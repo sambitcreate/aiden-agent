@@ -290,7 +290,7 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * Which of `bot:cards`, `bot:activity` and `bot:handoffs` [installation] holds. The Mac shapes a
+ * Which of `bot:cards`, `bot:activity`, `bot:handoffs` and `bot:handoff-notes` [installation] holds. The Mac shapes a
  * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
  * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
  * saved features while it connects, before this connection has negotiated a grant, so the chat
@@ -298,7 +298,12 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
  * ([AidenBotSessionController.reopenFeed]).
  */
 fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemoteCapability> =
-    listOf(AidenRemoteCapability.BOT_CARDS, AidenRemoteCapability.BOT_ACTIVITY, AidenRemoteCapability.BOT_HANDOFFS)
+    listOf(
+        AidenRemoteCapability.BOT_CARDS,
+        AidenRemoteCapability.BOT_ACTIVITY,
+        AidenRemoteCapability.BOT_HANDOFFS,
+        AidenRemoteCapability.BOT_HANDOFF_NOTES
+    )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
 /** What the composer does with its text (revision 37). */

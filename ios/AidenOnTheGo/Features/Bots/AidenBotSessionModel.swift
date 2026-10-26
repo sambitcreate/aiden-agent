@@ -46,7 +46,8 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity` and `bot:handoffs` the pairing holds.
+/// Which of `bot:cards`, `bot:activity`, `bot:handoffs` and `bot:handoff-notes`
+/// the pairing holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -54,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`

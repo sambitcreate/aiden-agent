@@ -660,6 +660,18 @@ interface Audience {
   activity: boolean;
   /** `bot:handoffs`: the `handoff` frame and snapshot key, and the `paused` state (revision 37). */
   handoffs: boolean;
+  /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 38). */
+  notes: boolean;
+}
+
+/**
+ * A hand-off as `audience` reads it: `takesNote` only for a device that holds
+ * `bot:handoff-notes`. v0.61.0 holds `bot:handoffs` and rejects the key.
+ */
+function handoffForAudience(handoff: AidenRemoteBotHandoff | null, audience: Audience): AidenRemoteBotHandoff | null {
+  if (handoff === null || audience.notes || handoff.takesNote === undefined) return handoff;
+  const { takesNote: _takesNote, ...card } = handoff;
+  return card;
 }
 
 interface Subscriber extends Audience {
@@ -812,7 +824,7 @@ class BotLiveProjector {
   snapshot(audience: Audience): AidenRemoteBotSession {
     const showActivity = audience.activity && this.activityDeps !== undefined;
     const state = stateViewForAudience(this.state, audience);
-    const handoff = this.handoff?.handoff ?? null;
+    const handoff = handoffForAudience(this.handoff?.handoff ?? null, audience);
     let used = 2 + memberBytes("botId", this.botId) + memberBytes("epoch", this.epoch) + memberBytes("seq", this.seq);
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
     used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
@@ -876,7 +888,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -934,6 +946,11 @@ class BotLiveProjector {
       if (handoffOnly && !audience.handoffs) {
         if (legacy === "snapshot") return this.snapshotFrame(audience);
         return legacy ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: legacy } }) : noOp(audience);
+      }
+      if (handoffOnly) {
+        const handoff = (event.payload as { handoff: AidenRemoteBotHandoff | null }).handoff;
+        const shown = handoffForAudience(handoff, audience);
+        return shown === handoff ? text : sseFrame(id, "handoff", { ...data, payload: { handoff: shown } });
       }
       if (event.type === "state" && !audience.handoffs) {
         const payload = stateViewForAudience(event.payload as AidenRemoteBotSessionStateView, audience);
@@ -1408,7 +1425,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1921,6 +1938,7 @@ export class AidenRemoteBotSessionService {
       cards: options.cards === true,
       activity: options.activity === true && this.supportsActivity,
       handoffs: options.handoffs === true && this.supportsHandoffs,
+      notes: options.handoffs === true && options.handoffNotes === true && this.supportsHandoffs,
     };
   }
 

@@ -91,19 +91,25 @@ internal fun aidenProgressCapabilitiesToRequest(
 
 /**
  * Revision 37: a Mac that offers `bot:handoffs` in `serverCapabilities` is asked for it, in a
- * call of its own after the progress grants, unless [installation] already holds it.
+ * call of its own after the progress grants, unless [installation] already holds it. Revision 38:
+ * `bot:handoff-notes` joins that call only when the Mac offers it too, so a Mac on revision 37
+ * still grants hand-offs, and a phone that holds them asks for the notes alone once its Mac updates.
  */
+internal fun aidenBotHandoffGrantsToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> {
+    if (!server.offersBotHandoffs) return emptyList()
+    val offered = if (server.offersBotHandoffNotes) AidenRemoteCapability.PHONE_BOT_HANDOFFS else listOf(AidenRemoteCapability.BOT_HANDOFFS)
+    return offered.filterNot { server.capabilities.contains(it) || installation.hasNegotiatedAccess(it) }
+}
+
 internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: AidenInstallation): Boolean =
-    server.offersBotHandoffs &&
-        !server.capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS) &&
-        !installation.hasNegotiatedAccess(AidenRemoteCapability.BOT_HANDOFFS)
+    aidenBotHandoffGrantsToRequest(server, installation).isNotEmpty()
 
 /** What asking a Mac for `bot:handoffs` came to: its fresh `/server`, and the grants to keep once it lists them all. */
 internal data class AidenBotHandoffsNegotiation(val server: AidenServer, val granted: List<AidenRemoteCapability>?)
 
 /**
- * Revision 37: asks [server] for `bot:handoffs` in a call of its own (`accepts` names nothing
- * else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
+ * Revision 37: asks [server] for `bot:handoffs` (and, revision 38, `bot:handoff-notes` when it
+ * offers them) in a call of its own (`accepts` names nothing else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
  * or 404 only means it can't grant it), the read failed, or the pairing changed while it ran
  * ([stillCurrent]). [AidenBotHandoffsNegotiation.granted] is set only once the Mac's own
  * `serverCapabilities` lists every grant it returned. A 401 or a revoked credential is rethrown.
@@ -114,9 +120,10 @@ internal suspend fun aidenRequestBotHandoffs(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenBotHandoffsNegotiation? {
-    if (!stillCurrent() || !aidenShouldRequestBotHandoffs(server, installation)) return null
+    val missing = aidenBotHandoffGrantsToRequest(server, installation)
+    if (!stillCurrent() || missing.isEmpty()) return null
     return try {
-        val complete = client.updateDeviceCapabilities(listOf(AidenRemoteCapability.BOT_HANDOFFS))
+        val complete = client.updateDeviceCapabilities(missing)
         if (!stillCurrent()) return null
         val refreshed = client.server()
         if (!stillCurrent()) return null

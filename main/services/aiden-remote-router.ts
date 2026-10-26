@@ -1695,6 +1695,14 @@ function holdsBotHandoffs(
   return device.capabilities.has("bot:handoffs") && botHandoffsWired(dependencies);
 }
 
+/** Whether this device is also told when a hand-off card takes no note (revision 38). */
+function holdsBotHandoffNotes(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
+}
+
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -2430,6 +2438,7 @@ export function createAidenRemoteRequestHandler(
             cards: device.capabilities.has("bot:cards"),
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
+            handoffNotes: holdsBotHandoffNotes(device, dependencies),
           }),
         );
         return;
@@ -2451,6 +2460,7 @@ export function createAidenRemoteRequestHandler(
             cards: device.capabilities.has("bot:cards"),
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
+            handoffNotes: holdsBotHandoffNotes(device, dependencies),
           },
         );
         return;

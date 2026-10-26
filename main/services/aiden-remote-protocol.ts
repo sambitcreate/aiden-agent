@@ -89,10 +89,11 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  *
  * Contract revision 38 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION`):
- * a hand-off card that takes no note (one a password-or-code rule opened)
- * carries `takesNote: false`, so a holder hides its note box instead of
- * learning from a `400` that the note was refused. Revision 37 shipped in no
- * release, so the field needs no opt-in of its own.
+ * a device that also negotiates `bot:handoff-notes` is told when a hand-off
+ * card takes no note (one a password-or-code rule opened): the card carries
+ * `takesNote: false`, so the device hides its note box instead of learning
+ * from a `400` that the note was refused. Revision 37 shipped in v0.61.0,
+ * whose closed hand-off decoder rejects the key, so only holders get it.
  */
 export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
 export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 38 as const;
@@ -271,9 +272,11 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
  * `handoff` field and frames, the `paused` session state and Bot `paused`
  * flags, and the `bot_paused` error code; it may call the hand-off answer,
  * open-on-Mac and pause routes. It is an opt-in like `bot:cards`: the routes
- * still need `bot:read` and `bot:write`.
+ * still need `bot:read` and `bot:write`. Revision 38: `bot:handoff-notes`,
+ * offered beside it, adds `takesNote: false` to a card that takes no note; it
+ * changes nothing without `bot:handoffs`.
  */
-export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs"] as const;
+export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:handoff-notes"] as const;
 
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 

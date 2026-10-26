@@ -163,6 +163,10 @@ data class AidenServer(
     val offersBotHandoffs: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFFS) == true
 
+    /** The Mac offers `bot:handoff-notes` (revision 38). Only a Mac serving hand-offs offers it. */
+    val offersBotHandoffNotes: Boolean
+        get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_NOTES) == true
+
     /** Offered and held: show hand-off cards, the paused state, and Pause and Resume. */
     val supportsBotHandoffs: Boolean
         get() = offersBotHandoffs && capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS)

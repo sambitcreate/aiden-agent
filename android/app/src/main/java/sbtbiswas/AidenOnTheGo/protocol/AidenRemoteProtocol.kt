@@ -549,6 +549,12 @@ data class AidenRemoteCapability(val rawValue: String) {
          * `serverCapabilities`, and it is asked for in a call of its own.
          */
         val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
+        /**
+         * Contract revision 38: a hand-off card that takes no note says so (`takesNote`). It
+         * grants no authority. A Mac on revision 37 refuses the name, so this phone asks for it
+         * only from a Mac that offers it, in the hand-offs call.
+         */
+        val BOT_HANDOFF_NOTES = AidenRemoteCapability("bot:handoff-notes")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -573,8 +579,8 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Negotiable behind `bot-activity-v1`. */
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
-        /** Negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
-        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS)
+        /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
+        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS, BOT_HANDOFF_NOTES)
 
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +

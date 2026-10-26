@@ -888,6 +888,8 @@ final class AidenRemoteCoordinator {
     /// after the progress batch. A Mac that does not know a name refuses the
     /// whole request with a 400, so naming it in the batch could cost the
     /// device every other opt-in. A refusal leaves the earlier grants as they are.
+    /// Revision 38: `bot:handoff-notes` joins that call only when the Mac
+    /// offers it, so a Mac on revision 37 still grants `bot:handoffs`.
     private func negotiateBotHandoffsIfNeeded(
         client: AidenRemoteClient,
         installationId: String,
@@ -895,12 +897,14 @@ final class AidenRemoteCoordinator {
     ) async {
         guard isCurrentContext(installationId: installationId, generation: generation),
               let server = self.server, server.instanceId == installationId, server.offersBotHandoffs,
-              let installation = installationStore.installations.first(where: { $0.id == installationId }),
-              !installation.hasNegotiatedAccess(to: .botHandoffs) else {
+              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return
         }
+        let offered: [AidenRemoteCapability] = server.offersBotHandoffNotes ? [.botHandoffs, .botHandoffNotes] : [.botHandoffs]
+        let missing = offered.filter { !installation.hasNegotiatedAccess(to: $0) }
+        guard !missing.isEmpty else { return }
         do {
-            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: [.botHandoffs])
+            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             let refreshedServer = try await client.server()
             guard isCurrentContext(installationId: installationId, generation: generation),
