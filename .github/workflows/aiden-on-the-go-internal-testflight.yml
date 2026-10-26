@@ -29,7 +29,7 @@ concurrency:
 jobs:
   upload:
     name: Archive and Upload
-    runs-on: macos-26
+    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
     environment: aiden-on-the-go-internal-testflight
     timeout-minutes: 60
 
