@@ -3028,13 +3028,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const last = messages[messages.length - 1];
     return last?.role === "assistant" && last.providerFailure ? last.id : undefined;
   }, [draft, messages, transcriptIdle]);
-  // A card action belongs to the chat it started in: another chat's card stays
-  // usable, and only the newest action clears the busy state.
+  // A card action belongs to the chat it started in: each chat's card is busy
+  // only while its own action runs, and only that action clears it.
   const failureActionTokenRef = React.useRef(0);
-  const [failureActionOwner, setFailureActionOwner] = React.useState<
-    { chatId: string; token: number } | undefined
-  >();
-  const failureActionBusy = failureActionOwner?.chatId === chatId;
+  const [failureActionOwners, setFailureActionOwners] = React.useState<
+    Readonly<Record<string, number>>
+  >({});
+  const failureActionBusy = failureActionOwners[chatId] !== undefined;
   const runFailureAction = React.useCallback(
     async (action: ProviderFailureAction) => {
       if (action === "open_providers") {
@@ -3042,7 +3042,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         return;
       }
       const token = ++failureActionTokenRef.current;
-      setFailureActionOwner({ chatId, token });
+      setFailureActionOwners((owners) => ({ ...owners, [chatId]: token }));
       try {
         if (action === "compact") {
           const result = await compactChat();
@@ -3060,7 +3060,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current !== chatId) return;
         toast.error(userFacingErrorMessage(actionError, "Couldn’t continue this chat."));
       } finally {
-        setFailureActionOwner((owner) => (owner?.token === token ? undefined : owner));
+        setFailureActionOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
       }
     },
     [chatId, compactChat, handleSend, navigate],

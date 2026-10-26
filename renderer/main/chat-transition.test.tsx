@@ -698,3 +698,40 @@ for (const compacted of [false, true]) {
     }
   });
 }
+
+test("a pending failure-card compaction keeps its chat busy while another chat starts one", async () => {
+  const compactions: string[] = [];
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => failedChatResponse(String(id), "context_window"),
+    "chats:compact": (chatId) => {
+      compactions.push(String(chatId));
+      return new Promise(() => undefined);
+    },
+  });
+  const visit = async (chatId: string) => {
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  };
+  const compactButton = async () =>
+    (await screen.findByRole("button", { name: "Compact and try again" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-b");
+    assert.equal((await compactButton()).disabled, false);
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-a");
+    assert.equal((await compactButton()).disabled, true, "Chat A's compaction is still running");
+    assert.deepEqual(compactions, ["chat-a", "chat-b"]);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
