@@ -70,6 +70,9 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
+import { useSpendingStatus } from "../lib/use-spending-status";
+import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
+import { spendingNotice } from "../shared/spending";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -411,8 +414,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         accessOff: effectiveWorkspace?.permission === "none",
       })
     : undefined;
-  const ready = modelReady && !chatReadinessMessage && !draftGitPending;
-  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? modelReadinessMessage;
+  // A chat over its spending limit sends nothing until the person allows more.
+  const spending = useSpendingStatus("chat", draft ? undefined : chatId);
+  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status)?.title : undefined;
+  const ready = modelReady && !chatReadinessMessage && !draftGitPending && !spendingReached;
+  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? spendingReached ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -3161,6 +3167,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
               ) : null}
             </EventPresence>
             <TodoPanel snapshot={todoSnapshot} />
+            {spending.status ? (
+              <SpendingLimitNotice
+                status={spending.status}
+                allowing={spending.allowing}
+                onAllowMore={() => void spending.allowMore()}
+                className="mb-2"
+              />
+            ) : null}
             {btwView ? (
               <BtwCard
                 view={btwView}

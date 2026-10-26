@@ -54,6 +54,8 @@ import {
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
 import { modelPaceRecorder } from "./services/model-pace-runtime.js";
+import { spending } from "./services/spending-main.js";
+import { usageLimits } from "./services/usage-limit-main.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
@@ -407,6 +409,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
+  // Every reply has settled: save the last spending and usage-limit changes.
+  await Promise.race([
+    Promise.all([spending.flush(), usageLimits.flush()]).catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
+  ]);
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =

@@ -542,6 +542,29 @@ export function usageLimitGiveUpNote(
   }
 }
 
+/**
+ * The Mac notification for a reply that waited and then stopped waiting. A
+ * limit that was never waited for fails in the chat at once, and turning
+ * waiting off is the owner's own doing, so neither notifies.
+ */
+export function usageLimitGiveUpNotification(input: {
+  providerLabel: string;
+  decision: Extract<UsageLimitDecision, { kind: "give-up" }>;
+  waited: boolean;
+  maxWaitMs: number;
+  now: number;
+  locale?: string;
+  timeZone?: string;
+}): { title: string; body: string } | undefined {
+  if (!input.waited) return undefined;
+  if (input.decision.reason !== "beyond-max-wait" && input.decision.reason !== "backoff-exhausted") return undefined;
+  const provider = input.providerLabel.trim() || "the provider";
+  return {
+    title: `Stopped waiting for ${provider}`,
+    body: usageLimitGiveUpNote(input.decision, input),
+  };
+}
+
 /** The error of a request that a recent give-up turned away without sending. */
 export function usageLimitRefusedMessage(input: {
   providerLabel: string;

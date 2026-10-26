@@ -60,6 +60,10 @@ export interface UsageLimitWaitEvent {
   model: Pick<Model<Api>, "provider" | "id">;
   entry?: UsageLimitEntry;
   decision?: Extract<UsageLimitDecision, { kind: "give-up" }>;
+  /** Set on a give-up: the provider's name, whether the request had waited, and the longest wait then. */
+  providerLabel?: string;
+  waited?: boolean;
+  maxWaitMs?: number;
 }
 
 export interface UsageLimitStreamOptions {
@@ -133,7 +137,7 @@ function replay(source: AssistantMessageEventStream, peeked: Peeked, replaceErro
   return output;
 }
 
-function terminalMessage(model: Model<Api>, stopReason: "error" | "aborted", errorMessage: string): AssistantMessage {
+export function terminalMessage(model: Model<Api>, stopReason: "error" | "aborted", errorMessage: string): AssistantMessage {
   return {
     role: "assistant",
     content: [],
@@ -154,7 +158,7 @@ function terminalMessage(model: Model<Api>, stopReason: "error" | "aborted", err
   };
 }
 
-function terminalStream(message: AssistantMessage): AssistantMessageEventStream {
+export function terminalStream(message: AssistantMessage): AssistantMessageEventStream {
   const output = createAssistantMessageEventStream();
   output.push({ type: "error", reason: message.stopReason === "aborted" ? "aborted" : "error", error: message });
   output.end();
@@ -279,7 +283,7 @@ export async function streamWaitingOutUsageLimits(
       } else {
         gate.release(ticket);
       }
-      limits.onGiveUp?.({ owner, model, decision });
+      limits.onGiveUp?.({ owner, model, decision, providerLabel, waited: previous !== undefined, maxWaitMs });
       const note = usageLimitGiveUpNote(decision, { maxWaitMs, now: at });
       const base = error.errorMessage?.trim() || `${providerLabel} rejected the request because of a usage limit.`;
       return replay(stream, peeked, note ? { ...error, errorMessage: `${base}\n\n${note}` } : undefined);

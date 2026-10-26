@@ -101,6 +101,8 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   routineNotes?(botId: string, taskId: string): Promise<string>;
   /** Fan a visible result or failure out to the Bot's other surfaces. Must not throw for delivery problems. */
   deliverResult?(delivery: BotRoutineResultDelivery): Promise<void>;
+  /** Why a spending limit stopped the run serving `requestId`, if one did. */
+  spendingStop?(botId: string, requestId: string): string | undefined;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -242,6 +244,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     if (outcome.kind === "failed") throw new Error(outcome.error);
     if (outcome.kind === "interrupted") {
+      // A spending limit stopped this run after its step: it failed, and the
+      // next run starts fresh.
+      const spendingStop = outcome.settled ? ports.spendingStop?.(task.botId, requestId) : undefined;
+      if (spendingStop !== undefined) throw new Error(spendingStop);
       // Pi can report a paused submission without settling it. Keep the
       // automatic fire's receipt until the person resumes that same turn.
       if (trigger.kind === "automatic" && !outcome.settled)

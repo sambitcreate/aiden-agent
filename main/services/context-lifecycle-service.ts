@@ -73,7 +73,7 @@ export interface ContextLifecycleServiceDeps {
     audience: ContextLifecycleAudience,
     runtime: ResolvedModelRuntime,
   ): Promise<ThinkingLevel>;
-  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime): void | Promise<void>;
+  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime, chatId: string): void | Promise<void>;
 }
 
 function cancelled(cause: unknown): boolean {
@@ -204,7 +204,7 @@ export class ContextLifecycleService {
         settings: resolveCompactionModelBudget(modelOverrides, model, engine),
         models: runtime
           ? createPiCompactionModels(runtime, (message) =>
-              this.deps.recordUsage?.(message, runtime!),
+              this.deps.recordUsage?.(message, runtime!, chat.id),
             )
           : createModels(),
         model,

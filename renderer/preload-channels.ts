@@ -46,6 +46,7 @@ export const INVOKE_PREFIXES = [
   "tts:",
   "usage:",
   "usageLimits:",
+  "spending:",
   "voice:",
   "webSearch:",
   "workspaces:",
@@ -145,6 +146,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "tts:event",
   /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
   "usageLimits:changed",
+  "spending:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** A workspace artifact was created, changed, refreshed or deleted: `WorkspaceArtifactsChangedEvent`. */

@@ -18,7 +18,7 @@ export const botRoutineNotes = createBotRoutineNotesStore({ profileDir: () => ap
  * routine's notes and the Telegram fan-out of its result.
  */
 export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
-  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+  const { botSessionRuntime, botSpendingStop } = await import("./bot-runtime/bot-session-main.js");
   const runtime = await botSessionRuntime();
   return {
     submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
@@ -27,6 +27,7 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
+    spendingStop: (_botId, requestId) => botSpendingStop(requestId),
     async deliverResult(delivery) {
       const { telegramService } = await import("./telegram/telegram-service.js");
       await telegramService.deliverBotRoutineResult(delivery);

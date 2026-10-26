@@ -30,6 +30,11 @@ import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import { usageLimits } from "../usage-limit-main.js";
+import { spending } from "../spending-main.js";
+import { responseCostUsd, spendCounts } from "../spending-service.js";
+import type { SpendingOwner } from "../spending-core.js";
+import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
+import { isLocalModelProvider } from "../usage-accounting.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -63,6 +68,7 @@ import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   BOT_NOTICE_ENTRY_KIND,
   createBotSessionService,
@@ -224,6 +230,46 @@ const compactionSteering = createBotCompactionSteering({
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
 
+// Spending. Each Bot's responses count toward its month, and a routine run's
+// toward that run too. A request after a limit is crossed stops the run; the
+// stop's reason is kept for the routine that ran it.
+const spendRuntimes = new Map<string, { local: boolean; provider: { id: string }; models: Pick<Models, "checkAuth"> }>();
+const spendingStops = new Map<string, string>();
+const SPENDING_STOPS_KEPT = 200;
+
+function botSpendingOwner(botId: string, requestIds: readonly (string | undefined)[]): SpendingOwner {
+  const run = requestIds.find((id) => botRoutineTaskIdOf(id) !== undefined);
+  return { kind: "bot", id: botId, ...(run === undefined ? {} : { run }) };
+}
+
+const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
+  async refusal(botId, requestIds) {
+    const refusal = await spending.refusal(botSpendingOwner(botId, requestIds), (await botStore.get(botId))?.name);
+    if (refusal !== undefined) {
+      for (const id of requestIds) {
+        if (id === undefined) continue;
+        spendingStops.delete(id);
+        spendingStops.set(id, refusal);
+      }
+      while (spendingStops.size > SPENDING_STOPS_KEPT) spendingStops.delete(spendingStops.keys().next().value!);
+    }
+    return refusal;
+  },
+  record(botId, requestIds, message) {
+    const cost = responseCostUsd(message);
+    const runtime = spendRuntimes.get(botId);
+    if (cost <= 0 || runtime === undefined) return;
+    void spendCounts(runtime)
+      .then((counts) => (counts ? spending.record(botSpendingOwner(botId, requestIds), cost) : undefined))
+      .catch((error: unknown) => logger.warn("bots", `Bot ${botId} spending could not be counted.`, error));
+  },
+};
+
+/** Why a spending limit stopped the run serving `requestId`, for its routine. */
+export function botSpendingStop(requestId: string): string | undefined {
+  return spendingStops.get(requestId);
+}
+
 const extension: BotExtensionDeps = {
   loadBot,
   async systemSections(bot, offered) {
@@ -297,6 +343,7 @@ const extension: BotExtensionDeps = {
     }
   },
   imageInput,
+  spending: botSpending,
 };
 
 /**
@@ -316,6 +363,7 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
       const { sourceProviderId, sourceModelId } = admission.authority.provider;
       const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
       runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
+      spendRuntimes.set(botId, { local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models });
       return runtime;
     });
     const ref = { provider: resolved.model.provider, modelId: resolved.model.id };
@@ -507,6 +555,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     onSessionOpen: (botId) => memory.beginSession(botId),
     compactionInstructions: BOT_COMPACTION_FOCUS,
     pauses: botPauses,
+    spendingRefusal: async (botId) => spending.refusal({ kind: "bot", id: botId }, (await botStore.get(botId))?.name),
     // No memory review runs or writes its marker while the Bot is paused.
     onPaused: (botId) => memoryReview.cancel(botId),
     afterPaused: afterBotPaused,
@@ -523,6 +572,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       async (botId) => {
         runtimeModels.forget(botId);
         resolvedModels.delete(botId);
+        spendRuntimes.delete(botId);
+        await spending.forgetBot(botId);
       },
       deleteRoutines,
       (botId) => botPauses.forgetBot(botId),

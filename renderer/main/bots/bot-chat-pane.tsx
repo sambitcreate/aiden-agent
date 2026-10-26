@@ -60,6 +60,8 @@ import { botRoutinesKey } from "./bot-routines";
 import { useConnectionSetup } from "./use-connection-setup";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
 import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
+import { useSpendingStatus } from "../../lib/use-spending-status";
+import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -714,6 +716,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
   const usageLimitWait = useUsageLimitWait("bot", botId);
+  const spending = useSpendingStatus("bot", botId);
   const usageLimitNow = useUsageLimitNow(usageLimitWait);
   React.useEffect(() => {
     // The card hides for one interrupted turn; any other state (running, idle,
@@ -1222,6 +1225,14 @@ export function BotChatPane({ botId }: { botId: string }) {
           wait={usageLimitWait}
           now={usageLimitNow}
           onRetryNow={() => void retryUsageLimitNow("bot", botId)}
+        />
+      ) : null}
+      {spending.status ? (
+        <SpendingLimitNotice
+          status={spending.status}
+          name={current.name}
+          allowing={spending.allowing}
+          onAllowMore={() => void spending.allowMore()}
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}

@@ -6,6 +6,7 @@ import {
   formatUsageLimitTime,
   parseUsageLimitEntries,
   usageLimitGiveUpNote,
+  usageLimitGiveUpNotification,
   usageLimitKeys,
   usageLimitMaxWaitMs,
   UsageLimitGate,
@@ -233,6 +234,27 @@ test("give-up notes say when the limit resets", () => {
   );
   assert.equal(formatUsageLimitTime(NOW + 9 * 86_400_000, NOW, { locale: "en-US", timeZone: "UTC" }), "Nov 4 at 3:00 PM");
   assert.equal(usageLimitGiveUpNote({ kind: "give-up", reason: "billing" }, { maxWaitMs: 1, now: NOW }), "");
+});
+
+test("only a reply that waited and ran out of time notifies", () => {
+  const ranOut = { kind: "give-up", reason: "beyond-max-wait", resetAt: NOW + 7 * 3_600_000 } as const;
+  const input = { providerLabel: "Claude", waited: true, maxWaitMs: usageLimitMaxWaitMs(6), now: NOW, locale: "en-US", timeZone: "UTC" };
+  assert.deepEqual(usageLimitGiveUpNotification({ ...input, decision: ranOut }), {
+    title: "Stopped waiting for Claude",
+    body: "Aiden stopped waiting: the limit resets at 10:00 PM, after the longest wait you set (6 hours).",
+  });
+  assert.match(
+    usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "backoff-exhausted" } })?.body ?? "",
+    /tried again for 30 minutes/u,
+  );
+  // A limit that was never waited for already fails in the chat.
+  assert.equal(usageLimitGiveUpNotification({ ...input, waited: false, decision: ranOut }), undefined);
+  assert.equal(
+    usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "long-window", resetAt: NOW + 3 * 86_400_000 } }),
+    undefined,
+  );
+  // Turning waiting off is the owner's own choice.
+  assert.equal(usageLimitGiveUpNotification({ ...input, decision: { kind: "give-up", reason: "off" } }), undefined);
 });
 
 test("the saved limits keep only well-formed, recent entries", () => {

@@ -132,7 +132,9 @@ export type BotSessionErrorReason =
   /** Interrupted: a turn is waiting for Resume (the unattended-send refusal). */
   | "bot_paused"
   /** The person paused the Bot. */
-  | "paused_by_person";
+  | "paused_by_person"
+  /** The Bot's month is over its spending limit. */
+  | "spending_limit";
 
 export class BotSessionError extends Error {
   constructor(readonly reason: BotSessionErrorReason, message?: string) {
@@ -158,6 +160,8 @@ function defaultMessage(reason: BotSessionErrorReason): string {
       return "I got interrupted while working on this.";
     case "paused_by_person":
       return "This Bot is paused. Resume it to continue.";
+    case "spending_limit":
+      return "This Bot reached its spending limit for this month. Allow more to keep going.";
   }
 }
 
@@ -285,6 +289,8 @@ export interface BotSessionServiceDeps {
   onUnpaused?(botId: string, record: BotPauseRecord): void | Promise<void>;
   /** How long a pause waits for a running turn to close (default 5 s, like quit). */
   suspendTimeoutMs?: number;
+  /** Why a new message may not start: the Bot's month is over its spending limit. */
+  spendingRefusal?(botId: string): Promise<string | undefined>;
 }
 
 const ctx = BACKGROUND_CONTEXT;
@@ -668,6 +674,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
         // After the dedupe lookup, so a redelivered request still reports its submission.
         await assertNotPaused(botId);
+        const spendingRefusal = await deps.spendingRefusal?.(botId);
+        if (spendingRefusal !== undefined) throw new BotSessionError("spending_limit", spendingRefusal);
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");

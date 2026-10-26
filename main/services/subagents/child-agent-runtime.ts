@@ -18,6 +18,8 @@ import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import type { UsageLimitOwner } from "../usage-limit-core.js";
 import { usageLimits } from "../usage-limit-main.js";
 import { withUsageLimitWait, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
+import { spending } from "../spending-main.js";
+import { createSpendingMeter, spendCounts, type SpendingMeterOptions } from "../spending-service.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -110,6 +112,8 @@ export interface SubagentRuntimeRegistryOptions {
   effectStore?: PiRuntimeEffectStore;
   /** Waits out provider usage limits for the parent chat; omitted by unit registries. */
   usageLimits?: (owner: UsageLimitOwner, providerLabel: string, extra: { observeFetch: boolean }) => UsageLimitStreamOptions;
+  /** Counts the child's spending toward the parent chat's limit; omitted by unit registries. */
+  spending?: SpendingMeterOptions["spending"];
 }
 
 function childIdentity(
@@ -154,6 +158,7 @@ export class SubagentRuntimeRegistry {
   private readonly inferenceIsolation?: SubagentInferenceIsolation;
   private readonly effectStore?: PiRuntimeEffectStore;
   private readonly usageLimits?: SubagentRuntimeRegistryOptions["usageLimits"];
+  private readonly spending?: SubagentRuntimeRegistryOptions["spending"];
   private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
   private readonly quarantinedDeployments = new Set<SubagentDeployment>();
@@ -177,6 +182,7 @@ export class SubagentRuntimeRegistry {
     this.inferenceIsolation = options.inferenceIsolation;
     this.effectStore = options.effectStore;
     this.usageLimits = options.usageLimits;
+    this.spending = options.spending;
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
@@ -194,11 +200,29 @@ export class SubagentRuntimeRegistry {
    */
   private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
     const options = buildAgentRuntimeOptions(sessionId, childRuntime);
-    if (!this.usageLimits || !options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
-    const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
-      observeFetch: childRuntime === spec.runtime,
-    });
-    return { ...options, streamFn: withUsageLimitWait(options.streamFn, limits) };
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    let streamFn = options.streamFn;
+    if (this.usageLimits) {
+      const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
+        observeFetch: childRuntime === spec.runtime,
+      });
+      streamFn = withUsageLimitWait(streamFn, limits);
+    }
+    if (this.spending) {
+      // A helper's spending is its chat's. Over the limit, its next request is
+      // refused, so the helper stops and the chat ends after that step.
+      streamFn = createSpendingMeter({
+        spending: this.spending,
+        owner: { kind: "chat", id: spec.authority.chatId },
+        refuse: true,
+        counts: () => spendCounts({
+          local: isLocalProviderDeployment(spec.runtime.provider),
+          provider: spec.runtime.provider,
+          models: spec.runtime.models,
+        }),
+      }).wrap(streamFn);
+    }
+    return { ...options, streamFn };
   }
 
   get activeCount(): number {
@@ -551,6 +575,7 @@ export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, un
   inferenceIsolation: new ElectronSubagentInferenceIsolation(),
   effectStore: piRuntimeEffectStore,
   usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
+  spending,
   recordCompactionUsage: async (message, runtime) => {
     const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
       import("../usage-accounting.js"),

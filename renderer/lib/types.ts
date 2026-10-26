@@ -921,6 +921,8 @@ export interface AppSettings {
   cacheWarmingEnabled?: boolean;
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../shared/usage-limits").UsageLimitWaitHours;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;

@@ -150,6 +150,33 @@ test("(b) a tool the current policy forbids is blocked without running", async (
   }
 });
 
+test("(b2) a run over its spending limit finishes the step, then sends no more requests", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("must not be requested"),
+  ]);
+  const recorded: Array<{ requestIds: readonly (string | undefined)[]; stopReason: string }> = [];
+  const deps: BotExtensionDeps = {
+    ...recordingDeps({ tools: [{ tool, replay: "unsafe" }] }),
+    spending: {
+      // Over the limit once the first response is counted.
+      refusal: async () => (recorded.length > 0 ? "Ada reached its $5.00 spending limit for this month." : undefined),
+      record: (_botId, requestIds, message) => recorded.push({ requestIds, stopReason: message.stopReason }),
+    },
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    const settled = await (await root.submit({ type: "input", content: "go", requestId: "routine:t1:1" }, ctx)).wait(ctx);
+    assert.equal(settled.status, "unanswered");
+    assert.equal(fauxModels.calls(), 1);
+    assert.equal(tool.executions.length, 1, "the step that crossed the limit finishes");
+    assert.deepEqual(recorded, [{ requestIds: ["routine:t1:1"], stopReason: "toolUse" }]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(c) an approval-gated tool asks once and runs after allow", async () => {
   const gated = countingTool("gated");
   const fauxModels = createFauxModels([

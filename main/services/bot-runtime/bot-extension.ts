@@ -38,7 +38,7 @@
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Message } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   CompactionTask,
@@ -243,12 +243,30 @@ export interface BotExtensionDeps {
   readmit(botId: string): Promise<BotReadmission>;
   /** Whether the Bot's model takes images. Defaults to true. */
   imageInput?(botId: string): Promise<boolean>;
+  /**
+   * Spending limits. `refusal` runs before every request with the request
+   * ids of the run it serves, and says why it may not go: the Bot's month or
+   * the routine run is over its limit. `record` counts every response; it
+   * must not throw.
+   */
+  spending?: {
+    refusal(botId: string, requestIds: readonly (string | undefined)[]): Promise<string | undefined>;
+    record(botId: string, requestIds: readonly (string | undefined)[], message: AssistantMessage): void;
+  };
 }
 
 export class BotAccessChangedError extends Error {
   constructor(readonly reason: "access_changed" | "bot_missing") {
     super(reason === "bot_missing" ? "This Bot no longer exists." : "This Bot's access changed. Review it in Advanced.");
     this.name = "BotAccessChangedError";
+  }
+}
+
+/** A request the Bot's month or a routine run had no money left for. */
+export class BotSpendingLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BotSpendingLimitError";
   }
 }
 
@@ -418,6 +436,12 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           failure = null;
           admitted = true;
         }
+        // The step that crossed a spending limit has finished: the run stops
+        // before its next request.
+        if (deps.spending !== undefined) {
+          const refusal = await deps.spending.refusal(botId, await runRequestIds(api, context));
+          if (refusal !== undefined) return failClosed(api.taskId, context, new BotSpendingLimitError(refusal));
+        }
         let messages = request.messages;
         const turnAllows = deps.turnAllows;
         if (turnAllows !== undefined) {
@@ -429,6 +453,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
         return messages === request.messages ? undefined : { messages };
+      },
+      afterResponse: async (message, api, context) => {
+        if (deps.spending === undefined) return;
+        try {
+          deps.spending.record(botId, await runRequestIds(api, context), message);
+        } catch {
+          // Spending that cannot be attributed must never fail the reply.
+        }
       },
       onYield: () => {
         // The review decides later whether to run; the answer never waits on it.
