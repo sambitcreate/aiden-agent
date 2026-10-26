@@ -1510,6 +1510,86 @@
         }
       }
     },
+    "/chats/{chatId}/spending": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatSpending",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 40. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "responses": {
+          "200": {
+            "description": "The spending status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/spending/allow-more": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "allowMoreChatSpending",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 40. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The spending status after Allow more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/visuals/{visualId}/document": {
       "parameters": [
         {
@@ -2357,6 +2437,89 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotHandoffOpenOnMacReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/spending": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSpending",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 40. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "responses": {
+          "200": {
+            "description": "The spending status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/spending/allow-more": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "allowMoreBotSpending",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 40. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The spending status after Allow more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
                 }
               }
             }
@@ -13231,6 +13394,90 @@
           }
         },
         "additionalProperties": false
+      },
+      "SpendingStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "spending"
+        ],
+        "description": "Contract revision 40 (spending-limits-v1).",
+        "properties": {
+          "spending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Spending"
+              }
+            ]
+          }
+        }
+      },
+      "Spending": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "period",
+          "state",
+          "limitUsd",
+          "allowedUsd",
+          "spentUsd",
+          "allowMoreUsd",
+          "revision"
+        ],
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "month"
+            ],
+            "description": "chat: the whole chat, its helpers included. month: the Bot's current month, its routines included."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "under",
+              "nearing",
+              "reached"
+            ]
+          },
+          "limitUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100000
+          },
+          "allowedUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "The limit plus what Allow more added."
+          },
+          "spentUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "allowMoreUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "What one Allow more adds: the limit again."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the Bot's month starts over."
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
       },
       "MemorySettings": {
         "type": "object",

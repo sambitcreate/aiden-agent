@@ -116,11 +116,27 @@ export class SpendingService {
   }
 
   async allowMore(kind: "chat" | "bot", id: string): Promise<SpendingStatusView | undefined> {
+    return (await this.allowMoreIf(kind, id, () => true)).view;
+  }
+
+  /**
+   * Allow more only while `current` accepts what the owner sees now, checked
+   * in the same step as the change, so two taps on one notice add once.
+   */
+  async allowMoreIf(
+    kind: "chat" | "bot",
+    id: string,
+    current: (view: SpendingStatusView) => boolean,
+  ): Promise<{ view: SpendingStatusView | undefined; accepted: boolean }> {
     await this.ready();
-    const before = this.ledger.status(kind, id, await this.settings(), this.now());
-    const after = this.ledger.allowMore(kind, id, await this.settings(), this.now());
-    if (after && before && after.extraUsd !== before.extraUsd) this.changed(kind, id);
-    return after;
+    const settings = await this.settings();
+    const now = this.now();
+    const before = this.ledger.status(kind, id, settings, now);
+    if (before === undefined) return { view: undefined, accepted: true };
+    if (!current(before)) return { view: before, accepted: false };
+    const after = this.ledger.allowMore(kind, id, settings, now);
+    if (after && after.extraUsd !== before.extraUsd) this.changed(kind, id);
+    return { view: after, accepted: true };
   }
 
   /** The Bot's own monthly limit: an amount, null for none, undefined for the default. */

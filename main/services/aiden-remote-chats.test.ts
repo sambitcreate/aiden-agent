@@ -67,6 +67,7 @@ function fixture(
     durableBotSessions?: () => boolean;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
+    spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -267,6 +268,7 @@ function fixture(
     botTurnAuthorityPreflight:
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
+    ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -1469,6 +1471,35 @@ test("a paused Bot's chat refuses a phone turn before anything is written, and t
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a chat over its spending limit refuses a phone turn with the limit's line, and the same request runs once more is allowed", async () => {
+  const { SpendingService } = await import("./spending-service.js");
+  const spending = new SpendingService({
+    persistence: { load: async () => undefined, save: async () => {} },
+    settings: async () => ({ chatUsd: 2 }),
+    broadcast: () => {},
+  });
+  await spending.record({ kind: "chat", id: "chat-1" }, 2.5);
+  const app = fixture(chat(), {
+    spendingRefusal: (current) => spending.refusal({ kind: "chat", id: current.id }),
+  });
+
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "over-the-limit-turn-0001", { text: "one more thing" }),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      error.code === "operation_stale" &&
+      error.status === 409 &&
+      error.message === "This chat reached its $2.00 spending limit. Allow more to keep going.",
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.starts(), 0, "no provider request");
+
+  await spending.allowMore("chat", "chat-1");
+  const accepted = await app.service.startTurn("device-1", "chat-1", "over-the-limit-turn-0001", { text: "one more thing" });
+  assert.equal(accepted.status, "accepted");
+  assert.equal(app.starts(), 1);
 });
 
 test("a pause that lands while a phone turn is being admitted refuses it before anything is written", async () => {
