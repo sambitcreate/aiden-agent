@@ -16,9 +16,7 @@ import { writeDevLog } from "../dev-log.js";
 import { buildAgentRuntimeOptions } from "../generation-runtime.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
 import type { UsageLimitOwner } from "../usage-limit-core.js";
-import { usageLimits } from "../usage-limit-main.js";
 import { withUsageLimitWait, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
-import { spending } from "../spending-main.js";
 import { createSpendingMeter, spendCounts, type SpendingMeterOptions } from "../spending-service.js";
 import {
   assertGenerationContextCapacity,
@@ -157,8 +155,8 @@ export class SubagentRuntimeRegistry {
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
   private readonly inferenceIsolation?: SubagentInferenceIsolation;
   private readonly effectStore?: PiRuntimeEffectStore;
-  private readonly usageLimits?: SubagentRuntimeRegistryOptions["usageLimits"];
-  private readonly spending?: SubagentRuntimeRegistryOptions["spending"];
+  private usageLimits?: SubagentRuntimeRegistryOptions["usageLimits"];
+  private spending?: SubagentRuntimeRegistryOptions["spending"];
   private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
   private readonly quarantinedDeployments = new Set<SubagentDeployment>();
@@ -187,6 +185,12 @@ export class SubagentRuntimeRegistry {
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
     this.healthMetrics = healthMetrics;
+  }
+
+  /** The app's usage-limit waits and spending limits, bound by the Electron main process. */
+  setLimits(limits: Pick<SubagentRuntimeRegistryOptions, "usageLimits" | "spending">): void {
+    this.usageLimits = limits.usageLimits;
+    this.spending = limits.spending;
   }
 
   setRuntimeFaultReporter(reporter: (source: string) => void): void {
@@ -574,8 +578,6 @@ export class SubagentRuntimeRegistry {
 export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, undefined, {
   inferenceIsolation: new ElectronSubagentInferenceIsolation(),
   effectStore: piRuntimeEffectStore,
-  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
-  spending,
   recordCompactionUsage: async (message, runtime) => {
     const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
       import("../usage-accounting.js"),

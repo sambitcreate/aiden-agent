@@ -492,6 +492,10 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
+subagentRuntimeRegistry.setLimits({
+  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
+  spending,
+});
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
   logger.warn("subagents", `Pi child runtime fault (${source}).`);
 });
