@@ -1,6 +1,6 @@
 # Web page reading and extract mode — 2026-10-26
 
-In review on branch `claude/project-thread-xxl0o7`. Plan: `docs/plans/web-page-extract-plan.md`. Guide: `docs/web-fetch-extract.md`.
+In review as PR #588 (branch `claude/project-thread-xxl0o7`); the owner merges. Plan: `docs/plans/web-page-extract-plan.md`. Guide: `docs/web-fetch-extract.md`.
 
 The owner asked for pi-web-access v0.45.0's extract mode as a native feature, without installing the plugin, and chose a new page reader tool over extending Web Search.
 

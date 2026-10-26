@@ -89,7 +89,7 @@ export function WebPageSettingsView({
             description={
               snapshot.extract.ready
                 ? "When the agent needs a few facts, such as a price or a date, it gets just those values, each with the line of the page it came from. Values that are not on the page come back as guesses."
-                : `Add your ${model.accountIdLabel.toLowerCase()} and an API key below to turn this on.`
+                : `Add your ${model.accountIdLabel} and an API key below to turn this on.`
             }
           >
             <Switch
@@ -155,7 +155,7 @@ export function WebPageSettingsView({
             ) : null}
           </Field>
 
-          <div className="settings-field relative p-4 after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
+          <div className="relative after:absolute after:inset-x-4 after:bottom-0 after:h-px after:bg-separator">
             <WebSearchKeyPoolEditor
               providerId={model.credentialId}
               providerLabel={model.vendor}

@@ -57,7 +57,7 @@ test("page reading is on, and extract mode cannot turn on until it is set up", a
   const extract = screen.getByRole("switch", { name: "Extract only the values asked for" });
   assert.equal(extract.hasAttribute("disabled"), true);
   assert.ok(screen.getByText("Needs setup"));
-  assert.ok(screen.getByText(/Add your cloudflare account id and an API key/u));
+  assert.ok(screen.getByText(/Add your Cloudflare account ID and an API key/u));
   // The Cloudflare key goes into the same write-only pool editor Web Search uses.
   assert.ok(screen.getByRole("textbox", { name: "Cloudflare key label" }));
 });

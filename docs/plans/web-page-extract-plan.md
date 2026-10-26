@@ -1,6 +1,6 @@
 # Web page reading and extract mode
 
-Status: in review (2026-10-26) on branch `claude/project-thread-xxl0o7`. User guide: [web-fetch-extract.md](../web-fetch-extract.md).
+Status: in review in [PR #588](https://github.com/sambitcreate/aiden-agent/pull/588) (2026-10-26). User guide: [web-fetch-extract.md](../web-fetch-extract.md).
 
 ## Goal
 
