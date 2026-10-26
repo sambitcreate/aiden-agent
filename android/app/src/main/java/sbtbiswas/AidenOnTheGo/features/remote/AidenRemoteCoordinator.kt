@@ -97,7 +97,7 @@ internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: Ai
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_HANDOFFS, server, installation)
 
 /**
- * Revision 39 (provisional): a Mac that offers `schedule:cards` in `serverCapabilities` is asked
+ * Revision 38: a Mac that offers `schedule:cards` in `serverCapabilities` is asked
  * for it, in a call of its own after every other negotiation, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -131,7 +131,7 @@ internal suspend fun aidenRequestBotHandoffs(
     aidenRequestSoloCapability(AidenRemoteCapability.BOT_HANDOFFS, client, server, installation, stillCurrent)
 
 /**
- * Revision 39 (provisional): asks [server] for `schedule:cards` alone, exactly as
+ * Revision 38: asks [server] for `schedule:cards` alone, exactly as
  * [aidenRequestBotHandoffs] asks for `bot:handoffs`. A Mac that refuses it (400 or 404) leaves
  * the pairing as it was; scheduled-task approvals then show the plain summary card.
  */
@@ -463,7 +463,7 @@ class AidenRemoteCoordinator(
                     server = progressServer,
                     request = ::aidenRequestBotHandoffs
                 )
-                // Revision 39: `schedule:cards` likewise goes alone, last. A Mac that refuses it
+                // Revision 38: `schedule:cards` likewise goes alone, last. A Mac that refuses it
                 // leaves every other grant in place; its approvals show the plain summary card.
                 val negotiatedServer = negotiateSoloCapability(
                     generation = generation,
@@ -553,7 +553,7 @@ class AidenRemoteCoordinator(
     }
 
     /**
-     * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
+     * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 38
      * `schedule:cards`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
      * only that the Mac can't grant it; the pairing carries on with what it has.
      */

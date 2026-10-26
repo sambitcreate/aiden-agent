@@ -261,7 +261,7 @@ struct AidenBotHandoffsContractFixture: Decodable {
     let legacy: Legacy
 }
 
-/// Revision 39 (`schedule:cards`): scheduled-task approvals with their card.
+/// Revision 38 (`schedule:cards`): scheduled-task approvals with their card.
 /// The fixture's `rejected` cards stay raw JSON; tests wrap each in a valid approval.
 struct AidenScheduleCardsContractFixture: Decodable {
     struct Card: Decodable {
@@ -461,7 +461,7 @@ struct AidenRemoteContractFixture: Decodable {
     let botSessionCards: AidenBotSession
     /// Revision 37: present from a revision-37 fixture.
     let botHandoffs: AidenBotHandoffsContractFixture?
-    /// Revision 39: present from a revision-39 fixture.
+    /// Revision 38: present from a revision-38 fixture.
     let scheduleCards: AidenScheduleCardsContractFixture?
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?

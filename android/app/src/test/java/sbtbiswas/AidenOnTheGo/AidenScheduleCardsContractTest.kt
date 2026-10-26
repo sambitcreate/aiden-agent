@@ -49,7 +49,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Contract revision 39 (provisional), `schedule:cards`: the scheduled-task card on approvals,
+ * Contract revision 38, `schedule:cards`: the scheduled-task card on approvals,
  * read from the fixture every client shares. A card the host would reject reads as no card and
  * never changes the approval around it.
  */
@@ -133,7 +133,7 @@ class AidenScheduleCardsContractTest {
 
     @Test
     fun theFixtureIsAtRevision39AndNamesTheGrant() {
-        assertTrue(fixture.getValue("contractRevision").jsonPrimitive.content.toInt() >= 39)
+        assertTrue(fixture.getValue("contractRevision").jsonPrimitive.content.toInt() >= 38)
         assertEquals(AidenRemoteCapability.SCHEDULE_CARDS, AidenRemoteCapability(scheduleCards.getValue("capability").jsonPrimitive.content))
     }
 

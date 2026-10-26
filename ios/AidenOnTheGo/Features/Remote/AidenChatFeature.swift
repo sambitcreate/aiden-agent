@@ -8050,7 +8050,7 @@ private struct AidenLiveResponseView: View {
 /// Shared with the Bot session chat (`AidenBotSessionChatView`). Matches the
 /// desktop card: an icon tile, the action as a question, the exact request in a
 /// code block, and two equal buttons with the remembered scopes behind Allow's
-/// chevron. A `schedule_task` approval with a valid revision 39 `schedule` card
+/// chevron. A `schedule_task` approval with a valid revision 38 `schedule` card
 /// shows the structured schedule in place of the request.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
@@ -8065,7 +8065,7 @@ struct AidenApprovalCard: View {
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let scopes: [AidenApprovalScope]
-    /// Contract revision 39: display-only. Nil, or any tool but `schedule_task`,
+    /// Contract revision 38: display-only. Nil, or any tool but `schedule_task`,
     /// keeps the summary card.
     var schedule: AidenApprovalSchedule? = nil
     let onDeny: () -> Void
@@ -8313,7 +8313,7 @@ private struct AidenApprovalFoldingText: View {
     }
 }
 
-/// Contract revision 39: the body of a scheduled-task approval with a
+/// Contract revision 38: the body of a scheduled-task approval with a
 /// `schedule` card. What runs and when, then where, with what access and model,
 /// then the instructions or script and a note when it will not run on its own.
 private struct AidenScheduleApprovalDetails: View {

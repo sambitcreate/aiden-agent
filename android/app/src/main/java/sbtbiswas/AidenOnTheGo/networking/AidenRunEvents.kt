@@ -49,7 +49,7 @@ data class AidenRemoteRunApproval(
     val toolName: String,
     val canAllow: Boolean,
     val scopes: List<AidenApprovalScope>?,
-    /** Contract revision 39 (`schedule:cards`): a scheduled-task card, or null when absent or invalid. */
+    /** Contract revision 38 (`schedule:cards`): a scheduled-task card, or null when absent or invalid. */
     val schedule: AidenApprovalSchedule? = null
 )
 
@@ -191,7 +191,7 @@ object AidenRunEventCodec {
     }
 
     fun parseApproval(obj: JsonObject, label: String = "approval_required"): AidenRemoteRunApproval {
-        // Tool arguments and host previews (`details`) stay on the Mac. Revision 39 adds the
+        // Tool arguments and host previews (`details`) stay on the Mac. Revision 38 adds the
         // display-only `schedule` card, which fails closed on its own: an invalid card reads as
         // no card and never fails the approval or changes `canAllow` and `scopes`.
         assertKeys(obj, setOf("approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"), label)

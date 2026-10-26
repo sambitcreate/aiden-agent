@@ -148,8 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        // Revision 39 is provisional and may be re-claimed when it merges.
-        XCTAssertGreaterThanOrEqual(fixture.contractRevision, 39)
+        XCTAssertGreaterThanOrEqual(fixture.contractRevision, 38)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
@@ -1450,7 +1449,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
     }
 
-    // MARK: Contract revision 39: scheduled-task approval cards (`schedule:cards`)
+    // MARK: Contract revision 38: scheduled-task approval cards (`schedule:cards`)
 
     private func decodedSharedFixture() throws -> AidenRemoteContractFixture {
         try AidenRemoteJSONDecoder.decode(

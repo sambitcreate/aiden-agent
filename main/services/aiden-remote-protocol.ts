@@ -95,16 +95,14 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  */
 export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
 /**
- * Contract revision 39 (provisional; re-claim the next revision after `main`'s
- * at merge by changing only `AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION`):
- * rich scheduled-task approval cards (`schedule:cards`). A device holding
- * `schedule:cards` and `schedule:read` receives an optional, bounded
- * `schedule` object on scheduled-task approvals, both the stream approval
+ * Contract revision 38: rich scheduled-task approval cards (`schedule:cards`).
+ * A device holding `schedule:cards` and `schedule:read` receives an optional,
+ * bounded `schedule` object on scheduled-task approvals, both the stream approval
  * snapshot and the phone run `approval_required` event. It is display-only:
  * it never changes `canAllow`, never appears in `details`, and devices
  * without it keep the summary-only card.
  */
-export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
+export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 38 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -294,7 +292,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
 ] as const;
 
 /**
- * Contract revision 39: a device holding `schedule:cards` (with
+ * Contract revision 38: a device holding `schedule:cards` (with
  * `schedule:read`) receives the `schedule` object on scheduled-task approvals.
  * It grants no authority and never changes `canAllow`; any device type may
  * hold it.
@@ -1736,7 +1734,7 @@ export interface AidenRemoteContractFixture {
   botAttachments?: AidenRemoteBotAttachmentsFixture;
   /** Revision 37 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
   botHandoffs?: AidenRemoteBotHandoffsFixture;
-  /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
+  /** Revision 38 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -7686,7 +7684,7 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
     } else if (projection === "phone" && event.type === "approval_required") {
       const payload = event.payload;
       assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"], "Phone run approval");
-      // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
+      // Revision 38: a display-only card for `schedule:cards` holders; it never changes canAllow.
       if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
       assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
       assertBoundedString(payload, "summary", 2_000);

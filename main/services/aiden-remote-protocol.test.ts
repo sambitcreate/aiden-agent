@@ -436,7 +436,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botAttachments;
   // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
-  // Schedule approval cards are revision 39.
+  // Schedule approval cards are revision 38.
   delete revision19.scheduleCards;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;

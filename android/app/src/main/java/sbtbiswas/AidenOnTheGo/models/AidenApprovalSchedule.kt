@@ -43,7 +43,7 @@ enum class AidenApprovalSchedulePermission(val wire: String) {
 }
 
 /**
- * Contract revision 39 (provisional), `schedule:cards`: the display-only facts of a scheduled-task
+ * Contract revision 38, `schedule:cards`: the display-only facts of a scheduled-task
  * approval. It never changes whether this phone may allow, which scopes it offers, or what the
  * summary says; it only lets the card show the task instead of the summary text. [nextRunAt]
  * keeps the host's exact text so the card round-trips; [nextRun] is the parsed instant.

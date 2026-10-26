@@ -8061,7 +8061,7 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
-    // MARK: Contract revision 39: scheduled-task approval cards
+    // MARK: Contract revision 38: scheduled-task approval cards
 
     private func scheduleCard(
         action: AidenApprovalSchedule.Action = .create,

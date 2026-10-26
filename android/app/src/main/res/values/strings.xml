@@ -857,7 +857,7 @@
     <string name="chat_approval_paused_note">Aiden is paused until you choose.</string>
     <string name="chat_approval_automation_note">Check the exact schedule and unattended access before Aiden saves it.</string>
     <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
-    <!-- Contract revision 39: the scheduled-task approval card. -->
+    <!-- Contract revision 38: the scheduled-task approval card. -->
     <string name="chat_schedule_next_run">Next run %1$s</string>
     <string name="chat_schedule_runs_in">Runs in</string>
     <string name="chat_schedule_anywhere">Anywhere on your computer</string>

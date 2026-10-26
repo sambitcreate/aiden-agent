@@ -314,7 +314,7 @@ test("pairing grants progress authority only to clients that explicitly accept i
         !(AIDEN_REMOTE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
         !(AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES as readonly string[]).includes(capability) &&
         !(AIDEN_REMOTE_HOST_CAPABILITIES as readonly string[]).includes(capability) &&
-        // bot:cards (revision 27), bot:activity (revision 30), bot:handoffs (revision 37) and schedule:cards (revision 39) are negotiated after pairing, never issued by it.
+        // bot:cards (revision 27), bot:activity (revision 30), bot:handoffs (revision 37) and schedule:cards (revision 38) are negotiated after pairing, never issued by it.
         !(AIDEN_REMOTE_OPT_IN_CAPABILITIES as readonly string[]).includes(capability),
     ),
   );

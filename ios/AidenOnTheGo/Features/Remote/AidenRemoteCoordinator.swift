@@ -834,7 +834,7 @@ final class AidenRemoteCoordinator {
 
     /// Opt-ins a Mac older than their revision refuses by name, in the order
     /// they are asked for after the progress batch: `bot:handoffs` (revision
-    /// 37), then `schedule:cards` (revision 39).
+    /// 37), then `schedule:cards` (revision 38).
     static let capabilitiesAskedForAlone: [AidenRemoteCapability] = [.botHandoffs, .scheduleCards]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
@@ -892,7 +892,7 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    /// Contract revisions 37 and 39: `bot:handoffs` and `schedule:cards` are
+    /// Contract revisions 37 and 38: `bot:handoffs` and `schedule:cards` are
     /// each asked for in a call of their own, after the progress batch, and
     /// only while the Mac lists them in `serverCapabilities`. A Mac that does
     /// not know a name refuses the whole request with a 400, so naming it in

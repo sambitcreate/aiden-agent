@@ -668,7 +668,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 30 adds `bot:activity`, which only opts the device into
     /// the activity and queued session frames and Bot detail `chatActivity`.
     /// Contract revision 37 adds `bot:handoffs`, asked for in a call of its own.
-    /// Contract revision 39 adds `schedule:cards`, also asked for alone, after
+    /// Contract revision 38 adds `schedule:cards`, also asked for alone, after
     /// any other negotiation.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
@@ -692,10 +692,10 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// that names it, so the device asks for it alone.
     static let botHandoffs = Self(rawValue: "bot:handoffs")
 
-    /// Revision 39 (provisional): the device receives the display-only
+    /// Revision 38: the device receives the display-only
     /// `schedule` card on scheduled-task approvals, which the host adds only
     /// while the device also holds `schedule:read`. It grants no authority. A
-    /// host older than revision 39 refuses the whole request that names it
+    /// host older than revision 38 refuses the whole request that names it
     /// (`400`), and one without approvals answers `404`, so the device asks for
     /// it alone, after any other negotiation.
     static let scheduleCards = Self(rawValue: "schedule:cards")
@@ -3412,7 +3412,7 @@ enum AidenRemoteRunEndState: String, Codable, Equatable, Sendable {
     case cancelled
 }
 
-// MARK: - Scheduled-task approval cards (contract revision 39, `schedule:cards`)
+// MARK: - Scheduled-task approval cards (contract revision 38, `schedule:cards`)
 
 /// The display-only card a host adds to a `schedule_task` approval for a device
 /// holding `schedule:cards` and `schedule:read`. It mirrors the host's wire
@@ -3701,7 +3701,7 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
     let toolName: String
     let canAllow: Bool
     let scopes: [AidenApprovalScope]?
-    /// Contract revision 39 (`schedule:cards`): display-only, nil when absent or invalid.
+    /// Contract revision 38 (`schedule:cards`): display-only, nil when absent or invalid.
     let schedule: AidenApprovalSchedule?
 
     init(

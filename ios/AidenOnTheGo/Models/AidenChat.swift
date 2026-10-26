@@ -2397,7 +2397,7 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     /// Contract revision 17. Raw scope names so an unknown future scope never
     /// fails decoding; `AidenApprovalScope.offered(_:)` keeps the known ones.
     var scopes: [String]? = nil
-    /// Contract revision 39 (`schedule:cards`): the display-only card on a
+    /// Contract revision 38 (`schedule:cards`): the display-only card on a
     /// scheduled-task approval. Nil when absent or when it fails validation.
     var schedule: AidenApprovalSchedule? = nil
 
@@ -2621,7 +2621,7 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     var scopes: [AidenApprovalScope] = [.once]
     /// The host's tool name, used only to word the card. Empty when unknown.
     var toolName: String = ""
-    /// Contract revision 39: the structured card for a `schedule_task` approval.
+    /// Contract revision 38: the structured card for a `schedule_task` approval.
     /// Display-only; it never changes `canAllow` or `scopes`.
     var schedule: AidenApprovalSchedule? = nil
 }
@@ -2825,7 +2825,7 @@ enum AidenApprovalPresentation {
     }
 }
 
-/// Contract revision 39: what the structured scheduled-task approval card says.
+/// Contract revision 38: what the structured scheduled-task approval card says.
 /// It matches the desktop card: the action as a question, what runs and when,
 /// where and with what access, the instructions or script, and a note when the
 /// task will not run on its own.

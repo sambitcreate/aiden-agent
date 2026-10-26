@@ -1675,7 +1675,7 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
-/** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
+/** Revision 38: schedule cards ride on stream approvals and phone run approvals. */
 function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
   return Boolean(dependencies.streams || dependencies.hostRuns);
 }
@@ -1769,7 +1769,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
-    // Revision 39: a display opt-in for any device type while approvals are served.
+    // Revision 38: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
@@ -2160,7 +2160,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
+            // Revision 38: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
             }

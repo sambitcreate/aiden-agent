@@ -20,7 +20,7 @@ export const AIDEN_REMOTE_APPROVAL_SCHEDULE_CADENCE_LIMIT = 200;
 
 /**
  * Display-only facts for a scheduled-task approval card on a phone (contract
- * revision 39, `schedule:cards`). Built on the host from validated details;
+ * revision 38, `schedule:cards`). Built on the host from validated details;
  * it never changes whether the phone may allow, and it carries no ids.
  */
 export interface AidenRemoteApprovalSchedule {
