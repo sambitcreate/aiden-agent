@@ -29,6 +29,7 @@ export const FOLLOW_QUIET_LIMIT_MS = 14 * 24 * 60 * MINUTE;
 const MAX_COMMENTS_PER_NOTICE = 5;
 const MAX_COMMENT_CHARS = 1_500;
 const MAX_LOGGED_CHECKS = 3;
+/** Seen ids kept beyond the ones the latest read returned (those are always kept). */
 const MAX_SEEN_COMMENTS = 300;
 
 const FAILED: ReadonlySet<GitHubPullRequestCheckStatus> = new Set(["failure", "action-required", "cancelled"]);
@@ -272,8 +273,13 @@ export function evaluateFollow(
   const fresh = observation.comments
     .filter((comment) => !seen.has(comment.id))
     .sort((left, right) => left.createdAt - right.createdAt);
-  for (const comment of fresh) record.seenCommentIds.push(comment.id);
-  record.seenCommentIds = record.seenCommentIds.slice(-MAX_SEEN_COMMENTS);
+  // Everything this read returned is seen. Older ids are kept too, so a comment
+  // that moves back into the read window after a deletion is not news.
+  const observed = new Set(observation.comments.map((comment) => comment.id));
+  record.seenCommentIds = [
+    ...previous.seenCommentIds.filter((id) => !observed.has(id)),
+    ...observed,
+  ].slice(-(observed.size + MAX_SEEN_COMMENTS));
   const reportable = fresh.filter(
     (comment) => comment.createdAt >= previous.startedAt && comment.trusted && !comment.ownEcho && comment.body.trim(),
   );

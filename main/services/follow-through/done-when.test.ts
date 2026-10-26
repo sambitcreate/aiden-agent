@@ -101,6 +101,19 @@ test("clearing or replacing a running check stops it and drops its result", asyn
   assert.deepEqual(posted, []);
   assert.equal(checks.get("chat-1")?.command, "npm run lint");
   assert.equal(checks.get("chat-1")?.checksRun, 0);
+
+  // A replacement asked to run now starts once the replaced run has stopped, never beside it.
+  checks.set({ chatId: "chat-1", workspaceId: "ws-1", command: "npm run lint", runNow: true });
+  checks.set({ chatId: "chat-1", workspaceId: "ws-1", command: "npm run typecheck", runNow: true });
+  assert.equal(runs[2]!.signal.aborted, true);
+  assert.equal(runs.length, 3, "nothing new runs while the replaced check is stopping");
+  await settle();
+  assert.equal(runs.length, 4);
+  assert.equal(runs[3]!.record.command, "npm run typecheck");
+  assert.equal(checks.get("chat-1")?.state, "running");
+  runs[3]!.finish({ exitCode: 0 });
+  await settle();
+  assert.deepEqual(posted.map((notice: DoneWhenNotice) => notice.notice.title), ["Check passed"]);
 });
 
 test("a check cut off by quitting waits for the next answer instead of rerunning on launch", async () => {

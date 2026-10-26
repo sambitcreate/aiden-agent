@@ -28,7 +28,7 @@ The owner asked for all three, desktop first, with these rules: background jobs 
 - Ask-mode approval covers `start` only.
 - Limits: 10 running per chat, 20 in all, 50 MB of output per job. Stop sends SIGTERM to the group and SIGKILL four seconds later.
 - A job that ends on its own posts a notice with its last 3,000 characters. When `start` sees the job end during its 1.5-second wait, the tool result reports it and no notice follows.
-- Jobs stop on quit, chat deletion, and folder-access change or workspace removal. A durable record of running jobs lets the next launch stop jobs a crash left behind, matching pid and process start time so a reused pid is never signalled.
+- Jobs stop on quit, chat deletion, and folder-access change or workspace removal. When a job's shell exits, the rest of its process group is ended too. A durable record of running jobs lets the next launch stop jobs a crash left behind, matching pid and process start time so a reused pid is never signalled; when the shell had already exited, only group members carrying the job's `AIDEN_BACKGROUND_JOB` marker are stopped.
 
 ### Following a pull request
 
@@ -43,7 +43,7 @@ The owner asked for all three, desktop first, with these rules: background jobs 
 
 - `/until <command>` sets one check per chat. It runs after each answer in that chat ends (and at once when the chat is idle), in the workspace folder, with a 10-minute limit.
 - A failure posts the exit code and the last 3,000 characters of output and wakes the agent; a pass, or the fifth failure, ends the loop without waking it.
-- A check cut off by quitting returns to waiting and is not counted; nothing reruns on launch. Clearing or replacing a running check aborts it and drops its result.
+- A check cut off by quitting returns to waiting and is not counted; nothing reruns on launch. Clearing or replacing a running check aborts it and drops its result; a replacement asked to run now starts once the old run has stopped.
 
 ### Desktop UI
 

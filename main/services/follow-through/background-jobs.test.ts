@@ -2,7 +2,7 @@
 // groups, exits and logs, which a fake process would only restate.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,9 +18,15 @@ async function tempDir(): Promise<string> {
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+  // An ended process stays a zombie until something reaps it, which a
+  // container's init may never do; it has still ended.
+  try {
+    return !execFileSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).trim().startsWith("Z");
+  } catch {
+    return false;
   }
 }
 
@@ -31,6 +37,12 @@ async function eventually(check: () => boolean | Promise<boolean>, what: string,
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.fail(`Timed out waiting for ${what}`);
+}
+
+/** Stop what is left and wait for the job record to be saved before removing the folder. */
+async function cleanUp(jobs: BackgroundJobs, dir: string): Promise<void> {
+  await jobs.shutdown();
+  await fs.rm(dir, { recursive: true, force: true });
 }
 
 function harness(dir: string, options: Partial<ConstructorParameters<typeof BackgroundJobs>[0]> = {}) {
@@ -48,8 +60,8 @@ function harness(dir: string, options: Partial<ConstructorParameters<typeof Back
 
 test("a job runs in the workspace folder and the chat hears how it ended, with its output", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const job = start('pwd; echo "build broke" >&2; exit 3', "chat-1", { description: "Run the\nbuild" });
   assert.equal(job.state, "running");
   assert.equal(job.description, "Run the build", "the label is one line");
@@ -85,8 +97,8 @@ test("jobs belong to their chat: another chat cannot list, read or stop them", {
 
 test("stopping a job ends everything it started and is not reported as ending by itself", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const pidFile = path.join(dir, "grandchild.pid");
   const job = start(`sleep 60 & echo $! > ${JSON.stringify(pidFile)}; wait`);
   await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).trim().length > 0, "the grandchild pid");
@@ -100,10 +112,26 @@ test("stopping a job ends everything it started and is not reported as ending by
   assert.deepEqual(ended, [], "a stop someone asked for is not news for the chat");
 });
 
+test("a job whose shell exits while something it started holds the output ends, and takes that with it", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, ended, start } = harness(dir, { stopGraceMs: 200 });
+  t.after(async () => {
+    await jobs.shutdown();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  const job = start("sleep 30 & echo $!; sleep 0.2; exit 0");
+  await eventually(() => jobs.get("chat-1", job.id)?.state !== "running", "the job to end");
+  const leftBehind = Number(jobs.read("chat-1", job.id).output.trim().split("\n")[0]);
+  assert.ok(leftBehind > 1);
+  assert.equal(jobs.get("chat-1", job.id)?.state, "exited");
+  assert.equal(ended.length, 1, "the chat hears that it ended");
+  await eventually(() => !alive(leftBehind), "what it left running to end");
+});
+
 test("a job that ignores the polite stop is forced after the grace period", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, start } = harness(dir, { stopGraceMs: 200 });
+  t.after(() => cleanUp(jobs, dir));
   const job = start("trap '' TERM; echo ready; while true; do sleep 0.1; done");
   await eventually(() => jobs.read("chat-1", job.id).output.includes("ready"), "the trap to be set");
   const began = Date.now();
@@ -114,8 +142,8 @@ test("a job that ignores the polite stop is forced after the grace period", { sk
 
 test("a start that the caller watches reports its own quick end instead of a chat notice", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const job = start("echo done");
   const settled = await jobs.settle("chat-1", job.id, 5_000);
   assert.equal(settled.state, "exited");
@@ -130,8 +158,8 @@ test("a start that the caller watches reports its own quick end instead of a cha
 
 test("a job whose output passes the size limit is stopped and the chat hears why", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
-  const { ended, start } = harness(dir, { maxLogBytes: 64 * 1024 });
+  const { jobs, ended, start } = harness(dir, { maxLogBytes: 64 * 1024 });
+  t.after(() => cleanUp(jobs, dir));
   start("while true; do echo 0123456789012345678901234567890123456789; done");
   await eventually(() => ended.length === 1, "the output limit to stop the job");
   assert.equal(ended[0]!.job.state, "stopped");
@@ -142,8 +170,8 @@ test("a job whose output passes the size limit is stopped and the chat hears why
 
 test("reads keep the newest output and say when older output was left out", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const job = start("for i in $(seq 1 2000); do echo line-$i; done");
   await eventually(() => ended.length === 1, "the job to end");
   const read = jobs.read("chat-1", job.id, 500);
@@ -170,8 +198,8 @@ test("a chat can run at most its share of jobs at once", { skip }, async (t) => 
 
 test("stopping a chat's jobs for deletion forgets them and their logs", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const job = start("sleep 30");
   await jobs.stopChat("chat-1", "chat-deleted", true);
   assert.deepEqual(jobs.list("chat-1"), []);
@@ -180,8 +208,8 @@ test("stopping a chat's jobs for deletion forgets them and their logs", { skip }
 
 test("after quitting, no new job starts", { skip }, async (t) => {
   const dir = await tempDir();
-  t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const { jobs, ended, start } = harness(dir);
+  t.after(() => cleanUp(jobs, dir));
   const job = start("sleep 30");
   await jobs.shutdown();
   assert.equal(jobs.get("chat-1", job.id)?.endReason, "app-quit");
@@ -226,4 +254,49 @@ test("the next launch stops a job a crash left running, but never a reused pid",
   await eventually(() => !alive(leftover.pid!), "the leftover job to end");
   assert.ok(alive(bystander.pid!), "a process that only shares the pid number is left alone");
   assert.deepEqual(await fs.readdir(logDir), [], "old logs and the record are cleared");
+});
+
+test("after a crash, what an ended shell left in its group is stopped only when it carries that job's marker", { skip }, async (t) => {
+  const dir = await tempDir();
+  const logDir = path.join(dir, "logs");
+  await fs.mkdir(logDir, { recursive: true });
+  // Each shell exits at once and leaves a sleeper in its process group, as a job can after Aiden crashed.
+  const leaveBehind = async (marker: string) => {
+    const pidFile = path.join(dir, `${marker}.pid`);
+    const shell = spawn("/bin/sh", ["-c", `sleep 60 & echo $! > ${JSON.stringify(pidFile)}`], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, AIDEN_BACKGROUND_JOB: marker },
+    });
+    await new Promise((resolve) => shell.once("exit", resolve));
+    await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).trim().length > 0, "the sleeper pid");
+    return { group: shell.pid!, sleeper: Number((await fs.readFile(pidFile, "utf8")).trim()) };
+  };
+  const ours = await leaveBehind("job_0000aaaa");
+  const another = await leaveBehind("job_0000bbbb");
+  t.after(async () => {
+    for (const pid of [ours.sleeper, another.sleeper]) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  await fs.writeFile(
+    path.join(logDir, "running.json"),
+    JSON.stringify({
+      version: 1,
+      jobs: [
+        { id: "job_0000aaaa", pid: ours.group, processStart: "Thu Jan  1 00:00:00 1970" },
+        // The same group number now holds processes of some other job: not this record's.
+        { id: "job_0000cccc", pid: another.group, processStart: "Thu Jan  1 00:00:00 1970" },
+      ],
+    }),
+  );
+  const jobs = new BackgroundJobs({ logDir, stopGraceMs: 500 });
+  assert.equal(await jobs.reapPreviousLaunch(), 1);
+  await eventually(() => !alive(ours.sleeper), "what the ended shell left behind to end");
+  assert.ok(alive(another.sleeper), "processes without this job's marker are left alone");
 });

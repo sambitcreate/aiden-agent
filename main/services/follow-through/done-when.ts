@@ -79,6 +79,8 @@ function outcomeLine(result: DoneWhenRunResult): string {
 export class DoneWhenChecks {
   private readonly records = new Map<string, DoneWhenRecord>();
   private readonly running = new Map<string, AbortController>();
+  /** Chats whose new check should run as soon as the replaced one has stopped. */
+  private readonly runWhenFree = new Set<string>();
 
   constructor(private readonly deps: DoneWhenDeps) {}
 
@@ -114,12 +116,18 @@ export class DoneWhenChecks {
     };
     this.records.set(input.chatId, record);
     this.changed(input.chatId);
-    if (input.runNow) void this.runCheck(input.chatId);
+    this.runWhenFree.delete(input.chatId);
+    if (input.runNow) {
+      // A replaced run may still be stopping; one check runs at a time.
+      if (this.running.has(input.chatId)) this.runWhenFree.add(input.chatId);
+      else void this.runCheck(input.chatId);
+    }
     return { ...record };
   }
 
   clear(chatId: string): boolean {
     const had = this.records.delete(chatId);
+    this.runWhenFree.delete(chatId);
     this.running.get(chatId)?.abort();
     if (had) this.changed(chatId);
     return had;
@@ -141,6 +149,7 @@ export class DoneWhenChecks {
 
   /** Stop any check that is running, for quit. */
   shutdown(): void {
+    this.runWhenFree.clear();
     for (const controller of this.running.values()) controller.abort();
   }
 
@@ -169,6 +178,7 @@ export class DoneWhenChecks {
       };
     } finally {
       if (this.running.get(chatId) === controller) this.running.delete(chatId);
+      if (this.runWhenFree.delete(chatId)) void this.runCheck(chatId);
     }
     // Cleared or replaced while it ran: that record is no longer this check.
     if (this.records.get(chatId) !== started) return;

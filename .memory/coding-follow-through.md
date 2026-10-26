@@ -10,7 +10,9 @@ Design decisions worth keeping:
 - Delivery order: queue into a running turn (`llmClient.admitAgentNotice`), else start an unattended turn (headless owner, approvals and questions detached, no subagents/Computer Use/MCP) when `wake` is true and the chat has wake budget left (6/hour), else append only. Never wake for passes, merges or closes, or the loop never settles.
 - The agent's own GitHub comments come back as `byViewer` comments; they are dropped only when made during that chat's run windows (from `hostRunRegistry`), so the person writing on GitHub with the same account still counts.
 - `BackgroundJobs.settle` marks a job watched so a job that ends during the tool's start wait is reported once (in the tool result), not twice.
-- Crash reaping matches pid and `ps -o lstart=` start time before signalling a leftover process group.
+- Crash reaping matches pid and `ps -o lstart=` start time before signalling a leftover process group. If the shell had already exited, it signals only group members whose environment has `AIDEN_BACKGROUND_JOB=<job id>` (`/proc/<pid>/environ` on Linux, `ps -E` on macOS). While Aiden runs, a shell's `exit` ends the rest of its group, because `close` waits for every holder of the output pipes.
+- Seen comment ids always keep every id the latest read returned (up to 660 per read) plus 300 older ones.
+- `/until` replacing a running check with runNow waits for the old run to stop (`runWhenFree`), then runs.
 - A done-when check interrupted by quit returns to waiting with its count restored; nothing reruns on launch.
 - `llm-client.ts` imports follow-through tools dynamically to avoid an import cycle; only `background-job-tool.ts` is imported statically (for the Ask-mode approval check).
 

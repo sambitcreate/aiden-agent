@@ -49,6 +49,10 @@ export interface BackgroundJobsOptions {
   maxRunning?: number;
   /** Reads a process's start time so a later launch can tell it from a reused pid. */
   processStartTime?: (pid: number) => Promise<string | undefined>;
+  /** Lists the processes in a process group. */
+  processGroupMembers?: (pgid: number) => Promise<number[]>;
+  /** Whether a process was started with this `NAME=value` in its environment. */
+  processHasEnvironment?: (pid: number, entry: string) => Promise<boolean>;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -71,6 +75,7 @@ interface JobRecord {
   decoder: StringDecoder;
   stopRequested?: BackgroundJobEndReason;
   forceTimer?: ReturnType<typeof setTimeout>;
+  leftoverTimer?: ReturnType<typeof setTimeout>;
   exited: Promise<void>;
   processStart?: string;
   /** Someone is waiting on this job right now and reports its end themselves. */
@@ -102,6 +107,44 @@ export function defaultProcessStartTime(pid: number): Promise<string | undefined
   });
 }
 
+export function defaultProcessGroupMembers(pgid: number): Promise<number[]> {
+  return new Promise((resolve) => {
+    execFile("ps", ["-A", "-o", "pid=,pgid="], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error || typeof stdout !== "string") return resolve([]);
+      const members: number[] = [];
+      for (const line of stdout.split("\n")) {
+        const [pid, group] = line.trim().split(/\s+/u).map(Number);
+        if (group === pgid && Number.isSafeInteger(pid) && pid! > 1) members.push(pid!);
+      }
+      resolve(members);
+    });
+  });
+}
+
+export function defaultProcessHasEnvironment(pid: number, entry: string): Promise<boolean> {
+  if (process.platform === "linux") {
+    return fsp
+      .readFile(`/proc/${pid}/environ`, "utf8")
+      .then((environment) => environment.split("\0").includes(entry))
+      .catch(() => false);
+  }
+  return new Promise((resolve) => {
+    // macOS prints the environment a process started with after its command.
+    execFile("ps", ["-E", "-ww", "-o", "command=", "-p", String(pid)], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      resolve(!error && typeof stdout === "string" && stdout.split(/\s+/u).includes(entry));
+    });
+  });
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function groupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
@@ -131,6 +174,8 @@ export class BackgroundJobs {
   private readonly maxRunningPerChat: number;
   private readonly maxRunning: number;
   private readonly processStartTime: (pid: number) => Promise<string | undefined>;
+  private readonly processGroupMembers: (pgid: number) => Promise<number[]>;
+  private readonly processHasEnvironment: (pid: number, entry: string) => Promise<boolean>;
   private recordWrite: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -141,6 +186,8 @@ export class BackgroundJobs {
     this.maxRunningPerChat = options.maxRunningPerChat ?? MAX_RUNNING_JOBS_PER_CHAT;
     this.maxRunning = options.maxRunning ?? MAX_RUNNING_JOBS;
     this.processStartTime = options.processStartTime ?? defaultProcessStartTime;
+    this.processGroupMembers = options.processGroupMembers ?? defaultProcessGroupMembers;
+    this.processHasEnvironment = options.processHasEnvironment ?? defaultProcessHasEnvironment;
   }
 
   start(input: StartBackgroundJobInput): BackgroundJobView {
@@ -211,6 +258,7 @@ export class BackgroundJobs {
       this.finish(record, null, null);
       resolveExited();
     });
+    child.once("exit", () => this.endLeftovers(record));
     child.once("close", (code, signal) => {
       this.finish(record, code, signal);
       resolveExited();
@@ -309,7 +357,10 @@ export class BackgroundJobs {
 
   /**
    * After a crash, jobs from the last launch may still run. Stop each one whose
-   * pid still names the same process (same start time), then clear old logs.
+   * pid still names the same process (same start time). When that shell has
+   * already gone, stop what it left in its group, but only processes that
+   * carry the job's marker, so a reused pid is never mistaken for a job. Then
+   * clear old logs.
    */
   async reapPreviousLaunch(): Promise<number> {
     const recordPath = path.join(this.options.logDir, RECORD_FILE);
@@ -322,15 +373,34 @@ export class BackgroundJobs {
     }
     let stopped = 0;
     for (const entry of parsed?.jobs ?? []) {
-      if (!Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !entry.processStart) continue;
-      const current = await this.processStartTime(entry.pid);
-      if (current !== entry.processStart || !groupExists(entry.pid)) continue;
-      signalGroup(entry.pid, "SIGTERM");
-      const deadline = this.now() + this.stopGraceMs;
-      while (groupExists(entry.pid) && this.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      if (!Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
+      const current = entry.processStart ? await this.processStartTime(entry.pid) : undefined;
+      if (current && current === entry.processStart) {
+        signalGroup(entry.pid, "SIGTERM");
+        await this.waitUntil(() => !groupExists(entry.pid));
+        if (groupExists(entry.pid)) signalGroup(entry.pid, "SIGKILL");
+        stopped += 1;
+        continue;
       }
-      if (groupExists(entry.pid)) signalGroup(entry.pid, "SIGKILL");
+      if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
+      const marker = `AIDEN_BACKGROUND_JOB=${entry.id}`;
+      const left: number[] = [];
+      for (const pid of await this.processGroupMembers(entry.pid)) {
+        if (await this.processHasEnvironment(pid, marker)) left.push(pid);
+      }
+      if (!left.length) continue;
+      const signal = (name: NodeJS.Signals) => {
+        for (const pid of left) {
+          try {
+            process.kill(pid, name);
+          } catch {
+            // Already gone.
+          }
+        }
+      };
+      signal("SIGTERM");
+      await this.waitUntil(() => left.every((pid) => !processExists(pid)));
+      signal("SIGKILL");
       stopped += 1;
     }
     try {
@@ -343,6 +413,33 @@ export class BackgroundJobs {
       // No log directory yet.
     }
     return stopped;
+  }
+
+  private async waitUntil(done: () => boolean): Promise<void> {
+    const deadline = this.now() + this.stopGraceMs;
+    while (!done() && this.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  /**
+   * The shell has exited, but what it started in the background can keep the
+   * output pipes, and so the job, open. End the rest of its group: politely
+   * first, then forced, then let go of the pipes.
+   */
+  private endLeftovers(job: JobRecord): void {
+    const pid = job.child?.pid;
+    if (!pid || job.view.state !== "running" || job.forceTimer || !groupExists(pid)) return;
+    signalGroup(pid, "SIGTERM");
+    job.leftoverTimer = setTimeout(() => {
+      if (groupExists(pid)) signalGroup(pid, "SIGKILL");
+      const release = setTimeout(() => {
+        job.child?.stdout?.destroy();
+        job.child?.stderr?.destroy();
+      }, 1_000);
+      release.unref?.();
+    }, this.stopGraceMs);
+    job.leftoverTimer.unref?.();
   }
 
   private stopRecord(job: JobRecord, reason: BackgroundJobEndReason): Promise<void> {
@@ -393,6 +490,7 @@ export class BackgroundJobs {
   private finish(job: JobRecord, code: number | null, signal: NodeJS.Signals | null): void {
     if (job.view.state !== "running") return;
     if (job.forceTimer) clearTimeout(job.forceTimer);
+    if (job.leftoverTimer) clearTimeout(job.leftoverTimer);
     // Anything still in the group after the shell left is ended with it.
     const pid = job.child?.pid;
     if (pid && groupExists(pid)) signalGroup(pid, "SIGKILL");

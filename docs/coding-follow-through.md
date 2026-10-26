@@ -32,7 +32,7 @@ The agent uses its `background_job` tool to start, read, list and stop jobs. Eac
 
 In an **Ask first** workspace, starting a job asks for approval like `run_command`. Reading, listing and stopping never ask.
 
-A chat can run 10 jobs at once and Aiden 20 in all. Jobs stop when Aiden quits, when the chat is deleted, and when the workspace's folder access changes or the workspace is removed. Stopping asks the whole process group to end and forces it after four seconds. If Aiden crashes, the next launch stops any job it left running (matching both the process id and its start time) and deletes the old logs.
+A chat can run 10 jobs at once and Aiden 20 in all. Jobs stop when Aiden quits, when the chat is deleted, and when the workspace's folder access changes or the workspace is removed. Stopping asks the whole process group to end and forces it after four seconds. When a job's shell exits, anything it started in the background is ended the same way, so nothing outlives its job. If Aiden crashes, the next launch stops any job it left running (matching both the process id and its start time). If that job's shell had already exited, it stops only the processes left in its group that carry the job's own marker in their environment, so a reused process id is never signalled. Then it deletes the old logs.
 
 The composer shows a **N in background** chip while jobs run. Its list shows each job's state and output, and **Stop** ends one.
 
@@ -60,7 +60,7 @@ Type `/until` followed by the check, for example `/until npm test`. The check is
 - When it passes, Aiden stops running it and tells the chat.
 - After five checks that still fail, Aiden stops and tells the chat, without starting another answer.
 
-A chat has one check at a time; `/until` with a new command replaces it. The composer shows an **Until npm test passes** chip, and **Stop checking** clears it. Changing the workspace's folder access or deleting the chat clears it too. A check that was running when Aiden quit is not rerun on launch; it waits for the next answer.
+A chat has one check at a time; `/until` with a new command replaces it. A replaced check that was running is stopped first, and the new one runs once it has. The composer shows an **Until npm test passes** chip, and **Stop checking** clears it. Changing the workspace's folder access or deleting the chat clears it too. A check that was running when Aiden quit is not rerun on launch; it waits for the next answer.
 
 ## Network
 

@@ -175,6 +175,29 @@ test("only new comments from people who can write reach the agent, and its own c
   assert.deepEqual(evaluateFollow(next, read, noLogs, START + 7 * MINUTE).notices, []);
 });
 
+test("a busy pull request's comments are news once, however many one read returns", () => {
+  // One read can return up to 30 comments plus 30 reviews with 20 inline comments each.
+  const busy = observation({
+    comments: Array.from({ length: 660 }, (_, index) =>
+      comment({ id: `c${index}`, createdAt: START + MINUTE + index, body: `Comment ${index}` }),
+    ),
+  });
+  const first = evaluateFollow(record(), busy, noLogs, START + 5 * MINUTE);
+  assert.equal(first.notices.length, 1);
+  let current = first.record;
+  for (let poll = 1; poll <= 3; poll += 1) {
+    const again = evaluateFollow(current, busy, noLogs, START + (5 + poll * 2) * MINUTE);
+    assert.deepEqual(again.notices, [], `read ${poll + 1} of the same comments is not news`);
+    assert.equal(again.record.noticesSent, 1, "and spends no update");
+    current = again.record;
+  }
+
+  // A comment deleted on GitHub lets an older one back into the read window; it was seen already.
+  const shifted = observation({ comments: [comment({ id: "older", createdAt: START + MINUTE }), ...busy.comments.slice(1)] });
+  const seenOlder = evaluateFollow(current, shifted, noLogs, START + 20 * MINUTE).record;
+  assert.deepEqual(evaluateFollow(seenOlder, busy, noLogs, START + 22 * MINUTE).notices, [], "the deleted one's neighbour returns");
+});
+
 test("passing checks are reported once, without waking the agent", () => {
   const passing = observation({
     checksState: "passing",
