@@ -523,6 +523,16 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   await api.mcpCommand(dir, ["remove", "local"]); assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
+test("MCP presets leave out Mac app connectors, which the desktop app sets up", async (t) => {
+  const dir = temporary(t);
+  const presets = await api.mcpCommand(dir, ["presets"]);
+  assert.ok(presets.length > 0);
+  assert.ok(presets.every((preset) => preset.transport === "http"));
+  assert.ok(!presets.some((preset) => preset.id === "imcp"));
+  await assert.rejects(api.mcpCommand(dir, ["preset", "imcp"]), /Aiden desktop app on your Mac/);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
 test("provider import rejects invalid configuration without replacing the previous file", async (t) => {
   const dir = temporary(t), original = { providers: {} };
   api.atomicJson(join(dir, "models.json"), original);

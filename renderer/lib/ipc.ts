@@ -79,6 +79,7 @@ import type {
   McpStatus,
   McpToolSummary,
   McpPendingLaunchApproval,
+  McpMacAppStatus,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -636,6 +637,10 @@ export const mcpApi = {
   liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
   /** The server's tools from its last discovery (never connects); null when none yet. */
   toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  /** Whether a Mac app connector's app (iMCP) is installed and open. Read-only. */
+  macAppStatus: (presetId: string) => invoke<McpMacAppStatus>("mcp:macAppStatus", presetId),
+  /** Open a Mac app connector's installed app. Only when the person chooses Open. */
+  openMacApp: (presetId: string) => invoke<{ opened: true }>("mcp:openMacApp", presetId),
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>

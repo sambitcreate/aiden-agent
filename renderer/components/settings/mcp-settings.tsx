@@ -56,8 +56,10 @@ import {
   filterConnectorCatalog,
   getConnectorCatalogEntry,
   isConnectorAvailable,
+  isConnectorOffered,
   type ConnectorCatalogEntry,
 } from "../../shared/connector-catalog";
+import { useAppCapabilities } from "../../lib/app-capabilities";
 import { McpPresetIcon } from "./mcp-preset-icons";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpSignInControls } from "./mcp-sign-in-controls";
@@ -192,6 +194,7 @@ function McpDependentsNote({
 
 export function McpSettings() {
   const qc = useQueryClient();
+  const capabilities = useAppCapabilities();
   const servers = useMcpServers();
   const presets = useMcpPresets();
   const [editing, setEditing] = React.useState<McpServer | null>(null);
@@ -331,7 +334,9 @@ export function McpSettings() {
     servers.isError ? { label: "your connectors", query: servers } : null,
     presets.isError ? { label: "connector details", query: presets } : null,
   ].filter((entry) => entry !== null);
-  const results = filterConnectorCatalog(CONNECTOR_CATALOG, search, category);
+  // Connectors served by a Mac app (iMCP) appear only where Aiden runs on a Mac.
+  const offered = CONNECTOR_CATALOG.filter((entry) => isConnectorOffered(entry, capabilities));
+  const results = filterConnectorCatalog(offered, search, category);
 
   return (
     <div className="flex flex-col gap-6">

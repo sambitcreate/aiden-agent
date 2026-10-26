@@ -9,6 +9,8 @@ export interface HostPlatformCapabilities {
   dictationHoldToTalk: boolean;
   dockIcon: boolean;
   nativeShare: boolean;
+  /** Connectors served by a separate Mac app, such as iMCP (`renderer/shared/connector-catalog.ts`). */
+  macAppConnectors: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -30,5 +32,6 @@ export function hostPlatformCapabilities(
     dictationHoldToTalk: darwin,
     dockIcon: darwin,
     nativeShare: darwin,
+    macAppConnectors: darwin,
   };
 }

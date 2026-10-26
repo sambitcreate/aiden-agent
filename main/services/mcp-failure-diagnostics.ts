@@ -313,6 +313,8 @@ let presetHosts: ReadonlySet<string> | undefined;
 /** Hosts of the bundled connector presets' own endpoints: public vendor services. */
 function bundledPresetHosts(): ReadonlySet<string> {
   presetHosts ??= new Set(MCP_PRESETS.flatMap((preset) => {
+    // A Mac app preset (iMCP) runs a local command and has no host.
+    if (preset.transport !== "http") return [];
     const host = hostnameOf(preset.url);
     // Local presets (Figma desktop on 127.0.0.1) are recorded by category like any local host.
     return host && mcpDiagnosticHostKind(host) === "custom" ? [host] : [];

@@ -23,6 +23,17 @@ Copyright (c) 2014 Ryan L McIntyre
 MIT License. See `renderer/lib/ghostty-terminal/fonts/LICENSE`
 
 
+## iMCP menu bar mark
+
+The iMCP connector's icon (`renderer/components/settings/mcp-preset-icons.tsx`)
+is the path from iMCP's `Assets/icon.svg`, recolored with `currentColor`.
+Aiden does not bundle the iMCP app; it runs the copy the person installs.
+Source: https://github.com/mattt/iMCP
+
+Copyright 2025 Mattt (https://mat.tt)
+
+MIT License. See https://github.com/mattt/iMCP/blob/main/LICENSE.md
+
 ## Chart.js
 
 Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.

@@ -11,6 +11,7 @@ import type { McpPresetState, McpServer, Provider } from "../../lib/types";
 import { Toaster } from "../ui";
 import { useMcpPresets, useMcpServers } from "../../lib/queries";
 import { McpSettings } from "./mcp-settings";
+import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../../lib/app-capabilities";
 import { PresetSetupDialog } from "./mcp-preset-setup";
 import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-metadata-field";
 import { ProviderConnectorKeySharing } from "./provider-connector-key-sharing";
@@ -46,7 +47,7 @@ const localServer: McpServer = {
   args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/My Docs"],
 };
 
-function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
+function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}, { onMac = false } = {}) {
   const calls = installBotTestIpc({
     "mcp:list": () => [localServer],
     "mcp:presets": () => catalogPresetStates(),
@@ -56,10 +57,15 @@ function mount(handlers: Record<string, (...args: unknown[]) => unknown> = {}) {
     "providers:list": () => [],
     ...handlers,
   });
+  const capabilities = onMac
+    ? { ...DISABLED_APP_CAPABILITIES, platform: "darwin" as const, macAppConnectors: true }
+    : DISABLED_APP_CAPABILITIES;
   render(
     <QueryClientProvider client={createBotTestQueryClient()}>
-      <McpSettings />
-      <Toaster />
+      <AppCapabilitiesProvider capabilities={capabilities}>
+        <McpSettings />
+        <Toaster />
+      </AppCapabilitiesProvider>
     </QueryClientProvider>,
   );
   return calls;
@@ -583,6 +589,83 @@ test("a connector on this device sets up with Test and Connect, without a key or
   fireEvent.click(connect);
   await waitFor(() => assert.deepEqual(openChanges, [false]));
   assert.deepEqual(savedServers(calls).map((server) => [server.url, server.oauth]), [["http://127.0.0.1:3845/mcp", undefined]]);
+});
+
+test("the iMCP card appears only where Aiden runs on a Mac", async () => {
+  mount();
+  await screen.findByRole("button", { name: "Set Up Linear" });
+  assert.equal(screen.queryByRole("button", { name: "Set Up iMCP" }), null);
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "imessage" } });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Set Up Linear" }), null));
+  assert.equal(screen.queryByRole("button", { name: "Set Up iMCP" }), null);
+  cleanup();
+
+  mount({}, { onMac: true });
+  await screen.findByRole("button", { name: "Set Up iMCP" });
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search connectors" }), { target: { value: "imessage" } });
+  await waitFor(() => assert.equal(screen.queryByRole("button", { name: "Set Up Linear" }), null));
+  assert.ok(screen.getByRole("button", { name: "Set Up iMCP" }));
+  assert.ok(screen.getByText("Calendar, Messages and more from this Mac through iMCP"));
+});
+
+const IMCP_SERVER = "/Applications/iMCP.app/Contents/MacOS/imcp-server";
+
+test("iMCP setup leads from download to Open, then saves a connection that runs only the installed app's server", async () => {
+  const state = catalogPresetStates().find((entry) => entry.preset.id === "imcp")!;
+  let app = { supported: true, installed: false, open: false } as { supported: boolean; installed: boolean; open: boolean; command?: string };
+  const { calls, openChanges } = renderPreset(state, undefined, {
+    "mcp:macAppStatus": () => app,
+    "mcp:openMacApp": () => {
+      app = { ...app, open: true };
+      return { opened: true };
+    },
+    "mcp:save": (server: unknown) => server,
+    "mcp:status": () => ({ connected: true, toolCount: 12 }),
+  });
+  const dialog = await screen.findByRole("dialog", { name: /Set up iMCP/u });
+  const download = await within(dialog).findByRole("link", { name: "Download iMCP" });
+  assert.equal(download.getAttribute("href"), "https://imcp.app/download");
+  const connect = within(dialog).getByRole("button", { name: "Connect" }) as HTMLButtonElement;
+  assert.equal(connect.disabled, true, "nothing to run until iMCP is installed");
+  assert.equal((within(dialog).getByRole("button", { name: "Open iMCP" }) as HTMLButtonElement).disabled, true);
+
+  // The person installs iMCP outside Aiden, then checks again.
+  app = { supported: true, installed: true, open: false, command: IMCP_SERVER };
+  fireEvent.click(within(dialog).getByRole("button", { name: "Check again" }));
+  await within(dialog).findByText("Installed");
+  assert.ok(within(dialog).getByText(IMCP_SERVER), "Connection details show exactly what runs");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open iMCP" }));
+  await within(dialog).findByText("Open");
+  assert.equal(channelCalls(calls, "mcp:openMacApp").length, 1);
+  assert.deepEqual(channelCalls(calls, "mcp:openMacApp")[0]!.args, ["imcp"]);
+
+  await waitFor(() => assert.equal(connect.disabled, false));
+  fireEvent.click(connect);
+  await waitFor(() => assert.deepEqual(openChanges, [false]));
+  const save = channelCalls(calls, "mcp:save")[0]!;
+  const saved = save.args[0] as McpServer;
+  assert.deepEqual(save.args[1], { approveLaunch: true }, "saving from the dialog that shows the command approves it");
+  assert.deepEqual(
+    [saved.transport, saved.command, saved.args, saved.url],
+    ["stdio", IMCP_SERVER, [], undefined],
+  );
+  // Main accepts exactly this record on a Mac.
+  assert.equal(assertMcpPresetServer(saved, { platform: "darwin", homedir: "/Users/me" })?.id, "imcp");
+});
+
+test("a failed iMCP connection test adds the checks that usually fix it", async () => {
+  const state = catalogPresetStates().find((entry) => entry.preset.id === "imcp")!;
+  const { calls } = renderPreset(state, undefined, {
+    "mcp:macAppStatus": () => ({ supported: true, installed: true, open: true, command: IMCP_SERVER }),
+    "mcp:testDraft": () => ({ connected: false, toolCount: 0, tools: [], serverCapabilities: null, error: "The MCP connection timed out after 10s." }),
+  });
+  const dialog = await screen.findByRole("dialog", { name: /Set up iMCP/u });
+  await within(dialog).findByText("Installed");
+  assert.equal(within(dialog).queryByText(/Still not connecting/u), null);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Test connection" }));
+  await within(dialog).findByText(/Still not connecting\? In iMCP, check that Enable MCP Server is on/u);
+  assert.equal(channelCalls(calls, "mcp:save").length, 0, "testing saves nothing");
+  assert.equal((channelCalls(calls, "mcp:testDraft")[0]!.args[0] as McpServer).command, IMCP_SERVER);
 });
 
 test("a saved hosted Figma connection shows why it can't connect and offers no way to save or sign in", async () => {
