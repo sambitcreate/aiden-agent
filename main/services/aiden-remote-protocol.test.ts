@@ -144,6 +144,10 @@ test("shared Aiden Remote v1 fixture is complete, ordered, and contains no unsaf
   assert.equal(recapStep.status, "completed");
   assert.equal(recapStep.questionnaire?.outcome, "answered");
   assert.deepEqual(recapStep.questionnaire?.items.map((item) => [item.kind, item.answers]), [["option", ["Plain text"]], ["skipped", []]]);
+  const extractStep = parsedTimeline?.steps.find((step) => step.kind === "tool" && step.extraction);
+  assert.ok(extractStep?.kind === "tool", "the fixture timeline carries a web page extract recap");
+  assert.equal(extractStep.toolName, "web_fetch");
+  assert.deepEqual(extractStep.extraction?.fields.map((field) => [field.name, field.status]), [["pro_monthly", "extracted"], ["team_yearly", "uncertain"], ["enterprise", "null"]]);
   assert.equal(fixture.protocolVersion, AIDEN_REMOTE_PROTOCOL_VERSION);
   assert.deepEqual(fixture.capabilities, MOBILE_CAPABILITIES);
   assert.deepEqual(fixture.server.serverCapabilities, MOBILE_CAPABILITIES);
@@ -2055,6 +2059,79 @@ test("questionnaire recap OpenAPI constraints agree with the runtime timeline pa
   const versionTwo = { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [versionTwoStep] };
   assert.equal(validateTimeline(versionTwo), true);
   assert.ok(parseGenerationTimeline(versionTwo));
+});
+
+test("web page extract recap OpenAPI constraints agree with the runtime timeline parser", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const ajv = new Ajv2020({ strict: false });
+  const validateTimeline = ajv.compile({ $ref: "#/components/schemas/GenerationTimeline", components: spec.components });
+  const step = { id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "web_fetch", label: "Fetch web page", status: "completed", startedAt: 1, updatedAt: 1, finishedAt: 1, contentOffset: 0, detail: "acme.example" };
+  const timeline = (extraction: unknown, overrides: Record<string, unknown> = {}) => ({
+    version: 3,
+    generationId: "gen-1",
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 1,
+    steps: [{ ...step, ...overrides, extraction }],
+  });
+  const read = { name: "pro_monthly", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." };
+  const recap = (fields: unknown[], extra: Record<string, unknown> = {}) => ({ version: 1, host: "acme.example", cut: false, fields, ...extra });
+  const cases: Array<[name: string, candidate: Record<string, unknown>, expected: boolean]> = [
+    ["extracted, uncertain and null", timeline(recap([read, { name: "seats", status: "uncertain", value: "50", confidence: 0.4, sourceLine: "Up to 50 seats." }, { name: "enterprise", status: "null" }])), true],
+    ["a guess that is not on the page", timeline(recap([{ name: "team", status: "uncertain", value: "1399", notFound: true }])), true],
+    ["an uncertain field with nothing to show", timeline(recap([{ name: "team", status: "uncertain" }])), true],
+    ["cut page", timeline(recap([read], { cut: true })), true],
+    ["failed extraction", timeline(recap([], { error: "quota" })), true],
+    ["sixteen fields", timeline(recap(Array.from({ length: 16 }, (_, index) => ({ name: `f${index}`, status: "null" })))), true],
+    ["200 astral code points in a value", timeline(recap([{ ...read, value: "😀".repeat(200) }])), true],
+    ["201 code points in a source line", timeline(recap([{ ...read, sourceLine: "x".repeat(201) }])), false],
+    ["seventeen fields", timeline(recap(Array.from({ length: 17 }, (_, index) => ({ name: `f${index}`, status: "null" })))), false],
+    ["no fields and no error", timeline(recap([])), false],
+    ["an error with fields", timeline(recap([read], { error: "quota" })), false],
+    ["unknown error", timeline(recap([], { error: "teapot" })), false],
+    ["extracted without its page line", timeline(recap([{ name: "pro", status: "extracted", value: "20", confidence: 0.9 }])), false],
+    ["extracted without confidence", timeline(recap([{ name: "pro", status: "extracted", value: "20", sourceLine: "Pro is $20." }])), false],
+    ["extracted marked not found", timeline(recap([{ ...read, notFound: true }])), false],
+    ["null with a value", timeline(recap([{ name: "pro", status: "null", value: "20" }])), false],
+    ["notFound false", timeline(recap([{ name: "pro", status: "uncertain", notFound: false }])), false],
+    ["confidence above one", timeline(recap([{ ...read, confidence: 1.2 }])), false],
+    ["field name with a space", timeline(recap([{ name: "pro monthly", status: "null" }])), false],
+    ["newline in a source line", timeline(recap([{ ...read, sourceLine: "Pro is\n$20" }])), false],
+    ["double space in a value", timeline(recap([{ ...read, value: "20  USD" }])), false],
+    ["trailing space in the host", timeline(recap([read], { host: "acme.example " })), false],
+    ["no-break space in a value", timeline(recap([{ ...read, value: "20 USD" }])), false],
+    ["unknown status", timeline(recap([{ name: "pro", status: "maybe" }])), false],
+    ["unknown recap version", timeline({ ...recap([read]), version: 2 }), false],
+    ["wrong tool", timeline(recap([read]), { toolName: "web_search", label: "Search the web" }), false],
+    ["failed step", timeline(recap([read]), { status: "failed" }), false],
+  ];
+  const { contentOffset: _offset, ...versionTwoStep } = step;
+  cases.push([
+    "version 2 timeline",
+    { version: 2, generationId: "gen-1", status: "completed", startedAt: 1, finishedAt: 1, steps: [{ ...versionTwoStep, extraction: recap([read]) }] },
+    false,
+  ]);
+  for (const [name, candidate, expected] of cases) {
+    const wire = JSON.parse(JSON.stringify(candidate)) as Record<string, unknown>;
+    assert.equal(validateTimeline(wire), expected, `schema: ${name} ${JSON.stringify(validateTimeline.errors)}`);
+    assert.equal(Boolean(parseGenerationTimeline(wire)), expected, `runtime: ${name}`);
+  }
+  // The wire refuses keys it does not name; the runtime parser rebuilds the
+  // recap, so a stray key never reaches what the host sends.
+  const stray = timeline(recap([read], { page: "the whole page" }));
+  assert.equal(validateTimeline(stray), false);
+  const rebuilt = parseGenerationTimeline(stray);
+  assert.ok(rebuilt);
+  assert.equal(validateTimeline(JSON.parse(JSON.stringify(rebuilt))), true);
+  // Without the recap the base step is valid on both sides, so each rejection
+  // above comes from the extraction rule rather than the surrounding step.
+  const { extraction: _e, ...bare } = record((timeline(undefined).steps as unknown[])[0], "step");
+  for (const overrides of [{}, { toolName: "web_search", label: "Search the web" }, { status: "failed" }]) {
+    const plain = { ...timeline(undefined), steps: [{ ...bare, ...overrides }] };
+    assert.equal(validateTimeline(plain), true, JSON.stringify(overrides));
+    assert.ok(parseGenerationTimeline(plain), JSON.stringify(overrides));
+  }
 });
 
 test("approval scope schemas accept the shared fixture and only allow-with-scope requests", async () => {

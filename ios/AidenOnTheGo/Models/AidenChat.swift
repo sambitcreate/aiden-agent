@@ -493,6 +493,199 @@ struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
     }
 }
 
+/// The values a `web_fetch` extract call read, carried on its completed
+/// timeline step so the transcript can show each value with the page line it
+/// came from (contract revision 40). Display-only: it never holds the page or
+/// the request. Decoding throws for any recap the desktop would reject;
+/// `AidenAgentStep` then drops only the recap.
+struct AidenWebExtractRecap: Codable, Equatable, Sendable {
+    static let toolName = "web_fetch"
+    static let maxFields = 16
+    static let maxHostLength = 253
+    static let maxValueLength = 200
+    static let maxSourceLineLength = 200
+
+    /// Why extraction failed; the page text was read instead.
+    enum Failure: String, Codable, Sendable {
+        case setup
+        case auth
+        case quota
+        case timeout
+        case unavailable
+        case invalidResponse = "invalid-response"
+
+        /// The same words the desktop card uses.
+        var message: String {
+            switch self {
+            case .setup: return "the extraction model is not set up"
+            case .auth: return "the extraction model rejected every saved key"
+            case .quota: return "the extraction model is rate-limited or out of quota"
+            case .timeout: return "the extraction model did not answer in time"
+            case .unavailable: return "the extraction model could not be reached"
+            case .invalidResponse: return "the extraction model sent an answer Aiden could not read"
+            }
+        }
+    }
+
+    struct Field: Codable, Equatable, Sendable, Identifiable {
+        enum Status: String, Codable, Sendable {
+            /// Typed, confident and found on the page.
+            case extracted
+            /// A guess, never a value read from the page.
+            case uncertain
+            /// The page has no value.
+            case absent = "null"
+        }
+
+        let name: String
+        let status: Status
+        /// Display form of the value or the guess.
+        let value: String?
+        let confidence: Double?
+        let sourceLine: String?
+        /// An uncertain value that appears nowhere on the page.
+        let notFound: Bool?
+
+        var id: String { name }
+
+        /// A field name as people read it: `pro_monthly` reads `pro monthly`.
+        var label: String {
+            let words = name.split(separator: "_", omittingEmptySubsequences: true).joined(separator: " ")
+            return words.isEmpty ? name : words
+        }
+
+        init(
+            name: String,
+            status: Status,
+            value: String? = nil,
+            confidence: Double? = nil,
+            sourceLine: String? = nil,
+            notFound: Bool? = nil
+        ) {
+            self.name = name
+            self.status = status
+            self.value = value
+            self.confidence = confidence
+            self.sourceLine = sourceLine
+            self.notFound = notFound
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            name = try values.decode(String.self, forKey: .name)
+            status = try values.decode(Status.self, forKey: .status)
+            value = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .value)
+            confidence = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .confidence)
+            sourceLine = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .sourceLine)
+            notFound = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .notFound)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case name, status, value, confidence, sourceLine, notFound
+        }
+    }
+
+    let version: Int
+    let host: String
+    let cut: Bool
+    let error: Failure?
+    let fields: [Field]
+
+    init(version: Int = 1, host: String, cut: Bool = false, error: Failure? = nil, fields: [Field]) {
+        self.version = version
+        self.host = host
+        self.cut = cut
+        self.error = error
+        self.fields = fields
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        host = try values.decode(String.self, forKey: .host)
+        cut = try values.decode(Bool.self, forKey: .cut)
+        error = try aidenDecodeOptionalNonNull(Failure.self, from: values, forKey: .error)
+        fields = try values.decode([Field].self, forKey: .fields)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid web page extract recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, host, cut, error, fields
+    }
+
+    var isValid: Bool {
+        guard version == 1, Self.isOneLine(host, maximum: Self.maxHostLength) else { return false }
+        // A failed page has no fields; a page that worked has one to sixteen.
+        if error != nil {
+            guard fields.isEmpty else { return false }
+        } else {
+            guard (1...Self.maxFields).contains(fields.count) else { return false }
+        }
+        guard Set(fields.map(\.name)).count == fields.count else { return false }
+        return fields.allSatisfy { field in
+            guard Self.isFieldName(field.name) else { return false }
+            if field.status == .absent {
+                return field.value == nil && field.confidence == nil
+                    && field.sourceLine == nil && field.notFound == nil
+            }
+            if let value = field.value, !Self.isOneLine(value, maximum: Self.maxValueLength) { return false }
+            if let confidence = field.confidence, !(confidence.isFinite && (0.0...1.0).contains(confidence)) {
+                return false
+            }
+            if let sourceLine = field.sourceLine, !Self.isOneLine(sourceLine, maximum: Self.maxSourceLineLength) {
+                return false
+            }
+            if let notFound = field.notFound, !(notFound && field.status == .uncertain) { return false }
+            // Extracted means typed, confident and on the page: all three are present.
+            if field.status == .extracted {
+                return field.value != nil && field.confidence != nil && field.sourceLine != nil
+            }
+            return true
+        }
+    }
+
+    /// One to 64 ASCII letters, digits and underscores.
+    private static func isFieldName(_ name: String) -> Bool {
+        (1...64).contains(name.unicodeScalars.count) && name.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x5F, 0x61...0x7A: return true
+            default: return false
+            }
+        }
+    }
+
+    /// The whitespace JavaScript's `\s` matches, so the phone accepts exactly
+    /// the single-line strings the desktop parser accepts.
+    private static let lineBreakingSpaces: Set<UInt32> = [
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003,
+        0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029,
+        0x202F, 0x205F, 0x3000, 0xFEFF,
+    ]
+
+    /// Non-empty, within `maximum` code points, free of control characters, and
+    /// spaced only by single U+0020 spaces with none at either end.
+    private static func isOneLine(_ value: String, maximum: Int) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        guard !scalars.isEmpty, scalars.count <= maximum,
+              scalars.first?.value != 0x20, scalars.last?.value != 0x20 else { return false }
+        var previousWasSpace = false
+        for scalar in scalars {
+            if scalar.value < 32 || scalar.value == 127 || lineBreakingSpaces.contains(scalar.value) {
+                return false
+            }
+            let isSpace = scalar.value == 0x20
+            if isSpace && previousWasSpace { return false }
+            previousWasSpace = isSpace
+        }
+        return true
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -519,6 +712,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let producedFile: AidenProducedFile?
     /// Present only on a completed `ask_user_question` step.
     let questionnaire: AidenQuestionnaireRecap?
+    /// Present only on a completed `web_fetch` step that ran in extract mode.
+    let extraction: AidenWebExtractRecap?
 
     init(
         id: String,
@@ -539,7 +734,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         detail: String?,
         lineChanges: AidenAgentLineChanges?,
         producedFile: AidenProducedFile? = nil,
-        questionnaire: AidenQuestionnaireRecap? = nil
+        questionnaire: AidenQuestionnaireRecap? = nil,
+        extraction: AidenWebExtractRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -560,6 +756,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.lineChanges = lineChanges
         self.producedFile = producedFile
         self.questionnaire = questionnaire
+        self.extraction = extraction
     }
 
     init(from decoder: Decoder) throws {
@@ -605,12 +802,21 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         } else {
             questionnaire = nil
         }
+        if kind == .tool, toolName == AidenWebExtractRecap.toolName, status == .completed {
+            extraction = try? aidenDecodeOptionalNonNull(
+                AidenWebExtractRecap.self,
+                from: values,
+                forKey: .extraction
+            )
+        } else {
+            extraction = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile, questionnaire
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire, extraction
     }
 
     var isActive: Bool {
@@ -625,7 +831,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool, questionnaire, visual(AidenChatVisual) }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, extraction, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -698,6 +904,10 @@ enum AidenChronologicalProjection {
                     if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+                // Values a page read in extract mode follow the line that read them.
+                for extracted in group where extracted.extraction != nil {
+                    result.append(.init(id: "extraction-\(extracted.id)", kind: .extraction, text: "", steps: [extracted]))
+                }
                 let groupCalls = Set(group.compactMap(\.toolCallId))
                 for (visualIndex, visual) in visuals.enumerated()
                 where !placedVisuals.contains(visualIndex) && visual.toolCallId.map(groupCalls.contains) == true {
@@ -1028,6 +1238,13 @@ enum AidenAgentActivityPresentation {
         timeline?.steps.filter(\.isQuestionnaire) ?? []
     }
 
+    /// Pages read in extract mode, in timeline order, for transcripts that
+    /// show their values after the activity feed. Unlike a questionnaire, the
+    /// step also stays an activity line.
+    static func extractionSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter { $0.extraction != nil } ?? []
+    }
+
     /// Whether a fallback transcript lists the stream's live tool rows. Once
     /// the timeline has a tool step, the activity feed or a recap card already
     /// shows each call, so the live rows would only repeat them.
@@ -1089,11 +1306,12 @@ enum AidenAgentActivityPresentation {
         let commands = tools.filter { $0.toolName == "run_command" }.count
         let changes = tools.filter { $0.toolName == "write_file" || $0.toolName == "edit_file" }.count
         let web = tools.filter { $0.toolName == "web_search" }.count
+        let pages = tools.filter { $0.toolName == "web_fetch" }.count
         let mac = tools.filter { $0.toolName == "computer_use" }.count
         let compactions = tools.filter { $0.toolName == "compact_context" }.count
         let tallied = Set([
             "read_file", "grep", "glob", "list_dir", "run_command", "write_file", "edit_file",
-            "web_search", "computer_use", "compact_context",
+            "web_search", "web_fetch", "computer_use", "compact_context",
         ])
         let other = tools.filter { step in
             guard let toolName = step.toolName else { return true }
@@ -1109,6 +1327,7 @@ enum AidenAgentActivityPresentation {
         if changes > 0 { clauses.append("\(running ? "editing" : "edited") \(changes) file\(changes == 1 ? "" : "s")") }
         if commands > 0 { clauses.append("\(running ? "running" : "ran") \(commands) command\(commands == 1 ? "" : "s")") }
         if web > 0 { clauses.append("\(web) web search\(web == 1 ? "" : "es")") }
+        if pages > 0 { clauses.append("\(pages) web page\(pages == 1 ? "" : "s")") }
         if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }

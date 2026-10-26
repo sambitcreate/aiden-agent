@@ -871,6 +871,20 @@
     <string name="chat_questionnaire_skipped">Skipped</string>
     <string name="chat_questionnaire_dismissed">Dismissed</string>
     <string name="chat_questionnaire_no_answer">No answer</string>
+    <!-- Chat: values a web page read in extract mode (contract revision 40) -->
+    <string name="chat_web_extract_recap_cd">Values read from %1$s</string>
+    <string name="chat_web_extract_guess">Guess</string>
+    <string name="chat_web_extract_absent">Not on the page</string>
+    <string name="chat_web_extract_not_found">Not found on the page</string>
+    <string name="chat_web_extract_source_line">“%1$s”</string>
+    <string name="chat_web_extract_cut">Only the first part of the page was read.</string>
+    <string name="chat_web_extract_failed">Couldn’t read the values: %1$s. The page was read instead.</string>
+    <string name="chat_web_extract_error_setup">the extraction model is not set up</string>
+    <string name="chat_web_extract_error_auth">the extraction model rejected every saved key</string>
+    <string name="chat_web_extract_error_quota">the extraction model is rate-limited or out of quota</string>
+    <string name="chat_web_extract_error_timeout">the extraction model did not answer in time</string>
+    <string name="chat_web_extract_error_unavailable">the extraction model could not be reached</string>
+    <string name="chat_web_extract_error_invalid_response">the extraction model sent an answer Aiden could not read</string>
 
     <!-- Chat: inline visuals (contract revision 28) -->
     <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
