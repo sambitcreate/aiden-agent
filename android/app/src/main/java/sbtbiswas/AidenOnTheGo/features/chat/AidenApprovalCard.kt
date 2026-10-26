@@ -100,7 +100,7 @@ private const val SCHEDULE_BODY_SCREEN_SHARE = 0.45f
  * question, the exact request in a code block, a short note, and two equal buttons with
  * the remembered scopes behind Allow's chevron. The caller owns the surface around it.
  *
- * A `schedule_task` approval that carries a revision 38 schedule card shows the task itself
+ * A `schedule_task` approval that carries a revision 39 schedule card shows the task itself
  * instead of the summary: its name and cadence, where and with what access it runs, its
  * instructions, and notes. Its buttons and permission notes are the same as without a card.
  * [scheduleBodyMaxHeight] bounds those details; unspecified means a share of the screen.
@@ -271,7 +271,7 @@ private fun AidenScrollCue(text: String) {
 }
 
 /**
- * Revision 38: the scheduled-task card's body. A connected group on the inner well holds the
+ * Revision 39: the scheduled-task card's body. A connected group on the inner well holds the
  * task (name, cadence, next run), its details as labelled rows, and its instructions; soft
  * notes and the footer follow. The whole body scrolls within [maxHeight] with a cue.
  */

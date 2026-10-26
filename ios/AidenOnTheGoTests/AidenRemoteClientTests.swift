@@ -4440,7 +4440,7 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
-    /// Contract revision 38: `schedule:cards` is asked for only when the Mac
+    /// Contract revision 39: `schedule:cards` is asked for only when the Mac
     /// offers it, alone and after every other opt-in, and a Mac that answers
     /// 400 or 404 leaves the device's other grants in place.
     @MainActor

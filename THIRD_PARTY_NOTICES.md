@@ -866,3 +866,15 @@ koffi: Copyright (C) 2026 Niels Martignène
 MIT License. The package's `licenses/` folder carries each license; see
 https://github.com/handy-computer/transcribe.cpp and
 https://github.com/Koromix/koffi
+
+## pi-web-access (web page extract mode)
+
+The `web_fetch` extract mode follows the field types, the 0.80 confidence
+threshold and the text-matching rules of `field-extract.ts` in pi-web-access
+v0.45.0 (https://github.com/nicobailon/pi-web-access). Aiden's implementation is
+its own code (`main/services/web-extract-core.ts`); no pi-web-access files are
+vendored or installed.
+
+Copyright (c) 2025 Nico Bailon
+
+MIT License. See https://github.com/nicobailon/pi-web-access/blob/main/LICENSE

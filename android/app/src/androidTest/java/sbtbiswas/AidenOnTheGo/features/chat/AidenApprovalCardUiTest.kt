@@ -122,7 +122,7 @@ class AidenApprovalCardUiTest {
         compose.onNodeWithText("Scroll for more").assertDoesNotExist()
     }
 
-    // Revision 38: the scheduled-task card.
+    // Revision 39: the scheduled-task card.
 
     private fun schedule(
         action: AidenApprovalScheduleAction = AidenApprovalScheduleAction.CREATE,

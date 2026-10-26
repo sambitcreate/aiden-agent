@@ -3419,7 +3419,7 @@
         "operationId": "getStreamApproval",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
-        "description": "Contract revision 38: devices holding schedule:cards and schedule:read receive schedule (ApprovalSchedule) on a scheduled-task approval. It is display-only and never changes canAllow.",
+        "description": "Contract revision 39: devices holding schedule:cards and schedule:read receive schedule (ApprovalSchedule) on a scheduled-task approval. It is display-only and never changes canAllow.",
         "parameters": [
           {
             "$ref": "#/components/parameters/StreamId"
@@ -5945,7 +5945,7 @@
       ],
       "get": {
         "operationId": "chatCurrentRunEvents",
-        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 38: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
+        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 39: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -5981,7 +5981,7 @@
       ],
       "get": {
         "operationId": "runEvents",
-        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 38: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
+        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 39: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -7419,7 +7419,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 38 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place.",
             "minItems": 1,
             "maxItems": 15,
             "items": {
@@ -8710,6 +8710,9 @@
           },
           "questionnaire": {
             "$ref": "#/components/schemas/AskUserQuestionRecap"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/WebExtractRecap"
           }
         },
         "allOf": [
@@ -8777,6 +8780,27 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "required": [
+                "extraction"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "web_fetch"
+                }
+              }
+            }
           }
         ],
         "additionalProperties": false
@@ -8808,6 +8832,173 @@
             "maximum": 1000000000
           }
         },
+        "additionalProperties": false
+      },
+      "WebExtractRecap": {
+        "type": "object",
+        "description": "Contract revision 38. Display-only recap of a web_fetch extract call: the page's host and each value read, with the page line it came from. Only on completed web_fetch tool steps of a version 3 timeline. error means extraction failed and the page text was read instead; fields is then empty, and otherwise holds one to sixteen fields with distinct names. cut means only the first part of the page was read. Strings are single lines: no control characters, no leading, trailing or repeated whitespace, and spaces only as U+0020. Lengths count Unicode code points. Clients render it as text and never act on it; older clients ignore it.",
+        "required": [
+          "version",
+          "host",
+          "cut",
+          "fields"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "cut": {
+            "type": "boolean"
+          },
+          "error": {
+            "enum": [
+              "setup",
+              "auth",
+              "quota",
+              "timeout",
+              "unavailable",
+              "invalid-response"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/WebExtractRecapField"
+            }
+          }
+        },
+        "if": {
+          "required": [
+            "error"
+          ]
+        },
+        "then": {
+          "properties": {
+            "fields": {
+              "maxItems": 0
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "fields": {
+              "minItems": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebExtractRecapField": {
+        "type": "object",
+        "description": "One value read off the page. extracted is typed, confident and found on the page, so value, confidence and sourceLine are all present. uncertain is a guess, never a value read from the page; notFound marks a guess that appears nowhere on the page. null means the page has no value, and carries only name and status. value is a short display form; scripts get the whole value.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+          },
+          "status": {
+            "enum": [
+              "extracted",
+              "uncertain",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sourceLine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "notFound": {
+            "const": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "extracted"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value",
+                "confidence",
+                "sourceLine"
+              ],
+              "not": {
+                "required": [
+                  "notFound"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "null"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "value"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "confidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sourceLine"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "notFound"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "AskUserQuestionRecap": {
@@ -9160,8 +9351,17 @@
                 "steps": {
                   "items": {
                     "not": {
-                      "required": [
-                        "questionnaire"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "questionnaire"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "extraction"
+                          ]
+                        }
                       ]
                     }
                   }
@@ -11439,7 +11639,7 @@
       },
       "ApprovalSchedule": {
         "type": "object",
-        "description": "Contract revision 38. Display-only facts for a scheduled-task approval card, sent only to devices holding both schedule:cards and schedule:read. The host builds it from the validated scheduled-task details; it never changes canAllow and is never part of details. Text is trimmed and carries no control or bidirectional-override characters; prompt and script may contain line breaks. A client that cannot validate it drops it and shows the summary card.",
+        "description": "Contract revision 39. Display-only facts for a scheduled-task approval card, sent only to devices holding both schedule:cards and schedule:read. The host builds it from the validated scheduled-task details; it never changes canAllow and is never part of details. Text is trimmed and carries no control or bidirectional-override characters; prompt and script may contain line breaks. A client that cannot validate it drops it and shows the summary card.",
         "required": [
           "action",
           "name",

@@ -148,7 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertGreaterThanOrEqual(fixture.contractRevision, 38)
+        XCTAssertEqual(fixture.contractRevision, 39)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
@@ -170,6 +170,14 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(recap.outcome, .answered)
         XCTAssertEqual(recap.items.map(\.kind), [.option, .skipped])
         XCTAssertEqual(recap.items.map { $0.answer(for: recap.outcome) }, [.chosen("Plain text"), .unanswered("Skipped")])
+        // Revision 38: values a page read in extract mode survive the stream decode.
+        let extraction = try XCTUnwrap(
+            fixture.events.lazy.compactMap(\.payload?.timeline).flatMap(\.steps)
+                .first { $0.toolName == AidenWebExtractRecap.toolName }?.extraction
+        )
+        XCTAssertEqual(extraction.host, "acme.example")
+        XCTAssertEqual(extraction.fields.map(\.status), [.extracted, .uncertain, .absent])
+        XCTAssertEqual(extraction.fields.first?.sourceLine, "Pro is $20 per month, billed monthly.")
         XCTAssertEqual(fixture.taskProgress?.chatId, fixture.chat.id)
         XCTAssertEqual(fixture.taskProgress?.tasks.count, 3)
         XCTAssertEqual(fixture.agentRoster?.chatId, fixture.chat.id)
@@ -1449,7 +1457,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertNil(AidenForeignRunResolution.loser(from: AidenRemoteClientError.invalidResponse))
     }
 
-    // MARK: Contract revision 38: scheduled-task approval cards (`schedule:cards`)
+    // MARK: Contract revision 39: scheduled-task approval cards (`schedule:cards`)
 
     private func decodedSharedFixture() throws -> AidenRemoteContractFixture {
         try AidenRemoteJSONDecoder.decode(

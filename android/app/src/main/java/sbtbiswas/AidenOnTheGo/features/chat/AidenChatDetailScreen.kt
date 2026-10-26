@@ -1408,6 +1408,14 @@ private fun AssistantMessageRow(
                     }
                 }
             }
+            AidenAgentActivityPresentation.extractionSteps(timeline).forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
         }
 
         // Progress disclosure for bot chats
@@ -1695,6 +1703,7 @@ internal fun ActiveStreamingCard(
     // Without chronological rows, the timeline still lists the calls and their recaps.
     val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
+    val fallbackExtractions = AidenAgentActivityPresentation.extractionSteps(activityTimeline)
     val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
     val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
     // Recaps that already sprang in during this reply. The card moves between the
@@ -1801,6 +1810,14 @@ internal fun ActiveStreamingCard(
                     key(step.id) {
                         val firstAppearance = remember { enteredRecaps.add(step.id) }
                         AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            fallbackExtractions.forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1940,6 +1957,9 @@ private fun AidenChronologicalTranscript(
                             }
                             AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         }
+                    }
+                    AidenChronologicalRow.Kind.EXTRACTION -> {
+                        row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
                 }

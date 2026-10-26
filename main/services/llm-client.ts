@@ -60,6 +60,8 @@ import {
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
+import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
+import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
   APPROVAL_TOOL_NAMES,
@@ -1731,6 +1733,19 @@ async function prepareGeneration(
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  // Reading web pages follows the Web Search switch in attended chats on the
+  // desktop and paired phones. Bots, schedules, helper agents, the Assistant
+  // and Telegram do not get it yet.
+  if (
+    !botContext &&
+    !assistantMode &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    !options.excludeToolNames?.has(WEB_FETCH_TOOL_NAME)
+  ) {
+    const webFetchTool = await webFetchService.toolForGeneration();
+    if (webFetchTool) tools.push(webFetchTool);
+  }
   // Background jobs and pull request follows: workspace chats with folder
   // access, on the Mac and Linux desktop. Their news reaches the chat later.
   if (

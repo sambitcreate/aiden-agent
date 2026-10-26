@@ -130,7 +130,7 @@ export interface AidenRemotePendingApproval {
    */
   scopes?: ToolApprovalScope[];
   /**
-   * Display-only scheduled-task card (contract revision 38), sent only to a
+   * Display-only scheduled-task card (contract revision 39), sent only to a
    * device holding `schedule:cards` and `schedule:read`. Never changes `canAllow`.
    */
   schedule?: AidenRemoteApprovalSchedule;

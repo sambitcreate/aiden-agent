@@ -178,7 +178,7 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
  * Strip host-only approval facts for observers without `runs:control`. Those
  * observers keep the mobile summary projection; controllers get the details
  * they need to decide. `phone-schedule` is the phone projection for a device
- * holding `schedule:cards` and `schedule:read` (contract revision 38): it adds
+ * holding `schedule:cards` and `schedule:read` (contract revision 39): it adds
  * the display-only `schedule` card to scheduled-task approvals.
  */
 export type RunProjection = "full" | "observer" | "phone" | "phone-schedule";

@@ -86,7 +86,7 @@ height) and past that the whole card scrolls, starting from its question. The qu
 desktop while Aiden is open and the computer is awake." The desktop also shows
 the project and connector ids in a tertiary monospaced line, because it
 authorizes the exact host scope; phones receive names only. A phone shows this
-review only when the host sends the revision 38 `schedule` card, and otherwise
+review only when the host sends the revision 39 `schedule` card, and otherwise
 keeps the summary card.
 
 ## Untitled structure

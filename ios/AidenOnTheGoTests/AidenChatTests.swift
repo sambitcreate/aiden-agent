@@ -655,6 +655,122 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
     }
 
+    private func extractStepJSON(
+        id: Int,
+        toolName: String = "web_fetch",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        extraction: String?
+    ) -> String {
+        let recap = extraction.map { #","extraction":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Fetch web page","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset),"detail":"acme.example"\#(recap)}"#
+    }
+
+    private func extractRecapJSON(_ fields: [String], extra: String = "") -> String {
+        #"{"version":1,"host":"acme.example","cut":false\#(extra),"fields":[\#(fields.joined(separator: ","))]}"#
+    }
+
+    private let extractedPrice = #"{"name":"pro_monthly","status":"extracted","value":"20","confidence":0.97,"sourceLine":"Pro is $20 per month."}"#
+
+    func testWebExtractRecapDecodesExtractedUncertainAndAbsentValues() throws {
+        let recap = extractRecapJSON([
+            extractedPrice,
+            #"{"name":"team_yearly","status":"uncertain","value":"1399","confidence":0.92,"notFound":true}"#,
+            #"{"name":"seats","status":"uncertain","value":"50","confidence":0.4,"sourceLine":"Up to 50 seats."}"#,
+            #"{"name":"enterprise","status":"null"}"#,
+        ])
+        let step = try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: recap))
+        let extraction = try XCTUnwrap(step.extraction)
+        XCTAssertEqual(extraction.host, "acme.example")
+        XCTAssertEqual(extraction.fields.map(\.status), [.extracted, .uncertain, .uncertain, .absent])
+        XCTAssertEqual(extraction.fields.map(\.label), ["pro monthly", "team yearly", "seats", "enterprise"])
+        XCTAssertEqual(extraction.fields[0].sourceLine, "Pro is $20 per month.")
+        XCTAssertEqual(extraction.fields[1].notFound, true)
+        XCTAssertNil(extraction.fields[1].sourceLine)
+        XCTAssertNil(extraction.fields[3].value)
+        // The step is still an activity line, not a questionnaire.
+        XCTAssertFalse(step.isQuestionnaire)
+
+        // A failed extraction carries its reason and no fields.
+        let failed = try XCTUnwrap(try decodeQuestionnaireStep(
+            extractStepJSON(id: 1, extraction: extractRecapJSON([], extra: #","error":"quota""#))
+        ).extraction)
+        XCTAssertEqual(failed.error, .quota)
+        XCTAssertEqual(failed.error?.message, "the extraction model is rate-limited or out of quota")
+
+        // The recap survives the chat cache's encode/decode round trip.
+        let roundTripped = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(roundTripped.extraction, extraction)
+    }
+
+    func testMalformedOrMisplacedWebExtractRecapIsDroppedButTheStepStillDecodes() throws {
+        let invalidRecaps: [(String, String)] = [
+            ("no fields and no error", extractRecapJSON([])),
+            ("an error with fields", extractRecapJSON([extractedPrice], extra: #","error":"quota""#)),
+            ("unknown error", extractRecapJSON([], extra: #","error":"teapot""#)),
+            ("seventeen fields", extractRecapJSON((0..<17).map { #"{"name":"f\#($0)","status":"null"}"# })),
+            ("duplicate names", extractRecapJSON([extractedPrice, extractedPrice])),
+            ("extracted without its page line", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9}"#])),
+            ("extracted marked not found", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9,"sourceLine":"Pro is $20.","notFound":true}"#])),
+            ("absent with a value", extractRecapJSON([#"{"name":"pro","status":"null","value":"20"}"#])),
+            ("notFound false", extractRecapJSON([#"{"name":"pro","status":"uncertain","notFound":false}"#])),
+            ("confidence above one", extractRecapJSON([#"{"name":"pro","status":"uncertain","confidence":1.2}"#])),
+            ("field name with a space", extractRecapJSON([#"{"name":"pro monthly","status":"null"}"#])),
+            ("field name starting with a digit", extractRecapJSON([#"{"name":"1price","status":"null"}"#])),
+            ("newline in a source line", extractRecapJSON([#"{"name":"pro","status":"uncertain","sourceLine":"Pro is\n$20"}"#])),
+            ("double space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20  USD"}"#])),
+            ("no-break space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20 USD"}"#])),
+            ("value over 200 characters", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "9", count: 201))"}"#])),
+            ("null value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":null}"#])),
+            ("unknown status", extractRecapJSON([#"{"name":"pro","status":"maybe"}"#])),
+            ("unknown version", #"{"version":2,"host":"acme.example","cut":false,"fields":[\#(extractedPrice)]}"#),
+            ("not an object", #""acme.example""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(extractStepJSON(id: 3, extraction: invalid))
+            XCTAssertNil(step.extraction, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "web_fetch", name)
+        }
+
+        // Boundary values the host accepts still decode.
+        let boundary = extractRecapJSON((0..<16).map { index in
+            index == 0
+                ? #"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "😀", count: 200))"}"#
+                : #"{"name":"f\#(index)","status":"null"}"#
+        })
+        XCTAssertEqual(try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: boundary)).extraction?.fields.count, 16)
+
+        let valid = extractRecapJSON([extractedPrice])
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, toolName: "web_search", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "running", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "failed", extraction: valid)).extraction)
+    }
+
+    func testChronologicalProjectionShowsExtractedValuesAfterTheLineThatReadThem() throws {
+        let recap = extractRecapJSON([extractedPrice])
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "web_search", contentOffset: 7, questionnaire: nil),
+            extractStepJSON(id: 2, contentOffset: 7, extraction: recap),
+            questionnaireStepJSON(id: 3, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .extraction, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1", "tool-2", "tool-3"], ["tool-2"], []])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        XCTAssertEqual(rows[2].steps.first?.extraction?.fields.first?.value, "20")
+
+        // The page read stays in the activity feed and its tally; fallback
+        // transcripts list its values after the feed.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-2", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.extractionSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, 1 web search, 1 web page")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Fetched web page acme.example")
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -5531,6 +5647,7 @@ final class AidenChatTests: XCTestCase {
             case .reasoning: return "reasoning"
             case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
             case .questionnaire: return "questionnaire"
+            case .extraction: return "extraction"
             case .visual(let visual): return "visual:\(visual.id)"
             }
         }
@@ -8061,7 +8178,7 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
-    // MARK: Contract revision 38: scheduled-task approval cards
+    // MARK: Contract revision 39: scheduled-task approval cards
 
     private func scheduleCard(
         action: AidenApprovalSchedule.Action = .create,

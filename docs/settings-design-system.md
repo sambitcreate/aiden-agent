@@ -37,6 +37,10 @@ Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add cu
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
 
+## Web pages
+
+Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.
+
 ## Icons and illustrations
 
 Use `MemoryCardIcon`, an SD-card silhouette, for Memory. Do not introduce brain glyphs or brain illustrations. The existing onboarding artwork is outside this Settings change.

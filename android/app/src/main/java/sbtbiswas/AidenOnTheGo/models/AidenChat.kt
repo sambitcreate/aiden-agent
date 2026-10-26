@@ -250,7 +250,10 @@ data class AidenAgentStep(
     val producedFile: AidenProducedFile? = null,
     /** Decoded leniently: a malformed recap is dropped, never the step. */
     @Serializable(with = AidenQuestionnaireRecapSerializer::class)
-    val questionnaire: AidenQuestionnaireRecap? = null
+    val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step. */
+    @Serializable(with = AidenWebExtractRecapSerializer::class)
+    val extraction: AidenWebExtractRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -271,6 +274,17 @@ data class AidenAgentStep(
             kind == Kind.TOOL && toolName == AidenQuestionnaireRecap.TOOL_NAME &&
                 status == AidenAgentStepStatus.COMPLETED && it.isValid
         }
+
+    /**
+     * The values a completed `web_fetch` extract call read, shown under its
+     * activity line. A recap on any other step is ignored. Unlike a
+     * questionnaire, the step stays an activity line too.
+     */
+    val extractionRecap: AidenWebExtractRecap?
+        get() = extraction?.takeIf {
+            kind == Kind.TOOL && toolName == AidenWebExtractRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
 @Immutable
@@ -281,10 +295,12 @@ data class AidenChronologicalRow(
     val steps: List<AidenAgentStep> = emptyList(),
     /** Set on a [Kind.QUESTIONNAIRE] row: the owner's answers, at the step's position. */
     val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Set on an [Kind.EXTRACTION] row: the values a page read, after the line that read them. */
+    val extraction: AidenWebExtractRecap? = null,
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
     val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, VISUAL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL }
 }
 
 object AidenChronologicalProjection {
@@ -358,6 +374,15 @@ object AidenChronologicalProjection {
                     if (drawn.isNotEmpty()) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+                // Values a page read in extract mode follow the line that read them.
+                group.forEach { grouped ->
+                    grouped.extractionRecap?.let { recap ->
+                        result += AidenChronologicalRow(
+                            "extraction-${grouped.id}", AidenChronologicalRow.Kind.EXTRACTION,
+                            steps = listOf(grouped), extraction = recap
+                        )
+                    }
+                }
                 emitVisuals(drawn)
             }
             cursor = offset
@@ -653,6 +678,13 @@ object AidenAgentActivityPresentation {
         timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
 
     /**
+     * Pages read in extract mode, in timeline order, for a fallback transcript
+     * that shows their values after the activity list. The steps stay in it.
+     */
+    fun extractionSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.extractionRecap != null }
+
+    /**
      * Whether a fallback live transcript lists the stream's own tool rows. Once
      * the timeline has a tool step, its rows or a recap card already show each
      * call, so the live rows would only repeat them.
@@ -679,11 +711,12 @@ object AidenAgentActivityPresentation {
         val commands = tools.count { it.toolName == "run_command" }
         val changes = tools.count { it.toolName == "write_file" || it.toolName == "edit_file" }
         val web = tools.count { it.toolName == "web_search" }
+        val pages = tools.count { it.toolName == "web_fetch" }
         val mac = tools.count { it.toolName == "computer_use" }
         val compactions = tools.count { it.toolName == "compact_context" }
         val tallied = setOf(
             "read_file", "grep", "glob", "list_dir", "run_command", "write_file", "edit_file",
-            "web_search", "computer_use", "compact_context"
+            "web_search", "web_fetch", "computer_use", "compact_context"
         )
         val other = tools.count { step ->
             val toolName = step.toolName ?: return@count true
@@ -701,6 +734,7 @@ object AidenAgentActivityPresentation {
         if (changes > 0) clauses.add("${if (running) "editing" else "edited"} $changes file${if (changes == 1) "" else "s"}")
         if (commands > 0) clauses.add("${if (running) "running" else "ran"} $commands command${if (commands == 1) "" else "s"}")
         if (web > 0) clauses.add("$web web search${if (web == 1) "" else "es"}")
+        if (pages > 0) clauses.add("$pages web page${if (pages == 1) "" else "s"}")
         if (mac > 0) clauses.add("$mac Computer Use action${if (mac == 1) "" else "s"}")
         if (compactions > 0) clauses.add(if (running) "compacting context" else "compacted context")
         if (other > 0) clauses.add("$other tool call${if (other == 1) "" else "s"}")
@@ -1375,7 +1409,7 @@ data class AidenStreamPendingApproval(
     /** Contract revision 17. Raw names so an unknown future scope never fails
      * decoding; [AidenApprovalScope.offered] keeps the known ones. */
     val scopes: List<String>? = null,
-    /** Contract revision 38 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
+    /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
     @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
     val schedule: AidenApprovalSchedule? = null
 )
@@ -1585,7 +1619,7 @@ data class AidenPendingApproval(
     val canAllow: Boolean,
     val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE),
     /**
-     * Revision 38: the scheduled-task card, kept only on a `schedule_task` approval. Display
+     * Revision 39: the scheduled-task card, kept only on a `schedule_task` approval. Display
      * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
      * relaunch reads it again from the host.
      */
