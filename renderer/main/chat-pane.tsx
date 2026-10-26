@@ -3090,16 +3090,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
     enabled: transcriptIdle && !draft && messages.length > 0,
     staleTime: Infinity,
   });
-  const [resumeBusy, setResumeBusy] = React.useState(false);
+  // Like the failure card, a Resume press is busy only in its own chat.
+  const resumeTokenRef = React.useRef(0);
+  const [resumeOwners, setResumeOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const resumeBusy = resumeOwners[chatId] !== undefined;
   const resumeInterruptedReply = React.useCallback(async () => {
-    setResumeBusy(true);
+    const token = ++resumeTokenRef.current;
+    setResumeOwners((owners) => ({ ...owners, [chatId]: token }));
     try {
       await handleSend(INTERRUPTED_REPLY_FOLLOW_UP, []);
     } catch (resumeError) {
       if (chatIdRef.current !== chatId) return;
       toast.error(userFacingErrorMessage(resumeError, "Couldn’t resume this chat."));
     } finally {
-      if (chatIdRef.current === chatId) setResumeBusy(false);
+      setResumeOwners((owners) => {
+        if (owners[chatId] !== token) return owners;
+        const { [chatId]: _settled, ...rest } = owners;
+        return rest;
+      });
     }
   }, [chatId, handleSend]);
   const interruptedReply = React.useMemo(
