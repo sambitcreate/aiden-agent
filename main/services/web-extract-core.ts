@@ -69,7 +69,9 @@ export function parseWebExtractFields(fields: unknown): WebExtractFieldSpecs {
   const specs: Record<string, WebExtractFieldSpec> = Object.create(null);
   for (const [name, raw] of entries) {
     if (!WEB_EXTRACT_FIELD_NAME_PATTERN.test(name)) {
-      throw new Error(`Field name "${name.slice(0, 64)}" must be 1 to 64 letters, digits or underscores.`);
+      throw new Error(
+        `Field name "${name.slice(0, 64)}" must start with a letter or underscore and use at most 64 letters, digits or underscores.`,
+      );
     }
     if (typeof raw !== "string") {
       throw new Error(`Field ${name} must be a string such as "number" or "date: when it ships".`);
@@ -451,49 +453,15 @@ const DATE_PATTERNS: readonly {
   },
 ];
 
-/** A date the page writes in ISO, English month-name or numeric form; a year-less form matches month and day. */
-function locateDate(value: string, page: WebExtractPage): Located | undefined {
-  const wanted = isoDate(value);
-  if (!wanted) return undefined;
-  for (const line of page.lines) {
-    if (!/\d/u.test(line)) continue;
-    for (const { pattern, read } of DATE_PATTERNS) {
-      pattern.lastIndex = 0;
-      for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
-        if (read(match).some(([month, day, year]) => month === wanted.month && day === wanted.day && (year === undefined || year === wanted.year))) {
-          return { line, start: match.index, end: match.index + match[0].length };
-        }
-      }
-    }
-  }
-  return undefined;
-}
+type IsoDate = NonNullable<ReturnType<typeof isoDate>>;
 
-/** A time in 24-hour form, 12-hour form with am/pm, or "noon"/"midnight". */
-function locateTime(value: string, page: WebExtractPage): Located | undefined {
-  const [hours, minutes, seconds = 0] = value.split(":").map(Number) as [number, number, number?];
-  const pattern = /(?<![\d:])(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:\s*([ap])\.?\s?m\b\.?)?(?![\d:])|\b(noon|midnight)\b/giu;
-  for (const line of page.lines) {
+/** The wanted day on one line, in ISO, English month-name or numeric form; a year-less form matches month and day. */
+function dateInLine(wanted: IsoDate, line: string): Located | undefined {
+  if (!/\d/u.test(line)) return undefined;
+  for (const { pattern, read } of DATE_PATTERNS) {
     pattern.lastIndex = 0;
     for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
-      let hour: number;
-      let minute = 0;
-      let second: number | undefined;
-      if (match[5]) {
-        hour = match[5].toLowerCase() === "noon" ? 12 : 0;
-      } else {
-        // A bare number is only a time with minutes or am/pm.
-        if (match[2] === undefined && match[4] === undefined) continue;
-        hour = Number(match[1]);
-        minute = match[2] === undefined ? 0 : Number(match[2]);
-        second = match[3] === undefined ? undefined : Number(match[3]);
-        const meridiem = match[4]?.toLowerCase();
-        if (meridiem) {
-          if (hour < 1 || hour > 12) continue;
-          hour = (hour % 12) + (meridiem === "p" ? 12 : 0);
-        }
-      }
-      if (hour === hours && minute === minutes && (second ?? 0) === seconds) {
+      if (read(match).some(([month, day, year]) => month === wanted.month && day === wanted.day && (year === undefined || year === wanted.year))) {
         return { line, start: match.index, end: match.index + match[0].length };
       }
     }
@@ -501,13 +469,150 @@ function locateTime(value: string, page: WebExtractPage): Located | undefined {
   return undefined;
 }
 
+function locateDate(value: string, page: WebExtractPage): Located | undefined {
+  const wanted = isoDate(value);
+  if (!wanted) return undefined;
+  for (const line of page.lines) {
+    const found = dateInLine(wanted, line);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function locateTime(value: string, page: WebExtractPage): Located | undefined {
+  const [hours, minutes, seconds = 0] = value.split(":").map(Number) as [number, number, number?];
+  for (const line of page.lines) {
+    const found = timeInLine(hours, minutes, seconds, line);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/** A time on one line in 24-hour form, 12-hour form with am/pm, or "noon"/"midnight". */
+function timeInLine(hours: number, minutes: number, seconds: number, line: string): Located | undefined {
+  const pattern = /(?<![\d:])(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?(?:\s*([ap])\.?\s?m\b\.?)?(?![\d:])|\b(noon|midnight)\b/giu;
+  for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
+    let hour: number;
+    let minute = 0;
+    let second: number | undefined;
+    if (match[5]) {
+      hour = match[5].toLowerCase() === "noon" ? 12 : 0;
+    } else {
+      // A bare number is only a time with minutes or am/pm.
+      if (match[2] === undefined && match[4] === undefined) continue;
+      hour = Number(match[1]);
+      minute = match[2] === undefined ? 0 : Number(match[2]);
+      second = match[3] === undefined ? undefined : Number(match[3]);
+      const meridiem = match[4]?.toLowerCase();
+      if (meridiem) {
+        if (hour < 1 || hour > 12) continue;
+        hour = (hour % 12) + (meridiem === "p" ? 12 : 0);
+      }
+    }
+    if (hour === hours && minute === minutes && (second ?? 0) === seconds) {
+      return { line, start: match.index, end: match.index + match[0].length };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A UTC offset as pages write it. UTC reads as "Z" after a time, "UTC",
+ * "GMT" or "+00:00"; "+09:00" also reads as "UTC+9" or "GMT+09:00".
+ */
+function zonePattern(zone: string): RegExp {
+  const offset = zone === "Z" ? "+00:00" : zone;
+  const sign = offset.startsWith("+") ? "\\+" : "[-−]";
+  const hours = offset.slice(1, 3);
+  const minutes = offset.slice(4, 6);
+  // "+09:00", "+0900"
+  const numeric = `(?<![\\d:])${sign}${hours}:?${minutes}(?!\\d)`;
+  if (hours === "00" && minutes === "00") {
+    // UTC itself ("09:00Z", "UTC", "GMT"), but not "UTC+9".
+    return new RegExp(`(?:(?<=\\d)Z|(?<!\\p{L})(?:UTC|GMT))(?!\\p{L})(?!\\s?[-+−]\\s?\\d)|${numeric}`, "u");
+  }
+  // "UTC+9", "GMT+09:00", "UTC+5:30"
+  const minutesPart = minutes === "00" ? "(?::?00)?" : `:?${minutes}`;
+  const named = `(?<!\\p{L})(?:UTC|GMT)\\s?${sign}\\s?0?${Number(hours)}${minutesPart}(?!\\d)`;
+  return new RegExp(`${named}|${numeric}`, "iu");
+}
+
+const ISO_DATETIME = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/u;
+
+/**
+ * The date, the time and any UTC offset on one line. A date from one line and
+ * a time from another is a different moment, and a claimed offset the line
+ * does not state is not on the page.
+ */
 function locateDateTime(value: string, page: WebExtractPage): Located | undefined {
   const exact = locateText(value, page);
   if (exact) return exact;
-  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)/u.exec(value);
-  if (!match) return undefined;
-  const date = locateDate(match[1]!, page);
-  return date && locateTime(match[2]!, page) ? date : undefined;
+  const match = ISO_DATETIME.exec(value);
+  const wanted = match ? isoDate(match[1]!) : undefined;
+  if (!match || !wanted) return undefined;
+  // Pages do not write fractions of a second; only a zero fraction can match.
+  if (match[5] !== undefined && /[1-9]/u.test(match[5])) return undefined;
+  const [hours, minutes, seconds] = [Number(match[2]), Number(match[3]), Number(match[4] ?? 0)];
+  const zone = match[6] === undefined ? undefined : zonePattern(match[6]);
+  for (const line of page.lines) {
+    const date = dateInLine(wanted, line);
+    if (date && timeInLine(hours, minutes, seconds, line) && (!zone || zone.test(line))) return date;
+  }
+  return undefined;
+}
+
+type DurationUnit = (typeof WEB_EXTRACT_DURATION_UNITS)[number];
+
+const DURATION_UNIT_ALIASES: Readonly<Record<string, DurationUnit>> = {
+  s: "seconds", sec: "seconds", secs: "seconds", second: "seconds", seconds: "seconds",
+  min: "minutes", mins: "minutes", minute: "minutes", minutes: "minutes",
+  h: "hours", hr: "hours", hrs: "hours", hour: "hours", hours: "hours",
+  d: "days", day: "days", days: "days",
+  w: "weeks", wk: "weeks", wks: "weeks", week: "weeks", weeks: "weeks",
+  mo: "months", mos: "months", month: "months", months: "months",
+  y: "years", yr: "years", yrs: "years", year: "years", years: "years",
+};
+/** Units with an exact size. Months and years only convert to each other. */
+const SECONDS_IN: Partial<Record<DurationUnit, number>> = { seconds: 1, minutes: 60, hours: 3_600, days: 86_400, weeks: 604_800 };
+const MONTHS_IN: Partial<Record<DurationUnit, number>> = { months: 1, years: 12 };
+const DURATION = /(?<![\d.,])(\d+(?:\.\d+)?)\s?-?\s?(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|wks?|months?|mos?|years?|yrs?|[shdwy])(?![\p{L}\p{N}])/giu;
+
+/** An amount in `unit` expressed in `wanted`, or undefined when the two do not convert exactly. */
+function convertDuration(amount: number, unit: DurationUnit, wanted: DurationUnit): number | undefined {
+  for (const table of [SECONDS_IN, MONTHS_IN]) {
+    const from = table[unit];
+    const to = table[wanted];
+    if (from !== undefined && to !== undefined) return (amount * from) / to;
+  }
+  return undefined;
+}
+
+/**
+ * A duration the page writes with its unit ("2 weeks", "14-day", "1 hour 30
+ * minutes") that equals the value in the requested unit. A bare number is
+ * never a duration, and days never convert to months.
+ */
+function locateDuration(value: number, unit: DurationUnit, page: WebExtractPage): Located | undefined {
+  for (const line of page.lines) {
+    const found: { start: number; end: number; amount: number | undefined }[] = [];
+    DURATION.lastIndex = 0;
+    for (let match = DURATION.exec(line); match; match = DURATION.exec(line)) {
+      const written = DURATION_UNIT_ALIASES[match[2]!.toLowerCase()]!;
+      found.push({ start: match.index, end: match.index + match[0].length, amount: convertDuration(Number(match[1]), written, unit) });
+    }
+    // One amount, or several written together ("1 hour 30 minutes", "2 hours and 15 minutes").
+    for (let first = 0; first < found.length; first++) {
+      let total = 0;
+      for (let last = first; last < found.length; last++) {
+        if (last > first && !/^\s*(?:,|and)?\s*$/iu.test(line.slice(found[last - 1]!.end, found[last]!.start))) break;
+        const amount = found[last]!.amount;
+        if (amount === undefined) break;
+        total += amount;
+        if (sameNumber(total, value)) return { line, start: found[first]!.start, end: found[last]!.end };
+      }
+    }
+  }
+  return undefined;
 }
 
 function locateItem(type: WebExtractItemType, value: unknown, page: WebExtractPage): Located | undefined {
@@ -522,8 +627,9 @@ function locateTyped(spec: WebExtractFieldSpec, value: unknown, page: WebExtract
     case "text":
       return locateItem("text", value, page);
     case "number":
-    case "duration":
       return locateItem("number", value, page);
+    case "duration":
+      return typeof value === "number" ? locateDuration(value, spec.unit ?? "seconds", page) : undefined;
     case "date":
       return locateItem("date", value, page);
     case "time":

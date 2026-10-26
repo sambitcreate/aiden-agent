@@ -167,3 +167,33 @@ test("stopping the turn rejects with the caller's reason, not a fetch error", as
     await assert.rejects(pending, /stopped/u);
   });
 });
+
+test("a compressed page that stalls or drops after its headers still settles", async () => {
+  // Settles within a bound, so a read that never ends fails the test instead of hanging it.
+  const settled = (promise: Promise<unknown>) =>
+    Promise.race([
+      promise.then(
+        () => assert.fail("the stalled page resolved"),
+        (error: unknown) => error,
+      ),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error("still pending after 2s")), 2_000).unref()),
+    ]);
+  await withServer((request, response) => {
+    response.writeHead(200, { "Content-Type": "text/html", "Content-Encoding": "gzip" });
+    // Only the start of the gzip stream, then nothing more.
+    response.write(gzipSync("<p>never finished</p>").subarray(0, 12));
+    if (request.url === "/reset") setTimeout(() => request.socket.destroy(), 20);
+  }, async (origin) => {
+    const reset = await settled(fetchPublicPage(new URL(`${origin}/reset`), { allowAddress: loopbackOnly }));
+    assert.ok(reset instanceof WebFetchError && reset.kind === "network", String(reset));
+
+    const timedOut = await settled(fetchPublicPage(new URL(`${origin}/stall`), { allowAddress: loopbackOnly, timeoutMs: 50 }));
+    assert.ok(timedOut instanceof WebFetchError && timedOut.kind === "timeout", String(timedOut));
+
+    const controller = new AbortController();
+    const pending = fetchPublicPage(new URL(`${origin}/stall`), { allowAddress: loopbackOnly, signal: controller.signal });
+    setTimeout(() => controller.abort(new Error("stopped")), 50);
+    const stopped = await settled(pending);
+    assert.match(String(stopped), /stopped/u);
+  });
+});

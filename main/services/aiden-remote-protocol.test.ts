@@ -2097,6 +2097,7 @@ test("web page extract recap OpenAPI constraints agree with the runtime timeline
     ["notFound false", timeline(recap([{ name: "pro", status: "uncertain", notFound: false }])), false],
     ["confidence above one", timeline(recap([{ ...read, confidence: 1.2 }])), false],
     ["field name with a space", timeline(recap([{ name: "pro monthly", status: "null" }])), false],
+    ["field name starting with a digit", timeline(recap([{ name: "1price", status: "null" }])), false],
     ["newline in a source line", timeline(recap([{ ...read, sourceLine: "Pro is\n$20" }])), false],
     ["double space in a value", timeline(recap([{ ...read, value: "20  USD" }])), false],
     ["trailing space in the host", timeline(recap([read], { host: "acme.example " })), false],

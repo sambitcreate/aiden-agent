@@ -810,7 +810,7 @@ When the agent reads a page with `web_fetch` in extract mode, the completed step
 - `extraction` is `{ version: 1, host, cut, error?, fields }`. Only a `tool` step with `toolName: "web_fetch"` and `status: "completed"` may carry it, and version 1 and 2 timelines never do.
 - `host` is the page's host, at most 253 characters. `cut` is `true` when only the first part of the page was read.
 - `error` is one of `setup`, `auth`, `quota`, `timeout`, `unavailable` or `invalid-response`. It means extraction failed and the agent got the page text instead. A recap with `error` has no fields; one without it has one to sixteen.
-- Each field is `{ name, status, value?, confidence?, sourceLine?, notFound? }`. `name` matches `^[A-Za-z0-9_]{1,64}$` and is unique within the recap.
+- Each field is `{ name, status, value?, confidence?, sourceLine?, notFound? }`. `name` matches `^[A-Za-z_][A-Za-z0-9_]{0,63}$` and is unique within the recap.
   - `extracted`: typed, confident and found on the page. `value`, `confidence` and `sourceLine` are all present.
   - `uncertain`: a guess, never a value read from the page. `value` is the guess, and `sourceLine` is present only when the guess appears on the page. `notFound: true` marks a guess that appears nowhere on the page.
   - `null`: the page has no value. No other keys.

@@ -14,7 +14,7 @@ import http from "node:http";
 import https from "node:https";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
-import type { Readable } from "node:stream";
+import { addAbortSignal, type Readable, type Transform } from "node:stream";
 
 export const WEB_FETCH_MAX_BYTES = 5 * 1024 * 1024;
 export const WEB_FETCH_TIMEOUT_MS = 20_000;
@@ -201,12 +201,28 @@ function request(url: URL, signal: AbortSignal, lookup: LookupFunction): Promise
   });
 }
 
+function decompressorFor(encoding: string): Transform | undefined {
+  if (encoding === "gzip" || encoding === "x-gzip") return createGunzip();
+  if (encoding === "deflate") return createInflate();
+  if (encoding === "br") return createBrotliDecompress();
+  return undefined;
+}
+
 async function readBody(hop: Hop, maxBytes: number, signal: AbortSignal): Promise<{ bytes: Buffer; truncated: boolean }> {
   const encoding = String(hop.headers["content-encoding"] ?? "").trim().toLowerCase();
+  const decompressor = decompressorFor(encoding);
   let stream: Readable = hop.stream;
-  if (encoding === "gzip" || encoding === "x-gzip") stream = hop.stream.pipe(createGunzip());
-  else if (encoding === "deflate") stream = hop.stream.pipe(createInflate());
-  else if (encoding === "br") stream = hop.stream.pipe(createBrotliDecompress());
+  if (decompressor) {
+    stream = hop.stream.pipe(decompressor);
+    // pipe() forwards data only: a source that fails or closes early would
+    // leave the decoder waiting for input that never comes.
+    hop.stream.once("error", (error) => decompressor.destroy(error));
+    hop.stream.once("close", () => {
+      if (!hop.stream.readableEnded) decompressor.destroy(new Error("The connection closed before the page ended."));
+    });
+  }
+  // A timeout or Stop ends the read even while no chunk is arriving.
+  addAbortSignal(signal, stream);
   const chunks: Buffer[] = [];
   let total = 0;
   let truncated = false;

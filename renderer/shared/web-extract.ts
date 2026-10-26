@@ -11,7 +11,8 @@
 export const WEB_FETCH_TOOL_NAME = "web_fetch" as const;
 export const WEB_EXTRACT_RECAP_VERSION = 1 as const;
 export const WEB_EXTRACT_MAX_FIELDS = 16;
-export const WEB_EXTRACT_FIELD_NAME_PATTERN = /^[A-Za-z0-9_]{1,64}$/u;
+/** Letters, digits and underscores, not starting with a digit: a subset of what Clairic accepts. */
+export const WEB_EXTRACT_FIELD_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u;
 /** A source line is the matched page line, or a window of it, with ellipses. */
 export const WEB_EXTRACT_MAX_SOURCE_LINE_CHARS = 200;
 /** Display form of one value in the recap; scripts get the whole value. */

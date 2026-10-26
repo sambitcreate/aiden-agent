@@ -164,6 +164,84 @@ test("dates, times and datetimes match the forms pages write them in", async () 
   assert.equal(fields.wrong_day!.status, "uncertain");
 });
 
+test("a datetime is extracted only when its date, time and offset share one line", async () => {
+  const page = [
+    "Launch: November 3, 2026 at 09:00.",
+    "Support closes at 17:00.",
+    "Keynote: 2026-11-04 09:00 UTC",
+    "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)",
+  ].join("\n");
+  const fields = await extract(
+    {
+      launch: "datetime",
+      mixed_lines: "datetime",
+      unstated_offset: "datetime",
+      keynote: "datetime",
+      wrong_offset: "datetime",
+      tokyo: "datetime",
+      fraction: "datetime",
+    },
+    {
+      launch: { value: "2026-11-03T09:00", confidence: 0.95 },
+      // The launch date with the support desk's closing time.
+      mixed_lines: { value: "2026-11-03T17:00", confidence: 0.95 },
+      unstated_offset: { value: "2026-11-03T09:00+09:00", confidence: 0.95 },
+      keynote: { value: "2026-11-04T09:00Z", confidence: 0.95 },
+      wrong_offset: { value: "2026-11-04T09:00+09:00", confidence: 0.95 },
+      tokyo: { value: "2026-11-05T18:30+09:00", confidence: 0.95 },
+      fraction: { value: "2026-11-04T09:00:00.250Z", confidence: 0.95 },
+    },
+    page,
+  );
+  assert.equal(fields.launch!.status === "extracted" && fields.launch!.sourceLine, "Launch: November 3, 2026 at 09:00.");
+  assert.equal(fields.keynote!.status === "extracted" && fields.keynote!.sourceLine, "Keynote: 2026-11-04 09:00 UTC");
+  assert.equal(fields.tokyo!.status === "extracted" && fields.tokyo!.sourceLine, "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)");
+  for (const name of ["mixed_lines", "unstated_offset", "wrong_offset", "fraction"]) {
+    assert.equal(fields[name]!.status, "uncertain", name);
+  }
+});
+
+test("a duration is extracted only when the page's amount and unit give the value in the requested unit", async () => {
+  const page = [
+    "We have 14 offices.",
+    "The trial lasts 2 weeks.",
+    "Sessions time out after 1 hour 30 minutes.",
+    "Plans renew every 2 years.",
+  ].join("\n");
+  const fields = await extract(
+    {
+      trial_days: "duration.days",
+      trial_weeks: "duration.weeks",
+      wrong_unit: "duration.days",
+      session: "duration",
+      renewal_months: "duration.months",
+      renewal_days: "duration.days",
+    },
+    {
+      trial_days: { value: 14, confidence: 0.95 },
+      trial_weeks: { value: 2, confidence: 0.95 },
+      // Two weeks read as two days.
+      wrong_unit: { value: 2, confidence: 0.95 },
+      session: { value: 5_400, confidence: 0.95 },
+      renewal_months: { value: 24, confidence: 0.95 },
+      // Two years is not an exact number of days.
+      renewal_days: { value: 730, confidence: 0.95 },
+    },
+    page,
+  );
+  // Converted from "2 weeks", not the unrelated 14 above it.
+  assert.equal(fields.trial_days!.status === "extracted" && fields.trial_days!.sourceLine, "The trial lasts 2 weeks.");
+  assert.equal(fields.trial_weeks!.status, "extracted");
+  assert.equal(fields.session!.status === "extracted" && fields.session!.sourceLine, "Sessions time out after 1 hour 30 minutes.");
+  assert.equal(fields.renewal_months!.status, "extracted");
+  assert.equal(fields.wrong_unit!.status, "uncertain");
+  assert.equal(fields.renewal_days!.status, "uncertain");
+
+  // A bare number is never a duration.
+  const bare = await extract({ team_days: "duration.days" }, { team_days: { value: 14, confidence: 0.95 } }, "We have 14 offices.");
+  assert.equal(bare.team_days!.status, "uncertain");
+});
+
 test("a list is extracted only when every item is on the page", async () => {
   const fields = await extract(
     { countries: "list", more_countries: "list" },
@@ -263,6 +341,24 @@ test("field maps are checked before anything is sent", () => {
   ]) {
     assert.throws(() => parseWebExtractFields(bad), Error, JSON.stringify(bad));
   }
+});
+
+test("every field name accepted is one Clairic accepts", () => {
+  // Cloudflare's published input schema for @cf/cloudflare/clairic, fields.propertyNames.
+  const CLAIRIC_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/u;
+  const accepted = (name: string) => {
+    try {
+      parseWebExtractFields({ [name]: "text" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const name of ["price", "_private", "Pro_Monthly2", "a".repeat(64)]) assert.equal(accepted(name), true, name);
+  for (const name of ["price", "_private", "1price", "9", "a".repeat(64), "a".repeat(65), "has-dash", "has.dot", "has space", "émoji", ""]) {
+    if (accepted(name)) assert.match(name, CLAIRIC_FIELD_NAME, name);
+  }
+  assert.throws(() => parseWebExtractFields({ "1price": "number" }), /start with a letter or underscore/u);
 });
 
 test("a long source line is cited as a window around the value", () => {

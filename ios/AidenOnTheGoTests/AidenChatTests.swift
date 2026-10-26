@@ -716,6 +716,7 @@ final class AidenChatTests: XCTestCase {
             ("notFound false", extractRecapJSON([#"{"name":"pro","status":"uncertain","notFound":false}"#])),
             ("confidence above one", extractRecapJSON([#"{"name":"pro","status":"uncertain","confidence":1.2}"#])),
             ("field name with a space", extractRecapJSON([#"{"name":"pro monthly","status":"null"}"#])),
+            ("field name starting with a digit", extractRecapJSON([#"{"name":"1price","status":"null"}"#])),
             ("newline in a source line", extractRecapJSON([#"{"name":"pro","status":"uncertain","sourceLine":"Pro is\n$20"}"#])),
             ("double space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20  USD"}"#])),
             ("no-break space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20 USD"}"#])),

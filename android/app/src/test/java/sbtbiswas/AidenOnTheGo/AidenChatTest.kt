@@ -1636,6 +1636,7 @@ class AidenChatTest {
             "confidence above one" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":1.2}"""),
             "string confidence" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":"0.9"}"""),
             "field name with a space" to extractRecapJson("""{"name":"pro monthly","status":"null"}"""),
+            "field name starting with a digit" to extractRecapJson("""{"name":"1price","status":"null"}"""),
             "newline in a source line" to extractRecapJson("""{"name":"pro","status":"uncertain","sourceLine":"Pro is\n20"}"""),
             "double space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20  USD"}"""),
             "no-break space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20 USD"}"""),

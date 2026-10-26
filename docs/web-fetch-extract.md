@@ -21,7 +21,7 @@ With extract mode on, the tool also offers `mode: "extract"` and `fields`, and i
 web_fetch(url, mode: "extract", fields: { pro_monthly: "number: Pro plan monthly price" })
 ```
 
-Each field is `"type"` or `"type: what to find"`, with up to 16 fields per call. Field names are 1 to 64 letters, digits or underscores. The types are `text`, `number`, `integer`, `date`, `time`, `datetime`, `duration` (optionally `duration.days` and the other units), `list`, `list.number` and `list.date`. A bad field fails the call before anything is fetched. While extract mode is off, the model never sees `mode` or `fields`.
+Each field is `"type"` or `"type: what to find"`, with up to 16 fields per call. Field names are up to 64 letters, digits or underscores and don't start with a digit, which keeps them within what Cloudflare accepts. The types are `text`, `number`, `integer`, `date`, `time`, `datetime`, `duration` (optionally `duration.days` and the other units), `list`, `list.number` and `list.date`. A bad field fails the call before anything is fetched. While extract mode is off, the model never sees `mode` or `fields`.
 
 Every field comes back with one of three statuses:
 
@@ -31,7 +31,7 @@ Every field comes back with one of three statuses:
 | `uncertain` | A guess: low confidence, the wrong type, or not on the page | `{ status, guess, confidence?, sourceLine?, notFound? }` |
 | `null` | The page has no value | `{ status: "null", value: null }` |
 
-A value counts as found only when it appears in the page text (numbers, dates and words are matched the way people write them, so `$1,399` matches `1399`). A value the page doesn't contain is always `uncertain` with `notFound: true`, never `extracted`, however confident the model was. An uncertain value is a `guess`, never a `value`, so code can't mistake one for the other.
+A value counts as found only when it appears in the page text (numbers, dates and words are matched the way people write them, so `$1,399` matches `1399`). A duration counts only when the page writes it with a unit that converts exactly to the one asked for ("2 weeks" is 14 days, but years never become days), and a date and time only when the date, the time and any UTC offset are on the same line. A value the page doesn't contain is always `uncertain` with `notFound: true`, never `extracted`, however confident the model was. An uncertain value is a `guess`, never a `value`, so code can't mistake one for the other.
 
 If extraction fails (setup, a rejected key, quota, a timeout, the service being down, or an answer Aiden can't read), the tool says why and returns the page text instead, so the agent can still answer.
 

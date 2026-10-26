@@ -649,9 +649,13 @@ struct AidenWebExtractRecap: Codable, Equatable, Sendable {
         }
     }
 
-    /// One to 64 ASCII letters, digits and underscores.
+    /// One to 64 ASCII letters, digits and underscores, not starting with a digit.
     private static func isFieldName(_ name: String) -> Bool {
-        (1...64).contains(name.unicodeScalars.count) && name.unicodeScalars.allSatisfy { scalar in
+        let scalars = name.unicodeScalars
+        guard (1...64).contains(scalars.count), let first = scalars.first, !(0x30...0x39).contains(first.value) else {
+            return false
+        }
+        return scalars.allSatisfy { scalar in
             switch scalar.value {
             case 0x30...0x39, 0x41...0x5A, 0x5F, 0x61...0x7A: return true
             default: return false

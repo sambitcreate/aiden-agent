@@ -124,7 +124,7 @@ data class AidenWebExtractRecap(
         const val MAX_HOST_LENGTH = 253
         const val MAX_VALUE_LENGTH = 200
         const val MAX_SOURCE_LINE_LENGTH = 200
-        private val FIELD_NAME = Regex("^[A-Za-z0-9_]{1,64}$")
+        private val FIELD_NAME = Regex("^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
         /** The whitespace JavaScript's `\s` matches, so phones accept what the desktop accepts. */
         private val LINE_BREAKING_SPACES: Set<Int> = setOf(
