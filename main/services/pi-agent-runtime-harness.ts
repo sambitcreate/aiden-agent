@@ -2,6 +2,7 @@ import { verificationIdentity } from "./pi-verification-store.js";
 import { hostCommandObservation } from "./pi-host-command-observation.js";
 import { toolOutputScope } from "./tool-output-store.js";
 import { recordAttendedToolArguments } from "./assistant/tool-loop-guard.js";
+import { AIDEN_PI_CLIENT_IDENTITY } from "./pi-client-identity.js";
 import { Agent, runToolCall, type AgentToolCallOutcome, type AgentTurnDecision, type AfterToolCallContext, type AfterToolCallResult, type AgentEvent, type AgentMessage, type AgentOptions, type AgentState, type AgentTool, type BeforeToolCallContext, type BeforeToolCallResult } from "@earendil-works/pi-agent-core";
 import { type AgentHarnessResources, type AgentHarnessStreamOptions, type AgentHarnessStreamOptionsPatch, formatSkillsForSystemPrompt } from "./pi-legacy-harness.js";
 import {
@@ -138,7 +139,11 @@ export interface PiAgentRuntimeExtension {
   onEvent?: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void;
 }
 
-export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution"> {
+/**
+ * Pi's own `identity` option (the request `ClientIdentity`) is fixed by the
+ * host to `AIDEN_PI_CLIENT_IDENTITY`; `identity` here is the runtime identity.
+ */
+export interface PiAgentRuntimeHarnessOptions extends Omit<AgentOptions, "toolExecution" | "identity"> {
   extensions?: readonly PiAgentRuntimeExtension[];
   /** Fully resolved immutable contributions for one foreground operation. */
   contributions?: PiRuntimeContributionSnapshot;
@@ -1173,6 +1178,7 @@ export class PiAgentRuntimeHarness {
       // Aiden tools share workspace, scheduler, and external-service state.
       // Pi defaults to parallel execution, so the host must state this policy.
       toolExecution: "sequential",
+      identity: AIDEN_PI_CLIENT_IDENTITY,
       finishTurn,
       transformContext:
         options.transformContext || extensions.some((extension) => extension.transformContext)
