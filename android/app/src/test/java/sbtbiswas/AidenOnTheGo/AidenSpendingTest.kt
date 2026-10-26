@@ -57,7 +57,7 @@ class AidenSpendingTest {
         MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(response.toString())
 
     @Test
-    fun readsTheStatusAndAllowsMoreWithTheRevisionAndAnEmptyBody() = runBlocking {
+    fun readsTheStatusAndAllowsMoreWithTheRevisionAndAnEmptyBody() = runBlocking<Unit> {
         server.enqueue(json(fixture.getValue("chatReached")))
         server.enqueue(json(fixture.getValue("chatAllowMore").jsonObject.getValue("response")))
         server.enqueue(json(fixture.getValue("bot")))
@@ -85,7 +85,7 @@ class AidenSpendingTest {
     }
 
     @Test
-    fun noLimitIsNullAndABadStatusIsRefused() = runBlocking {
+    fun noLimitIsNullAndABadStatusIsRefused() = runBlocking<Unit> {
         server.enqueue(json(fixture.getValue("none")))
         assertNull(client.spending(AidenSpendingOwner.Chat("chat-1")).spending)
 
@@ -128,7 +128,7 @@ class AidenSpendingTest {
     }
 
     @Test
-    fun aTapAnotherDeviceAlreadyAnsweredRereadsInsteadOfAddingTwice() = runBlocking {
+    fun aTapAnotherDeviceAlreadyAnsweredRereadsInsteadOfAddingTwice() = runBlocking<Unit> {
         val mac = FakeSpendingMac(
             AidenSpending(AidenSpending.Period.CHAT, AidenSpending.State.REACHED, 5.0, 5.0, 5.37, 5.0, revision = "sp_1")
         )
