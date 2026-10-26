@@ -1,6 +1,6 @@
 # Web page reading and extract mode — 2026-10-26
 
-In review as PR #588 (branch `claude/project-thread-xxl0o7`); the owner merges. Plan: `docs/plans/web-page-extract-plan.md`. Guide: `docs/web-fetch-extract.md`.
+Merged as PR #588 on 2026-10-26 (owner enabled auto-merge); unreleased. Plan: `docs/plans/web-page-extract-plan.md`. Guide: `docs/web-fetch-extract.md`.
 
 The owner asked for pi-web-access v0.45.0's extract mode as a native feature, without installing the plugin, and chose a new page reader tool over extending Web Search.
 
@@ -31,7 +31,7 @@ The owner asked for pi-web-access v0.45.0's extract mode as a native feature, wi
 
 ## Remote contract and phones
 
-- Remote revision 40 is provisional. Re-claim it at merge by changing only `AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`, plus the fixture's `contractRevision` in two places, the iOS Phase0 test and the docs.
+- Remote revision 38, claimed at merge on 2026-10-26 after `main`'s 37. It lives in `AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`, the fixture's `contractRevision` (two places), the iOS Phase0 test and the docs.
 - OpenAPI has `WebExtractRecap` and `WebExtractRecapField`. A version 1 or 2 timeline must not carry `extraction`.
 - The Ajv agreement test is in `aiden-remote-protocol.test.ts`. The runtime parser rebuilds the recap, so it drops stray keys while the schema rejects them. That case is asserted separately.
 - iOS: `AidenWebExtractRecap` in `Models/AidenChat.swift` and `AidenWebExtractRecapView` in `AidenChatFeature.swift`.

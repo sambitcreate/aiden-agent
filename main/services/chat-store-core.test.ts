@@ -805,6 +805,27 @@ test("persists only normalized user skill provenance", async (t) => {
   assert.equal(updated?.messages[2]?.skill, undefined);
 });
 
+test("follow-up notices survive a restart on user messages only, in their exact shape", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-notice-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  const notice = { version: 1, source: "background_job", tone: "failure", title: "Background job ended", summary: "npm run dev · exit code 1" } as const;
+  await store.appendMessage(chat.id, { role: "user", content: "[Aiden follow-up: background job]\n…", notice });
+  await store.appendMessage(chat.id, { role: "assistant", content: "Looking.", notice } as never);
+  await store.appendMessage(chat.id, {
+    role: "user",
+    content: "Spoofed card.",
+    notice: { ...notice, onClick: "run" } as never,
+  });
+
+  const loaded = await createChatStore(async () => directory).get(chat.id);
+  assert.deepEqual(loaded?.messages[0]?.notice, notice);
+  assert.equal(loaded?.messages[1]?.notice, undefined, "assistant messages never carry a notice");
+  assert.equal(loaded?.messages[2]?.notice, undefined, "an unknown shape is dropped");
+  assert.deepEqual(chatForRenderer(loaded)?.messages[0]?.notice, notice);
+});
+
 test("renderer ownership is checked again at the atomic append commit", async (t) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "aiden-chat-owner-guard-"),

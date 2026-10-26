@@ -871,7 +871,7 @@
     <string name="chat_questionnaire_skipped">Skipped</string>
     <string name="chat_questionnaire_dismissed">Dismissed</string>
     <string name="chat_questionnaire_no_answer">No answer</string>
-    <!-- Chat: values a web page read in extract mode (contract revision 40) -->
+    <!-- Chat: values a web page read in extract mode (contract revision 38) -->
     <string name="chat_web_extract_recap_cd">Values read from %1$s</string>
     <string name="chat_web_extract_guess">Guess</string>
     <string name="chat_web_extract_absent">Not on the page</string>

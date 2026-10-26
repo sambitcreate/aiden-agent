@@ -8831,7 +8831,7 @@
       },
       "WebExtractRecap": {
         "type": "object",
-        "description": "Contract revision 40 (provisional). Display-only recap of a web_fetch extract call: the page's host and each value read, with the page line it came from. Only on completed web_fetch tool steps of a version 3 timeline. error means extraction failed and the page text was read instead; fields is then empty, and otherwise holds one to sixteen fields with distinct names. cut means only the first part of the page was read. Strings are single lines: no control characters, no leading, trailing or repeated whitespace, and spaces only as U+0020. Lengths count Unicode code points. Clients render it as text and never act on it; older clients ignore it.",
+        "description": "Contract revision 38. Display-only recap of a web_fetch extract call: the page's host and each value read, with the page line it came from. Only on completed web_fetch tool steps of a version 3 timeline. error means extraction failed and the page text was read instead; fields is then empty, and otherwise holds one to sixteen fields with distinct names. cut means only the first part of the page was read. Strings are single lines: no control characters, no leading, trailing or repeated whitespace, and spaces only as U+0020. Lengths count Unicode code points. Clients render it as text and never act on it; older clients ignore it.",
         "required": [
           "version",
           "host",

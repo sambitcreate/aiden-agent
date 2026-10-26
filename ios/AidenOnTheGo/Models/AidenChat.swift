@@ -495,7 +495,7 @@ struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
 
 /// The values a `web_fetch` extract call read, carried on its completed
 /// timeline step so the transcript can show each value with the page line it
-/// came from (contract revision 40). Display-only: it never holds the page or
+/// came from (contract revision 38). Display-only: it never holds the page or
 /// the request. Decoding throws for any recap the desktop would reject;
 /// `AidenAgentStep` then drops only the recap.
 struct AidenWebExtractRecap: Codable, Equatable, Sendable {

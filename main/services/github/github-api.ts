@@ -69,6 +69,8 @@ export interface GitHubRestRequest extends GitHubRequestContext {
   body?: unknown;
   accept?: string;
   ifNoneMatch?: string;
+  /** Return the body as text instead of parsed JSON, e.g. a job log. */
+  text?: boolean;
 }
 
 export interface GitHubGraphQlRequest extends GitHubRequestContext {
@@ -488,7 +490,7 @@ export class GitHubApi {
     if (status === 401) return { kind: "unauthorized", message: message ?? "GitHub rejected the saved credential." };
     if (status === 404) return { kind: "not-found", message: message ?? "GitHub could not find that resource." };
     if (status >= 200 && status < 300) {
-      const data = (request.accept?.includes("diff") ? text : parsed) as T;
+      const data = (request.text || request.accept?.includes("diff") ? text : parsed) as T;
       return { kind: "ok", data, status, ...(etag ? { etag } : {}) };
     }
     return { kind: "failed", status, message: message ?? `GitHub answered with HTTP ${status}.` };

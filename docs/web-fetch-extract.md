@@ -64,7 +64,7 @@ The model is pluggable. Adding one means a definition in `renderer/shared/web-fe
 
 ## The values in the transcript
 
-A completed extract shows a card under its activity line, on the desktop and on Aiden On The Go for iPhone and Android. Each field shows its name as words, its value, and the page line it came from. A guess carries a **Guess** label, a value the page doesn't have reads "Not on the page", and a guess that appears nowhere on the page reads "Not found on the page". The card is display-only: it carries at most 200 characters of each value and line, and never the page itself. Phones get it through Aiden Remote contract revision 40 (provisional); see "Web page extract recap" in [aiden-remote-api-v1.md](aiden-remote-api-v1.md). Older phones keep showing the activity line without the card.
+A completed extract shows a card under its activity line, on the desktop and on Aiden On The Go for iPhone and Android. Each field shows its name as words, its value, and the page line it came from. A guess carries a **Guess** label, a value the page doesn't have reads "Not on the page", and a guess that appears nowhere on the page reads "Not found on the page". The card is display-only: it carries at most 200 characters of each value and line, and never the page itself. Phones get it through Aiden Remote contract revision 38; see "Web page extract recap" in [aiden-remote-api-v1.md](aiden-remote-api-v1.md). Older phones keep showing the activity line without the card.
 
 ## Smaller tool definitions
 

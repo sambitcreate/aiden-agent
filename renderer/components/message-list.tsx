@@ -7,6 +7,7 @@ import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import { MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
 import { MessageActions } from "./message-actions";
@@ -472,7 +473,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant")) {
+    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant") || message.notice) {
       return undefined;
     }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
@@ -526,6 +527,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             <ProviderFailureCallout failure={message.providerFailure} />
           ) : null}
         </>
+      ) : message.notice ? (
+        <AgentNoticeCard notice={message.notice} content={message.content} />
       ) : (
         <SafeMessageBubble
           role={message.role}

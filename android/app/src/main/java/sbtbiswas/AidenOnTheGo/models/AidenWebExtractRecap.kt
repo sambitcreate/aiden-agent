@@ -24,7 +24,7 @@ import kotlinx.serialization.json.putJsonArray
 /**
  * The values a `web_fetch` extract call read, carried on its completed
  * timeline step so the transcript can show each value with the page line it
- * came from (contract revision 40). Display-only: it never holds the page or
+ * came from (contract revision 38). Display-only: it never holds the page or
  * the request. Mirrors the desktop's `WebExtractRecapV1` and its
  * `parseWebExtractRecap` rules.
  */

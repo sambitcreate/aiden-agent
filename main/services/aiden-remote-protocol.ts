@@ -89,14 +89,12 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * without it see a paused Bot as unavailable, a pending hand-off as an
  * assistant notice, and `operation_stale` for writes to a paused Bot.
  *
- * Contract revision 40 (provisional; re-claim the next revision after `main`'s
- * at merge by changing only `AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`):
- * completed `web_fetch` tool steps on a version 3 generation timeline may carry
+ * Contract revision 38: completed `web_fetch` tool steps on a version 3 generation timeline may carry
  * a display-only `extraction` recap of the values an extract call read, each
  * with the page line it came from; older clients ignore it.
  */
 export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
-export const AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION = 40 as const;
+export const AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION = 38 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;

@@ -9,6 +9,8 @@ export interface HostPlatformCapabilities {
   dictationHoldToTalk: boolean;
   dockIcon: boolean;
   nativeShare: boolean;
+  /** The agent's background jobs follow process groups, which macOS and Linux both offer. */
+  backgroundJobs: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -30,5 +32,6 @@ export function hostPlatformCapabilities(
     dictationHoldToTalk: darwin,
     dockIcon: darwin,
     nativeShare: darwin,
+    backgroundJobs: darwin || platform === "linux",
   };
 }

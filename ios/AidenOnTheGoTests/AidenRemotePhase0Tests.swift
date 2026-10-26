@@ -148,7 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 40)
+        XCTAssertEqual(fixture.contractRevision, 38)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.
         let runControlError = try XCTUnwrap(fixture.runControlError?.error)
@@ -169,7 +169,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(recap.outcome, .answered)
         XCTAssertEqual(recap.items.map(\.kind), [.option, .skipped])
         XCTAssertEqual(recap.items.map { $0.answer(for: recap.outcome) }, [.chosen("Plain text"), .unanswered("Skipped")])
-        // Revision 40: values a page read in extract mode survive the stream decode.
+        // Revision 38: values a page read in extract mode survive the stream decode.
         let extraction = try XCTUnwrap(
             fixture.events.lazy.compactMap(\.payload?.timeline).flatMap(\.steps)
                 .first { $0.toolName == AidenWebExtractRecap.toolName }?.extraction

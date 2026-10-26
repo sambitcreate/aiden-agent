@@ -1,6 +1,6 @@
 # Web page reading and extract mode
 
-Status: in review in [PR #588](https://github.com/sambitcreate/aiden-agent/pull/588) (2026-10-26). User guide: [web-fetch-extract.md](../web-fetch-extract.md).
+Status: merged in [PR #588](https://github.com/sambitcreate/aiden-agent/pull/588) (2026-10-26); unreleased. User guide: [web-fetch-extract.md](../web-fetch-extract.md).
 
 ## Goal
 
@@ -23,7 +23,7 @@ Bring pi-web-access v0.45.0's extract mode into Aiden as a native feature, witho
 
    The Clairic adapter (`web-extract-models.ts`) rotates pool keys on 401, 403 and 429. When extraction fails, the tool returns the page text with the reason.
 4. **Settings.** Settings → Web Search → Web pages holds the reading switch, the extract switch with its status badge, the Cloudflare account ID, the key pool and a privacy line. Portable config carries the settings without keys.
-5. **Transcript.** A completed extract step carries a bounded, display-only recap (`renderer/shared/web-extract.ts`). The desktop, iOS and Android show it as a card under the step's activity line. Remote contract revision 40 (provisional) adds `extraction` to `GenerationToolStep`.
+5. **Transcript.** A completed extract step carries a bounded, display-only recap (`renderer/shared/web-extract.ts`). The desktop, iOS and Android show it as a card under the step's activity line. Remote contract revision 38 adds `extraction` to `GenerationToolStep`.
 6. **Smaller tool definitions.** The web and browser tool descriptions were trimmed, measured with o200k:
    - description text went from 1,015 to 440 tokens (−57%);
    - whole definitions went from 2,754 to 1,566 tokens (−43%).
@@ -32,6 +32,5 @@ Bring pi-web-access v0.45.0's extract mode into Aiden as a native feature, witho
 
 ## Open
 
-- Re-claim Remote revision 40 at merge, after whatever `main` holds then (38 and 39 are held by open PRs).
-- iOS and Android code was not compiled in the cloud container, so rely on CI and a TestFlight or Android build to hand-check the card.
+- Hand-check the card, and take iPhone and Android screenshots, on the next TestFlight and Android builds. CI builds both apps and runs their tests.
 - Later, possibly: give Bots and schedules the tool, add extraction models, and give the CLI `web_fetch`.

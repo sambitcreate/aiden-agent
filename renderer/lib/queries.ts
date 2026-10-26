@@ -118,6 +118,8 @@ export const queryKeys = {
     ["workspace-repository-identity", workspaceId ?? "none"] as const,
   chatPullRequests: (chatId: string | undefined) =>
     ["chat-pull-requests", chatId ?? "none"] as const,
+  chatFollowThrough: (chatId: string | undefined) =>
+    ["chat-follow-through", chatId ?? "none"] as const,
   chatCurrentPullRequest: (chatId: string | undefined) =>
     ["chat-current-pull-request", chatId ?? "none"] as const,
   chatPullRequestsSidebar: (chatIds: readonly string[]) =>
@@ -568,6 +570,16 @@ export function useChatPullRequests(chatId: string | undefined, enabled = true) 
   return useQuery({
     queryKey: queryKeys.chatPullRequests(chatId),
     queryFn: () => pullRequestsApi.list(chatId as string),
+    enabled: Boolean(chatId) && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** A chat's background jobs, followed pull requests and check; `chats:follow-through-changed` invalidates it. */
+export function useChatFollowThrough(chatId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.chatFollowThrough(chatId),
+    queryFn: () => chatsApi.followThrough(chatId as string),
     enabled: Boolean(chatId) && enabled,
     staleTime: 30_000,
   });

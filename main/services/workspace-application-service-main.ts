@@ -8,6 +8,7 @@ import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { terminalService } from "./terminal.js";
 import { browserService } from "./browser/service.js";
 import { workspaceArtifactStore } from "./workspace-artifacts/main.js";
+import { closeWorkspaceFollowThrough } from "./follow-through/follow-through-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import {
@@ -23,6 +24,7 @@ export const workspaceApplicationService = createWorkspaceApplicationService({
   terminalService,
   browserService,
   workspaceArtifacts: workspaceArtifactStore,
+  followThrough: { closeForWorkspace: closeWorkspaceFollowThrough },
   workspaceMutationGate,
   workspaceOperationRegistry,
   createScratchWorkspaceDirectory,
