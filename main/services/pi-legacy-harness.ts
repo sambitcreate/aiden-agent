@@ -11,7 +11,6 @@ export {
   DEFAULT_COMPACTION_SETTINGS,
   JsonlSessionRepo,
   MemorySessionRepo,
-  TODO_CONTEXT,
   branchTip,
   calculateContextTokens,
   convertToLlm,
@@ -27,8 +26,7 @@ export {
   sessionName,
   setValue,
   shouldCompact,
-  value,
-  withAbortSignal
+  value
 } from "@aiden/pi-legacy-harness";
 export type {
   Session,
@@ -63,6 +61,27 @@ declare module "@earendil-works/pi-agent-core" {
     compactionSummary: CompactionSummaryMessage;
   }
 }
+
+import {
+  TODO_CONTEXT as legacyTodoContext,
+  withAbortSignal as legacyWithAbortSignal,
+  type Session as LegacySession,
+} from "@aiden/pi-legacy-harness";
+
+/**
+ * The context the frozen helpers' declarations ask for. They name chord's
+ * `Context`, which the root tsconfig's catch-all path resolves to the current
+ * chord (whose `Context` has a required `telemetry` since 1.4), while the
+ * contexts below come from the harness's own 0.87.1 chord. Both stay inside
+ * this boundary: they are only ever handed back to the frozen helpers, which
+ * never read `telemetry`, and never to a current Pi API.
+ */
+export type LegacyContext = Parameters<LegacySession["close"]>[0];
+export const TODO_CONTEXT = legacyTodoContext as unknown as LegacyContext;
+export const withAbortSignal = legacyWithAbortSignal as unknown as (
+  signal: AbortSignal,
+  context: LegacyContext,
+) => LegacyContext;
 
 import { compact as legacyCompact } from "@aiden/pi-legacy-harness";
 import { generateBranchSummary as legacyGenerateBranchSummary } from "@aiden/pi-legacy-harness";
