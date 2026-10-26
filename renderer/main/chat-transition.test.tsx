@@ -8,7 +8,7 @@ import { emitBotTestNotification, installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Outlet, RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
@@ -120,6 +120,81 @@ async function mountRoutedChatPane(
   });
   return { router, queryClient };
 }
+
+test("question countdown stays singular across chat updates and is removed after answering", async () => {
+  let prompt = {
+    version: 1 as const,
+    promptId: "question-1",
+    streamId: "stream-question-1",
+    toolCallId: "call-question-1",
+    source: "remote" as const,
+    expiresAt: new Date(Date.now() + 180_000).toISOString(),
+    questions: [{
+      header: "URL",
+      question: "Where should the monitor connect?",
+      multiSelect: false,
+      options: [{ label: "Set later", description: "Use a placeholder for now." }],
+    }],
+  };
+  let answers = 0;
+  const { queryClient } = await mountRoutedChatPane("chat-a", {
+    "remote:getPendingQuestion": () => ({ ...prompt }),
+    "remote:respondQuestionFromHost": () => {
+      answers += 1;
+      return { status: "answered" };
+    },
+  });
+  const countdowns = () => screen.queryAllByText(/Aiden continues on its own in /u);
+  const refreshQuestion = async () => {
+    await act(async () => {
+      emitBotTestNotification("remote:approval-changed", { chatId: "chat-a" });
+    });
+  };
+  try {
+    await waitFor(() => assert.equal(countdowns().length, 1));
+    const answer = screen.getByRole("button", { name: /Set later/u });
+    await act(async () => { fireEvent.click(answer); });
+    for (let update = 0; update < 6; update += 1) {
+      await refreshQuestion();
+      assert.equal(countdowns().length, 1, "A chat update must not append another countdown");
+      assert.ok(screen.getByRole("button", { name: /Set later/u }) === answer);
+      assert.equal(answer.getAttribute("aria-pressed"), "true", "Updates preserve the selected answer");
+    }
+    await act(async () => { fireEvent.keyDown(answer, { key: "Enter", metaKey: true }); });
+    await waitFor(() => assert.equal(answers, 1));
+    assert.equal(countdowns().length, 0, "Answering removes every countdown");
+    assert.ok(screen.queryByRole("button", { name: "Close questionnaire" }) === null);
+
+    prompt = { ...prompt, promptId: "question-2", toolCallId: "call-question-2" };
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1, "A later question starts with one countdown");
+    const nextAnswer = screen.getByRole("button", { name: /Set later/u });
+    assert.equal(nextAnswer.getAttribute("aria-pressed"), "false", "A new prompt resets the selection");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
+    });
+    const customAnswer = screen.getByRole("textbox", { name: /Custom answer for/u }) as HTMLTextAreaElement;
+    await act(async () => { fireEvent.change(customAnswer, { target: { value: "https://monitor.local" } }); });
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1);
+    assert.ok(screen.getByRole("textbox", { name: /Custom answer for/u }) === customAnswer);
+    assert.equal(customAnswer.value, "https://monitor.local", "Updates preserve a typed custom answer");
+
+    prompt = { ...prompt, promptId: "question-3", toolCallId: "call-question-3" };
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1, "Replacing an open prompt removes the old countdown");
+    assert.ok(!customAnswer.isConnected, "A replacement prompt does not inherit the custom draft");
+    assert.equal(screen.getByRole("button", { name: /Set later/u }).getAttribute("aria-pressed"), "false");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Close questionnaire" }));
+    });
+    await waitFor(() => assert.equal(answers, 2));
+    assert.equal(countdowns().length, 0, "Dismissing the question removes its countdown");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
 
 test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
   const { router, queryClient } = await mountRoutedChatPane("chat-a");
