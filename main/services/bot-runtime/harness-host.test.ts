@@ -16,6 +16,7 @@ import {
 } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import { OPENROUTER_ATTRIBUTION_HEADERS, recordingOpenRouter } from "../openrouter-recording-test-support.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -167,6 +168,50 @@ test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the 
   } finally {
     await host.shutdown();
   }
+});
+
+test("(b1) a turn cut off by a crash every time it resumed still runs when the person resumes it again", async () => {
+  const profile = tempProfile();
+  const first = spawnHarnessChild("stream", [profile, "bot:looping", "req-1"]);
+  await first.waitFor("STREAMING");
+  await first.kill();
+  // Pi Durable parks a task after five crashes in a row unless the host says otherwise.
+  for (let crash = 2; crash <= 5; crash += 1) {
+    const child = spawnHarnessChild("resume", [profile, "bot:looping"]);
+    await child.waitFor("STREAMING");
+    await child.kill();
+  }
+
+  const fauxModels = createFauxModels([fauxAssistantMessage("finally answered")]);
+  const host = await hostFor(profile, fauxModels);
+  try {
+    const { harness } = await host.open("bot:looping");
+    assert.equal((await harness.inspect(ctx)).scheduling, "paused");
+    harness.resume();
+    await waitFor(() => fauxModels.calls() > 0, { what: "the resumed turn to reach the provider" });
+    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the resumed turn to finish" });
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("a Bot's requests to OpenRouter carry no pi attribution headers", async (t) => {
+  const router = await recordingOpenRouter(t);
+  const host = await createBotHarnessHost({ profileDir: tempProfile(), buildRegistry: () => createRegistry(), models: router.models });
+  assert.ok(!isBotHarnessHostUnavailable(host), "profile lock should be free");
+  try {
+    const { conversation } = await host.open("bot-router");
+    await conversation.configure({ model: { provider: router.model.provider, modelId: router.model.id } }, ctx);
+    const submission = await conversation.submit({ type: "input", content: "hello" }, ctx);
+    assert.equal((await submission.wait(ctx)).status, "done");
+  } finally {
+    await host.shutdown();
+  }
+  assert.ok(router.requests.length > 0);
+  assert.deepEqual(
+    OPENROUTER_ATTRIBUTION_HEADERS.filter((header) => router.requests.some((request) => header in request)),
+    [],
+  );
 });
 
 test("(b2) the scan closes Bots that have nothing to recover", async () => {

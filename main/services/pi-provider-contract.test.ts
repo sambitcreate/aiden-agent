@@ -44,7 +44,7 @@ test("the pinned Pi release exposes native OpenAI Codex OAuth", async () => {
 
   const codexModels = models.getModels("openai-codex");
   assert.ok(codexModels.some((model) => model.id === "gpt-6.1-sol"));
-  assert.ok(codexModels.some((model) => model.id === "gpt-5.5"));
+  assert.ok(codexModels.some((model) => model.id === "gpt-5.6-sol"));
   assert.ok(codexModels.every((model) => model.api === "openai-codex-responses"));
   assert.deepEqual(await models.getAvailable("openai-codex"), []);
 });
