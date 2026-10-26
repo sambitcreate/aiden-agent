@@ -128,6 +128,8 @@ export class AidenRemoteHostFeedService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingRuns = new Map<string, RunStateChange>();
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
+  /** The Bot rows each device last opened the feed with; its cursor resumes only those. */
+  private readonly audiences = new Map<string, Audience>();
   private closed = false;
 
   constructor(private readonly options: AidenRemoteHostFeedOptions) {
@@ -186,7 +188,11 @@ export class AidenRemoteHostFeedService {
     admit();
     const botVisible = device.capabilities.has("bot:read");
     const audience: Audience = device.botHandoffs === true ? "handoffs" : "legacy";
-    let position = this.resumePosition(cursor);
+    // A device that gained or lost `bot:handoffs` since its cursor read other
+    // Bot rows: replaying from it would keep a paused Bot as it read before.
+    const previous = this.audiences.get(device.id);
+    this.audiences.set(device.id, audience);
+    let position = previous === undefined || previous === audience ? this.resumePosition(cursor) : undefined;
     /** Remaining frames of a snapshot being delivered one frame per pull. */
     let snapshot: string[] = [];
     const pull = (): CursorSsePull => {
@@ -233,6 +239,7 @@ export class AidenRemoteHostFeedService {
 
   /** Close every feed a revoked device holds. */
   revokeDevice(deviceId: string): void {
+    this.audiences.delete(deviceId);
     const owned = this.subscriptions.get(deviceId);
     if (!owned) return;
     this.subscriptions.delete(deviceId);
