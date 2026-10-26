@@ -3029,18 +3029,29 @@ export function ChatPane({ chatId }: { chatId: string }) {
     const last = messages[messages.length - 1];
     return last?.role === "assistant" && last.providerFailure ? last.id : undefined;
   }, [draft, messages, transcriptIdle]);
-  const [failureActionBusy, setFailureActionBusy] = React.useState(false);
+  // A card action belongs to the chat it started in: another chat's card stays
+  // usable, and only the newest action clears the busy state.
+  const failureActionTokenRef = React.useRef(0);
+  const [failureActionOwner, setFailureActionOwner] = React.useState<
+    { chatId: string; token: number } | undefined
+  >();
+  const failureActionBusy = failureActionOwner?.chatId === chatId;
   const runFailureAction = React.useCallback(
     async (action: ProviderFailureAction) => {
       if (action === "open_providers") {
         void navigate({ to: "/settings", search: { section: "providers" } });
         return;
       }
-      setFailureActionBusy(true);
+      const token = ++failureActionTokenRef.current;
+      setFailureActionOwner({ chatId, token });
       try {
         if (action === "compact") {
           const result = await compactChat();
-          if (!result.compacted) return;
+          // Already compact (an earlier press finished while the person was away) still sends.
+          if (!result.compacted && result.reason !== "already_compact") return;
+          // The pane may show another chat now: skip the follow-up, and this
+          // chat's card is still there when the person comes back.
+          if (chatIdRef.current !== chatId) return;
         }
         await handleSend(
           action === "continue" ? PROVIDER_FAILURE_FOLLOW_UPS.continue : PROVIDER_FAILURE_FOLLOW_UPS.try_again,
@@ -3050,7 +3061,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         if (chatIdRef.current !== chatId) return;
         toast.error(userFacingErrorMessage(actionError, "Couldn’t continue this chat."));
       } finally {
-        if (chatIdRef.current === chatId) setFailureActionBusy(false);
+        setFailureActionOwner((owner) => (owner?.token === token ? undefined : owner));
       }
     },
     [chatId, compactChat, handleSend, navigate],

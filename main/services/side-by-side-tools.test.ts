@@ -49,6 +49,10 @@ test("the policy marks every other tool sequential and keeps one copy per tool",
   const [readAgain, writeAgain] = policy([read, write]);
   assert.equal(readAgain, readCopy);
   assert.equal(writeAgain, writeCopy);
+  // Pi hands the copies back on the next request; they must not be wrapped again.
+  const [readOnceMore, writeOnceMore] = policy([readCopy!, writeCopy!]);
+  assert.equal(readOnceMore, readCopy);
+  assert.equal(writeOnceMore, writeCopy);
 });
 
 test("side-by-side calls share a few slots, and a waiting call can be stopped", async () => {

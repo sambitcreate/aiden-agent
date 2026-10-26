@@ -77,8 +77,12 @@ export function createSideBySideToolPolicy(
 ): (tools: readonly AgentTool[]) => AgentTool[] {
   const slots = new ToolCallSlots(limit);
   const copies = new WeakMap<AgentTool, AgentTool>();
+  // Pi carries a request's tools into the next request, so the policy sees
+  // its own copies again; wrapping one twice would hold two slots per call.
+  const produced = new WeakSet<AgentTool>();
   return (tools) =>
     tools.map((tool) => {
+      if (produced.has(tool)) return tool;
       const cached = copies.get(tool);
       if (cached) return cached;
       const copy: AgentTool = runsSideBySide(tool)
@@ -91,6 +95,7 @@ export function createSideBySideToolPolicy(
           ? tool
           : { ...tool, executionMode: "sequential" };
       copies.set(tool, copy);
+      produced.add(copy);
       return copy;
     });
 }

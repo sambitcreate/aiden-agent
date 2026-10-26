@@ -302,6 +302,42 @@ test("reads in one batch run side by side after their approvals are asked one at
   assert.deepEqual(toolResults.map((message) => message.toolName), ["read_file", "grep"]);
 });
 
+test("a run with many read steps keeps going and still caps reads at four at once", async () => {
+  let running = 0;
+  let peak = 0;
+  const read: AgentTool = {
+    name: "read_file",
+    label: "read_file",
+    description: "read_file",
+    parameters: Type.Object({}),
+    execute: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      running -= 1;
+      return { content: [{ type: "text", text: "ok" }], details: null };
+    },
+  };
+  const steps = [
+    ...Array.from({ length: 6 }, () =>
+      fauxAssistantMessage([fauxToolCall(read.name, {})], { stopReason: "toolUse" }),
+    ),
+    fauxAssistantMessage(Array.from({ length: 6 }, () => fauxToolCall(read.name, {})), {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("done"),
+  ];
+  const { harness } = testHarness(steps, { initialState: { tools: [read] } });
+  const outcome = await Promise.race([
+    harness.prompt("read a lot").then(() => "finished"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("stalled"), 5_000)),
+  ]);
+  if (outcome === "stalled") harness.abort();
+  assert.equal(outcome, "finished");
+  assert.equal(messageText(harness.state.messages[harness.state.messages.length - 1]), "done");
+  assert.equal(peak, 4);
+});
+
 test("a read batched with a write runs one call at a time", async () => {
   const trace: string[] = [];
   const makeTool = (name: string): AgentTool => ({
