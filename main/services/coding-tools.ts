@@ -876,6 +876,8 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "background_job":
+      return `Run in the background: ${String(a.command ?? "?")}`;
     case "generate_image":
       return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":

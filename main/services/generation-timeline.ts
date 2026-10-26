@@ -287,6 +287,28 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
       return { label: "Draw visual", detail: safeDetail(values.title) };
     case "run_command":
       return { label: "Run command", detail: safeDetail(values.description) };
+    // The job's label, never its command; pull request links stay out of the feed.
+    case "background_job":
+      return {
+        label:
+          values.action === "start"
+            ? "Start background job"
+            : values.action === "stop"
+              ? "Stop background job"
+              : values.action === "read"
+                ? "Read background job output"
+                : "List background jobs",
+        detail: values.action === "start" ? safeDetail(values.description) : undefined,
+      };
+    case "follow_pull_request":
+      return {
+        label:
+          values.action === "stop"
+            ? "Stop following pull request"
+            : values.action === "list"
+              ? "List followed pull requests"
+              : "Follow pull request",
+      };
     case "share_image":
       return { label: "Share image", target: path };
     case "generate_image":

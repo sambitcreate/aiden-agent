@@ -387,3 +387,36 @@ test("visualize works in any idle chat and submits a composer instruction", () =
   assert.equal(executeSlashCommandAction(visualize, "  chart sales  ", handlers), true);
   assert.deepEqual(submitted, [["visualize", "chart sales"]]);
 });
+
+test("/until and /follow need a chat with folder access, and /until can be set while an answer runs", () => {
+  const until = command("until");
+  const follow = command("follow");
+  for (const entry of [until, follow]) {
+    assert.deepEqual(slashCommandAvailability(entry, context), { available: true });
+    assert.deepEqual(slashCommandAvailability(entry, { ...context, idle: false }), { available: true });
+    assert.match(slashCommandAvailability(entry, { ...context, hasWorkspace: false }).reason ?? "", /open a workspace/iu);
+    assert.match(slashCommandAvailability(entry, { ...context, hasChat: false }).reason ?? "", /send a message first/iu);
+    assert.equal(
+      slashCommandAvailability(entry, { ...context, followThroughBlockedReason: "Turn on folder access for this workspace first." }).reason,
+      "Turn on folder access for this workspace first.",
+    );
+  }
+
+  const asked: unknown[] = [];
+  const handlers: SlashCommandActionHandlers = {
+    executeCommand: () => true,
+    openSettings: () => undefined,
+    requestRename: () => undefined,
+    copyLatestResponse: () => undefined,
+    openReview: () => undefined,
+    openAccess: () => undefined,
+    followThrough: (action, argument) => {
+      asked.push([action, argument]);
+      return true;
+    },
+  };
+  assert.equal(executeSlashCommandAction(until, "  npm test -- --run  ", handlers), true);
+  assert.equal(executeSlashCommandAction(follow, "", handlers), true);
+  assert.deepEqual(asked, [["until", "npm test -- --run"], ["follow", ""]]);
+  assert.equal(executeSlashCommandAction(until, "npm test", { ...handlers, followThrough: undefined }), false);
+});

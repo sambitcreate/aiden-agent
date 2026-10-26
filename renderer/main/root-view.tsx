@@ -399,6 +399,16 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => {
+    return onNotification("chats:follow-through-changed", (payload: unknown) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; transcript?: unknown }) : {};
+      const chatId = typeof update.chatId === "string" && update.chatId ? update.chatId : undefined;
+      void queryClient.invalidateQueries({ queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])] });
+      // A follow-up notice was saved without a turn to stream it: re-read the transcript.
+      if (chatId && update.transcript === true) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
     return onNotification("chats:pull-requests-changed", (payload: unknown) => {
       const chatId =
         payload && typeof payload === "object" && "chatId" in payload
