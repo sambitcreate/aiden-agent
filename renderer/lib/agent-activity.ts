@@ -1,5 +1,6 @@
 import type { ActivityMark } from "../shared/activity-marks";
 import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
+import { modelCallRetryLabel, type ModelCallRetryView } from "../shared/model-call-retry";
 
 export interface ToolActivity {
   state: "running" | "finished" | "failed" | "blocked";
@@ -16,6 +17,8 @@ export type AgentActivityPhase =
   | "working"
   | "visualizing"
   | "waiting"
+  /** A failed model request waits before it is sent again. */
+  | "retrying"
   | "stopping";
 
 export interface AgentActivity {
@@ -55,6 +58,10 @@ interface AgentActivityInput {
   textStreaming?: boolean;
   pendingApproval: boolean;
   toolActivity: ToolActivity | null;
+  /** The failed request this reply is about to send again, if it is. */
+  modelCallRetry?: ModelCallRetryView | null;
+  /** Epoch ms, for the retry countdown. */
+  now?: number;
 }
 
 const SEARCH_TOOL_PATTERN = /(?:^|[_:-])(find|glob|grep|list|read|search)(?:$|[_:-])/iu;
@@ -75,6 +82,8 @@ export function resolveAgentActivity({
   textStreaming = false,
   pendingApproval,
   toolActivity,
+  modelCallRetry = null,
+  now = Date.now(),
 }: AgentActivityInput): AgentActivity | null {
   if (isStopping) {
     return { phase: "stopping", label: "Stopping…", mark: "bounce" };
@@ -82,6 +91,10 @@ export function resolveAgentActivity({
 
   if (pendingApproval) {
     return { phase: "waiting", label: "Waiting for approval", mark: "glance" };
+  }
+
+  if (modelCallRetry) {
+    return { phase: "retrying", label: modelCallRetryLabel(modelCallRetry, now), mark: "glance" };
   }
 
   if (toolActivity?.state === "running") {

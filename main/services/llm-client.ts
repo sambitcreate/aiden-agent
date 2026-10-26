@@ -4697,7 +4697,7 @@ export const llmClient = {
                 throw new Error("The Pi visible-turn transaction did not start.");
               }
             },
-            onRetry: () => {
+            onRetry: (retry) => {
               full = full.slice(0, fullLengthBeforeAttempt);
               reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
               timeline.rewindContentOffset(full.length);
@@ -4707,6 +4707,18 @@ export const llmClient = {
                 delta: "",
                 reset: true,
               });
+              // The working row counts down to the next try; Stop cancels the wait.
+              if (retry.reason === "provider") {
+                sendGeneration(streamId, "chat:status", {
+                  streamId,
+                  phase: "retrying",
+                  retry: {
+                    attempt: retry.attempt,
+                    maxAttempts: retry.maxAttempts,
+                    retryAt: Date.now() + retry.delayMs,
+                  },
+                });
+              }
             },
           },
         );

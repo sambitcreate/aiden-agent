@@ -16,6 +16,12 @@ import {
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
+import {
+  isModelCallTimeout,
+  MODEL_CALL_RETRY_POLICY,
+  MODEL_CALL_TIMEOUT_MAX_RETRIES,
+  modelCallRetryDelayMs,
+} from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
@@ -67,6 +73,9 @@ export interface PiCompactionCheckResult {
     | "session-failed"
     | "unsafe-rollback";
   retryDelayMs?: number;
+  /** The try a provider retry starts (2 for the first retry), out of `maxAttempts`. */
+  retryAttempt?: number;
+  maxAttempts?: number;
 }
 
 export interface PiCompactionCoordinatorOptions {
@@ -81,8 +90,8 @@ export interface PiCompactionCoordinatorOptions {
   settings?: Partial<CompactionSettings>;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
-  /** Bounded host backoff for transient provider/transport retries. */
-  retryDelayMs?: number;
+  /** Retries and backoff for transient provider/transport failures. */
+  providerRetry?: RetryPolicy;
   /** Current-Pi-compatible retry policy for each standalone hidden summary request. */
   summaryRetry?: RetryPolicy;
   /** Native Pi retry lifecycle callbacks for the isolated summary request. */
@@ -237,7 +246,11 @@ function withoutRetryableAssistantTail(messages: readonly AgentMessage[]): Agent
 export class PiCompactionCoordinator {
   private readonly settings: CompactionSettings;
   private overflowRecoveryAttempted = false;
-  private providerRetryAttempted = false;
+  /** Retries in the current run of failures; any answer that succeeds in between starts over. */
+  private providerRetries = 0;
+  private timeoutRetries = 0;
+  /** Retained message count when the last retry started, to see whether the run moved on since. */
+  private providerRetryBase = 0;
   private activeAbortController?: AbortController;
 
   constructor(private readonly options: PiCompactionCoordinatorOptions) {
@@ -311,6 +324,12 @@ export class PiCompactionCoordinator {
     return retainedTailSystemTokens(messages.slice(anchorIndex + 1), {
       retainsSystemUpdates: modelRetainsSystemUpdates(this.options.model),
     });
+  }
+
+  private resetProviderRetries(): void {
+    this.providerRetries = 0;
+    this.timeoutRetries = 0;
+    this.providerRetryBase = 0;
   }
 
   /** Pi resets overflow recovery when a new user prompt enters the agent. */
@@ -459,9 +478,7 @@ export class PiCompactionCoordinator {
     if (assistantMessage.stopReason !== "error" && assistantMessage.stopReason !== "length") {
       this.overflowRecoveryAttempted = false;
     }
-    if (assistantMessage.stopReason !== "error") {
-      this.providerRetryAttempted = false;
-    }
+    if (assistantMessage.stopReason !== "error") this.resetProviderRetries();
     // Output below the current cap does not prove context overflow: the cap
     // may have changed since this response, or the provider may enforce less.
     // Let detected overflow or measured context pressure drive compaction.
@@ -505,23 +522,57 @@ export class PiCompactionCoordinator {
         }
       }
       const retryMessages = withoutRetryableAssistantTail(liveMessages);
-      if (this.providerRetryAttempted) {
-        this.providerRetryAttempted = false;
+      // A run that answered successfully since the last retry is a new run of failures.
+      if (
+        this.providerRetries > 0 &&
+        retryMessages
+          .slice(this.providerRetryBase)
+          .some(
+            (message) =>
+              message.role === "assistant" &&
+              message.stopReason !== "error" &&
+              message.stopReason !== "aborted",
+          )
+      ) {
+        this.resetProviderRetries();
+      }
+      const policy = this.options.providerRetry ?? MODEL_CALL_RETRY_POLICY;
+      const maxRetries = policy.enabled ? Math.max(0, policy.maxRetries) : 0;
+      const timeout = isModelCallTimeout(assistantMessage);
+      if (
+        this.providerRetries >= maxRetries ||
+        (timeout && this.timeoutRetries >= MODEL_CALL_TIMEOUT_MAX_RETRIES)
+      ) {
+        const retries = this.providerRetries;
+        this.resetProviderRetries();
         return {
           compacted: false,
           shouldRetry: false,
           messages: retryMessages,
           errorMessage:
-            "The provider failed again after one automatic retry. Try again in a moment or switch models.",
+            retries === 0
+              ? "The provider request failed. Try again in a moment or switch models."
+              : `The provider failed again after ${retries === 1 ? "one automatic retry" : `${retries} automatic retries`}. Try again in a moment or switch models.`,
           failureCode: "retry-exhausted",
         };
       }
-      this.providerRetryAttempted = true;
+      this.providerRetries += 1;
+      if (timeout) this.timeoutRetries += 1;
+      this.providerRetryBase = retryMessages.length;
       return {
         compacted: false,
         shouldRetry: true,
         messages: retryMessages,
-        retryDelayMs: Math.max(0, Math.min(5_000, this.options.retryDelayMs ?? 500)),
+        retryDelayMs: modelCallRetryDelayMs(policy, this.providerRetries),
+        retryAttempt: this.providerRetries + 1,
+        // A timeout leaves fewer retries, counted from the ones it has left.
+        maxAttempts:
+          (timeout
+            ? Math.min(
+                maxRetries,
+                this.providerRetries + MODEL_CALL_TIMEOUT_MAX_RETRIES - this.timeoutRetries,
+              )
+            : maxRetries) + 1,
       };
     }
 

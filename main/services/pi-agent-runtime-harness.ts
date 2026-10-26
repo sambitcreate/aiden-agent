@@ -1,3 +1,4 @@
+import { MODEL_CALL_RETRY_POLICY } from "./model-call-retry.js";
 import { verificationIdentity } from "./pi-verification-store.js";
 import { hostCommandObservation } from "./pi-host-command-observation.js";
 import { toolOutputScope } from "./tool-output-store.js";
@@ -232,13 +233,13 @@ export type PiRuntimeTerminalOutcome = (
       kind: "completed";
       finalMessage: AssistantMessage;
       finalMessageWasAbandoned?: false;
-      attempts: 1 | 2;
+      attempts: number;
     }
   | {
       kind: "app_cancelled";
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }
   | {
       kind: "provider_failed";
@@ -248,14 +249,14 @@ export type PiRuntimeTerminalOutcome = (
       providerFailure?: ProviderFailureV1;
       /** True only when recovery removed finalMessage from the Pi branch. */
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }
   | {
       kind: "host_failed";
       faultKind: PiRuntimeHostFaultKind;
       finalMessage?: AssistantMessage;
       finalMessageWasAbandoned?: boolean;
-      attempts: 0 | 1 | 2;
+      attempts: number;
     }) & { emergencyProjection?: Exclude<GenerationEmergencyProjection, { kind: "none" }> };
 
 export interface PiRuntimeSessionBinding {
@@ -290,14 +291,22 @@ export type PiRuntimeRunInput =
   | { kind: "continue-durable-tail" }
   | { kind: "append-and-run"; message: AgentMessage };
 
+/** Every provider retry of a run of failures plus one compact-and-retry. */
+const PI_RUNTIME_MAX_ATTEMPTS = MODEL_CALL_RETRY_POLICY.maxRetries + 2;
+
+export interface PiRuntimeRetryEvent {
+  /** The try about to start, from 2. */
+  attempt: number;
+  /** The most tries this run of failures may take. */
+  maxAttempts: number;
+  reason: "provider" | "overflow";
+  delayMs: number;
+}
+
 export interface PiRuntimeRunOptions {
   /** Opens the host's visible-turn transaction after prior-tail repair. */
   beforeDurableTurn?: (signal: AbortSignal) => Promise<void> | void;
-  onRetry?: (event: {
-    attempt: 2;
-    reason: "provider" | "overflow";
-    delayMs: number;
-  }) => Promise<void> | void;
+  onRetry?: (event: PiRuntimeRetryEvent) => Promise<void> | void;
 }
 
 export interface PiRuntimeQueueOptions {
@@ -1872,7 +1881,7 @@ export class PiAgentRuntimeHarness {
         once: true,
       });
 
-    let attempts: 0 | 1 | 2 = 0;
+    let attempts = 0;
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
@@ -2152,7 +2161,7 @@ export class PiAgentRuntimeHarness {
             attempts,
           });
         }
-        attempts = (attempts + 1) as 1 | 2;
+        attempts += 1;
         this.runtimeEvents?.setAttempt(attempts);
         this.lastAssistantMessage = undefined;
         try {
@@ -2277,7 +2286,14 @@ export class PiAgentRuntimeHarness {
           ) {
             this.capturedTurnMessages.pop();
           }
-          if (attempts >= 2) {
+          const retry: PiRuntimeRetryEvent = {
+            attempt: compactionResult.retryAttempt ?? attempts + 1,
+            maxAttempts: compactionResult.maxAttempts ?? Math.max(2, attempts + 1),
+            reason: compactionResult.compacted === true ? "overflow" : "provider",
+            delayMs: compactionResult.retryDelayMs ?? 0,
+          };
+          // The coordinator bounds each kind of retry; this also bounds them together.
+          if (retry.attempt > PI_RUNTIME_MAX_ATTEMPTS) {
             if (
               !cancelled() &&
               compactionResult.failureCode !== "session-failed" &&
@@ -2299,20 +2315,11 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
-          const delayMs = compactionResult.retryDelayMs ?? 0;
-          this.runtimeEvents?.emit({
-            type: "retry",
-            attempt: 2,
-            reason: compactionResult.compacted === true ? "overflow" : "provider",
-            delayMs,
-          });
+          const delayMs = retry.delayMs;
+          this.runtimeEvents?.emit({ type: "retry", ...retry });
           const retryHook = await waitForManagedHook(
             Promise.resolve().then(() =>
-              options.onRetry?.({
-                attempt: 2,
-                reason: compactionResult.compacted === true ? "overflow" : "provider",
-                delayMs,
-              }),
+              options.onRetry?.(retry),
             ),
             abortController.signal,
           );
@@ -2346,6 +2353,8 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
+          // The loop counts this try as `retry.attempt`.
+          attempts = retry.attempt - 1;
           continue;
         }
 

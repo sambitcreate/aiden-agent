@@ -235,6 +235,7 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import {
   acpHarnessChatReason,
   acpHarnessReadinessMessage,
@@ -604,6 +605,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     stopRequestedRef.current = isStoppingGeneration;
   }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
+  const [modelCallRetry, setModelCallRetry] = React.useState<ModelCallRetryView | null>(null);
+  const [modelCallRetryNow, setModelCallRetryNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!modelCallRetry) return;
+    const timer = window.setInterval(() => setModelCallRetryNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [modelCallRetry]);
   // Read aloud: one controller per chat surface; main owns eligibility.
   const { state: readAloudState, controller: readAloudController } = useReadAloud(chatId);
   const readAloudRef = React.useRef(readAloudController);
@@ -804,6 +812,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
+    setModelCallRetry(null);
     setCanStopGeneration(false);
     setHasUnpersistedResponse(false);
     setGenerationTimeline(null);
@@ -1287,6 +1296,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStoppingGeneration(false);
       setCanStopGeneration(true);
       setIsModelLoading(false);
+      setModelCallRetry(null);
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
@@ -1356,6 +1366,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
+              setModelCallRetry(null);
               pendingDeltaRef.current += delta;
               scheduleStreamFlush();
             }
@@ -1392,6 +1403,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            setModelCallRetry(null);
             // Seed main's ready preview before the frame mounts so the final
             // visual replaces its draft without a loading placeholder.
             if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
@@ -1442,6 +1454,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
+              setModelCallRetry(null);
               pendingReasoningDeltaRef.current += delta;
               scheduleStreamFlush();
             }
@@ -1450,6 +1463,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
+          },
+          onRetrying: (retry) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            setModelCallRetryNow(Date.now());
+            setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
@@ -1488,6 +1506,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               generationTimelineRef.current = timeline;
               setGenerationTimeline(timeline);
+              // A tool starting means the retried request answered.
+              if (latestActiveAgentStep(timeline)) setModelCallRetry(null);
             }
           },
           onApproval: (prompt) => {
@@ -1557,6 +1577,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setPersistedHandoffMessageId(null);
               setIsStoppingGeneration(false);
               setIsModelLoading(false);
+              setModelCallRetry(null);
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
@@ -1638,6 +1659,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setIsStoppingGeneration(false);
                 setIsModelLoading(false);
+                setModelCallRetry(null);
                 if (!partial || updatedChat) {
                   setGenerationTimeline(null);
                   generationTimelineRef.current = null;
@@ -2204,6 +2226,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
+    setModelCallRetry(null);
     setCanStopGeneration(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
@@ -2877,6 +2900,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
+    modelCallRetry,
+    now: modelCallRetryNow,
   });
   const visualizingLive =
     (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||

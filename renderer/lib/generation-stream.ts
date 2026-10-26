@@ -7,6 +7,7 @@ import { chatArtifactIdentity, parseChatArtifactEventV1, type ChatArtifactV1 } f
 import type { ChatUiVisualV1 } from "../shared/aiden-ui/types";
 import { reduceUiVisuals } from "./ui-visual-transcript";
 import { parseChatContextPressureNotification } from "../shared/context-pressure";
+import { parseModelCallRetryView } from "../shared/model-call-retry";
 import type { ChatTimelineNotification, GenerationTimeline } from "../shared/generation-timeline";
 import { parseSubagentRunSnapshot, type SubagentRunSnapshot } from "../shared/subagent-runs";
 import { parseToolApprovalScope } from "../shared/tool-approval-scope";
@@ -33,8 +34,9 @@ interface ChatArtifactNotification {
 }
 interface ChatStatus {
   streamId: string;
-  phase: ChatStatusPhase | "agents_instructions_limited";
+  phase: ChatStatusPhase | "agents_instructions_limited" | "retrying";
   notices?: unknown;
+  retry?: unknown;
 }
 interface ChatDone {
   streamId: string;
@@ -139,6 +141,9 @@ export function subscribeGenerationStream(
       if (p.phase === "agents_instructions_limited") {
         const notices = parseAgentsInstructionNotices(p.notices);
         if (notices) callbacks.onAgentsInstructionNotices?.(notices);
+      } else if (p.phase === "retrying") {
+        const retry = parseModelCallRetryView(p.retry);
+        if (retry) callbacks.onRetrying?.(retry);
       } else {
         callbacks.onStatus?.(p.phase);
       }
