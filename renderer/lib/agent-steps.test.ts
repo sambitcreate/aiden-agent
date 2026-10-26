@@ -215,6 +215,12 @@ test("an answered questionnaire becomes its own row and leaves the activity grou
 
   // A questionnaire that settled without a recap (a stopped run) keeps its activity line.
   const stopped = step("ask", 1, "ask_user_question", "cancelled", { contentOffset: 7 });
+  const stoppedRows = assistantPresentationRows("Before.", timeline("cancelled", [stopped]));
+  assert.deepEqual(
+    stoppedRows?.map((row) => row.kind),
+    ["text", "activity"],
+  );
+});
 
 test("extracted values show as a card under their activity line, which stays in the group", () => {
   const recap = {
@@ -244,12 +250,6 @@ test("extracted values show as a card under their activity line, which stays in 
       ["extraction", "20"],
       ["text", "After."],
     ],
-  );
-});
-  const stoppedRows = assistantPresentationRows("Before.", timeline("cancelled", [stopped]));
-  assert.deepEqual(
-    stoppedRows?.map((row) => row.kind),
-    ["text", "activity"],
   );
 });
 
