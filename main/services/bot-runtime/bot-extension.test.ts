@@ -162,7 +162,12 @@ test("(b2) a run over its spending limit finishes the step, then sends no more r
     spending: {
       // Over the limit once the first response is counted.
       refusal: async () => (recorded.length > 0 ? "Ada reached its $5.00 spending limit for this month." : undefined),
-      record: (_botId, requestIds, message) => recorded.push({ requestIds, stopReason: message.stopReason }),
+      // Counting takes a moment (it looks up the sign-in first); the next
+      // request must still see it.
+      record: async (_botId, requestIds, message) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        recorded.push({ requestIds, stopReason: message.stopReason });
+      },
     },
   };
   const { harness, root } = await memoryHarness(deps, fauxModels);

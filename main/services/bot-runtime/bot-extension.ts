@@ -246,12 +246,13 @@ export interface BotExtensionDeps {
   /**
    * Spending limits. `refusal` runs before every request with the request
    * ids of the run it serves, and says why it may not go: the Bot's month or
-   * the routine run is over its limit. `record` counts every response; it
-   * must not throw.
+   * the routine run is over its limit. `record` counts every response; the
+   * next request waits for it, so a fast tool turn cannot slip past a limit.
+   * It must not throw.
    */
   spending?: {
     refusal(botId: string, requestIds: readonly (string | undefined)[]): Promise<string | undefined>;
-    record(botId: string, requestIds: readonly (string | undefined)[], message: AssistantMessage): void;
+    record(botId: string, requestIds: readonly (string | undefined)[], message: AssistantMessage): void | Promise<void>;
   };
 }
 
@@ -457,7 +458,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       afterResponse: async (message, api, context) => {
         if (deps.spending === undefined) return;
         try {
-          deps.spending.record(botId, await runRequestIds(api, context), message);
+          await deps.spending.record(botId, await runRequestIds(api, context), message);
         } catch {
           // Spending that cannot be attributed must never fail the reply.
         }

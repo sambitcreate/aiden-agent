@@ -255,11 +255,11 @@ const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
     }
     return refusal;
   },
-  record(botId, requestIds, message) {
+  async record(botId, requestIds, message) {
     const cost = responseCostUsd(message);
     const runtime = spendRuntimes.get(botId);
     if (cost <= 0 || runtime === undefined) return;
-    void spendCounts(runtime)
+    await spendCounts(runtime)
       .then((counts) => (counts ? spending.record(botSpendingOwner(botId, requestIds), cost) : undefined))
       .catch((error: unknown) => logger.warn("bots", `Bot ${botId} spending could not be counted.`, error));
   },
