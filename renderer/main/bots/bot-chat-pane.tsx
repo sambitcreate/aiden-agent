@@ -5,7 +5,7 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
@@ -58,6 +58,8 @@ import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
 import { useConnectionSetup } from "./use-connection-setup";
+import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
+import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -238,6 +240,40 @@ export function BotFailedTurnCard({
       }
     >
       {errorMessage ? <p className="whitespace-pre-wrap">{errorMessage}</p> : null}
+    </BotNoticeCard>
+  );
+}
+
+/** A reply waiting for a provider usage limit: when it tries again, and Retry now. */
+export function BotUsageLimitCard({
+  name,
+  wait,
+  now,
+  onRetryNow,
+}: {
+  name: string;
+  wait: UsageLimitWaitView;
+  now: number;
+  onRetryNow(): void;
+}) {
+  const provider = wait.providerLabel.trim() || "the provider";
+  const trying = wait.trying || wait.nextTryAt <= now;
+  return (
+    <BotNoticeCard
+      label={`${name} is waiting for a usage limit`}
+      icon={<Hourglass />}
+      title={trying ? `Trying ${provider} again…` : `Waiting for ${provider}’s usage limit`}
+      actions={
+        trying ? undefined : (
+          <Button variant="transparent" size="small" onClick={onRetryNow}>
+            Retry now
+          </Button>
+        )
+      }
+    >
+      {trying ? null : (
+        <p>{`Next try ${formatUsageLimitTime(wait.nextTryAt, now)}. ${name} keeps the same model and carries on when the limit clears.`}</p>
+      )}
     </BotNoticeCard>
   );
 }
@@ -677,6 +713,8 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [snapshot]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
+  const usageLimitWait = useUsageLimitWait("bot", botId);
+  const usageLimitNow = useUsageLimitNow(usageLimitWait);
   React.useEffect(() => {
     // The card hides for one interrupted turn; any other state (running, idle,
     // paused by the person, or a later interruption) clears that.
@@ -1176,6 +1214,14 @@ export function BotChatPane({ botId }: { botId: string }) {
           wording={chatActivity.wording}
           onStop={stop}
           onLayoutChange={setStatusLayout}
+        />
+      ) : null}
+      {running && usageLimitWait ? (
+        <BotUsageLimitCard
+          name={current.name}
+          wait={usageLimitWait}
+          now={usageLimitNow}
+          onRetryNow={() => void retryUsageLimitNow("bot", botId)}
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}

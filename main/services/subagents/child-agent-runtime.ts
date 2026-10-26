@@ -14,6 +14,10 @@ import type {
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { writeDevLog } from "../dev-log.js";
 import { buildAgentRuntimeOptions } from "../generation-runtime.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import type { UsageLimitOwner } from "../usage-limit-core.js";
+import { usageLimits } from "../usage-limit-main.js";
+import { withUsageLimitWait, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -104,6 +108,8 @@ export interface SubagentRuntimeRegistryOptions {
   inferenceIsolation?: SubagentInferenceIsolation;
   /** Separate crash-safe tool-effect journal; omitted by isolated unit registries. */
   effectStore?: PiRuntimeEffectStore;
+  /** Waits out provider usage limits for the parent chat; omitted by unit registries. */
+  usageLimits?: (owner: UsageLimitOwner, providerLabel: string, extra: { observeFetch: boolean }) => UsageLimitStreamOptions;
 }
 
 function childIdentity(
@@ -147,6 +153,7 @@ export class SubagentRuntimeRegistry {
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
   private readonly inferenceIsolation?: SubagentInferenceIsolation;
   private readonly effectStore?: PiRuntimeEffectStore;
+  private readonly usageLimits?: SubagentRuntimeRegistryOptions["usageLimits"];
   private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
   private readonly quarantinedDeployments = new Set<SubagentDeployment>();
@@ -169,6 +176,7 @@ export class SubagentRuntimeRegistry {
     this.recordCompactionUsage = options.recordCompactionUsage;
     this.inferenceIsolation = options.inferenceIsolation;
     this.effectStore = options.effectStore;
+    this.usageLimits = options.usageLimits;
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
@@ -177,6 +185,20 @@ export class SubagentRuntimeRegistry {
 
   setRuntimeFaultReporter(reporter: (source: string) => void): void {
     this.reportRuntimeFault = reporter;
+  }
+
+  /**
+   * The child's provider transport. Its requests wait out usage limits as the
+   * parent chat's would; an isolated request process cannot take a recording
+   * fetch, so only its response hook is read there.
+   */
+  private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
+    const options = buildAgentRuntimeOptions(sessionId, childRuntime);
+    if (!this.usageLimits || !options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
+      observeFetch: childRuntime === spec.runtime,
+    });
+    return { ...options, streamFn: withUsageLimitWait(options.streamFn, limits) };
   }
 
   get activeCount(): number {
@@ -255,7 +277,7 @@ export class SubagentRuntimeRegistry {
           ]);
         }
       },
-      ...buildAgentRuntimeOptions(sessionId, childRuntime),
+      ...this.childStreamOptions(sessionId, childRuntime, spec),
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions),
       durability: {
@@ -528,6 +550,7 @@ export class SubagentRuntimeRegistry {
 export const subagentRuntimeRegistry = new SubagentRuntimeRegistry(undefined, undefined, {
   inferenceIsolation: new ElectronSubagentInferenceIsolation(),
   effectStore: piRuntimeEffectStore,
+  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
   recordCompactionUsage: async (message, runtime) => {
     const [{ assistantUsageRecord }, { usageStore }] = await Promise.all([
       import("../usage-accounting.js"),

@@ -1,5 +1,6 @@
 import type { ActivityMark } from "../shared/activity-marks";
 import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
+import { usageLimitWaitLabel, type UsageLimitWaitView } from "../shared/usage-limits";
 
 export interface ToolActivity {
   state: "running" | "finished" | "failed" | "blocked";
@@ -16,12 +17,16 @@ export type AgentActivityPhase =
   | "working"
   | "visualizing"
   | "waiting"
+  /** A provider usage limit turned the request away; it sends again when the limit clears. */
+  | "limited"
   | "stopping";
 
 export interface AgentActivity {
   phase: AgentActivityPhase;
   label: string;
   mark: ActivityMark;
+  /** A usage-limit wait whose next try can be sent now. */
+  canRetryNow?: boolean;
 }
 
 /** Hold transient phase changes briefly without delaying safety-critical controls. */
@@ -31,7 +36,7 @@ export function activityPresentationDelay(
   reduceMotion = false,
 ): number {
   if (reduceMotion || !current || !next || next.phase === "stopping" || next.phase === "waiting" ||
-    next.phase === "preparing" || current.phase === next.phase) return 0;
+    next.phase === "limited" || next.phase === "preparing" || current.phase === next.phase) return 0;
   return 120;
 }
 
@@ -55,6 +60,10 @@ interface AgentActivityInput {
   textStreaming?: boolean;
   pendingApproval: boolean;
   toolActivity: ToolActivity | null;
+  /** This chat's reply waiting for a provider usage limit, if it is. */
+  usageLimitWait?: UsageLimitWaitView | null;
+  /** Epoch ms, for the wait's next-try time. */
+  now?: number;
 }
 
 const SEARCH_TOOL_PATTERN = /(?:^|[_:-])(find|glob|grep|list|read|search)(?:$|[_:-])/iu;
@@ -75,6 +84,8 @@ export function resolveAgentActivity({
   textStreaming = false,
   pendingApproval,
   toolActivity,
+  usageLimitWait = null,
+  now = Date.now(),
 }: AgentActivityInput): AgentActivity | null {
   if (isStopping) {
     return { phase: "stopping", label: "Stopping…", mark: "bounce" };
@@ -82,6 +93,11 @@ export function resolveAgentActivity({
 
   if (pendingApproval) {
     return { phase: "waiting", label: "Waiting for approval", mark: "glance" };
+  }
+
+  if (usageLimitWait && (isStarting || streamingText !== null)) {
+    const trying = usageLimitWait.trying || usageLimitWait.nextTryAt <= now;
+    return { phase: "limited", label: usageLimitWaitLabel(usageLimitWait, now), mark: "glance", canRetryNow: !trying };
   }
 
   if (toolActivity?.state === "running") {

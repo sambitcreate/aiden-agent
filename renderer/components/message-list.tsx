@@ -2,7 +2,8 @@ import { AppControlsPanel } from "./app-controls-panel";
 // Renders the transcript: persisted messages + the in-progress streaming reply.
 
 import * as React from "react";
-import { Callout, Text } from "./ui";
+import { Button, Callout, Text } from "./ui";
+import { cn } from "../lib/ui-utils";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
@@ -105,6 +106,8 @@ interface MessageListProps {
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
+  /** Retry now while the reply waits for a provider usage limit. */
+  onRetryUsageLimit?: () => void;
   error: string | null;
   /** Message id whose whole response may host the read-aloud action. */
   readAloudMessageId?: string;
@@ -612,6 +615,7 @@ export function MessageList({
   subagentsEnabled,
   onOpenSubagent,
   agentActivity,
+  onRetryUsageLimit,
   error,
   readAloudMessageId,
   readAloud,
@@ -977,7 +981,7 @@ export function MessageList({
       >
         {transcriptRows}
 
-        <AgentActivityTransition activity={agentActivity} />
+        <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
         <EventPresence present={Boolean(error)}>
           {error ? (
@@ -996,10 +1000,20 @@ export function MessageList({
   );
 }
 
-function AgentActivityTransition({ activity }: { activity: AgentActivity | null }) {
+function AgentActivityTransition({
+  activity,
+  onRetryUsageLimit,
+}: {
+  activity: AgentActivity | null;
+  onRetryUsageLimit?: () => void;
+}) {
   const [current, setCurrent] = React.useState(activity);
   React.useEffect(() => {
-    if (current?.phase === activity?.phase && current?.label === activity?.label) return;
+    if (
+      current?.phase === activity?.phase &&
+      current?.label === activity?.label &&
+      current?.canRetryNow === activity?.canRetryNow
+    ) return;
     const delay = activityPresentationDelay(
       current,
       activity,
@@ -1011,16 +1025,20 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     }
     const timer = window.setTimeout(() => setCurrent(activity), delay);
     return () => window.clearTimeout(timer);
-  }, [activity?.phase, activity?.label, activity?.mark, current]);
+  }, [activity?.phase, activity?.label, activity?.mark, activity?.canRetryNow, current]);
 
   if (!current) return null;
+  const retry = current.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
   return (
     <div
       role="status"
       aria-live="polite"
       // One fixed-height line: the label swaps on presentation timers, and a
       // wrapping label would move the bottom edge the transcript follows.
-      className="agent-activity-layer agent-event-in flex h-6 w-fit max-w-full items-center gap-2"
+      className={cn(
+        "agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2",
+        current.phase === "limited" ? "h-7" : "h-6",
+      )}
       data-agent-activity={current.phase}
     >
       <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
@@ -1038,6 +1056,11 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
       >
         {current.label}
       </Text>
+      {retry ? (
+        <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
+          Retry now
+        </Button>
+      ) : null}
     </div>
   );
 }

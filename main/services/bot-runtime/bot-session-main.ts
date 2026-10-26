@@ -28,6 +28,8 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import { usageLimits } from "../usage-limit-main.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -88,7 +90,13 @@ const profileDir = () => app.getPath("userData");
 // Every Bot's session database and memory files live under `<profile>/bots/`;
 // only Aiden writes them, never a Bot's file tools (whatever location they use).
 setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
-const runtimeModels = createBotRuntimeModels();
+// A Bot's replies and routines wait out provider usage limits like a chat's.
+const runtimeModels = createBotRuntimeModels({
+  usageLimits: (botId, runtime) =>
+    runtime.provider && isAcpHarnessProvider(runtime.provider.id)
+      ? undefined
+      : usageLimits.streamOptions({ kind: "bot", id: botId }, runtime.provider?.label ?? runtime.model.provider),
+});
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
 export { isBotPaused };
@@ -182,7 +190,8 @@ async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
     const { sourceProviderId, sourceModelId } = admission.authority.provider;
     const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
     runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
-    const models = runtimeModels.modelsFor(botId);
+    // Memory tidy-up is a background chore: at a usage limit it fails and runs another time.
+    const models = runtimeModels.backgroundModelsFor(botId);
     const model = models.getModel(runtime.model.provider, runtime.model.id);
     if (model === undefined) {
       admission.release();

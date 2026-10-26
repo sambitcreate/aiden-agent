@@ -7,6 +7,8 @@ import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
+import { usageLimits } from "./usage-limit-main.js";
+import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
@@ -3414,7 +3416,14 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      const observedStream: typeof realStream = pace.wrap(warmedStream);
+      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
+      // a request turned away before any reply waits and sends again, same model.
+      const observedStream: typeof realStream = harnessProvider
+        ? pace.wrap(warmedStream)
+        : withUsageLimitWait(
+            pace.wrap(warmedStream),
+            usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+          );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,

@@ -1,5 +1,6 @@
 import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { randomBytes } from "node:crypto";
 import { normalizeAppearanceConfig, parseAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
@@ -1039,6 +1040,7 @@ export function createConfigStore(
         throw new Error("Invalid compaction engine.");
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }

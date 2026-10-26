@@ -220,6 +220,8 @@
         "main/services/provider-auth-flow-core.test.ts",
         "main/services/provider-auth-owner.test.ts",
         "main/services/provider-failure.test.ts",
+        "main/services/usage-limit-core.test.ts",
+        "main/services/usage-limit-stream.test.ts",
         "main/services/provider-key-policy.test.ts",
         "main/services/provider-list-core.test.ts",
         "main/services/pull-request-create-reconciliation.test.ts",

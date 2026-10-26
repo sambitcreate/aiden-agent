@@ -69,6 +69,7 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -2858,6 +2859,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     !isStartingGeneration &&
     !detachedGenerationDraining &&
     !visibleDetachedProjection;
+  const usageLimitWait = useUsageLimitWait("chat", draft ? undefined : chatId);
+  const usageLimitNow = useUsageLimitNow(usageLimitWait);
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2870,6 +2873,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
+    usageLimitWait: usageLimitWait ?? null,
+    now: usageLimitNow,
     streamingText:
       canStopGeneration || isStoppingGeneration || detachedGenerationDraining
         ? displayedStreamingText
@@ -3544,6 +3549,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             subagentsEnabled={environmentPanel.subagentsEnabled}
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
+            onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
             readAloudMessageId={readAloudCandidateId}
             readAloud={readAloudProps}
             onFork={forkFromTranscript}

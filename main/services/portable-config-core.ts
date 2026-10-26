@@ -61,6 +61,7 @@ import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -728,6 +729,7 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
   if (settings.compactionModelOverrides !== undefined) {
     try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
     catch { delete runtime.compactionModelOverrides; }
