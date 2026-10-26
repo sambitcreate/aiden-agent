@@ -27,3 +27,7 @@ Found by driving the real app (2026-10-26), now fixed:
 Screenshots: a throwaway Playwright spec (never committed) seeds PR notices, captures with `webContents.capturePage()` at 2880x1800 / zoom 2, and switches theme through the command palette (Search settings, then Use dark appearance); setting `nativeTheme.themeSource` alone does not change Aiden's theme.
 
 Open: native phone cards, CLI support, hand check on a real Mac.
+
+## macOS marker-visibility limitation, 2026-10-26
+
+CI on the countdown PR exposed that Apple platform executables such as `/bin/sh` and `/bin/sleep` hide their launch environment from `ps -E`. The crash-leftover fixture now uses Node descendants, with a readiness signal after installing its TERM handler, to exercise real observable environment markers, late-spawn cleanup and bystander protection. Production ownership checks are unchanged. If the original leader is gone and a descendant's marker is unobservable, recovery skips that descendant and does not retain its record; this pre-existing limitation remains unresolved and is documented in `docs/coding-follow-through.md`. Do not weaken ownership verification to make that case pass.
