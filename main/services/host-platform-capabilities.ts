@@ -11,6 +11,8 @@ export interface HostPlatformCapabilities {
   nativeShare: boolean;
   /** Connectors served by a separate Mac app, such as iMCP (`renderer/shared/connector-catalog.ts`). */
   macAppConnectors: boolean;
+  /** The agent's background jobs follow process groups, which macOS and Linux both offer. */
+  backgroundJobs: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -33,5 +35,6 @@ export function hostPlatformCapabilities(
     dockIcon: darwin,
     nativeShare: darwin,
     macAppConnectors: darwin,
+    backgroundJobs: darwin || platform === "linux",
   };
 }

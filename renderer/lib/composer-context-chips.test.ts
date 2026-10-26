@@ -35,47 +35,47 @@ const rows: Row[] = [
   [
     "plain folder draft: workspace only, no Local label, no PR chip",
     plainFolder,
-    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "clean git draft: workspace and branch",
     gitHubRepo,
-    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "dirty git draft: branch carries the change count",
     { ...gitHubRepo, uncommitted: 3 },
-    { workspace: true, machine: false, branch: true, changesBadge: 3, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: true, changesBadge: 3, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "draft with a paired Mac: machine picker shows",
     { ...plainFolder, machinePicker: true },
-    { workspace: true, machine: true, branch: false, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: true, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "draft never shows the PR chip, even with a linked PR",
     { ...gitHubRepo, pullRequest: { ...noPullRequest, linked: 1 } },
-    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "started GitHub chat with a linked PR: summary of branch and PR",
     { ...gitHubRepo, stage: "started", machinePicker: true, pullRequest: { ...noPullRequest, linked: 1 } },
-    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: true, barMode: "summary" },
+    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: true, followThrough: false, barMode: "summary" },
   ],
   [
     "started GitHub chat with a pending create: PR chip shows",
     { ...gitHubRepo, stage: "started", pullRequest: { ...noPullRequest, pending: 1 } },
-    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: true, barMode: "summary" },
+    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: true, followThrough: false, barMode: "summary" },
   ],
   [
     "started GitHub chat whose branch has work to open: PR chip shows",
     { ...gitHubRepo, stage: "started", uncommitted: 2, pullRequest: { ...noPullRequest, branchCanOpen: true } },
-    { workspace: false, machine: false, branch: true, changesBadge: 2, pullRequest: true, barMode: "summary" },
+    { workspace: false, machine: false, branch: true, changesBadge: 2, pullRequest: true, followThrough: false, barMode: "summary" },
   ],
   [
     "started GitHub chat with nothing to open: branch only",
     { ...gitHubRepo, stage: "started" },
-    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "summary" },
+    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "summary" },
   ],
   [
     "started git chat whose remote is a non-GitHub forge (or no remote): branch only",
@@ -85,32 +85,52 @@ const rows: Row[] = [
       pullRequestRemote: false,
       pullRequest: { linked: 1, pending: 1, current: true, branchCanOpen: true },
     },
-    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, barMode: "summary" },
+    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "summary" },
   ],
   [
     "started chat in a plain folder: bar hidden",
     { ...plainFolder, stage: "started" },
-    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, barMode: "hidden" },
+    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "hidden" },
   ],
   [
     "started chat with access off: no branch, bar hidden",
     { ...gitHubRepo, stage: "started", accessOff: true, uncommitted: 4, pullRequest: { ...noPullRequest, current: true } },
-    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, barMode: "hidden" },
+    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "hidden" },
   ],
   [
     "auto-hide off, started GitHub chat with current PR: full bar",
     { ...gitHubRepo, stage: "started", autoHide: false, pullRequest: { ...noPullRequest, current: true } },
-    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: true, barMode: "full" },
+    { workspace: true, machine: false, branch: true, changesBadge: 0, pullRequest: true, followThrough: false, barMode: "full" },
   ],
   [
     "auto-hide off, started plain folder: full bar with workspace only",
     { ...plainFolder, stage: "started", autoHide: false },
-    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
+  ],
+  [
+    "started plain folder with a background job running: summary strip with its chips",
+    { ...plainFolder, stage: "started", followThrough: true },
+    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: true, barMode: "summary" },
+  ],
+  [
+    "started GitHub chat following its PR: branch, PR and follow-through chips",
+    { ...gitHubRepo, stage: "started", followThrough: true, pullRequest: { ...noPullRequest, current: true } },
+    { workspace: false, machine: false, branch: true, changesBadge: 0, pullRequest: true, followThrough: true, barMode: "summary" },
+  ],
+  [
+    "follow-through with folder access off: bar hidden, no chips",
+    { ...plainFolder, stage: "started", accessOff: true, followThrough: true },
+    { workspace: false, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "hidden" },
+  ],
+  [
+    "a draft never shows follow-through chips",
+    { ...plainFolder, followThrough: true },
+    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
   [
     "git draft in a folder-less workspace: no branch chip",
     { ...gitHubRepo, hasFolder: false, uncommitted: 1 },
-    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, barMode: "full" },
+    { workspace: true, machine: false, branch: false, changesBadge: 0, pullRequest: false, followThrough: false, barMode: "full" },
   ],
 ];
 

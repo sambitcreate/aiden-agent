@@ -38,6 +38,7 @@ import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
 import { useComposerContextChips } from "./use-composer-context-chips";
+import { FollowThroughChips } from "./follow-through-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
 import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
@@ -49,7 +50,7 @@ import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi, browserApi } from "../lib/ipc";
+import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
@@ -817,6 +818,13 @@ export function Composer({
       navigationBlockedReason: slashNavigationBlockedReason,
       sessionActionBlockedReason: slashSessionBlockedReason,
       sideQuestionBlockedReason,
+      followThroughBlockedReason: !surfaces.localContext
+        ? "Available in workspace chats on this computer."
+        : !workspace?.folderPath
+          ? "This chat has no folder."
+          : workspace.permission === "none"
+            ? "Turn on folder access for this chat first."
+            : undefined,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -867,6 +875,7 @@ export function Composer({
       sideQuestionBlockedReason,
       slashSession,
       selectedSkill,
+      surfaces.localContext,
       text,
       voice.recording,
       voice.transcribing,
@@ -1318,6 +1327,25 @@ export function Composer({
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        followThrough: async (action, argument) => {
+          try {
+            if (action === "follow") {
+              await chatsApi.followPullRequest(chatId);
+              toast.success("Following this pull request. The chat hears about failed checks, conflicts and reviews.");
+              return true;
+            }
+            if (!argument) {
+              toast.info("Add the check after /until, for example /until npm test.");
+              return false;
+            }
+            await chatsApi.setDoneWhenCheck(chatId, argument);
+            toast.success(`Aiden runs ${argument} after each answer until it passes, 5 checks at most.`);
+            return true;
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "That could not be set up.");
+            return false;
+          }
+        },
         submitComposerInstruction: async (instruction, prompt) => {
           const nextPrompt = prompt.trim() || consumeSlashToken(text, session).trim();
           const missingPromptMessage =
@@ -1410,10 +1438,11 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        result.command.action.kind === "session" &&
-        (result.command.action.action === "clone" ||
-          result.command.action.action === "export" ||
-          result.command.action.action === "worktree");
+        result.command.action.kind === "follow-through" ||
+        (result.command.action.kind === "session" &&
+          (result.command.action.action === "clone" ||
+            result.command.action.action === "export" ||
+            result.command.action.action === "worktree"));
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -2112,6 +2141,7 @@ export function Composer({
                 <ChatPullRequestsChip chatId={chatId} />
               </span>
             ) : null}
+            {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
             {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
             <span role="status" className="sr-only">
               {pullRequestAnnouncement}

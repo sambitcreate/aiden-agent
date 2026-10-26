@@ -103,7 +103,8 @@ uncertain connection.
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
-artifacts, diagnostics,
+artifacts, coding follow-through (background jobs, followed pull requests and
+`/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents use the same contracts as macOS. Linux-specific integrations include:
 
