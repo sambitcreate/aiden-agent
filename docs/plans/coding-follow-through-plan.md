@@ -28,7 +28,7 @@ The owner asked for all three, desktop first, with these rules: background jobs 
 - Ask-mode approval covers `start` only.
 - Limits: 10 running per chat, 20 in all, 50 MB of output per job. Stop sends SIGTERM to the group and SIGKILL four seconds later.
 - A job that ends on its own posts a notice with its last 3,000 characters. When `start` sees the job end during its 1.5-second wait, the tool result reports it and no notice follows.
-- Jobs stop on quit, chat deletion, and folder-access change or workspace removal. When a job's shell exits, the rest of its process group is ended too. A durable record of running jobs lets the next launch stop jobs a crash left behind, matching pid and process start time so a reused pid is never signalled; when the shell had already exited, only group members carrying the job's `AIDEN_BACKGROUND_JOB` marker are stopped.
+- Jobs stop on quit, chat deletion, and folder-access change or workspace removal. When a job's shell exits, the rest of its process group is ended too. A durable record of running jobs lets the next launch stop jobs a crash left behind, matching pid and process start time so a reused pid is never signalled; when the shell had already exited, only group members carrying the job's `AIDEN_BACKGROUND_JOB` marker are stopped, looked up again before each forced round so children started during termination are caught, and a job with marked survivors stays in the record for the next launch.
 
 ### Following a pull request
 

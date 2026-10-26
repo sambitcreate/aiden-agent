@@ -260,24 +260,29 @@ test("after a crash, what an ended shell left in its group is stopped only when 
   const dir = await tempDir();
   const logDir = path.join(dir, "logs");
   await fs.mkdir(logDir, { recursive: true });
-  // Each shell exits at once and leaves a sleeper in its process group, as a job can after Aiden crashed.
-  const leaveBehind = async (marker: string) => {
+  // Each shell exits at once and leaves a process in its group, as a job can after Aiden crashed.
+  const leaveBehind = async (marker: string, command: string) => {
     const pidFile = path.join(dir, `${marker}.pid`);
-    const shell = spawn("/bin/sh", ["-c", `sleep 60 & echo $! > ${JSON.stringify(pidFile)}`], {
+    const shell = spawn("/bin/sh", ["-c", `${command} & echo $! > ${JSON.stringify(pidFile)}`], {
       detached: true,
       stdio: "ignore",
       env: { ...process.env, AIDEN_BACKGROUND_JOB: marker },
     });
     await new Promise((resolve) => shell.once("exit", resolve));
-    await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).trim().length > 0, "the sleeper pid");
-    return { group: shell.pid!, sleeper: Number((await fs.readFile(pidFile, "utf8")).trim()) };
+    await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).trim().length > 0, "the leftover pid");
+    return { group: shell.pid!, leftover: Number((await fs.readFile(pidFile, "utf8")).trim()) };
   };
-  const ours = await leaveBehind("job_0000aaaa");
-  const another = await leaveBehind("job_0000bbbb");
+  // This job's leftover starts another process as it is asked to end.
+  const lateFile = path.join(dir, "late.pid");
+  const ending = path.join(dir, "ending.sh");
+  await fs.writeFile(ending, `trap 'sleep 60 & echo $! > ${JSON.stringify(lateFile)}; exit 0' TERM\nwhile :; do sleep 0.1; done\n`);
+  const ours = await leaveBehind("job_0000aaaa", `/bin/sh ${JSON.stringify(ending)}`);
+  const another = await leaveBehind("job_0000bbbb", "sleep 60");
+  const latePid = async () => Number((await fs.readFile(lateFile, "utf8").catch(() => "")).trim()) || undefined;
   t.after(async () => {
-    for (const pid of [ours.sleeper, another.sleeper]) {
+    for (const pid of [ours.leftover, another.leftover, (await latePid()) ?? 0]) {
       try {
-        process.kill(pid, "SIGKILL");
+        if (pid) process.kill(pid, "SIGKILL");
       } catch {
         // Already gone.
       }
@@ -297,6 +302,36 @@ test("after a crash, what an ended shell left in its group is stopped only when 
   );
   const jobs = new BackgroundJobs({ logDir, stopGraceMs: 500 });
   assert.equal(await jobs.reapPreviousLaunch(), 1);
-  await eventually(() => !alive(ours.sleeper), "what the ended shell left behind to end");
-  assert.ok(alive(another.sleeper), "processes without this job's marker are left alone");
+  const late = await latePid();
+  assert.ok(late, "the leftover started a process while it ended");
+  assert.ok(!alive(ours.leftover), "what the ended shell left behind has ended");
+  assert.ok(!alive(late), "and so has what it started while ending");
+  assert.ok(alive(another.leftover), "processes without this job's marker are left alone");
+  await assert.rejects(fs.access(path.join(logDir, "running.json")), "nothing is left to recover");
+});
+
+test("a job whose marked processes outlive cleanup stays in the record for the next launch", { skip }, async (t) => {
+  const dir = await tempDir();
+  const logDir = path.join(dir, "logs");
+  await fs.mkdir(logDir, { recursive: true });
+  const group = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+  group.unref();
+  // A pid above every platform's limit: signalling it never ends it, so it stands in for a process that won't stop.
+  const unstoppable = 2 ** 22 + 1;
+  const { jobs, start } = harness(dir, {
+    processGroupMembers: async (pgid) => (pgid === group.pid ? [unstoppable] : []),
+    processHasEnvironment: async (pid, entry) => pid === unstoppable && entry === "AIDEN_BACKGROUND_JOB=job_0000dddd",
+  });
+  t.after(async () => {
+    group.kill("SIGKILL");
+    await cleanUp(jobs, dir);
+  });
+  const leftover = { id: "job_0000dddd", pid: group.pid!, processStart: "Thu Jan  1 00:00:00 1970" };
+  await fs.writeFile(path.join(logDir, "running.json"), JSON.stringify({ version: 1, jobs: [leftover] }));
+  assert.equal(await jobs.reapPreviousLaunch(), 0, "a job still running is not reported as stopped");
+  const record = async () => JSON.parse(await fs.readFile(path.join(logDir, "running.json"), "utf8")) as { jobs: Array<{ id: string }> };
+  assert.deepEqual((await record()).jobs, [leftover]);
+  const job = start("sleep 30");
+  await eventually(async () => (await record()).jobs.some((entry) => entry.id === job.id), "the new job in the record");
+  assert.deepEqual((await record()).jobs.map((entry) => entry.id), ["job_0000dddd", job.id], "saving this launch's jobs keeps it");
 });

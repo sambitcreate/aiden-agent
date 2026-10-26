@@ -89,6 +89,9 @@ interface RunningRecordFile {
 }
 
 const RECORD_FILE = "running.json";
+/** Forced rounds against marked leftovers, each preceded by a fresh look for what the last round missed. */
+const FORCED_REAP_ROUNDS = 3;
+const FORCED_REAP_WAIT_MS = 1_000;
 
 function newJobId(): string {
   return `job_${randomBytes(4).toString("hex")}`;
@@ -136,6 +139,16 @@ export function defaultProcessHasEnvironment(pid: number, entry: string): Promis
   });
 }
 
+function signalEach(pids: readonly number[], signal: NodeJS.Signals): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -177,6 +190,8 @@ export class BackgroundJobs {
   private readonly processGroupMembers: (pgid: number) => Promise<number[]>;
   private readonly processHasEnvironment: (pid: number, entry: string) => Promise<boolean>;
   private recordWrite: Promise<void> = Promise.resolve();
+  /** Last launch's jobs whose marked processes outlived cleanup; kept in the record so the next launch tries again. */
+  private carriedOver: RunningRecordFile["jobs"] = [];
   private closed = false;
 
   constructor(private readonly options: BackgroundJobsOptions) {
@@ -359,8 +374,10 @@ export class BackgroundJobs {
    * After a crash, jobs from the last launch may still run. Stop each one whose
    * pid still names the same process (same start time). When that shell has
    * already gone, stop what it left in its group, but only processes that
-   * carry the job's marker, so a reused pid is never mistaken for a job. Then
-   * clear old logs.
+   * carry the job's marker, so a reused pid is never mistaken for a job. A
+   * process can start another while it ends, so each forced round looks for
+   * marked members again, and a job whose marked processes still run stays
+   * in the record for the next launch. Then clear old logs.
    */
   async reapPreviousLaunch(): Promise<number> {
     const recordPath = path.join(this.options.logDir, RECORD_FILE);
@@ -372,6 +389,7 @@ export class BackgroundJobs {
       parsed = undefined;
     }
     let stopped = 0;
+    const survivors: RunningRecordFile["jobs"] = [];
     for (const entry of parsed?.jobs ?? []) {
       if (!Number.isSafeInteger(entry.pid) || entry.pid <= 1 || !groupExists(entry.pid)) continue;
       const current = entry.processStart ? await this.processStartTime(entry.pid) : undefined;
@@ -384,39 +402,45 @@ export class BackgroundJobs {
       }
       if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
       const marker = `AIDEN_BACKGROUND_JOB=${entry.id}`;
-      const left: number[] = [];
-      for (const pid of await this.processGroupMembers(entry.pid)) {
-        if (await this.processHasEnvironment(pid, marker)) left.push(pid);
-      }
-      if (!left.length) continue;
-      const signal = (name: NodeJS.Signals) => {
-        for (const pid of left) {
-          try {
-            process.kill(pid, name);
-          } catch {
-            // Already gone.
-          }
+      const marked = async () => {
+        const found: number[] = [];
+        for (const pid of await this.processGroupMembers(entry.pid)) {
+          if (await this.processHasEnvironment(pid, marker)) found.push(pid);
         }
+        return found;
       };
-      signal("SIGTERM");
-      await this.waitUntil(() => left.every((pid) => !processExists(pid)));
-      signal("SIGKILL");
-      stopped += 1;
+      let left = await marked();
+      if (!left.length) continue;
+      signalEach(left, "SIGTERM");
+      const asked = left;
+      await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
+      for (let round = 0; (left = await marked()).length && round < FORCED_REAP_ROUNDS; round += 1) {
+        const forced = left;
+        signalEach(forced, "SIGKILL");
+        await this.waitUntil(() => forced.every((pid) => !processExists(pid)), FORCED_REAP_WAIT_MS);
+      }
+      if (left.length) survivors.push(entry);
+      else stopped += 1;
     }
+    this.carriedOver = survivors;
     try {
       for (const name of await fsp.readdir(this.options.logDir)) {
-        if (/^job_[0-9a-f]{8}\.log$/u.test(name) || name === RECORD_FILE) {
+        if (/^job_[0-9a-f]{8}\.log$/u.test(name) || (name === RECORD_FILE && !survivors.length)) {
           await fsp.rm(path.join(this.options.logDir, name), { force: true });
         }
       }
     } catch {
       // No log directory yet.
     }
+    if (survivors.length) {
+      this.writeRecord();
+      await this.recordWrite;
+    }
     return stopped;
   }
 
-  private async waitUntil(done: () => boolean): Promise<void> {
-    const deadline = this.now() + this.stopGraceMs;
+  private async waitUntil(done: () => boolean, withinMs = this.stopGraceMs): Promise<void> {
+    const deadline = this.now() + withinMs;
     while (!done() && this.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -526,9 +550,12 @@ export class BackgroundJobs {
   private writeRecord(): void {
     const file: RunningRecordFile = {
       version: 1,
-      jobs: [...this.jobs.values()]
-        .filter((job) => job.view.state === "running" && job.view.pid)
-        .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
+      jobs: [
+        ...this.carriedOver,
+        ...[...this.jobs.values()]
+          .filter((job) => job.view.state === "running" && job.view.pid)
+          .map((job) => ({ id: job.view.id, pid: job.view.pid!, ...(job.processStart ? { processStart: job.processStart } : {}) })),
+      ],
     };
     const target = path.join(this.options.logDir, RECORD_FILE);
     this.recordWrite = this.recordWrite
