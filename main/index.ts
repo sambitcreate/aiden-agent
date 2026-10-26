@@ -165,6 +165,7 @@ import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -394,6 +395,14 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  // Background jobs and done-when checks stop with the app; follows and
+  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  await Promise.race([
+    shutdownFollowThrough().catch((error: unknown) =>
+      logger.warn("follow-through", "Background jobs did not stop cleanly.", error),
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, 6_000).unref()),
+  ]);
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
   await Promise.race([
@@ -2306,6 +2315,10 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
+      await startFollowThrough().catch((error: unknown) =>
+        logger.error("follow-through", "Follow-through state could not be restored.", error),
+      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.
