@@ -580,6 +580,44 @@ test("an answer between failures starts a fresh set of retries", async () => {
   });
   assert.equal(again.shouldRetry, false);
   assert.equal(again.failureCode, "retry-exhausted");
+
+  // Compaction between the retry and the answer shortens the transcript; the
+  // answer still counts once the history is rebuilt around it.
+  const history = Array.from({ length: 6 }, (_, index) => user(`earlier ${index}`, 10));
+  const beforeCompaction = await coordinator.check(failure(30), {
+    liveMessages: [...history, request, failure(30)],
+  });
+  assert.equal(beforeCompaction.shouldRetry, true);
+  const summary = user("Summary of the earlier conversation", 10);
+  const answered = assistant(model, { stopReason: "toolUse", text: "found it", input: 10, timestamp: 31 });
+  const afterCompaction = await coordinator.check(failure(32), {
+    liveMessages: [summary, answered, failure(32)],
+  });
+  assert.equal(afterCompaction.shouldRetry, true);
+  assert.equal(afterCompaction.retryAttempt, 2);
+});
+
+test("a new prompt starts with every retry even when the last one was stopped mid-wait", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-new-prompt");
+  const request = user("first question", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+  });
+  const failure = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "fetch failed", input: 10, timestamp });
+  assert.equal((await coordinator.check(failure(20), { liveMessages: [request, failure(20)] })).shouldRetry, true);
+  // Stop during the wait: no answer and no give-up reaches the coordinator.
+  coordinator.beginPrompt();
+  const next = user("second question", 10);
+  const result = await coordinator.check(failure(30), { liveMessages: [request, next, failure(30)] });
+  assert.equal(result.shouldRetry, true);
+  assert.equal(result.retryAttempt, 2);
 });
 
 test("text kept from a dropped stream is not an answer that starts fresh retries", async () => {

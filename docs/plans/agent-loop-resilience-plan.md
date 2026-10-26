@@ -29,7 +29,7 @@ When a reply still fails, the red card on the latest reply gets one button that 
 | network, timeout, service unavailable, rate limit, interrupted, unknown | Try again | Sends a visible "Try that again." turn |
 | authentication, quota, invalid request | Open Providers | Opens Settings → Providers |
 | output limit | Continue | Sends a visible "Continue from where you stopped." turn |
-| context window, context management | Compact and try again | Compacts the chat, then sends "Try that again." if it compacted |
+| context window, context management | Compact and try again | Compacts the chat, then sends "Try that again." if it compacted or was already compact. If the person left the chat before it finished, nothing is sent and the card stays |
 
 Older failure cards keep their text but show no buttons, and the buttons wait while one action runs. Desktop only; the phones keep their current failure card.
 
