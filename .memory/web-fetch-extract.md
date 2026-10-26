@@ -25,6 +25,7 @@ The owner asked for pi-web-access v0.45.0's extract mode as a native feature, wi
 - `extracted` needs the type, a confidence of at least 0.80 and the value found on the page. A value not on the page is `uncertain` with `notFound`, never `extracted`.
 - Uncertain values travel as `guess`, never `value`.
 - While extract mode is off or not set up, the schema doesn't offer `mode` or `fields`.
+- The settings switch shows the saved choice. If extract is on but its setup goes missing, the row reads "Paused" with Needs setup and can still be turned off. A switch that is off can't be turned on until the setup is ready.
 - A failed extraction returns the page text with the reason, and the recap carries `error` with no fields.
 - Keys never reach tool args, results, the recap or portable config.
 
