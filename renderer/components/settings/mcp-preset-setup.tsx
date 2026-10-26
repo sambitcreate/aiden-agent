@@ -106,6 +106,9 @@ function HttpPresetSetupDialog({
     oauth: preset.auth.kind === "oauth" ? true : undefined,
     presetId: preset.id,
     enabled,
+    // Model access is chosen elsewhere in Settings; saving here keeps it.
+    exposure: server?.exposure,
+    hiddenTools: server?.hiddenTools,
   });
 
   const credentialReady = mcpPresetCredentialReady({

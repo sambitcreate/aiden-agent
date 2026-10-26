@@ -670,11 +670,26 @@ test("a failed iMCP connection test adds the checks that usually fix it", async 
   assert.equal((channelCalls(calls, "mcp:testDraft")[0]!.args[0] as McpServer).command, IMCP_SERVER);
 });
 
+/** Model access chosen on a connector's row: always visible, with one tool hidden. */
+const CHOSEN_ACCESS = { exposure: "direct", hiddenTools: ["messages_fetch"] } as const;
+
+/** What main stores from each save still offers the model only the tools the person left visible. */
+function assertSavesKeepModelAccess(calls: { channel: string; args: unknown[] }[], expectedSaves: number) {
+  const saves = channelCalls(calls, "mcp:save");
+  assert.equal(saves.length, expectedSaves);
+  const tools = [{ name: "calendar_events" }, { name: "messages_fetch" }];
+  for (const call of saves) {
+    const stored = parseMcpServer(call.args[0]);
+    assert.equal(stored.exposure, "direct");
+    assert.deepEqual(mcpToolsOfferedToModel(stored, tools).map((tool) => tool.name), ["calendar_events"]);
+  }
+}
+
 test("managing a saved iMCP connection keeps the model access chosen for it", async () => {
   const state = catalogPresetStates({ imcp: { configured: true, ready: true } }).find((entry) => entry.preset.id === "imcp")!;
   const saved: McpServer = {
     id: state.serverId, name: "iMCP", transport: "stdio", command: IMCP_SERVER, args: [], presetId: "imcp", enabled: true,
-    exposure: "direct", hiddenTools: ["messages_fetch"],
+    ...CHOSEN_ACCESS, hiddenTools: [...CHOSEN_ACCESS.hiddenTools],
   };
   const { calls } = renderPreset(state, saved, {
     "mcp:macAppStatus": () => ({ supported: true, installed: true, open: true, command: IMCP_SERVER }),
@@ -686,14 +701,40 @@ test("managing a saved iMCP connection keeps the model access chosen for it", as
   await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 1));
   fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
   await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 2));
+  assertSavesKeepModelAccess(calls, 2);
+});
 
-  // What main stores from each save: the switch and Save change only what they show.
-  const tools = [{ name: "calendar_events" }, { name: "messages_fetch" }];
-  for (const call of channelCalls(calls, "mcp:save")) {
-    const stored = parseMcpServer(call.args[0]);
-    assert.equal(stored.exposure, "direct");
-    assert.deepEqual(mcpToolsOfferedToModel(stored, tools).map((tool) => tool.name), ["calendar_events"]);
-  }
+test("managing a saved built-in connector keeps the model access chosen for it", async () => {
+  const state = linearState({ configured: true, ready: true });
+  const saved: McpServer = {
+    id: state.serverId, name: "Linear", transport: "http", url: state.preset.url, oauth: true, presetId: "linear", enabled: true,
+    ...CHOSEN_ACCESS, hiddenTools: [...CHOSEN_ACCESS.hiddenTools],
+  };
+  const { calls, openChanges } = renderPreset(state, saved, {
+    "mcp:save": (server: unknown) => server,
+    "mcp:status": () => ({ connected: true, toolCount: 2 }),
+  });
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("switch", { name: "Enable Linear" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 1));
+  const save = within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+  await waitFor(() => assert.equal(save.disabled, false));
+  fireEvent.click(save);
+  await waitFor(() => assert.deepEqual(openChanges, [false]));
+  assertSavesKeepModelAccess(calls, 2);
+});
+
+test("saving a custom connector's editor keeps the model access chosen on its row", async () => {
+  const calls = mount({
+    "mcp:list": () => [{ ...localServer, ...CHOSEN_ACCESS, hiddenTools: [...CHOSEN_ACCESS.hiddenTools] }],
+    "mcp:save": (server: unknown) => server,
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Edit Files" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Connector description" }), { target: { value: "notes" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 1));
+  assertSavesKeepModelAccess(calls, 1);
 });
 
 test("a saved hosted Figma connection shows why it can't connect and offers no way to save or sign in", async () => {

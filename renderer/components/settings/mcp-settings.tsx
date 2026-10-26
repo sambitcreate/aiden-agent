@@ -806,6 +806,9 @@ function McpEditor({
     oauth: transport !== "stdio" && !authProvider ? oauth || undefined : undefined,
     authProvider: transport === "http" ? authProvider || undefined : undefined,
     authServerMetadataUrl: transport !== "stdio" && oauth ? authServerMetadataUrl.trim() || undefined : undefined,
+    // Model access is chosen on the connector's row; saving the editor keeps it.
+    exposure: server.exposure,
+    hiddenTools: server.hiddenTools,
   });
 
   const handleProviderConsent = async (allowed: boolean) => {
