@@ -421,8 +421,13 @@ test("a desktop that gains bot:handoffs on reconnect gets a fresh snapshot inste
     assert.equal(frames[0]!.event, "snapshot");
     assert.deepEqual((frames[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "paused", paused: true }]);
 
+    // That snapshot never fully arrived, so the desktop kept its old cursor: trying again still snapshots.
+    const retried = (await open(feed, upgradedDevice, cursor)).frames();
+    assert.equal(retried[0]?.event, "snapshot");
+    assert.deepEqual((retried[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "paused", paused: true }]);
+
     // Back without it, the cursor from the holder's snapshot doesn't replay either.
-    const back = await open(feed, legacyDevice, frames.slice(-1)[0]!.id);
+    const back = await open(feed, legacyDevice, retried.slice(-1)[0]!.id);
     assert.deepEqual((back.frames()[0]!.data.payload as { bots: unknown[] }).bots, [{ ...bot, sessionState: "unavailable" }]);
 
     // A cursor kept on the same rows still resumes without a snapshot.

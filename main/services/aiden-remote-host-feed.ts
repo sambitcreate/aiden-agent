@@ -128,8 +128,11 @@ export class AidenRemoteHostFeedService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingRuns = new Map<string, RunStateChange>();
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
-  /** The Bot rows each device last opened the feed with; its cursor resumes only those. */
-  private readonly audiences = new Map<string, Audience>();
+  /**
+   * The Bot rows each device last opened the feed with, and the head when it
+   * switched to them: a cursor older than that belongs to the other rows.
+   */
+  private readonly audiences = new Map<string, { audience: Audience; since: number }>();
   private closed = false;
 
   constructor(private readonly options: AidenRemoteHostFeedOptions) {
@@ -190,9 +193,18 @@ export class AidenRemoteHostFeedService {
     const audience: Audience = device.botHandoffs === true ? "handoffs" : "legacy";
     // A device that gained or lost `bot:handoffs` since its cursor read other
     // Bot rows: replaying from it would keep a paused Bot as it read before.
-    const previous = this.audiences.get(device.id);
-    this.audiences.set(device.id, audience);
-    let position = previous === undefined || previous === audience ? this.resumePosition(cursor) : undefined;
+    // The switch advances the head, so every cursor from before it, including
+    // one kept through a snapshot that never finished arriving, gets a snapshot.
+    let record = this.audiences.get(device.id);
+    if (record === undefined) {
+      record = { audience, since: 0 };
+    } else if (record.audience !== audience) {
+      this.appendMarker();
+      record = { audience, since: this.head };
+    }
+    this.audiences.set(device.id, record);
+    let position = this.resumePosition(cursor);
+    if (position !== undefined && position < record.since) position = undefined;
     /** Remaining frames of a snapshot being delivered one frame per pull. */
     let snapshot: string[] = [];
     const pull = (): CursorSsePull => {
@@ -210,6 +222,7 @@ export class AidenRemoteHostFeedService {
       ) {
         const entry = this.journal[index]!;
         position = entry.sequence;
+        if (entry.frame === "") continue;
         if (entry.botOnly && !botVisible) continue;
         if (entry.audience !== "all" && entry.audience !== audience) continue;
         frames.push(entry.frame);
@@ -372,6 +385,10 @@ export class AidenRemoteHostFeedService {
     const bytes = Buffer.byteLength(frame);
     this.journal.push({ sequence: this.head, frame, bytes, botOnly, audience });
     this.journalBytes += bytes;
+    this.trimJournal();
+  }
+
+  private trimJournal(): void {
     while (
       this.journal.length > this.maxEvents ||
       (this.journalBytes > this.maxBytes && this.journal.length > 0)
@@ -380,6 +397,13 @@ export class AidenRemoteHostFeedService {
       this.journalBytes -= dropped.bytes;
       this.floor = dropped.sequence;
     }
+  }
+
+  /** An entry no device is sent: it only moves the head past every earlier cursor. */
+  private appendMarker(): void {
+    this.head += 1;
+    this.journal.push({ sequence: this.head, frame: "", bytes: 0, botOnly: false, audience: "all" });
+    this.trimJournal();
   }
 
   private truncateJournal(): void {
