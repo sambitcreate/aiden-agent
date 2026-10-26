@@ -95,6 +95,25 @@ test("once set up, extract mode turns on and says so", async () => {
   assert.equal(server.current().extract.enabled, true);
 });
 
+test("extract mode left on after its key is removed shows as paused and can be turned off", async () => {
+  const settings = { ...defaultWebFetchSettings(), extract: { enabled: true, model: "cloudflare-clairic" as const, accountId: ACCOUNT_ID } };
+  const server = webFetchServer({ settings, keys: 0 });
+  await mount();
+  const extract = screen.getByRole("switch", { name: "Extract only the values asked for" });
+  assert.equal(extract.getAttribute("aria-checked"), "true");
+  assert.equal(extract.hasAttribute("disabled"), false);
+  assert.ok(screen.getByText("Needs setup"));
+  assert.ok(screen.getByText(/Paused until you add your Cloudflare account ID and an API key/u));
+  await act(async () => {
+    fireEvent.click(extract);
+  });
+  await waitFor(() => assert.equal(extract.getAttribute("aria-checked"), "false"));
+  assert.equal(server.current().extract.enabled, false);
+  assert.equal(screen.queryByRole("alert"), null);
+  // Off and not set up, it can't be turned back on.
+  assert.equal(extract.hasAttribute("disabled"), true);
+});
+
 test("turning page reading off hides the extract setup", async () => {
   const server = webFetchServer();
   await mount();

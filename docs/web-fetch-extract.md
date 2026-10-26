@@ -9,7 +9,7 @@ Aiden's agent can open a public web page and read it with the `web_fetch` tool. 
 Settings → Web Search → **Web pages** has two switches:
 
 - **Read web pages** (on by default) lets the agent read a public page as text. With Web Search off, the tool isn't offered and the row says to turn Web Search on.
-- **Extract only the values asked for** (off by default) turns on extract mode. It can only be turned on once its model is set up, and it stays off while the setup is incomplete.
+- **Extract only the values asked for** (off by default) turns on extract mode. It can only be turned on once its model is set up. If you remove the account ID or the last key while it is on, the switch stays on but extract mode pauses until the setup is complete again, and you can still turn it off.
 
 ## What the agent sees
 

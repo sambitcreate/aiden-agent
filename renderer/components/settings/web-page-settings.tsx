@@ -89,11 +89,14 @@ export function WebPageSettingsView({
             description={
               snapshot.extract.ready
                 ? "When the agent needs a few facts, such as a price or a date, it gets just those values, each with the line of the page it came from. Values that are not on the page come back as guesses."
-                : `Add your ${model.accountIdLabel} and an API key below to turn this on.`
+                : snapshot.settings.extract.enabled
+                  ? `Paused until you add your ${model.accountIdLabel} and an API key below.`
+                  : `Add your ${model.accountIdLabel} and an API key below to turn this on.`
             }
           >
+            {/* Shows the saved choice, so a switch left on after its key is removed can still be turned off. */}
             <Switch
-              checked={snapshot.settings.extract.enabled && snapshot.extract.ready}
+              checked={snapshot.settings.extract.enabled}
               onCheckedChange={onSetExtractEnabled}
               disabled={busy || (!snapshot.extract.ready && !snapshot.settings.extract.enabled)}
               aria-label="Extract only the values asked for"
