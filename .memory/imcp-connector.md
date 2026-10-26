@@ -13,3 +13,5 @@ Decisions:
 - No code-signature check of the bundle yet (possible hardening).
 
 Not verified on a real Mac from the cloud container: the owner needs to install iMCP, set it up in Settings → Connectors and accept iMCP's "Allow aiden-agent" prompt and the Local Network prompt for imcp-server.
+
+Review round 1 (Pullfrog, 2026-10-26): Manage → Save and the dialog's switch dropped the saved `exposure`/`hiddenTools` (main's parser stores absent fields as cleared). Fixed in the iMCP dialog. The HTTP preset dialog (`mcp-preset-setup.tsx` `build()`) has the same pre-existing gap; offered to the owner as a follow-up, not fixed in #590.
