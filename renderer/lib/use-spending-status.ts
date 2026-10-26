@@ -12,6 +12,7 @@ export function useSpendingStatus(
 ): { status: SpendingStatusView | undefined; allowMore(): Promise<void>; allowing: boolean } {
   const [status, setStatus] = React.useState<SpendingStatusView | undefined>(undefined);
   const [allowing, setAllowing] = React.useState(false);
+  const reread = React.useRef<(() => void) | undefined>(undefined);
   React.useEffect(() => {
     setStatus(undefined);
     if (!ownerId) return;
@@ -27,14 +28,30 @@ export function useSpendingStatus(
       );
     };
     read();
+    reread.current = read;
     const unsubscribe = spendingApi.onChanged((event) => {
       if (event.ownerKind === ownerKind && (event.ownerId === ownerId || event.ownerId === "*")) read();
     });
     return () => {
       current = false;
+      reread.current = undefined;
       unsubscribe();
     };
   }, [ownerKind, ownerId]);
+  // A Bot's month starts over with no change event: read again once it has
+  // ended. Checked at least every minute, so a Mac that slept through the
+  // boundary catches up soon after it wakes.
+  const periodEnd = status?.periodEnd;
+  React.useEffect(() => {
+    if (periodEnd === undefined) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      if (Date.now() >= periodEnd) reread.current?.();
+      else timer = setTimeout(tick, Math.min(periodEnd - Date.now() + 50, 60_000));
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [periodEnd]);
   const allowMore = React.useCallback(async () => {
     if (!ownerId) return;
     setAllowing(true);

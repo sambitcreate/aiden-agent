@@ -63,7 +63,7 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 
 - From **80%** of the limit, the chat or Bot shows a quiet line above the composer: "This chat has used $4.10 of its $5.00 limit."
 - The request that crosses the limit still finishes its step, so nothing is cut off mid-answer. The next request is refused with a clear line, for example "This chat reached its $5.00 spending limit. Allow more to keep going." The chat's or Bot's message box shows the same line and sends nothing until more is allowed. Telegram chats with a Bot get the same line.
-- The reached notice offers **Allow $X more**, which adds the limit's amount again (a $5 limit becomes $10). A chat keeps its extra amount; a Bot's extra amount ends with its month.
+- The reached notice offers **Allow $X more**, which adds the limit's amount again (a $5 limit becomes $10). A chat keeps its extra amount; a Bot's extra amount ends with its month. When a Bot's month starts over, an open Bot chat can send again without being reopened.
 - A **routine run** that reaches its limit stops: "This routine run reached its $X spending limit. The next run starts fresh." There is no Allow more for a run.
 
 The ledger is saved in `userData/spending.json` (chat ids, Bot ids, recent routine run ids and dollar amounts only), so a routine run resumed after a restart keeps what it already spent.

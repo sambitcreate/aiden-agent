@@ -351,6 +351,25 @@ test("a Bot over its monthly spending limit sends nothing until Allow more", asy
   await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
 });
 
+test("a Bot at its monthly limit can send again once its month starts over, without Allow more", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  const periodEnd = Date.now() + 300;
+  let reads = 0;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s", deduped: false }),
+    "spending:status": () =>
+      ++reads === 1
+        ? { ...month, spentUsd: 20.4, state: "reached", periodStart: periodEnd - 30 * 86_400_000, periodEnd }
+        : { ...month, spentUsd: 0, state: "under", periodStart: periodEnd, periodEnd: periodEnd + 30 * 86_400_000 },
+  });
+  await waitFor(() => assert.equal(screen.getAllByText("Planner reached its $20.00 spending limit this month.").length, 2));
+  const box = await screen.findByPlaceholderText("Ask Planner", undefined, { timeout: 3_000 });
+  fireEvent.change(box, { target: { value: "New month" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+});
+
 test("a connect card answered with Not now reads Not connected and stays put", async () => {
   await mountChat({
     "bots:live:subscribe": () =>
