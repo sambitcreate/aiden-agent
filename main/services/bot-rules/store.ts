@@ -148,8 +148,8 @@ function parseRulesFile(value: unknown): RulesFile | undefined {
 interface StoredRules {
   file: RulesFile;
   unreadable: boolean;
-  /** The damaged file's bytes, kept aside before a change replaces them. */
-  damaged?: string;
+  /** The damaged file's exact bytes, kept aside before a change replaces them. */
+  damaged?: Buffer;
 }
 
 function viewOf(botId: string, stored: StoredRules): BotRulesView {
@@ -229,9 +229,9 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
   const fileOf = (botId: string) => path.join(directory(botId), BOT_RULES_FILE);
 
   async function read(botId: string): Promise<StoredRules> {
-    let text: string;
+    let bytes: Buffer;
     try {
-      text = await fs.readFile(fileOf(botId), "utf8");
+      bytes = await fs.readFile(fileOf(botId));
     } catch (error) {
       // No file (or no directory yet): nothing changed from the defaults.
       if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") return { file: EMPTY, unreadable: false };
@@ -239,19 +239,19 @@ export function createBotRuleStore(options: BotRuleStoreOptions): BotRuleStore {
     }
     let parsed: RulesFile | undefined;
     try {
-      parsed = parseRulesFile(JSON.parse(text));
+      parsed = parseRulesFile(JSON.parse(bytes.toString("utf8")));
     } catch {
       parsed = undefined;
     }
-    return parsed === undefined ? { file: EMPTY, unreadable: true, damaged: text } : { file: parsed, unreadable: false };
+    return parsed === undefined ? { file: EMPTY, unreadable: true, damaged: bytes } : { file: parsed, unreadable: false };
   }
 
   /** Keeps a damaged file's bytes under the first free copy name, never over an earlier copy. */
-  async function keepDamagedCopy(botId: string, bytes: string): Promise<void> {
+  async function keepDamagedCopy(botId: string, bytes: Buffer): Promise<void> {
     for (let n = 1; ; n += 1) {
       const name = n === 1 ? BOT_RULES_UNREADABLE_COPY : `${BOT_RULES_UNREADABLE_COPY}.${n}`;
       try {
-        await fs.writeFile(path.join(directory(botId), name), bytes, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        await fs.writeFile(path.join(directory(botId), name), bytes, { mode: 0o600, flag: "wx" });
         return;
       } catch (error) {
         if (errorCode(error) !== "EEXIST") throw error;

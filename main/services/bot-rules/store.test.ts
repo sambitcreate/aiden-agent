@@ -177,14 +177,15 @@ test("replacing a damaged rules file keeps each damaged version beside it, and d
   assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
 
   // A refused change on a damaged file keeps nothing; the next saved one keeps the new damage without touching the first copy.
-  const second = "{also broken";
-  handWrite(p.file, second);
+  // The copy is the file's exact bytes, even ones that aren't valid UTF-8.
+  const second = Buffer.from([0x7b, 0x22, 0x63, 0x61, 0x66, 0xe9, 0x22, 0x3a]);
+  writeFileSync(p.file, second);
   const refused = await p.store.update(BOT, 0, { type: "set_behavior", ruleId: "locked.money", behavior: "ask" });
   assert.equal(refused.ok, false);
   assert.equal(existsSync(path.join(directory, "rules.json.unreadable.2")), false);
   assert.equal((await p.store.update(BOT, 0, { type: "add_custom", text: "order food", behavior: "ask" })).ok, true);
   assert.equal(readFileSync(path.join(directory, "rules.json.unreadable"), "utf8"), first);
-  assert.equal(readFileSync(path.join(directory, "rules.json.unreadable.2"), "utf8"), second);
+  assert.deepEqual(readFileSync(path.join(directory, "rules.json.unreadable.2")), second);
 
   // A readable file is replaced without a copy.
   assert.equal((await p.store.update(BOT, 1, { type: "add_custom", text: "book a flight", behavior: "ask" })).ok, true);
