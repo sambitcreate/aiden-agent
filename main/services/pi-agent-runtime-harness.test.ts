@@ -17,6 +17,8 @@ import {
 import { type AfterToolCallResult, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, createCompactionSummaryMessage } from "./pi-legacy-harness.js";
 import { createModels } from "@earendil-works/pi-ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { OPENROUTER_ATTRIBUTION_HEADERS, recordingOpenRouter } from "./openrouter-recording-test-support.js";
 import {
   appendPiMessages,
   beginPiVisibleTurnLease,
@@ -3895,4 +3897,29 @@ test("a receipt that cannot be written never fails the command or the run", asyn
   const result = harness.state.messages.find((message) => message.role === "toolResult" && message.toolName === "run_command");
   assert.equal(result?.role === "toolResult" && result.isError, false);
   await harness.dispose();
+});
+
+test("Aiden's requests to OpenRouter carry no pi attribution headers", async (t) => {
+  // Control: Pi's own Agent attributes the same request to pi.
+  const control = await recordingOpenRouter(t);
+  const piAgent = new Agent({
+    convertToLlm,
+    streamFn: control.models.streamSimple.bind(control.models),
+    initialState: { systemPrompt: "Base prompt", thinkingLevel: "off", tools: [], messages: [], model: control.model },
+  });
+  await piAgent.prompt("hello");
+  assert.equal(control.requests.length, 1);
+  assert.equal(control.requests[0]!["x-openrouter-title"], "pi");
+
+  const aiden = await recordingOpenRouter(t);
+  const harness = new PiAgentRuntimeHarness({
+    convertToLlm,
+    models: aiden.models,
+    streamFn: aiden.models.streamSimple.bind(aiden.models),
+    initialState: { systemPrompt: "Base prompt", thinkingLevel: "off", tools: [], messages: [], model: aiden.model },
+  });
+  await harness.prompt("hello");
+  await harness.dispose();
+  assert.equal(aiden.requests.length, 1);
+  assert.deepEqual(OPENROUTER_ATTRIBUTION_HEADERS.filter((header) => header in aiden.requests[0]!), []);
 });
