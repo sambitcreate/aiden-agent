@@ -531,9 +531,9 @@ function zonePattern(zone: string): RegExp {
     // UTC itself ("09:00Z", "UTC", "GMT"), but not "UTC+9".
     return new RegExp(`(?:(?<=\\d)Z|(?<!\\p{L})(?:UTC|GMT))(?!\\p{L})(?!\\s?[-+−]\\s?\\d)|${numeric}`, "u");
   }
-  // "UTC+9", "GMT+09:00", "UTC+5:30"
+  // "UTC+9", "GMT+09:00", "UTC+5:30", but "UTC+9" is never the start of "UTC+9:30".
   const minutesPart = minutes === "00" ? "(?::?00)?" : `:?${minutes}`;
-  const named = `(?<!\\p{L})(?:UTC|GMT)\\s?${sign}\\s?0?${Number(hours)}${minutesPart}(?!\\d)`;
+  const named = `(?<!\\p{L})(?:UTC|GMT)\\s?${sign}\\s?0?${Number(hours)}${minutesPart}(?![:.]?\\d)`;
   return new RegExp(`${named}|${numeric}`, "iu");
 }
 
@@ -572,6 +572,8 @@ const DURATION_UNIT_ALIASES: Readonly<Record<string, DurationUnit>> = {
   mo: "months", mos: "months", month: "months", months: "months",
   y: "years", yr: "years", yrs: "years", year: "years", years: "years",
 };
+/** Units from smallest to largest; a compound duration writes them largest first. */
+const DURATION_UNIT_ORDER: readonly DurationUnit[] = ["seconds", "minutes", "hours", "days", "weeks", "months", "years"];
 /** Units with an exact size. Months and years only convert to each other. */
 const SECONDS_IN: Partial<Record<DurationUnit, number>> = { seconds: 1, minutes: 60, hours: 3_600, days: 86_400, weeks: 604_800 };
 const MONTHS_IN: Partial<Record<DurationUnit, number>> = { months: 1, years: 12 };
@@ -591,25 +593,31 @@ function convertDuration(amount: number, unit: DurationUnit, wanted: DurationUni
  * A duration the page writes with its unit ("2 weeks", "14-day", "1 hour 30
  * minutes") that equals the value in the requested unit. A bare number is
  * never a duration, and days never convert to months.
+ *
+ * Amounts written together in falling units ("1 hour 30 minutes", "2 days and
+ * 4 hours") are one duration, so only their total counts, never one part of
+ * it. Amounts in the same or a rising unit ("7 days, 14 days") stand alone.
  */
 function locateDuration(value: number, unit: DurationUnit, page: WebExtractPage): Located | undefined {
   for (const line of page.lines) {
-    const found: { start: number; end: number; amount: number | undefined }[] = [];
+    const groups: { start: number; end: number; total: number | undefined; smallest: number }[] = [];
     DURATION.lastIndex = 0;
     for (let match = DURATION.exec(line); match; match = DURATION.exec(line)) {
       const written = DURATION_UNIT_ALIASES[match[2]!.toLowerCase()]!;
-      found.push({ start: match.index, end: match.index + match[0].length, amount: convertDuration(Number(match[1]), written, unit) });
-    }
-    // One amount, or several written together ("1 hour 30 minutes", "2 hours and 15 minutes").
-    for (let first = 0; first < found.length; first++) {
-      let total = 0;
-      for (let last = first; last < found.length; last++) {
-        if (last > first && !/^\s*(?:,|and)?\s*$/iu.test(line.slice(found[last - 1]!.end, found[last]!.start))) break;
-        const amount = found[last]!.amount;
-        if (amount === undefined) break;
-        total += amount;
-        if (sameNumber(total, value)) return { line, start: found[first]!.start, end: found[last]!.end };
+      const rank = DURATION_UNIT_ORDER.indexOf(written);
+      const amount = convertDuration(Number(match[1]), written, unit);
+      const end = match.index + match[0].length;
+      const previous = groups[groups.length - 1];
+      if (previous && rank < previous.smallest && /^\s*(?:,|and)?\s*$/iu.test(line.slice(previous.end, match.index))) {
+        previous.end = end;
+        previous.smallest = rank;
+        previous.total = previous.total === undefined || amount === undefined ? undefined : previous.total + amount;
+      } else {
+        groups.push({ start: match.index, end, total: amount, smallest: rank });
       }
+    }
+    for (const group of groups) {
+      if (group.total !== undefined && sameNumber(group.total, value)) return { line, start: group.start, end: group.end };
     }
   }
   return undefined;

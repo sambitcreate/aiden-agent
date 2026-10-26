@@ -170,6 +170,7 @@ test("a datetime is extracted only when its date, time and offset share one line
     "Support closes at 17:00.",
     "Keynote: 2026-11-04 09:00 UTC",
     "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)",
+    "Adelaide meetup: 6 Nov 2026, 18:30 (UTC+9:30)",
   ].join("\n");
   const fields = await extract(
     {
@@ -180,6 +181,8 @@ test("a datetime is extracted only when its date, time and offset share one line
       wrong_offset: "datetime",
       tokyo: "datetime",
       fraction: "datetime",
+      adelaide: "datetime",
+      whole_hour_prefix: "datetime",
     },
     {
       launch: { value: "2026-11-03T09:00", confidence: 0.95 },
@@ -190,13 +193,17 @@ test("a datetime is extracted only when its date, time and offset share one line
       wrong_offset: { value: "2026-11-04T09:00+09:00", confidence: 0.95 },
       tokyo: { value: "2026-11-05T18:30+09:00", confidence: 0.95 },
       fraction: { value: "2026-11-04T09:00:00.250Z", confidence: 0.95 },
+      adelaide: { value: "2026-11-06T18:30+09:30", confidence: 0.95 },
+      // Half an hour off: the page's offset is +9:30, not +9.
+      whole_hour_prefix: { value: "2026-11-06T18:30+09:00", confidence: 0.95 },
     },
     page,
   );
   assert.equal(fields.launch!.status === "extracted" && fields.launch!.sourceLine, "Launch: November 3, 2026 at 09:00.");
   assert.equal(fields.keynote!.status === "extracted" && fields.keynote!.sourceLine, "Keynote: 2026-11-04 09:00 UTC");
   assert.equal(fields.tokyo!.status === "extracted" && fields.tokyo!.sourceLine, "Tokyo meetup: 5 Nov 2026, 18:30 (UTC+9)");
-  for (const name of ["mixed_lines", "unstated_offset", "wrong_offset", "fraction"]) {
+  assert.equal(fields.adelaide!.status === "extracted" && fields.adelaide!.sourceLine, "Adelaide meetup: 6 Nov 2026, 18:30 (UTC+9:30)");
+  for (const name of ["mixed_lines", "unstated_offset", "wrong_offset", "fraction", "whole_hour_prefix"]) {
     assert.equal(fields[name]!.status, "uncertain", name);
   }
 });
@@ -214,6 +221,8 @@ test("a duration is extracted only when the page's amount and unit give the valu
       trial_weeks: "duration.weeks",
       wrong_unit: "duration.days",
       session: "duration",
+      session_hour_only: "duration",
+      session_minutes_only: "duration",
       renewal_months: "duration.months",
       renewal_days: "duration.days",
     },
@@ -223,6 +232,9 @@ test("a duration is extracted only when the page's amount and unit give the valu
       // Two weeks read as two days.
       wrong_unit: { value: 2, confidence: 0.95 },
       session: { value: 5_400, confidence: 0.95 },
+      // Each part of "1 hour 30 minutes" on its own is not the stated duration.
+      session_hour_only: { value: 3_600, confidence: 0.95 },
+      session_minutes_only: { value: 1_800, confidence: 0.95 },
       renewal_months: { value: 24, confidence: 0.95 },
       // Two years is not an exact number of days.
       renewal_days: { value: 730, confidence: 0.95 },
@@ -234,8 +246,18 @@ test("a duration is extracted only when the page's amount and unit give the valu
   assert.equal(fields.trial_weeks!.status, "extracted");
   assert.equal(fields.session!.status === "extracted" && fields.session!.sourceLine, "Sessions time out after 1 hour 30 minutes.");
   assert.equal(fields.renewal_months!.status, "extracted");
-  assert.equal(fields.wrong_unit!.status, "uncertain");
-  assert.equal(fields.renewal_days!.status, "uncertain");
+  for (const name of ["wrong_unit", "renewal_days", "session_hour_only", "session_minutes_only"]) {
+    assert.equal(fields[name]!.status, "uncertain", name);
+  }
+
+  // Separate durations in a list each stand alone.
+  const plans = await extract(
+    { middle: "duration.days", summed: "duration.days" },
+    { middle: { value: 14, confidence: 0.95 }, summed: { value: 21, confidence: 0.95 } },
+    "Passes come in 7 days, 14 days and 30 days.",
+  );
+  assert.equal(plans.middle!.status, "extracted");
+  assert.equal(plans.summed!.status, "uncertain");
 
   // A bare number is never a duration.
   const bare = await extract({ team_days: "duration.days" }, { team_days: { value: 14, confidence: 0.95 } }, "We have 14 offices.");
