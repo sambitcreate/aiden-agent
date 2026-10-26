@@ -147,8 +147,8 @@ export type LmStudioEndpoint = {
   enqueueStreamedReply?: (prompt: string) => StreamedReplyController;
   /**
    * Fails the next `count` agent completions whose prompt contains `prompt`
-   * with `status` (a server error), as a provider having a bad moment does,
-   * available only on the deterministic model.
+   * with `status`: a server error as a provider having a bad moment sends, or
+   * a client error such as a rejected key. Deterministic model only.
    */
   failCompletions?: (prompt: string, count: number, status: number) => void;
 };
@@ -422,7 +422,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         if (serverFailure) {
           serverFailure.remaining -= 1;
           response.writeHead(serverFailure.status, { "content-type": "application/json; charset=utf-8" });
-          response.end(JSON.stringify({ error: { message: "Bad gateway", type: "server_error" } }));
+          response.end(JSON.stringify({ error: { message: "The fixture turned this request away", type: "fixture_error" } }));
           return;
         }
         const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
@@ -502,8 +502,8 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     enqueueToolScenario,
     enqueueStreamedReply,
     failCompletions: (prompt, count, status) => {
-      if (!prompt.trim() || !Number.isInteger(count) || count < 1 || status < 500) {
-        throw new Error("A server failure needs a prompt, a positive count and a 5xx status.");
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1 || status < 400 || status === 429) {
+        throw new Error("A failure needs a prompt, a positive count and a 4xx (not 429) or 5xx status.");
       }
       serverFailures.push({ prompt, remaining: count, status });
     },
