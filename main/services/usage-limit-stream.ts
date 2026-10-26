@@ -260,14 +260,15 @@ export async function streamWaitingOutUsageLimits(
       gate.answered(ticket);
       return replay(stream, peeked);
     }
-    maxWaitMs = await limits.maxWaitMs();
+    // Turned off during the wait: fail as a request with waiting off would.
+    maxWaitMs = ticket.off ? 0 : await limits.maxWaitMs();
     const accountWide = verdict.kind === "stop" || verdict.scope === "account";
     const key = accountWide ? keys.account : keys.model;
     // The test of one limit met a different one: the limit it tested is gone.
     if (ticket.testing && ticket.key !== key) gate.answered(ticket);
     const existing = gate.entry(key);
     const ownTest = ticket.testing && ticket.key === key;
-    if (verdict.kind === "wait" && existing && !ownTest) {
+    if (verdict.kind === "wait" && existing && !ownTest && maxWaitMs > 0) {
       // Another request already holds this limit (or just gave it up): wait behind its test.
       previous = ticket;
       continue;

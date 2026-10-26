@@ -614,8 +614,12 @@ interface Waiter extends Holder {
 
 /** A request's permission to send, returned by `acquire`. */
 export type UsageLimitTicket =
-  /** `testing`: this request tests the limit held on `key`. */
-  | { kind: "send"; id: number; key?: string; testing: boolean }
+  /**
+   * `testing`: this request tests the limit held on `key`. `off`: waiting
+   * was turned off while it waited, so a rejection now fails as it would
+   * with waiting off.
+   */
+  | { kind: "send"; id: number; key?: string; testing: boolean; off?: true }
   | { kind: "refused"; resetAt?: number }
   /**
    * The held limit's next try is past this request's longest wait: it stops
@@ -784,7 +788,7 @@ export class UsageLimitGate {
         let waiter = this.waiters.get(id);
         const maxWaitMs = waiter?.maxWaitMs ?? options.maxWaitMs;
         if (maxWaitMs !== undefined && maxWaitMs <= 0) {
-          finish({ kind: "send", id, testing: false });
+          finish({ kind: "send", id, testing: false, off: true });
           return;
         }
         // A reset counts as the time the limit clears; the try lands a little after it.
