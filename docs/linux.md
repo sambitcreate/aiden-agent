@@ -102,6 +102,7 @@ uncertain connection.
 ## Platform behavior
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
+web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, coding follow-through (background jobs, followed pull requests and
 `/until` checks), diagnostics,

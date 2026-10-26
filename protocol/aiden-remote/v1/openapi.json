@@ -8705,6 +8705,9 @@
           },
           "questionnaire": {
             "$ref": "#/components/schemas/AskUserQuestionRecap"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/WebExtractRecap"
           }
         },
         "allOf": [
@@ -8772,6 +8775,27 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "required": [
+                "extraction"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "web_fetch"
+                }
+              }
+            }
           }
         ],
         "additionalProperties": false
@@ -8803,6 +8827,173 @@
             "maximum": 1000000000
           }
         },
+        "additionalProperties": false
+      },
+      "WebExtractRecap": {
+        "type": "object",
+        "description": "Contract revision 38. Display-only recap of a web_fetch extract call: the page's host and each value read, with the page line it came from. Only on completed web_fetch tool steps of a version 3 timeline. error means extraction failed and the page text was read instead; fields is then empty, and otherwise holds one to sixteen fields with distinct names. cut means only the first part of the page was read. Strings are single lines: no control characters, no leading, trailing or repeated whitespace, and spaces only as U+0020. Lengths count Unicode code points. Clients render it as text and never act on it; older clients ignore it.",
+        "required": [
+          "version",
+          "host",
+          "cut",
+          "fields"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "cut": {
+            "type": "boolean"
+          },
+          "error": {
+            "enum": [
+              "setup",
+              "auth",
+              "quota",
+              "timeout",
+              "unavailable",
+              "invalid-response"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/WebExtractRecapField"
+            }
+          }
+        },
+        "if": {
+          "required": [
+            "error"
+          ]
+        },
+        "then": {
+          "properties": {
+            "fields": {
+              "maxItems": 0
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "fields": {
+              "minItems": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebExtractRecapField": {
+        "type": "object",
+        "description": "One value read off the page. extracted is typed, confident and found on the page, so value, confidence and sourceLine are all present. uncertain is a guess, never a value read from the page; notFound marks a guess that appears nowhere on the page. null means the page has no value, and carries only name and status. value is a short display form; scripts get the whole value.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+          },
+          "status": {
+            "enum": [
+              "extracted",
+              "uncertain",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sourceLine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "notFound": {
+            "const": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "extracted"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value",
+                "confidence",
+                "sourceLine"
+              ],
+              "not": {
+                "required": [
+                  "notFound"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "null"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "value"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "confidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sourceLine"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "notFound"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "AskUserQuestionRecap": {
@@ -9155,8 +9346,17 @@
                 "steps": {
                   "items": {
                     "not": {
-                      "required": [
-                        "questionnaire"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "questionnaire"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "extraction"
+                          ]
+                        }
                       ]
                     }
                   }

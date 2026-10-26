@@ -61,6 +61,8 @@ import {
   webSearchKeyPoolTracker,
 } from "../services/web-search-credentials.js";
 import { registerWebSearchKeyPoolHandlers } from "./web-search-key-pool.js";
+import { registerWebFetchHandlers } from "./web-fetch.js";
+import { webFetchService } from "../services/web-fetch-main.js";
 import { webSearchExistingAuthReuse } from "../services/web-search-auth-reuse-main.js";
 import {
   DEFAULT_WEB_SEARCH_FALLBACK_ON,
@@ -713,7 +715,19 @@ export function registerPhase2Handlers(): void {
       (await configStore.getWebSearchSettings()).providerConfig[providerId],
     owner: webSearchMutationOwner,
     assertMutationAllowed: (providerId) =>
-      assertWebSearchRolloutMutationAllowed("set-credential", providerId, webSearchRollout),
+      assertWebSearchRolloutMutationAllowed(
+        "set-credential",
+        isWebSearchProviderId(providerId) ? providerId : undefined,
+        webSearchRollout,
+      ),
+  });
+
+  // Reading web pages (`web_fetch`) and extract mode; keys use the pool above.
+  registerWebFetchHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: webSearchMutationOwner,
+    snapshot: () => webFetchService.snapshot(),
+    update: (mutation, isCurrent) => configStore.updateWebFetchSettings(mutation, isCurrent),
   });
 
   // Legacy Exa aliases remain for one rollback window. They use the same

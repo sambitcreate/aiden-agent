@@ -222,6 +222,37 @@ test("an answered questionnaire becomes its own row and leaves the activity grou
   );
 });
 
+test("extracted values show as a card under their activity line, which stays in the group", () => {
+  const recap = {
+    version: 1 as const,
+    host: "acme.example",
+    cut: false,
+    fields: [{ name: "price", status: "extracted" as const, value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+  };
+  const fetched = step("fetch", 1, "web_fetch", "completed", { contentOffset: 7, extraction: recap });
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [positionedTool(0, 7), fetched, positionedTool(2, 7, "grep")]),
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : row.kind === "extraction"
+            ? [row.kind, row.step.extraction.fields[0]?.value]
+            : [row.kind],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1", "fetch", "tool-3"]],
+      ["extraction", "20"],
+      ["text", "After."],
+    ],
+  );
+});
+
 test("unreadable thinking remains a chronological status row", () => {
   const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
   const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
@@ -363,6 +394,10 @@ test("summarizes a finished turn as one deterministic sentence", () => {
   assert.equal(
     summarizeActivity(timeline("completed", tools({ web_search: 2, computer_use: 1 }))),
     "2 web searches, 1 Computer Use action",
+  );
+  assert.equal(
+    summarizeActivity(timeline("completed", tools({ web_search: 1, web_fetch: 2 }))),
+    "1 web search, 2 web pages",
   );
 });
 

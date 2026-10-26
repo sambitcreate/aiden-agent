@@ -343,7 +343,12 @@
         "main/services/workspace-artifacts/store.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
-        "main/services/workspace-artifacts/runner.test.ts"
+        "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/web-fetch.test.ts",
+        "main/services/web-extract-core.test.ts",
+        "main/services/web-fetch-transport.test.ts",
+        "main/services/web-page-text.test.ts",
+        "main/handlers/web-fetch.test.ts"
       ],
       "preserved": [
         "browser",
@@ -1155,7 +1160,11 @@
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
         "renderer/components/artifacts-panel.test.tsx",
-        "renderer/lib/chat-prompt-bridge.test.ts"
+        "renderer/lib/chat-prompt-bridge.test.ts",
+        "renderer/shared/web-extract.test.ts",
+        "renderer/shared/web-fetch-settings.test.ts",
+        "renderer/components/settings/web-page-settings.test.tsx",
+        "renderer/components/web-extract-recap.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

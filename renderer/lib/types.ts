@@ -20,6 +20,7 @@ import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -937,6 +938,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
   tts?: TtsSettingsV1;
   voiceProvider?: VoiceProvider;

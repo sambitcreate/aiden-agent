@@ -37,6 +37,7 @@ import {
   usageApi,
   voiceApi,
   webSearchApi,
+  webFetchApi,
   workspacesApi,
 } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
@@ -94,6 +95,7 @@ export const queryKeys = {
   mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
+  webFetch: ["webFetch"] as const,
   telegram: ["telegram"] as const,
   aidenRemote: ["aidenRemote"] as const,
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
@@ -886,6 +888,11 @@ export function useWebSearch() {
 
 /** Compatibility name for Settings callers that prefer an explicit suffix. */
 export const useWebSearchSettings = useWebSearch;
+
+/** Reading web pages and extract mode; never holds a key. */
+export function useWebFetch() {
+  return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
+}
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });

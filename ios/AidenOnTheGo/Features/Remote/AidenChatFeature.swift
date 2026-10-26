@@ -6551,6 +6551,11 @@ struct AidenMessageView: View, Equatable {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(timeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
@@ -7961,6 +7966,11 @@ private struct AidenLiveResponseView: View {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(model.activityTimeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
             }
 
             if let chronologicalRows {
@@ -8505,6 +8515,10 @@ private struct AidenChronologicalTranscript: View {
                     if let recap = row.steps.first?.questionnaire {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
+                case .extraction:
+                    if let recap = row.steps.first?.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
                 case .visual(let visual):
                     visualContent?(visual)
                 }
@@ -8566,6 +8580,108 @@ struct AidenQuestionnaireRecapView: View {
             Text(verbatim: label)
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// The values a `web_fetch` extract call read, under its activity line: each
+/// name and value with the page line it came from, so the owner can check a
+/// number against its source without opening the page. Guesses and values
+/// the page does not have are labelled as such, never shown as read.
+struct AidenWebExtractRecapView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recap: AidenWebExtractRecap
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label {
+                Text(verbatim: recap.host)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: "globe")
+                    .imageScale(.small)
+            }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+
+            if let failure = recap.error {
+                Text(verbatim: "Couldn\u{2019}t read the values: \(failure.message). The page was read instead.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            } else {
+                ForEach(recap.fields) { field in
+                    fieldRow(field)
+                }
+            }
+
+            if recap.cut {
+                Text("Only the first part of the page was read.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: "Values read from \(recap.host)"))
+    }
+
+    private func fieldRow(_ field: AidenWebExtractRecap.Field) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: field.label)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            value(for: field)
+            source(for: field)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func value(for field: AidenWebExtractRecap.Field) -> some View {
+        switch field.status {
+        case .absent:
+            Text("Not on the page")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+        case .extracted:
+            Text(verbatim: field.value ?? "")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.foreground)
+        case .uncertain:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let value = field.value {
+                    Text(verbatim: value)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                Text("Guess")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(palette.warning.opacity(0.12), in: Capsule())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func source(for field: AidenWebExtractRecap.Field) -> some View {
+        if field.status != .absent {
+            if let line = field.sourceLine {
+                Text(verbatim: "\u{201C}\(line)\u{201D}")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else if field.notFound == true {
+                Text("Not found on the page")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }

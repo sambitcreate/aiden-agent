@@ -191,6 +191,7 @@ const TALLIED_TOOLS = [
   "write_file",
   "edit_file",
   "web_search",
+  "web_fetch",
   "computer_use",
   "compact_context",
 ];
@@ -220,6 +221,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
   const commands = countTools(steps, ["run_command"]);
   const changes = countTools(steps, ["write_file", "edit_file"]);
   const web = countTools(steps, ["web_search"]);
+  const pages = countTools(steps, ["web_fetch"]);
   const mac = countTools(steps, ["computer_use"]);
   const compactions = countTools(steps, ["compact_context"]);
   const other = toolSteps.filter((step) => !TALLIED_TOOLS.includes(step.toolName)).length;
@@ -233,6 +235,7 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     changes ? `${running ? "editing" : "edited"} ${plural(changes, "file")}` : "",
     commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
     web ? plural(web, "web search", "web searches") : "",
+    pages ? plural(pages, "web page") : "",
     mac ? plural(mac, "Computer Use action") : "",
     compactions ? (running ? "compacting context" : "compacted context") : "",
     other ? plural(other, "tool call") : "",
