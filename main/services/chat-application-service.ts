@@ -78,6 +78,8 @@ export interface ChatApplicationDependencies {
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
+  /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
+  followThrough?: { deleteChat(chatId: string): Promise<void> };
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
@@ -271,6 +273,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         await options.assertCurrent?.(current);
         await deps.llmClient.cancelChat(chatId);
         deps.visualSnapshots?.cancelChat(chatId);
+        await deps.followThrough?.deleteChat(chatId).catch((error: unknown) => {
+          deps.logError("follow-through", "Could not stop the chat's background jobs.", error);
+        });
         try {
           await deps.subagentRunStore.deleteChat(chatId);
         } catch (error) {

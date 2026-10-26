@@ -109,6 +109,11 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chats:fork-summary-changed",
   "chats:btw-event",
   "chats:pull-requests-changed",
+  /**
+   * A chat's background jobs, followed pull requests or done-when check changed: `{chatId}`.
+   * `transcript: true` means a follow-up notice was also saved into its messages.
+   */
+  "chats:follow-through-changed",
   "chats:settled",
   "designProjects:changed",
   "designProjects:run-changed",

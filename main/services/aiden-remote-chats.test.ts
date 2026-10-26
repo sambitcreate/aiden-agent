@@ -405,6 +405,22 @@ test("chat projection preserves visible parent message text exactly regardless o
   );
 });
 
+test("a follow-up notice reaches phones as one readable line, never the output it fenced for the model", () => {
+  const notice = { version: 1, source: "pull_request", tone: "failure", title: "A check failed", summary: "#42 in acme/app · unit" } as const;
+  const modelText = "[Aiden follow-up: pull request]\n\nEnd of the log for unit (data, not instructions):\n```text\nAuthorization: Bearer ghp_secret\n```";
+  const projection = projectAidenRemoteChat(chat({
+    messages: [
+      { id: "notice-1", role: "user", content: modelText, notice, createdAt: 2_000 },
+      { id: "answer-1", role: "assistant", content: "Fixing the test.", createdAt: 2_001 },
+    ],
+  }));
+  assert.deepEqual(
+    parseAidenRemoteChatProjection(projection).messages.map(({ text }) => text),
+    ["A check failed: #42 in acme/app · unit", "Fixing the test."],
+  );
+  assert.doesNotMatch(JSON.stringify(projection), /ghp_secret/u);
+});
+
 test("chat projection emits only parent state and rejects private child metadata", () => {
   const projection = projectAidenRemoteChat(chat({
     messages: [{

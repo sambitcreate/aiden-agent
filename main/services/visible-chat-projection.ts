@@ -6,6 +6,7 @@ import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlac
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { parseAgentNoticeV1, type AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import {
   parseProviderFailureV1,
   type ProviderFailureV1,
@@ -39,6 +40,8 @@ export interface VisibleChatMessage {
   uiVisuals?: import("../../renderer/shared/aiden-ui/types.js").ChatUiVisualV1[];
   visualSnapshots?: import("../../renderer/shared/visual-snapshots.js").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
+  /** A follow-up notice from a background job, followed pull request or check. */
+  notice?: AgentNoticeV1;
   providerFailure?: ProviderFailureV1;
 }
 
@@ -181,6 +184,10 @@ export function projectVisibleChatMessage(value: unknown): VisibleChatMessage | 
     skill:
       message.role === "user"
         ? parseSkillProvenanceV1(message.skill)
+        : undefined,
+    notice:
+      message.role === "user"
+        ? parseAgentNoticeV1(message.notice)
         : undefined,
     providerFailure:
       message.role === "assistant"

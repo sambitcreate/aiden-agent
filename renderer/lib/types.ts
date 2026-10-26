@@ -646,6 +646,7 @@ export interface ChatMessage {
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
+  notice?: import("../shared/agent-notices").AgentNoticeV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;

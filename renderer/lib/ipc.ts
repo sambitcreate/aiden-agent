@@ -236,6 +236,8 @@ import type {
   ChatSidebarPullRequests,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
+import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
   type DeviceHostCheck,
@@ -1448,6 +1450,22 @@ export const chatsApi = {
   btwCancel: (chatId: string, requestId: string) =>
     invoke<boolean>("chats:btwCancel", { chatId, requestId }),
   btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
+  // Follow-through: background jobs, followed pull requests and the done-when check.
+  followThrough: async (chatId: string): Promise<ChatFollowThroughV1> => {
+    const value = parseChatFollowThrough(await invoke<unknown>("chats:followThrough", chatId));
+    if (!value || value.chatId !== chatId) throw new Error("The follow-through response was invalid.");
+    return value;
+  },
+  backgroundJobOutput: (chatId: string, jobId: string) =>
+    invoke<BackgroundJobOutput>("chats:followThroughJobOutput", { chatId, jobId }),
+  stopBackgroundJob: (chatId: string, jobId: string) =>
+    invoke<void>("chats:followThroughStopJob", { chatId, jobId }),
+  followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
+  stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
+    invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  setDoneWhenCheck: (chatId: string, command: string) =>
+    invoke<void>("chats:followThroughSetCheck", { chatId, command }),
+  clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);

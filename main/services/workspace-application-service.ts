@@ -36,6 +36,8 @@ export interface WorkspaceApplicationDependencies {
   >;
   terminalService: Pick<typeof terminalService, "closeForWorkspace">;
   browserService?: { closeForWorkspace(workspaceId: string): void };
+  /** Stops background jobs and done-when checks that run in the workspace folder. */
+  followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
@@ -67,6 +69,10 @@ export interface WorkspaceFolderCreationOptions {
 }
 
 export function createWorkspaceApplicationService(deps: WorkspaceApplicationDependencies) {
+  const closeFollowThrough = (workspaceId: string) =>
+    deps.followThrough?.closeForWorkspace(workspaceId).catch((error: unknown) => {
+      deps.logError("follow-through", "Could not stop the workspace's background jobs.", error);
+    });
   let folderCreationTail: Promise<void> = Promise.resolve();
 
   const serializeFolderCreation = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -227,6 +233,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
           async ({ ensureResumedOnExit, keepPaused }) => {
             deps.terminalService.closeForWorkspace(existing.id);
             deps.browserService?.closeForWorkspace(existing.id);
+            if (next.permission !== existing.permission) await closeFollowThrough(existing.id);
             await deps.llmClient.cancelWorkspaceAndSettle(existing.id);
             await deps.scheduleService.cancelWorkspace(existing.id);
             options.assertCurrent?.(await deps.configStore.getWorkspace(id) ?? existing);
@@ -258,6 +265,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
         deps.terminalService.closeForWorkspace(id);
         deps.browserService?.closeForWorkspace(id);
         assertWorkspaceRecordRemovalAllowed(existing);
+        await closeFollowThrough(id);
         await withWorkspaceScheduleRestoration(
           {
             restoreOnExit: existing?.permission !== "none",
