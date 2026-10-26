@@ -31,7 +31,7 @@ A limit can cover one model (a 429 or an overload) or the whole sign-in or key (
 
 ### Retry now, restarts and giving up
 
-- The chat, or the Bot's chat, shows a **"Waiting for <provider> until 3:40 PM"** row with **Retry now**. Retry now sends the test request at once, at most once every 30 seconds per limit. Stop still stops the reply.
+- The chat shows a **"Waiting for <provider>'s usage limit · next try at 3:40 PM"** row, and a Bot's chat a "Waiting for <provider>'s usage limit" card, each with **Retry now**. Retry now sends the test request at once, at most once every 30 seconds per limit. Stop still stops the reply.
 - Waits are saved in `userData/usage-limits.json` (provider ids, model ids and times only), so a reply that was waiting when Aiden quit or the Mac restarted still knows when to try again. Entries older than 25 hours are dropped.
 - Aiden sends a notification only when it **gives up** on a wait, not when a wait starts. After a give-up, new requests on that limit fail at once with "<provider> is still at its usage limit, and Aiden stopped waiting for it a few minutes ago." for 5 minutes, or until the reset time.
 

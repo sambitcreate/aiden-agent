@@ -36,29 +36,30 @@ export function SpendingLimitNotice({
     );
   }
   return (
-    <BotNoticeCard
-      label="Spending limit reached"
-      role="alert"
-      icon={<CircleDollarSign />}
-      iconTone="warning"
-      title={notice.title}
-      className={className}
-      actions={
-        <>
-          <Button
-            variant="transparent"
-            size="small"
-            onClick={() => void navigate({ to: "/settings", search: { section: "limits" } })}
-          >
-            Change limits
-          </Button>
-          <Button variant="filled" size="small" disabled={allowing} onClick={onAllowMore}>
-            {notice.allowMoreLabel}
-          </Button>
-        </>
-      }
-    >
-      <p>{notice.body}</p>
-    </BotNoticeCard>
+    <div className={className}>
+      <BotNoticeCard
+        label="Spending limit reached"
+        role="alert"
+        icon={<CircleDollarSign />}
+        iconTone="warning"
+        title={notice.title}
+        actions={
+          <>
+            <Button
+              variant="transparent"
+              size="small"
+              onClick={() => void navigate({ to: "/settings", search: { section: "limits" } })}
+            >
+              Change limits
+            </Button>
+            <Button variant="filled" size="small" disabled={allowing} onClick={onAllowMore}>
+              {notice.allowMoreLabel}
+            </Button>
+          </>
+        }
+      >
+        <p>{notice.body}</p>
+      </BotNoticeCard>
+    </div>
   );
 }

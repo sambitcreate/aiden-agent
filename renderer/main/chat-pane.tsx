@@ -3172,7 +3172,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 status={spending.status}
                 allowing={spending.allowing}
                 onAllowMore={() => void spending.allowMore()}
-                className="mb-2"
+                className="aiden-dock-inset chat-content-column pb-2"
               />
             ) : null}
             {btwView ? (

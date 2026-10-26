@@ -145,6 +145,12 @@ export type LmStudioEndpoint = {
    * the test streams one delta at a time, available only on the deterministic model.
    */
   enqueueStreamedReply?: (prompt: string) => StreamedReplyController;
+  /**
+   * Turns away the next `count` agent completions whose prompt contains
+   * `prompt` with `429` and these headers, as a provider at its rate limit
+   * does, available only on the deterministic model.
+   */
+  rateLimitCompletions?: (prompt: string, count: number, headers: Record<string, string>) => void;
 };
 
 export type StreamedReplyController = {
@@ -341,6 +347,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
   };
   let holding = false;
   const held = new Set<() => void>();
+  const rateLimits: Array<{ prompt: string; remaining: number; headers: Record<string, string> }> = [];
   const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
   const enqueueToolScenario = (scenario: DeterministicToolScenario): DeterministicToolScenarioState => {
     if (!scenario.prompt.trim() || scenario.calls.length > 16 || scenarios.length >= 8) {
@@ -409,6 +416,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const rateLimit = completion?.tools?.length
+          ? rateLimits.find((limit) => limit.remaining > 0 && userText.includes(limit.prompt))
+          : undefined;
+        if (rateLimit) {
+          rateLimit.remaining -= 1;
+          response.writeHead(429, { ...rateLimit.headers, "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: { message: "Rate limit reached for requests", type: "rate_limit_exceeded" } }));
+          return;
+        }
         const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
         if (streamed && completion?.tools?.length) {
           streamed.response = response;
@@ -485,6 +501,10 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     },
     enqueueToolScenario,
     enqueueStreamedReply,
+    rateLimitCompletions: (prompt, count, headers) => {
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1) throw new Error("A rate limit needs a prompt and a positive count.");
+      rateLimits.push({ prompt, remaining: count, headers: { ...headers } });
+    },
     server,
   };
 }
