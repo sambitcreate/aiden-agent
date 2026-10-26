@@ -249,8 +249,11 @@ export class PiCompactionCoordinator {
   /** Retries in the current run of failures; any answer that succeeds in between starts over. */
   private providerRetries = 0;
   private timeoutRetries = 0;
-  /** Retained message count when the last retry started, to see whether the run moved on since. */
-  private providerRetryBase = 0;
+  /**
+   * When the failure behind the last retry started. A later answer means the
+   * run moved on; timestamps survive compaction, unlike transcript positions.
+   */
+  private providerRetryFailedAt = 0;
   private activeAbortController?: AbortController;
 
   constructor(private readonly options: PiCompactionCoordinatorOptions) {
@@ -329,12 +332,13 @@ export class PiCompactionCoordinator {
   private resetProviderRetries(): void {
     this.providerRetries = 0;
     this.timeoutRetries = 0;
-    this.providerRetryBase = 0;
+    this.providerRetryFailedAt = 0;
   }
 
-  /** Pi resets overflow recovery when a new user prompt enters the agent. */
+  /** Pi resets overflow recovery when a new user prompt enters the agent; retries start over too. */
   beginPrompt(): void {
     this.overflowRecoveryAttempted = false;
+    this.resetProviderRetries();
   }
 
   /** Run the same Pi-owned compaction path on an explicit operator request. */
@@ -526,15 +530,14 @@ export class PiCompactionCoordinator {
       // failures. A cut-off reply kept after a dropped stream is not an answer.
       if (
         this.providerRetries > 0 &&
-        retryMessages
-          .slice(this.providerRetryBase)
-          .some(
-            (message) =>
-              message.role === "assistant" &&
-              message.stopReason !== "error" &&
-              message.stopReason !== "aborted" &&
-              message.stopReason !== "length",
-          )
+        retryMessages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.stopReason !== "error" &&
+            message.stopReason !== "aborted" &&
+            message.stopReason !== "length" &&
+            message.timestamp > this.providerRetryFailedAt,
+        )
       ) {
         this.resetProviderRetries();
       }
@@ -560,7 +563,7 @@ export class PiCompactionCoordinator {
       }
       this.providerRetries += 1;
       if (timeout) this.timeoutRetries += 1;
-      this.providerRetryBase = retryMessages.length;
+      this.providerRetryFailedAt = assistantMessage.timestamp;
       return {
         compacted: false,
         shouldRetry: true,
