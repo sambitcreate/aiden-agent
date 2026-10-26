@@ -17,6 +17,8 @@ import { McpOAuthMetadataField, mcpOAuthMetadataFieldError } from "./mcp-oauth-m
 import { ProviderConnectorKeySharing } from "./provider-connector-key-sharing";
 import { McpProviderAuthFields, mcpShareableProviders } from "./mcp-provider-auth-fields";
 import { buildMcpPresetStates } from "../../../main/handlers/mcp-preset-states";
+import { parseMcpServer } from "../../../main/handlers/phase2-parse";
+import { mcpToolsOfferedToModel } from "../../shared/mcp-exposure";
 import {
   MCP_PRESETS,
   assertMcpPresetServer,
@@ -666,6 +668,32 @@ test("a failed iMCP connection test adds the checks that usually fix it", async 
   await within(dialog).findByText(/Still not connecting\? In iMCP, check that Enable MCP Server is on/u);
   assert.equal(channelCalls(calls, "mcp:save").length, 0, "testing saves nothing");
   assert.equal((channelCalls(calls, "mcp:testDraft")[0]!.args[0] as McpServer).command, IMCP_SERVER);
+});
+
+test("managing a saved iMCP connection keeps the model access chosen for it", async () => {
+  const state = catalogPresetStates({ imcp: { configured: true, ready: true } }).find((entry) => entry.preset.id === "imcp")!;
+  const saved: McpServer = {
+    id: state.serverId, name: "iMCP", transport: "stdio", command: IMCP_SERVER, args: [], presetId: "imcp", enabled: true,
+    exposure: "direct", hiddenTools: ["messages_fetch"],
+  };
+  const { calls } = renderPreset(state, saved, {
+    "mcp:macAppStatus": () => ({ supported: true, installed: true, open: true, command: IMCP_SERVER }),
+    "mcp:save": (server: unknown) => server,
+  });
+  const dialog = await screen.findByRole("dialog", { name: /Manage iMCP/u });
+  await within(dialog).findByText("Installed");
+  fireEvent.click(within(dialog).getByRole("switch", { name: "Enable iMCP" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 1));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => assert.equal(channelCalls(calls, "mcp:save").length, 2));
+
+  // What main stores from each save: the switch and Save change only what they show.
+  const tools = [{ name: "calendar_events" }, { name: "messages_fetch" }];
+  for (const call of channelCalls(calls, "mcp:save")) {
+    const stored = parseMcpServer(call.args[0]);
+    assert.equal(stored.exposure, "direct");
+    assert.deepEqual(mcpToolsOfferedToModel(stored, tools).map((tool) => tool.name), ["calendar_events"]);
+  }
 });
 
 test("a saved hosted Figma connection shows why it can't connect and offers no way to save or sign in", async () => {

@@ -80,6 +80,9 @@ export function MacAppSetupDialog({
     args: [],
     presetId: preset.id,
     enabled: nextEnabled,
+    // Model access is chosen elsewhere in Settings; saving here keeps it.
+    exposure: server?.exposure,
+    hiddenTools: server?.hiddenTools,
   });
   // This dialog shows the command it saves, so saving approves it to run.
   const save = (record: McpServer) => mcpApi.save(record, { approveLaunch: true });
