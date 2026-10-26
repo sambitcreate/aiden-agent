@@ -49,6 +49,7 @@ import kotlinx.coroutines.launch
 import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
+import sbtbiswas.AidenOnTheGo.features.chat.AidenSpendingNotice
 import sbtbiswas.AidenOnTheGo.features.chat.AidenRunInputSplitButton
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.models.*
@@ -235,6 +236,12 @@ private fun AidenBotSessionContent(
     // Steer or Queue while the Bot works: Queue by default, and Queue again once the turn ends.
     var busyMode by remember(botId) { mutableStateOf(AidenStreamInputMode.QUEUE) }
     LaunchedEffect(ui.isRunning) { busyMode = aidenBotBusyMode(busyMode, ui.isRunning) }
+    // Revision 40: the Bot's month, re-read after each reply and send.
+    val spending = remember(botId) { AidenSpendingNoticeState() }
+    val spendingTransport = cl.takeIf { serverInfo?.supportsSpendingLimits == true }
+    LaunchedEffect(botId, spendingTransport, ui.isRunning, ui.entries.size, ui.outgoing.size) {
+        spending.refresh(AidenSpendingOwner.Bot(botId), spendingTransport)
+    }
     var confirmingDelete by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
     // "Set up" (no AI model) and "Advanced" (access changed) open the Bot's Advanced settings.
@@ -468,6 +475,18 @@ private fun AidenBotSessionContent(
                 item(key = "status") { AidenBotStatusLine(ui) }
                 // Revision 37: a Bot the person paused. Resume lifts it; a reply it cut short then
                 // shows the interrupted card below.
+                spending.spending?.takeIf { !ui.isPaused }?.let { current ->
+                    item(key = "spending") {
+                        AidenSpendingNotice(
+                            spending = current,
+                            botName = identity.name,
+                            isAllowing = spending.isAllowing,
+                            canAllow = coordinator.installationStore.activeInstallation?.canWriteBots == true,
+                            errorMessage = spending.errorMessage,
+                            onAllowMore = { scope.launch { spending.allowMore(spendingTransport) } }
+                        )
+                    }
+                }
                 if (ui.isPaused) {
                     item(key = "paused") {
                         AidenBotPausedCard(

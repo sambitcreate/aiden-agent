@@ -66,7 +66,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) {
+) : AidenSpendingTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -616,6 +616,44 @@ class AidenRemoteClient(
             acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
         }
+
+    /** Revision 40: the chat's or Bot's spending limit, or `spending: null` without one. */
+    override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
+        executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
+
+    /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
+    override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {
+        if (revision.isEmpty() || revision.length > 128 || revision.any { it.code !in 0x21..0x7e }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return executeRequest(
+            spendingPath(owner) + "/allow-more",
+            method = "POST",
+            ifMatchRevision = revision,
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> decodeSpending(bytes) }
+    }
+
+    private fun spendingPath(owner: AidenSpendingOwner): String = when (owner) {
+        is AidenSpendingOwner.Chat -> {
+            AidenBotWire.validateIdentifier(owner.chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+            "/chats/${owner.chatId}/spending"
+        }
+        is AidenSpendingOwner.Bot -> {
+            AidenBotWire.validateIdentifier(owner.botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+            "/bots/${owner.botId}/spending"
+        }
+    }
+
+    private fun decodeSpending(bytes: ByteArray): AidenSpendingStatus {
+        val text = String(bytes, Charsets.UTF_8)
+        val root = json.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject
+        if (root == null || !root.containsKey("spending")) throw AidenRemoteClientException.InvalidResponse()
+        val status = json.decodeFromString<AidenSpendingStatus>(text)
+        if (status.spending?.isValid == false) throw AidenRemoteClientException.InvalidResponse()
+        return status
+    }
 
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->

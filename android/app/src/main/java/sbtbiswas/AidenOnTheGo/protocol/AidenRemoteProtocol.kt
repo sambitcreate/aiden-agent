@@ -81,6 +81,8 @@ object AidenRemoteProtocol {
     /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
+    /** Contract revision 40: a chat's or Bot's spending limit, and Allow more once it is reached. */
+    const val SPENDING_LIMITS_FEATURE = "spending-limits-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5
