@@ -2677,9 +2677,20 @@ test("foreground glob agrees with native glob on normal patterns, hidden paths a
     for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
     await fs.symlink("src", path.join(root, "link"));
     await fs.symlink("sub", path.join(root, "src/alias"));
-    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
+    for (const pattern of ["*", "**", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "src/**/..", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
       const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
       assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
+    }
+    // Node 24.22 (Electron 43.8) never steps into a symlink after `**`; Node 22 still does.
+    // Aiden follows the newer rule on every runtime, so these patterns need fixed answers.
+    for (const [pattern, expected] of [
+      ["**/*", "link root.txt src src/a.ts src/alias src/b.js src/sub src/sub/c.ts"],
+      ["**/*/*.ts", "src/a.ts src/sub/c.ts"],
+      ["**/*/**/c.ts", "src/sub/c.ts"],
+      ["**/*/", "src src/sub"],
+      ["{src,link}/**/*", "link/a.ts link/alias link/b.js link/sub link/sub/c.ts src/a.ts src/alias src/b.js src/sub src/sub/c.ts"],
+    ]) {
+      assert.equal(await foregroundText(root, "glob", { pattern }), expected.split(" ").join("\n"), pattern);
     }
     await fs.writeFile(path.join(root, ".env"), "SECRET");
     assert.equal(await foregroundText(root, "glob", { pattern: ".env" }), "[no matches]");

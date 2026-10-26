@@ -271,7 +271,7 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.match(workflow, /changed_paths.*git diff-tree/u);
   assert.match(workflow, /changed_paths.*resources\/model-capabilities\.json/u);
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 2);
-  assert.match(workflow, /node-version: 22\.22\.3/u);
+  assert.match(workflow, /node-version: 22\.23\.4/u);
   assert.match(workflow, /npm run models:refresh/u);
   assert.match(workflow, /npm run test:model-catalog/u);
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
