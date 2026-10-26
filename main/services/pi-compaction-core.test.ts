@@ -582,6 +582,32 @@ test("an answer between failures starts a fresh set of retries", async () => {
   assert.equal(again.failureCode, "retry-exhausted");
 });
 
+test("text kept from a dropped stream is not an answer that starts fresh retries", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-kept-cut-off");
+  const request = user("long answer", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+  });
+  const failure = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "terminated", input: 10, timestamp });
+  const first = await coordinator.check(failure(20), { liveMessages: [request, failure(20)] });
+  assert.equal(first.shouldRetry, true);
+  // The dropped stream's text was kept as a cut-off reply, then the continuation failed too.
+  const kept = assistant(model, { stopReason: "length", text: "half of it", input: 10, timestamp: 21 });
+  const continued = user("continue", 22);
+  const again = await coordinator.check(failure(23), {
+    liveMessages: [request, kept, continued, failure(23)],
+  });
+  assert.equal(again.shouldRetry, false);
+  assert.equal(again.failureCode, "retry-exhausted");
+});
+
 test("summary failure leaves the append-only history authoritative", async () => {
   const { faux, models, model } = compactionFixture();
   faux.setResponses([

@@ -522,7 +522,8 @@ export class PiCompactionCoordinator {
         }
       }
       const retryMessages = withoutRetryableAssistantTail(liveMessages);
-      // A run that answered successfully since the last retry is a new run of failures.
+      // A run that answered successfully since the last retry is a new run of
+      // failures. A cut-off reply kept after a dropped stream is not an answer.
       if (
         this.providerRetries > 0 &&
         retryMessages
@@ -531,7 +532,8 @@ export class PiCompactionCoordinator {
             (message) =>
               message.role === "assistant" &&
               message.stopReason !== "error" &&
-              message.stopReason !== "aborted",
+              message.stopReason !== "aborted" &&
+              message.stopReason !== "length",
           )
       ) {
         this.resetProviderRetries();

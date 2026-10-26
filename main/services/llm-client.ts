@@ -178,6 +178,7 @@ import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
+import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -2867,6 +2868,12 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
+    // Set while the model is asked to continue a cut-off reply; its text then
+    // joins the kept text directly, without a paragraph break.
+    let continuingCutOffReply = false;
+    let currentAssistantTurnContinuesCutOff = false;
+    // Where the latest failed turn's text started; a retry drops only that turn.
+    let failedAssistantTurnStart: { full: number; reasoning: number } | undefined;
     const requestUsage = new AssistantRequestUsageTracker();
     let turnUsage: AssistantTurnUsageV1 | undefined;
     let activeCompactionStepId: string | undefined;
@@ -4103,6 +4110,7 @@ export const llmClient = {
               requestUsage.started();
               currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
+              currentAssistantTurnContinuesCutOff = continuingCutOffReply;
               currentAssistantTurnStart = {
                 full: full.length,
                 reasoning: reasoning.length,
@@ -4149,7 +4157,7 @@ export const llmClient = {
               }
             }
             if (e.type === "text_delta") {
-              const separator = !currentAssistantTurnHadVisibleText
+              const separator = !currentAssistantTurnHadVisibleText && !currentAssistantTurnContinuesCutOff
                 ? assistantTurnTextSeparator(full, e.delta)
                 : "";
               const delta = `${separator}${e.delta}`;
@@ -4199,12 +4207,23 @@ export const llmClient = {
                 );
               }
             }
+            if (event.message.role === "assistant") {
+              if (event.message.stopReason === "error") {
+                failedAssistantTurnStart = {
+                  full: currentAssistantTurnStart.full,
+                  reasoning: currentAssistantTurnStart.reasoning,
+                };
+              } else if (event.message.stopReason !== "aborted") {
+                continuingCutOffReply = false;
+              }
+            }
             const streamedTurn = full.slice(currentAssistantTurnStart.full);
             const projection = reconcileTerminalAssistantProjection(
               { full, reasoning },
               currentAssistantTurnStart,
               event.message,
               exposeReasoning,
+              currentAssistantTurnContinuesCutOff,
             );
             if (projection.changed) {
               full = projection.full;
@@ -4698,15 +4717,25 @@ export const llmClient = {
               }
             },
             onRetry: (retry) => {
-              full = full.slice(0, fullLengthBeforeAttempt);
-              reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
-              timeline.rewindContentOffset(full.length);
-              timeline.rewindReasoningOffset(reasoning.length);
-              sendGeneration(streamId, "chat:delta", {
-                streamId,
-                delta: "",
-                reset: true,
-              });
+              // A dropped stream's text stays when the next try continues it.
+              // Otherwise only the failed turn's text goes: earlier turns of
+              // this run stay in the model's context, so they stay visible too.
+              if (!retry.keepsPartial) {
+                full = full.slice(0, Math.max(fullLengthBeforeAttempt, failedAssistantTurnStart?.full ?? 0));
+                reasoning = reasoning.slice(
+                  0,
+                  Math.max(reasoningLengthBeforeAttempt, failedAssistantTurnStart?.reasoning ?? 0),
+                );
+                timeline.rewindContentOffset(full.length);
+                timeline.rewindReasoningOffset(reasoning.length);
+                sendGeneration(streamId, "chat:delta", {
+                  streamId,
+                  delta: "",
+                  reset: true,
+                });
+                if (full) sendGeneration(streamId, "chat:delta", { streamId, delta: full });
+                if (reasoning) sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta: reasoning });
+              }
               // The working row counts down to the next try; Stop cancels the wait.
               if (retry.reason === "provider") {
                 sendGeneration(streamId, "chat:status", {
@@ -4719,6 +4748,10 @@ export const llmClient = {
                   },
                 });
               }
+            },
+            maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS,
+            onContinue: () => {
+              continuingCutOffReply = true;
             },
           },
         );

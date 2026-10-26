@@ -1,6 +1,6 @@
 # Agent loop resilience
 
-Status: Steps 1 and 1b in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
+Status: Steps 1, 1b and 2 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
 
 The agent loop sends the conversation to the model, runs the tools the model asks for, feeds the results back, and repeats until the task is done. A 2026-10-26 comparison against OpenCode, Pi's coding agent and pi-gui found five places where Aiden's loop gives up sooner than it needs to. Each step is its own pull request, in this order.
 
@@ -37,7 +37,20 @@ Code: `providerFailureAction` in `renderer/shared/provider-failure.ts`, `Provide
 
 ## 2. Continue a cut-off reply
 
-A reply cut off by a dropped stream or by the model's output limit keeps what was written and continues automatically, up to 2 times. Tool calls that were cut off never run (Pi's agent loop already fails them on a length stop).
+Before: a reply that hit the model's output limit ended with the red card, and a stream that dropped mid-answer threw away what it had written and asked again from the start.
+
+Now (desktop chats):
+
+- A reply that stops at the output limit after writing text keeps that text, and Aiden asks the model, in a hidden host message, to continue exactly where it stopped. The continuation joins the text directly, so the reply reads as one answer.
+- A stream that drops after the reply started (a retryable error from step 1) keeps the text it wrote, waits like any retry ("Trying again in 2s"), then asks the model to continue. The kept text stays on screen through the wait. A failure before any text still retries from the start.
+- Each reply continues at most 2 times. After that it ends the way it did before: the output-limit card with its Continue button, or a plain retry.
+- Tool calls that were cut off never run. Pi's agent loop fails them on a length stop, and a dropped stream keeps only its text (its thinking and partial tool calls are left out).
+- The kept text and the continue request go into the chat's Pi journal, so later turns replay what the person saw. A kept reply does not count as a success that starts a fresh set of retries.
+- A retry that does start over now drops only the failed step's text; earlier steps of the same reply stay visible, as they stay in the model's context.
+
+Bots, subagents and the CLI keep their current behavior.
+
+Code: `main/services/cut-off-reply.ts` (what is kept and the continue request), `PiAgentRuntimeHarness.runManaged` (`maxCutOffContinuations`, `onContinue`, `keepsPartial` on retries), `llm-client.ts` (joins the continuation without a paragraph break). Tests: the harness suite and `tests/e2e/cut-off-reply.spec.ts`, using the fixture hook `cutOffCompletions`.
 
 ## 3. Run safe tools side by side
 
