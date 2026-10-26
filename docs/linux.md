@@ -102,6 +102,7 @@ uncertain connection.
 ## Platform behavior
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
+web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
 artifacts, diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and

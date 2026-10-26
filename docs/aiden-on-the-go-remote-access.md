@@ -77,6 +77,10 @@ The **Usage** row on the Aiden On The Go home screen reads aggregate usage from 
 
 When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone and Android shows a step a Bot hands back to you ("Your turn: Enter the code your bank sent you") as a card in the Bot's chat. **Done** marks it done: to add a note, type it in the composer and send it. **Skip** skips the step, and **Open** opens the page it names in the phone's browser. A sign-in step is finished in the Bot's own browser on the Mac: **Finish on your Mac** brings it forward there, or you can **Skip** it. If the Bot's chat is open while the app is in the background, a notification says the Bot needs you. The Bot's profile menu offers **Pause Bot** and **Resume Bot**. A paused Bot reads "Paused" in the Bots list, and its chat shows a Resume card and takes no messages until you resume it. An interrupted Bot reads "Interrupted — tap to resume". With an older Mac, the step appears as a "needs you on your Mac" message, and you answer it on the Mac.
 
+## Values read from a web page
+
+When the agent reads a page in extract mode, the Mac (contract revision 40, provisional) sends the values it read with the chat's activity. Aiden On The Go for iPhone and Android shows them as a card under the "Fetched web page" line: each value with the line of the page it came from, a **Guess** label on values the agent isn't sure of, and "Not on the page" for values the page doesn't have. Only the field names, a short form of each value and its page line reach the phone, never the page. Older phones and Macs show the activity line without the card. See [web-fetch-extract.md](web-fetch-extract.md).
+
 ## Paired-Mac voice input
 
 In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
