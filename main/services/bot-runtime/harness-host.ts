@@ -25,8 +25,16 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
+import { AIDEN_PI_CLIENT_IDENTITY } from "../pi-client-identity.js";
 
 export const BOT_SESSION_FILE = "session.sqlite";
+/**
+ * Recovered work never runs until the person chooses Resume, so the person
+ * already decides whether a task a crash cut off runs again. Pi Durable's
+ * crash-loop guard (default 5, counted at each open) would instead park the
+ * task, and nothing in Aiden runs a parked task again.
+ */
+export const BOT_HARNESS_SETTINGS: HarnessSettings = Object.freeze({ restartLimit: Infinity });
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
 const DESTROY_ABORT_TIMEOUT_MS = 10_000;
 /** How long `suspend` waits for a harness to close: the same budget as quit. */
@@ -238,8 +246,9 @@ export async function createBotHarnessHost(
         storage,
         {
           models: typeof opts.models === "function" ? opts.models(botId) : opts.models,
+          identity: AIDEN_PI_CLIENT_IDENTITY,
           registry,
-          ...(opts.settings === undefined ? {} : { settings: opts.settings }),
+          settings: { ...BOT_HARNESS_SETTINGS, ...opts.settings },
           now,
           onReport: (error) => opts.onReport?.(botId, error),
         },

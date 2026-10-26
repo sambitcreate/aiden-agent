@@ -9,3 +9,5 @@ No Aiden code changes were needed. Chord 1.3.0 has large breaking API changes (H
 Local validation in a cloud container: root/CLI type-check, lint, vite and Electron production builds, CLI build and 97/99 CLI tests, 85 focused Pi/Bot/models/compaction files (1,189 pass, 1 skip). Environmental-only local failures, not Pi: CLI print-mode test picks up container AWS creds (passes with them unset), IPv6/LAN listener tests, macOS `plutil`, and some git sandbox tests. Full `npm test` hung past two hours in that container, so hosted CI is the acceptance record.
 
 2026-10-20 addendum: pi-ai 1.3.0 is patched at install/build time with a backport of Pi #11142 (see `pi-ai-11142-backport.md`). The next Pi bump must delete that patch and its script, or `patch-pi-ai-tool-cache.mjs` fails the install on the version gate.
+
+2026-10-26: superseded by `pi-1.4.0-upgrade.md`.
