@@ -209,6 +209,7 @@
         "main/services/pi-provider-contract.test.ts",
         "main/services/pi-remote-catalog.test.ts",
         "main/services/pi-runtime-effect-store.test.ts",
+        "main/services/interrupted-reply.test.ts",
         "main/services/pi-runtime-events.test.ts",
         "main/services/pi-session-migration.test.ts",
         "main/services/pi-session-port.test.ts",

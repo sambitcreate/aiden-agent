@@ -1,6 +1,6 @@
 # Agent loop resilience
 
-Status: Steps 1, 1b, 2 and 3 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
+Status: Steps 1, 1b, 2, 3 and 4 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
 
 The agent loop sends the conversation to the model, runs the tools the model asks for, feeds the results back, and repeats until the task is done. A 2026-10-26 comparison against OpenCode, Pi's coding agent and pi-gui found five places where Aiden's loop gives up sooner than it needs to. Each step is its own pull request, in this order.
 
@@ -71,3 +71,17 @@ The filesystem read guard allows 4 open reads across the whole app, so two chats
 ## 4. Resume after a relaunch (desktop)
 
 A chat that was mid-answer when Aiden quit or crashed shows a Resume button. Aiden never resumes on its own, so a half-finished command never re-runs without the person seeing it.
+
+Before: a crash left the chat with only the person's message and no sign anything went wrong; a quit saved the text written so far as if it were a finished reply.
+
+Now (desktop chats on Mac and Linux; not the CLI, Bots or the phones):
+
+- The runtime already records every reply as a run. A crash leaves that run open and the next launch marks it interrupted. A quit now records it as interrupted too, instead of cancelled.
+- When the chat's latest reply (subagent runs under the chat don't count) is interrupted, the chat shows a gray card under the transcript: "This reply was interrupted. Aiden closed before it finished. Resume to pick up where it stopped." with a Resume button.
+- Nothing is sent until the person presses Resume. It sends the visible turn "Continue where you left off." Aiden's existing recovery note for interrupted tool calls tells the model which actions may or may not have happened, so it checks before repeating one.
+- Stop, a finished reply, or any new message records a later run, so the card goes away.
+
+Known limit: after a crash the text that was streaming had not been saved yet, so it is gone; the model writes the answer again from the start. After a quit the text written so far stays.
+
+Code: `main/services/interrupted-reply.ts`, `abortForShutdown` in `PiAgentRuntimeHarness` (called by `llmClient.cancel` for the app-shutdown origin), the `chats:replyInterrupted` handler, and `InterruptedReplyCallout` in `message-list.tsx`. Tests: `interrupted-reply.test.ts`, the harness suite, and `tests/e2e/interrupted-reply-resume.spec.ts` (crash, quit, and Stop in the real app).
+
