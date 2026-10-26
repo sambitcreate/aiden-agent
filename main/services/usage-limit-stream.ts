@@ -212,11 +212,20 @@ export async function streamWaitingOutUsageLimits(
   const signal = options?.signal;
   let previous: UsageLimitTicket | undefined;
   await limits.ready?.();
+  let maxWaitMs = await limits.maxWaitMs();
   // With waiting off, requests go straight through, as they did before.
-  if ((await limits.maxWaitMs()) <= 0) return call(options);
+  if (maxWaitMs <= 0) return call(options);
   for (;;) {
-    const ticket = await gate.acquire(order, { owner, providerLabel, modelId: model.id, signal, ...(previous ? { previous } : {}) });
+    const ticket = await gate.acquire(order, { owner, providerLabel, modelId: model.id, signal, maxWaitMs, ...(previous ? { previous } : {}) });
     if (ticket.kind === "aborted") return terminalStream(terminalMessage(model, "aborted", "Request was aborted"));
+    if (ticket.kind === "too-long") {
+      // A limit another request (or an earlier run) holds clears after this request's longest wait.
+      const decision = { kind: "give-up", reason: "beyond-max-wait", ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}) } as const;
+      const waited = previous !== undefined || ticket.waited;
+      limits.onGiveUp?.({ owner, model, decision, providerLabel, waited, maxWaitMs: ticket.maxWaitMs });
+      const note = usageLimitGiveUpNote(decision, { maxWaitMs: ticket.maxWaitMs, now: now() });
+      return terminalStream(terminalMessage(model, "error", `${providerLabel} is at its usage limit.\n\n${note}`));
+    }
     if (ticket.kind === "refused") {
       return terminalStream(
         terminalMessage(model, "error", usageLimitRefusedMessage({ providerLabel, ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}), now: now() })),
@@ -251,7 +260,7 @@ export async function streamWaitingOutUsageLimits(
       gate.answered(ticket);
       return replay(stream, peeked);
     }
-    const maxWaitMs = await limits.maxWaitMs();
+    maxWaitMs = await limits.maxWaitMs();
     const accountWide = verdict.kind === "stop" || verdict.scope === "account";
     const key = accountWide ? keys.account : keys.model;
     // The test of one limit met a different one: the limit it tested is gone.

@@ -107,7 +107,7 @@ const UNIT_MS: Record<string, number> = {
 export function parseUsageLimitDuration(text: string): number | undefined {
   const trimmed = text.trim().toLowerCase();
   if (/^\d+(?:\.\d+)?$/u.test(trimmed)) return Number(trimmed) * 1_000;
-  const parts = [...trimmed.matchAll(/(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h)\b/gu)];
+  const parts = [...trimmed.matchAll(/(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|sec|s|minutes?|mins?|min|m|hours?|hrs?|hr|h)(?![a-z])/gu)];
   if (parts.length === 0) return undefined;
   let total = 0;
   for (const [, amount, unit] of parts) total += Number(amount) * (UNIT_MS[unit] ?? 0);
@@ -606,6 +606,8 @@ interface Holder {
 
 interface Waiter extends Holder {
   id: number;
+  /** This request's longest wait, when it has one. */
+  maxWaitMs?: number;
   /** Wakes the waiter to look at the gate again. */
   wake(): void;
 }
@@ -615,6 +617,11 @@ export type UsageLimitTicket =
   /** `testing`: this request tests the limit held on `key`. */
   | { kind: "send"; id: number; key?: string; testing: boolean }
   | { kind: "refused"; resetAt?: number }
+  /**
+   * The held limit's next try is past this request's longest wait: it stops
+   * waiting. `waited`: it had been waiting before it found out.
+   */
+  | { kind: "too-long"; resetAt?: number; maxWaitMs: number; waited: boolean }
   | { kind: "aborted" };
 
 export interface UsageLimitAcquireOptions {
@@ -624,6 +631,11 @@ export interface UsageLimitAcquireOptions {
   signal?: AbortSignal;
   /** The same request's last ticket, when it met the limit and waits again: a test stays the test. */
   previous?: UsageLimitTicket;
+  /**
+   * The longest wait in force: a held limit whose next try lands past it ends
+   * the wait, and 0 (waiting off) lets the request go straight through.
+   */
+  maxWaitMs?: number;
 }
 
 /**
@@ -770,13 +782,31 @@ export class UsageLimitGate {
           this.entries.set(entry.key, entry);
         }
         let waiter = this.waiters.get(id);
+        const maxWaitMs = waiter?.maxWaitMs ?? options.maxWaitMs;
+        if (maxWaitMs !== undefined && maxWaitMs <= 0) {
+          finish({ kind: "send", id, testing: false });
+          return;
+        }
+        // A reset counts as the time the limit clears; the try lands a little after it.
+        if (maxWaitMs !== undefined && entry.nextTryAt > now && (entry.resetAt ?? entry.nextTryAt) > entry.since + maxWaitMs) {
+          finish({ kind: "too-long", ...withReset(entry.resetAt), maxWaitMs, waited: waiter !== undefined });
+          return;
+        }
         if (waiter && waiter.key !== entry.key) {
           this.leaveLine(waiter.key, id);
           this.leaveTesting(id);
           waiter.key = entry.key;
         }
         if (!waiter) {
-          waiter = { id, owner: options.owner, providerLabel: options.providerLabel, modelId: options.modelId, key: entry.key, wake: look };
+          waiter = {
+            id,
+            owner: options.owner,
+            providerLabel: options.providerLabel,
+            modelId: options.modelId,
+            key: entry.key,
+            ...(maxWaitMs !== undefined ? { maxWaitMs } : {}),
+            wake: look,
+          };
           this.waiters.set(id, waiter);
         }
         const tester = this.liveTester(entry.key);
@@ -921,6 +951,16 @@ export class UsageLimitGate {
    * Retry now for one owner: each limit it waits on is tested at once, at most
    * once per `USAGE_LIMIT_RETRY_NOW_INTERVAL_MS`. Returns whether a test started.
    */
+  /**
+   * The owner changed the longest wait: every waiting request looks again, so
+   * a shorter wait ends waits now past it and "Don't wait" sends them.
+   */
+  setMaxWait(maxWaitMs: number): void {
+    const waiters = [...this.waiters.values()];
+    for (const waiter of waiters) waiter.maxWaitMs = maxWaitMs;
+    for (const waiter of waiters) waiter.wake();
+  }
+
   retryNow(owner: UsageLimitOwner): boolean {
     const now = this.clock.now();
     let started = false;

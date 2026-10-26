@@ -90,6 +90,11 @@ export class UsageLimitService {
     }));
   }
 
+  /** The owner changed the longest wait: waiting requests apply it now. */
+  async waitSettingChanged(): Promise<void> {
+    this.gate.setMaxWait(await this.maxWaitMs());
+  }
+
   retryNow(owner: UsageLimitOwner): boolean {
     return this.gate.retryNow(owner);
   }

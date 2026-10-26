@@ -64,6 +64,7 @@ import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../render
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { spending } from "../services/spending-main.js";
+import { usageLimits } from "../services/usage-limit-main.js";
 
 
 const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
@@ -467,6 +468,7 @@ export function registerProviderHandlers(): void {
       : await configStore.setSettings(next);
     await applySettingsEffects(saved, next);
     if (next.spendingLimits !== undefined) spending.settingsChanged();
+    if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();
     return saved;
   });
 }

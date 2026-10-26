@@ -1013,13 +1013,16 @@ final class AidenRemoteClientTests: XCTestCase {
             }
         }
 
-        let status = try XCTUnwrap(try await client.spending(owner: .chat("chat_fixture_01")).spending)
+        let read = try await client.spending(owner: .chat("chat_fixture_01"))
+        let status = try XCTUnwrap(read.spending)
         XCTAssertEqual(status.state, .reached)
         XCTAssertEqual(status.spentUsd, 5.37)
-        let after = try XCTUnwrap(try await client.allowMoreSpending(owner: .chat("chat_fixture_01"), revision: status.revision).spending)
+        let allowedMore = try await client.allowMoreSpending(owner: .chat("chat_fixture_01"), revision: status.revision)
+        let after = try XCTUnwrap(allowedMore.spending)
         XCTAssertEqual(after.state, .under)
         XCTAssertEqual(after.allowedUsd, 10)
-        let bot = try XCTUnwrap(try await client.spending(owner: .bot("bot_fixture_01")).spending)
+        let botRead = try await client.spending(owner: .bot("bot_fixture_01"))
+        let bot = try XCTUnwrap(botRead.spending)
         XCTAssertEqual(bot.period, .month)
         XCTAssertNotNil(bot.periodEnd)
         XCTAssertEqual(step, 3)

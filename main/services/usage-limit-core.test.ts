@@ -41,6 +41,19 @@ test("rejections that wait read their reset time from headers before text", () =
   });
   assert.deepEqual(openAiTokens, { kind: "wait", scope: "model", resetAt: NOW + 2_500 });
 
+  // OpenAI writes its reset headers as compact durations such as `6m0s`.
+  for (const [value, ms] of [
+    ["6m0s", 360_000],
+    ["1h2m3.5s", 3_723_500],
+  ] as const) {
+    const openAiHeader = classifyUsageLimit({
+      errorMessage: "429 Rate limit reached for requests",
+      observation: { status: 429, headers: { "x-ratelimit-reset-tokens": value } },
+      now: NOW,
+    });
+    assert.deepEqual(openAiHeader, { kind: "wait", scope: "model", resetAt: NOW + ms }, value);
+  }
+
   const overloaded = classifyUsageLimit({
     errorMessage: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     now: NOW,

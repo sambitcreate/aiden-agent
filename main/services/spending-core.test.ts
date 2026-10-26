@@ -89,14 +89,20 @@ test("the saved document survives a reload and drops anything malformed", () => 
   ledger.record(CHAT, 2, {}, NOW);
   ledger.record({ kind: "bot", id: "ada" }, 3, {}, NOW);
   ledger.setBotLimit("ada", 40);
+  const run = { kind: "bot", id: "ada", run: "routine:t1:100" } as const;
+  ledger.record(run, 1.2, {}, NOW);
   const reloaded = new SpendingLedger(parseSpendingDocument(JSON.parse(JSON.stringify(ledger.snapshot()))));
   assert.equal(reloaded.status("chat", "chat-1", { chatUsd: 5 }, NOW)?.spentUsd, 2);
   assert.equal(reloaded.status("bot", "ada", {}, NOW)?.limitUsd, 40);
+  // A routine run resumed after a restart keeps its balance; a new run starts fresh.
+  assert.deepEqual(reloaded.block(run, { routineRunUsd: 1 }, NOW), { kind: "run", allowedUsd: 1, spentUsd: 1.2 });
+  assert.equal(reloaded.block({ ...run, run: "routine:t1:200" }, { routineRunUsd: 1 }, NOW), undefined);
 
   const parsed = parseSpendingDocument(
     JSON.parse(
       '{"version":1,"chats":{"__proto__":{"spentUsd":9},"ok":{"spentUsd":-4,"extraUsd":"x"}},' +
-        '"bots":{"bad":{"period":"October","spentUsd":1}},"botLimits":{"a":0,"b":null,"c":12.345}}',
+        '"bots":{"bad":{"period":"October","spentUsd":1}},"botLimits":{"a":0,"b":null,"c":12.345},' +
+        '"runs":{"constructor":3,"routine:t1:1":"x","routine:t1:2":0.5}}',
     ),
   );
   assert.deepEqual(parsed, {
@@ -104,6 +110,7 @@ test("the saved document survives a reload and drops anything malformed", () => 
     chats: { ok: { spentUsd: 0, extraUsd: 0 } },
     bots: {},
     botLimits: { b: null, c: 12.35 },
+    runs: { "routine:t1:2": 0.5 },
   });
   assert.equal(Object.getPrototypeOf(parsed.chats), Object.prototype);
   assert.deepEqual(parseSpendingDocument({ version: 2, chats: { a: { spentUsd: 1 } } }).chats, {});

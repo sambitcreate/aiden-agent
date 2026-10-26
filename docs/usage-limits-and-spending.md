@@ -16,7 +16,7 @@ Workspace chats, Bot chats, Bot routines, Telegram replies from a Bot and the he
 
 ### How long
 
-**Longest wait for a usage limit** offers Don't wait, 1, 6 (the default), 12 and 24 hours. When the next try would land past that, Aiden stops waiting and the reply fails with the reset time in its message.
+**Longest wait for a usage limit** offers Don't wait, 1, 6 (the default), 12 and 24 hours. When the next try would land past that, Aiden stops waiting and the reply fails with the reset time in its message. The longest wait counts from when the limit was first hit, and it applies to requests that join a limit another reply (or an earlier run of Aiden) already holds. Changing the setting applies at once: a shorter wait ends waits now past it, and Don't wait sends the waiting requests straight away.
 
 - **The provider gave a time.** Aiden reads `retry-after` / `retry-after-ms`, the `x-ratelimit-*`, `ratelimit-*` and `anthropic-ratelimit-*` reset headers, the Codex `x-codex-primary-*` / `x-codex-secondary-*` windows, and reset times written in the error text. It tries again at that time. No wait is shorter than 5 seconds.
 - **No time given.** It backs off: 15 s, 30 s, 1 min, 2 min, 5 min, then every 10 min, for at most 30 minutes in total.
@@ -66,7 +66,7 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 - The reached notice offers **Allow $X more**, which adds the limit's amount again (a $5 limit becomes $10). A chat keeps its extra amount; a Bot's extra amount ends with its month.
 - A **routine run** that reaches its limit stops: "This routine run reached its $X spending limit. The next run starts fresh." There is no Allow more for a run.
 
-The ledger is saved in `userData/spending.json` (chat and Bot ids and dollar amounts only).
+The ledger is saved in `userData/spending.json` (chat ids, Bot ids, recent routine run ids and dollar amounts only), so a routine run resumed after a restart keeps what it already spent.
 
 ### On a phone (Remote revision 40)
 

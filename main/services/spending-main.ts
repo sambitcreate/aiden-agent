@@ -7,7 +7,7 @@ import { DataStore } from "./data-store.js";
 import type { SpendingDocument } from "./spending-core.js";
 import { SPENDING_FILE, SpendingService } from "./spending-service.js";
 
-const store = new DataStore<unknown>(SPENDING_FILE, { version: 1, chats: {}, bots: {}, botLimits: {} }, undefined, {
+const store = new DataStore<unknown>(SPENDING_FILE, { version: 1, chats: {}, bots: {}, botLimits: {}, runs: {} }, undefined, {
   maxBytes: 2 * 1024 * 1024,
   fileMode: 0o600,
   compact: true,

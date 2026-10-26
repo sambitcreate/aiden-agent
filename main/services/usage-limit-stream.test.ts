@@ -268,6 +268,40 @@ test("with waiting off, a limit fails as it does today and nothing is held", asy
   assert.equal(calls.length, 2);
 });
 
+test("a held limit that clears after the longest wait ends the wait, including one already waiting when the setting changes", async () => {
+  let maxHours = 1;
+  const { calls, streamFn, gate } = fixture([{ kind: "text", text: "ok" }], { maxWaitMs: () => usageLimitMaxWaitMs(maxHours) });
+  const account = usageLimitKeys("anthropic", "opus").account;
+  // A four-hour hold left by an earlier run, or by another chat.
+  gate.load([{ key: account, providerId: "anthropic", since: NOW, nextTryAt: NOW + 4 * 3_600_000 + 5_000, resetAt: NOW + 4 * 3_600_000, attempts: 1 }]);
+
+  const joined = await (await streamFn(model(), context, {})).result();
+  assert.equal(joined.stopReason, "error");
+  assert.match(joined.errorMessage ?? "", /^Claude is at its usage limit\.\n\nAiden stopped waiting: the limit resets .+, after the longest wait you set \(1 hour\)\.$/u);
+  assert.equal(calls.length, 0);
+
+  // Waiting under six hours, then the owner lowers it to one.
+  maxHours = 6;
+  let waiting: AssistantMessageEventStream | undefined;
+  void Promise.resolve(streamFn(model(), context, {})).then((value) => (waiting = value));
+  await settle();
+  assert.equal(gate.waits().length, 1);
+  gate.setMaxWait(usageLimitMaxWaitMs(1));
+  await settle();
+  assert.match((await waiting!.result()).errorMessage ?? "", /after the longest wait you set \(1 hour\)\.$/u);
+  assert.deepEqual(gate.waits(), []);
+  assert.equal(calls.length, 0);
+
+  // Turned off during a wait: the request goes straight through, as it would with waiting off.
+  let sent: AssistantMessageEventStream | undefined;
+  void Promise.resolve(streamFn(model(), context, {})).then((value) => (sent = value));
+  await settle();
+  gate.setMaxWait(0);
+  await settle();
+  assert.equal((await sent!.result()).stopReason, "stop");
+  assert.equal(calls.length, 1);
+});
+
 test("stopping a waiting reply ends it as stopped without another request", async () => {
   const { calls, streamFn, gate } = fixture([{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "300" } }]);
   const controller = new AbortController();

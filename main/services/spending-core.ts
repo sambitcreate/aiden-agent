@@ -41,6 +41,11 @@ export interface SpendingDocument {
   bots: Record<string, BotSpend>;
   /** A Bot's own monthly limit: an amount, or null for no limit. Absent: the default in Settings. */
   botLimits: Record<string, number | null>;
+  /**
+   * What each recent routine run has spent, by its request id, oldest first.
+   * Saved so a run resumed after a restart keeps its balance.
+   */
+  runs: Record<string, number>;
 }
 
 export type SpendingBlock =
@@ -53,7 +58,7 @@ const RUNS_KEPT = 500;
 const MAX_OWNERS = 20_000;
 
 export function emptySpendingDocument(): SpendingDocument {
-  return { version: 1, chats: {}, bots: {}, botLimits: {} };
+  return { version: 1, chats: {}, bots: {}, botLimits: {}, runs: {} };
 }
 
 /** The Bot month `now` falls in: it starts on `startDay` at local midnight. */
@@ -117,6 +122,9 @@ export function parseSpendingDocument(value: unknown): SpendingDocument {
       if (amount !== undefined) document.botLimits[id] = amount;
     }
   }
+  for (const [id, usd] of entries(input.runs).slice(-RUNS_KEPT)) {
+    if (safeId(id) && spent(usd) > 0) document.runs[id] = spent(usd);
+  }
   return document;
 }
 
@@ -135,7 +143,6 @@ export function spendingBlockMessage(block: SpendingBlock, botName?: string): st
 
 export class SpendingLedger {
   private document: SpendingDocument;
-  private readonly runs = new Map<string, number>();
 
   constructor(document: SpendingDocument = emptySpendingDocument()) {
     this.document = document;
@@ -183,11 +190,13 @@ export class SpendingLedger {
     }
     const bot = this.botSpend(owner.id, settings, now);
     this.document.bots[owner.id] = { ...bot, spentUsd: bot.spentUsd + cost };
-    if (owner.run !== undefined) {
-      const run = (this.runs.get(owner.run) ?? 0) + cost;
-      this.runs.delete(owner.run);
-      this.runs.set(owner.run, run);
-      while (this.runs.size > RUNS_KEPT) this.runs.delete(this.runs.keys().next().value!);
+    if (owner.run !== undefined && safeId(owner.run)) {
+      const runs = this.document.runs;
+      const run = (own(runs, owner.run) ? runs[owner.run] : 0) + cost;
+      delete runs[owner.run];
+      runs[owner.run] = run;
+      const ids = Object.keys(runs);
+      for (const id of ids.slice(0, Math.max(0, ids.length - RUNS_KEPT))) delete runs[id];
     }
     return true;
   }
@@ -208,7 +217,7 @@ export class SpendingLedger {
       if (bot.spentUsd >= allowedUsd) return { kind: "bot-month", allowedUsd, spentUsd: bot.spentUsd };
     }
     if (owner.run !== undefined && settings.routineRunUsd !== undefined) {
-      const run = this.runs.get(owner.run) ?? 0;
+      const run = own(this.document.runs, owner.run) ? this.document.runs[owner.run] : 0;
       if (run >= settings.routineRunUsd) return { kind: "run", allowedUsd: settings.routineRunUsd, spentUsd: run };
     }
     return undefined;
