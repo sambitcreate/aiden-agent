@@ -122,6 +122,18 @@ test("CLI lease reclaims null owner metadata under a free guard", (t) => {
   } finally { release(); }
 });
 
+test("daemon approval summaries read like the desktop's without hiding any argument", () => {
+  assert.equal(api.daemonApprovalSummary("bash", { command: "npm test" }), "Run command: npm test");
+  assert.equal(api.daemonApprovalSummary("read", { path: "src/a.ts" }), "Read file: src/a.ts");
+  assert.equal(api.daemonApprovalSummary("ls", { path: "src" }), "List folder: src");
+  // Any other argument, tool or shape keeps the exact request.
+  assert.equal(api.daemonApprovalSummary("bash", { command: "sleep 9", timeout: 5 }), 'bash: {"command":"sleep 9","timeout":5}');
+  assert.equal(api.daemonApprovalSummary("read", { path: "a.ts", offset: 40 }), 'read: {"path":"a.ts","offset":40}');
+  assert.equal(api.daemonApprovalSummary("ls", {}), "ls: {}");
+  assert.equal(api.daemonApprovalSummary("bash", { command: "  " }), 'bash: {"command":"  "}');
+  assert.equal(api.daemonApprovalSummary("edit", { path: "a.ts", oldText: "a", newText: "b" }), 'edit: {"path":"a.ts","oldText":"a","newText":"b"}');
+});
+
 test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
   const dir = temporary(t), workspace = await api.workspaceCommand(dir, ["add", dir]);
   assert.equal(api.accessFor(dir, dir), "ask");
@@ -521,6 +533,16 @@ test("MCP validates transports and redacts configured secrets from listing", asy
   const listed = await api.mcpCommand(dir, ["list"]);
   assert.equal(listed.length, 1); assert.ok(!JSON.stringify(listed).includes("do-not-list"));
   await api.mcpCommand(dir, ["remove", "local"]); assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
+});
+
+test("MCP presets leave out Mac app connectors, which the desktop app sets up", async (t) => {
+  const dir = temporary(t);
+  const presets = await api.mcpCommand(dir, ["presets"]);
+  assert.ok(presets.length > 0);
+  assert.ok(presets.every((preset) => preset.transport === "http"));
+  assert.ok(!presets.some((preset) => preset.id === "imcp"));
+  await assert.rejects(api.mcpCommand(dir, ["preset", "imcp"]), /Aiden desktop app on your Mac/);
+  assert.deepEqual(await api.mcpCommand(dir, ["list"]), []);
 });
 
 test("provider import rejects invalid configuration without replacing the previous file", async (t) => {

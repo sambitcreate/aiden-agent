@@ -493,6 +493,203 @@ struct AidenQuestionnaireRecap: Codable, Equatable, Sendable {
     }
 }
 
+/// The values a `web_fetch` extract call read, carried on its completed
+/// timeline step so the transcript can show each value with the page line it
+/// came from (contract revision 38). Display-only: it never holds the page or
+/// the request. Decoding throws for any recap the desktop would reject;
+/// `AidenAgentStep` then drops only the recap.
+struct AidenWebExtractRecap: Codable, Equatable, Sendable {
+    static let toolName = "web_fetch"
+    static let maxFields = 16
+    static let maxHostLength = 253
+    static let maxValueLength = 200
+    static let maxSourceLineLength = 200
+
+    /// Why extraction failed; the page text was read instead.
+    enum Failure: String, Codable, Sendable {
+        case setup
+        case auth
+        case quota
+        case timeout
+        case unavailable
+        case invalidResponse = "invalid-response"
+
+        /// The same words the desktop card uses.
+        var message: String {
+            switch self {
+            case .setup: return "the extraction model is not set up"
+            case .auth: return "the extraction model rejected every saved key"
+            case .quota: return "the extraction model is rate-limited or out of quota"
+            case .timeout: return "the extraction model did not answer in time"
+            case .unavailable: return "the extraction model could not be reached"
+            case .invalidResponse: return "the extraction model sent an answer Aiden could not read"
+            }
+        }
+    }
+
+    struct Field: Codable, Equatable, Sendable, Identifiable {
+        enum Status: String, Codable, Sendable {
+            /// Typed, confident and found on the page.
+            case extracted
+            /// A guess, never a value read from the page.
+            case uncertain
+            /// The page has no value.
+            case absent = "null"
+        }
+
+        let name: String
+        let status: Status
+        /// Display form of the value or the guess.
+        let value: String?
+        let confidence: Double?
+        let sourceLine: String?
+        /// An uncertain value that appears nowhere on the page.
+        let notFound: Bool?
+
+        var id: String { name }
+
+        /// A field name as people read it: `pro_monthly` reads `pro monthly`.
+        var label: String {
+            let words = name.split(separator: "_", omittingEmptySubsequences: true).joined(separator: " ")
+            return words.isEmpty ? name : words
+        }
+
+        init(
+            name: String,
+            status: Status,
+            value: String? = nil,
+            confidence: Double? = nil,
+            sourceLine: String? = nil,
+            notFound: Bool? = nil
+        ) {
+            self.name = name
+            self.status = status
+            self.value = value
+            self.confidence = confidence
+            self.sourceLine = sourceLine
+            self.notFound = notFound
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            name = try values.decode(String.self, forKey: .name)
+            status = try values.decode(Status.self, forKey: .status)
+            value = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .value)
+            confidence = try aidenDecodeOptionalNonNull(Double.self, from: values, forKey: .confidence)
+            sourceLine = try aidenDecodeOptionalNonNull(String.self, from: values, forKey: .sourceLine)
+            notFound = try aidenDecodeOptionalNonNull(Bool.self, from: values, forKey: .notFound)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case name, status, value, confidence, sourceLine, notFound
+        }
+    }
+
+    let version: Int
+    let host: String
+    let cut: Bool
+    let error: Failure?
+    let fields: [Field]
+
+    init(version: Int = 1, host: String, cut: Bool = false, error: Failure? = nil, fields: [Field]) {
+        self.version = version
+        self.host = host
+        self.cut = cut
+        self.error = error
+        self.fields = fields
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        host = try values.decode(String.self, forKey: .host)
+        cut = try values.decode(Bool.self, forKey: .cut)
+        error = try aidenDecodeOptionalNonNull(Failure.self, from: values, forKey: .error)
+        fields = try values.decode([Field].self, forKey: .fields)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid web page extract recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, host, cut, error, fields
+    }
+
+    var isValid: Bool {
+        guard version == 1, Self.isOneLine(host, maximum: Self.maxHostLength) else { return false }
+        // A failed page has no fields; a page that worked has one to sixteen.
+        if error != nil {
+            guard fields.isEmpty else { return false }
+        } else {
+            guard (1...Self.maxFields).contains(fields.count) else { return false }
+        }
+        guard Set(fields.map(\.name)).count == fields.count else { return false }
+        return fields.allSatisfy { field in
+            guard Self.isFieldName(field.name) else { return false }
+            if field.status == .absent {
+                return field.value == nil && field.confidence == nil
+                    && field.sourceLine == nil && field.notFound == nil
+            }
+            if let value = field.value, !Self.isOneLine(value, maximum: Self.maxValueLength) { return false }
+            if let confidence = field.confidence, !(confidence.isFinite && (0.0...1.0).contains(confidence)) {
+                return false
+            }
+            if let sourceLine = field.sourceLine, !Self.isOneLine(sourceLine, maximum: Self.maxSourceLineLength) {
+                return false
+            }
+            if let notFound = field.notFound, !(notFound && field.status == .uncertain) { return false }
+            // Extracted means typed, confident and on the page: all three are present.
+            if field.status == .extracted {
+                return field.value != nil && field.confidence != nil && field.sourceLine != nil
+            }
+            return true
+        }
+    }
+
+    /// One to 64 ASCII letters, digits and underscores, not starting with a digit.
+    private static func isFieldName(_ name: String) -> Bool {
+        let scalars = name.unicodeScalars
+        guard (1...64).contains(scalars.count), let first = scalars.first, !(0x30...0x39).contains(first.value) else {
+            return false
+        }
+        return scalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 0x30...0x39, 0x41...0x5A, 0x5F, 0x61...0x7A: return true
+            default: return false
+            }
+        }
+    }
+
+    /// The whitespace JavaScript's `\s` matches, so the phone accepts exactly
+    /// the single-line strings the desktop parser accepts.
+    private static let lineBreakingSpaces: Set<UInt32> = [
+        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003,
+        0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029,
+        0x202F, 0x205F, 0x3000, 0xFEFF,
+    ]
+
+    /// Non-empty, within `maximum` code points, free of control characters, and
+    /// spaced only by single U+0020 spaces with none at either end.
+    private static func isOneLine(_ value: String, maximum: Int) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        guard !scalars.isEmpty, scalars.count <= maximum,
+              scalars.first?.value != 0x20, scalars.last?.value != 0x20 else { return false }
+        var previousWasSpace = false
+        for scalar in scalars {
+            if scalar.value < 32 || scalar.value == 127 || lineBreakingSpaces.contains(scalar.value) {
+                return false
+            }
+            let isSpace = scalar.value == 0x20
+            if isSpace && previousWasSpace { return false }
+            previousWasSpace = isSpace
+        }
+        return true
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -519,6 +716,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let producedFile: AidenProducedFile?
     /// Present only on a completed `ask_user_question` step.
     let questionnaire: AidenQuestionnaireRecap?
+    /// Present only on a completed `web_fetch` step that ran in extract mode.
+    let extraction: AidenWebExtractRecap?
 
     init(
         id: String,
@@ -539,7 +738,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         detail: String?,
         lineChanges: AidenAgentLineChanges?,
         producedFile: AidenProducedFile? = nil,
-        questionnaire: AidenQuestionnaireRecap? = nil
+        questionnaire: AidenQuestionnaireRecap? = nil,
+        extraction: AidenWebExtractRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -560,6 +760,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.lineChanges = lineChanges
         self.producedFile = producedFile
         self.questionnaire = questionnaire
+        self.extraction = extraction
     }
 
     init(from decoder: Decoder) throws {
@@ -605,12 +806,21 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         } else {
             questionnaire = nil
         }
+        if kind == .tool, toolName == AidenWebExtractRecap.toolName, status == .completed {
+            extraction = try? aidenDecodeOptionalNonNull(
+                AidenWebExtractRecap.self,
+                from: values,
+                forKey: .extraction
+            )
+        } else {
+            extraction = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile, questionnaire
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire, extraction
     }
 
     var isActive: Bool {
@@ -625,7 +835,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool, questionnaire, visual(AidenChatVisual) }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, extraction, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -698,6 +908,10 @@ enum AidenChronologicalProjection {
                     if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
+                // Values a page read in extract mode follow the line that read them.
+                for extracted in group where extracted.extraction != nil {
+                    result.append(.init(id: "extraction-\(extracted.id)", kind: .extraction, text: "", steps: [extracted]))
+                }
                 let groupCalls = Set(group.compactMap(\.toolCallId))
                 for (visualIndex, visual) in visuals.enumerated()
                 where !placedVisuals.contains(visualIndex) && visual.toolCallId.map(groupCalls.contains) == true {
@@ -1028,6 +1242,13 @@ enum AidenAgentActivityPresentation {
         timeline?.steps.filter(\.isQuestionnaire) ?? []
     }
 
+    /// Pages read in extract mode, in timeline order, for transcripts that
+    /// show their values after the activity feed. Unlike a questionnaire, the
+    /// step also stays an activity line.
+    static func extractionSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter { $0.extraction != nil } ?? []
+    }
+
     /// Whether a fallback transcript lists the stream's live tool rows. Once
     /// the timeline has a tool step, the activity feed or a recap card already
     /// shows each call, so the live rows would only repeat them.
@@ -1078,22 +1299,27 @@ enum AidenAgentActivityPresentation {
     }
 
     static func summary(_ timeline: AidenGenerationTimeline) -> String {
-        let tools = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
-        guard !tools.isEmpty else {
+        let toolSteps = timeline.steps.filter { $0.kind == .tool && !$0.isQuestionnaire }
+        guard !toolSteps.isEmpty else {
             return timeline.status == .running ? "Thinking" : "Thought \(duration(timeline.steps.compactMap(\.durationMs).reduce(0, +)))"
         }
         let running = timeline.status == .running
+        // Matches desktop: a denied or blocked call never ran, so it is
+        // counted as skipped. A call still waiting for approval is not counted yet.
+        let skipped = toolSteps.filter { $0.status == .blocked }
+        let tools = toolSteps.filter { $0.status != .blocked && $0.status != .awaitingApproval }
         let files = tools.filter { $0.toolName == "read_file" }.count
         let searches = tools.filter { $0.toolName == "grep" || $0.toolName == "glob" }.count
         let directories = tools.filter { $0.toolName == "list_dir" }.count
         let commands = tools.filter { $0.toolName == "run_command" }.count
         let changes = tools.filter { $0.toolName == "write_file" || $0.toolName == "edit_file" }.count
         let web = tools.filter { $0.toolName == "web_search" }.count
+        let pages = tools.filter { $0.toolName == "web_fetch" }.count
         let mac = tools.filter { $0.toolName == "computer_use" }.count
         let compactions = tools.filter { $0.toolName == "compact_context" }.count
         let tallied = Set([
             "read_file", "grep", "glob", "list_dir", "run_command", "write_file", "edit_file",
-            "web_search", "computer_use", "compact_context",
+            "web_search", "web_fetch", "computer_use", "compact_context",
         ])
         let other = tools.filter { step in
             guard let toolName = step.toolName else { return true }
@@ -1109,10 +1335,17 @@ enum AidenAgentActivityPresentation {
         if changes > 0 { clauses.append("\(running ? "editing" : "edited") \(changes) file\(changes == 1 ? "" : "s")") }
         if commands > 0 { clauses.append("\(running ? "running" : "ran") \(commands) command\(commands == 1 ? "" : "s")") }
         if web > 0 { clauses.append("\(web) web search\(web == 1 ? "" : "es")") }
+        if pages > 0 { clauses.append("\(pages) web page\(pages == 1 ? "" : "s")") }
         if mac > 0 { clauses.append("\(mac) Computer Use action\(mac == 1 ? "" : "s")") }
         if compactions > 0 { clauses.append(running ? "compacting context" : "compacted context") }
         if other > 0 { clauses.append("\(other) tool call\(other == 1 ? "" : "s")") }
-        if clauses.isEmpty { return running ? "Working" : "Used \(tools.count) tool\(tools.count == 1 ? "" : "s")" }
+        if !skipped.isEmpty {
+            let noun = skipped.allSatisfy { $0.toolName == "run_command" }
+                ? "command"
+                : skipped.allSatisfy { $0.toolName == "write_file" || $0.toolName == "edit_file" } ? "file change" : "action"
+            clauses.append("skipped \(skipped.count) \(noun)\(skipped.count == 1 ? "" : "s")")
+        }
+        if clauses.isEmpty { return running ? "Waiting for approval" : "No activity" }
         let sentence = clauses.joined(separator: ", ")
         guard explored.isEmpty, let first = sentence.first else { return sentence }
         return first.uppercased() + sentence.dropFirst()
@@ -2387,6 +2620,30 @@ struct AidenStreamPendingApproval: Codable, Equatable, Sendable {
     /// Contract revision 17. Raw scope names so an unknown future scope never
     /// fails decoding; `AidenApprovalScope.offered(_:)` keeps the known ones.
     var scopes: [String]? = nil
+    /// Contract revision 39 (`schedule:cards`): the display-only card on a
+    /// scheduled-task approval. Nil when absent or when it fails validation.
+    var schedule: AidenApprovalSchedule? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case approvalId, streamId, chatId, summary, toolCallId, toolName, expiresAt, canAllow, scopes, schedule
+    }
+}
+
+extension AidenStreamPendingApproval {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        approvalId = try values.decode(String.self, forKey: .approvalId)
+        streamId = try values.decode(String.self, forKey: .streamId)
+        chatId = try values.decode(String.self, forKey: .chatId)
+        summary = try values.decode(String.self, forKey: .summary)
+        toolCallId = try values.decode(String.self, forKey: .toolCallId)
+        toolName = try values.decode(String.self, forKey: .toolName)
+        expiresAt = try values.decode(Date.self, forKey: .expiresAt)
+        canAllow = try values.decode(Bool.self, forKey: .canAllow)
+        scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
+        // A card that fails validation is dropped; the approval still decodes.
+        schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
+    }
 }
 
 struct AidenStreamApprovalSnapshot: Codable, Equatable, Sendable {
@@ -2585,6 +2842,11 @@ struct AidenPendingApproval: Identifiable, Equatable, Sendable {
     let hostCanAllow: Bool
     let canAllow: Bool
     var scopes: [AidenApprovalScope] = [.once]
+    /// The host's tool name, used only to word the card. Empty when unknown.
+    var toolName: String = ""
+    /// Contract revision 39: the structured card for a `schedule_task` approval.
+    /// Display-only; it never changes `canAllow` or `scopes`.
+    var schedule: AidenApprovalSchedule? = nil
 }
 
 enum AidenApprovalKind: Equatable, Sendable {
@@ -2629,14 +2891,13 @@ enum AidenApprovalResponseAuthorization: Equatable, Sendable {
     }
 }
 
-enum AidenApprovalPresentation {
-    static func oneLineSummary(_ summary: String) -> String {
-        let collapsed = summary
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
-        return collapsed.isEmpty ? String(localized: "Review requested action") : collapsed
-    }
+/// Why an approval card cannot be fully answered on this device, with its SF Symbol.
+struct AidenApprovalLimit: Equatable {
+    let text: String
+    let symbol: String
+}
 
+enum AidenApprovalPresentation {
     static func title(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action: String(localized: "Approval needed")
@@ -2647,10 +2908,31 @@ enum AidenApprovalPresentation {
     static func detail(for kind: AidenApprovalKind) -> String {
         switch kind {
         case .action:
-            String(localized: "Review this one action before Aiden continues.")
+            String(localized: "Aiden is paused until you choose.")
         case .scheduledTask:
             String(localized: "Check the exact schedule and unattended access before Aiden saves it.")
         }
+    }
+
+    /// A reason the card cannot be fully answered here, shown in place of the note.
+    static func limit(
+        kind: AidenApprovalKind,
+        canRespond: Bool,
+        hasRequiredWriteCapability: Bool,
+        canAllow: Bool
+    ) -> AidenApprovalLimit? {
+        if !canRespond {
+            return AidenApprovalLimit(text: String(localized: "This paired device can review approvals but cannot respond."), symbol: "lock.fill")
+        }
+        if kind == .scheduledTask && !hasRequiredWriteCapability {
+            return AidenApprovalLimit(text: String(localized: "Schedule write access is required to approve this task."), symbol: "lock.fill")
+        }
+        if !canAllow {
+            return kind == .scheduledTask
+                ? AidenApprovalLimit(text: String(localized: "This task must be approved on your paired desktop."), symbol: "desktopcomputer")
+                : AidenApprovalLimit(text: String(localized: "Allow this on your Mac. You can deny it here."), symbol: "desktopcomputer")
+        }
+        return nil
     }
 
     static func denyTitle(for kind: AidenApprovalKind) -> String {
@@ -2672,6 +2954,261 @@ enum AidenApprovalPresentation {
         case .once: String(localized: "Allow once")
         case .chat: String(localized: "Allow for this chat")
         case .always: String(localized: "Always allow")
+        }
+    }
+
+    /// What a remembered scope covers, under its menu title. A command rule
+    /// matches only that exact command, but a file rule matches the tool and
+    /// path, so it also covers later changes with different contents.
+    static func scopeDetail(_ scope: AidenApprovalScope, toolName: String) -> String? {
+        switch (scope, toolName) {
+        case (.once, _): nil
+        case (.chat, "run_command"): String(localized: "This exact command, until Aiden quits")
+        case (.always, "run_command"): String(localized: "This exact command in this workspace")
+        case (.chat, "edit_file"): String(localized: "Any edit to this file, until Aiden quits")
+        case (.always, "edit_file"): String(localized: "Any edit to this file in this workspace")
+        case (.chat, "write_file"): String(localized: "Any write to this file, until Aiden quits")
+        case (.always, "write_file"): String(localized: "Any write to this file in this workspace")
+        case (.chat, _): String(localized: "This exact action, until Aiden quits")
+        case (.always, _): String(localized: "This exact action in this workspace")
+        }
+    }
+
+    /// Host summary prefixes that name the tool, which the card's title already says.
+    /// Desktop hosts write the first four; the CLI daemon writes the last three.
+    private static let actionPrefixes: [String: String] = [
+        "run_command": "Run command: ",
+        "edit_file": "Edit file: ",
+        "write_file": "Create or replace file: ",
+        "share_image": "Share image in chat: ",
+        "bash": "Run command: ",
+        "read": "Read file: ",
+        "ls": "List folder: ",
+    ]
+
+    /// The exact action the host asks about, without a prefix the title repeats.
+    static func requestedAction(toolName: String, summary: String) -> String {
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let prefix = actionPrefixes[toolName], trimmed.hasPrefix(prefix) {
+            let rest = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rest.isEmpty { return rest }
+        }
+        return trimmed.isEmpty ? String(localized: "Review requested action") : trimmed
+    }
+
+    /// The card's title: the requested action as a plain question.
+    static func headline(toolName: String, kind: AidenApprovalKind, summary: String) -> String {
+        switch toolName {
+        case "schedule_task": return String(localized: "Save this scheduled task?")
+        case "edit_automation": return String(localized: "Change this automation?")
+        default: break
+        }
+        guard kind == .action else { return title(for: kind) }
+        switch toolName {
+        case "run_command", "bash":
+            return String(localized: "Run this command?")
+        case "edit_file", "edit":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Edit \($0)?") }
+                ?? String(localized: "Edit files?")
+        case "write_file", "write":
+            return fileName(toolName: toolName, summary: summary).map { String(localized: "Write \($0)?") }
+                ?? String(localized: "Write a file?")
+        case "delete_file": return String(localized: "Delete files?")
+        case "move_file": return String(localized: "Move files?")
+        case "read_file", "read": return String(localized: "Read a file?")
+        case "ls": return String(localized: "List a folder?")
+        case "grep", "find": return String(localized: "Search files?")
+        case "web_fetch": return String(localized: "Open a web page?")
+        case "generate_image": return String(localized: "Generate an image?")
+        case "share_image": return String(localized: "Share this image in the chat?")
+        default: return title(for: kind)
+        }
+    }
+
+    /// The SF Symbol in the card's icon tile.
+    static func symbol(toolName: String, kind: AidenApprovalKind) -> String {
+        guard kind == .action else { return "calendar.badge.clock" }
+        switch toolName {
+        case "run_command", "bash": return "terminal"
+        case "edit_file", "edit": return "pencil"
+        case "write_file", "write": return "doc.badge.plus"
+        default: return "lock.shield"
+        }
+    }
+
+    /// A short file name for the title, only when the host summary names one path.
+    private static func fileName(toolName: String, summary: String) -> String? {
+        guard let prefix = actionPrefixes[toolName],
+              summary.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(prefix) else { return nil }
+        let path = requestedAction(toolName: toolName, summary: summary)
+        guard !path.contains(where: \.isNewline),
+              let name = path.split(separator: "/").last.map(String.init),
+              !name.isEmpty, name.count <= 60 else { return nil }
+        return name
+    }
+}
+
+/// Contract revision 39: what the structured scheduled-task approval card says.
+/// It matches the desktop card: the action as a question, what runs and when,
+/// where and with what access, the instructions or script, and a note when the
+/// task will not run on its own.
+struct AidenScheduleCardPresentation: Equatable {
+    /// One fact in the card's grouped list, read as one element ("Access, Full access").
+    struct Row: Equatable, Identifiable {
+        let label: String
+        let value: String
+        let symbol: String
+        var isWarning = false
+
+        var id: String { label }
+        var accessibilityLabel: String { "\(label), \(value)" }
+    }
+
+    enum Note: Equatable {
+        case schedulerOff
+        case paused
+
+        var text: String {
+            switch self {
+            case .schedulerOff:
+                String(localized: "Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.")
+            case .paused:
+                String(localized: "This task stays paused.")
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .schedulerOff: "exclamationmark.triangle"
+            case .paused: "pause.circle"
+            }
+        }
+
+        var isWarning: Bool { self == .schedulerOff }
+    }
+
+    static let footnote = String(localized: "Scheduled work runs on your desktop while Aiden is open and the computer is awake.")
+    static let truncatedNote = String(localized: "Shortened to fit. The full text is on your computer.")
+
+    let title: String
+    let name: String
+    let cadence: String
+    /// "tomorrow at 9:00 AM", shown after "Next run" only while the task runs on its own.
+    let nextRun: String?
+    let runsIn: Row
+    let access: Row
+    /// "Model" for instructions (omitted when the host names neither part), or "Runs: Script".
+    let model: Row?
+    let notifications: Row
+    let timeZone: Row
+    /// "Instructions" or "Script", with the text the task runs.
+    let contentTitle: String
+    let content: String?
+    let contentIsScript: Bool
+    let isTruncated: Bool
+    let note: Note?
+
+    var isFullAccess: Bool { access.isWarning }
+    var rows: [Row] { [runsIn, access] + (model.map { [$0] } ?? []) + [notifications, timeZone] }
+
+    init(
+        _ schedule: AidenApprovalSchedule,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        locale: Locale = .current
+    ) {
+        title = Self.title(for: schedule.action)
+        name = schedule.name
+        cadence = schedule.cadence
+        // The task's state once approved: a resume runs again and a pause stops,
+        // as the Mac sends it, whatever `enabled` says.
+        let enabledOnceApproved = schedule.action == .resume || (schedule.action != .pause && schedule.enabled)
+        // The host sends a next run only for a task that will start on its own;
+        // the card holds to that rule even if one arrives anyway.
+        let runsOnItsOwn = enabledOnceApproved && schedule.schedulerEnabled && schedule.action != .remove
+        nextRun = runsOnItsOwn
+            ? schedule.nextRun.map { Self.nextRunText($0, now: now, calendar: calendar, locale: locale) }
+            : nil
+        runsIn = Self.runsIn(schedule)
+        let full = schedule.permission == .full
+        access = Row(
+            label: String(localized: "Access"),
+            value: full ? String(localized: "Full access") : String(localized: "Read-only"),
+            symbol: full ? "exclamationmark.shield" : "checkmark.shield",
+            isWarning: full
+        )
+        switch schedule.mode {
+        case .script:
+            model = Row(label: String(localized: "Runs"), value: String(localized: "Script"), symbol: "terminal")
+        case .llm:
+            let parts = [schedule.providerName, schedule.modelName].compactMap { $0 }
+            model = parts.isEmpty ? nil : Row(label: String(localized: "Model"), value: parts.joined(separator: " · "), symbol: "cpu")
+        }
+        notifications = Row(
+            label: String(localized: "Notifications"),
+            value: schedule.notify ? String(localized: "On") : String(localized: "Off"),
+            symbol: schedule.notify ? "bell" : "bell.slash"
+        )
+        timeZone = Row(label: String(localized: "Time zone"), value: schedule.timezone, symbol: "globe")
+        contentIsScript = schedule.mode == .script
+        contentTitle = contentIsScript ? String(localized: "Script") : String(localized: "Instructions")
+        content = contentIsScript ? schedule.script : schedule.prompt
+        isTruncated = schedule.truncated && content != nil
+        if !schedule.schedulerEnabled {
+            note = .schedulerOff
+        } else if !enabledOnceApproved && schedule.action != .remove && schedule.action != .pause {
+            // A pause says so in its question.
+            note = .paused
+        } else {
+            note = nil
+        }
+    }
+
+    /// The card's question, by what approving would do.
+    static func title(for action: AidenApprovalSchedule.Action) -> String {
+        switch action {
+        case .create: String(localized: "Save this scheduled task?")
+        case .update: String(localized: "Update this scheduled task?")
+        case .pause: String(localized: "Pause this scheduled task?")
+        case .resume: String(localized: "Resume this scheduled task?")
+        case .remove: String(localized: "Delete this scheduled task?")
+        case .runNow: String(localized: "Run this scheduled task now?")
+        }
+    }
+
+    /// Where the task runs: its project, else its connectors, else anywhere on
+    /// the computer for Full access (the host's global scope), else no project.
+    static func runsIn(_ schedule: AidenApprovalSchedule) -> Row {
+        let label = String(localized: "Runs in")
+        if let workspaceName = schedule.workspaceName {
+            return Row(label: label, value: workspaceName, symbol: "folder")
+        }
+        if !schedule.connectors.isEmpty {
+            return Row(label: label, value: schedule.connectors.joined(separator: ", "), symbol: "powerplug")
+        }
+        if schedule.permission == .full {
+            return Row(label: label, value: String(localized: "Anywhere on your computer"), symbol: "desktopcomputer")
+        }
+        return Row(label: label, value: String(localized: "No project"), symbol: "folder")
+    }
+
+    /// "today at 9:00 AM", "tomorrow at 9:00 AM", or "Thu, Oct 23 at 9:00 AM",
+    /// in this phone's time zone.
+    static func nextRunText(_ date: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
+        var style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+        let time = date.formatted(style.hour().minute())
+        let days = calendar.dateComponents(
+            [.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)
+        ).day ?? .min
+        switch days {
+        case 0: return String(localized: "today at \(time)")
+        case 1: return String(localized: "tomorrow at \(time)")
+        default:
+            style = style.weekday(.abbreviated).month(.abbreviated).day()
+            if calendar.component(.year, from: date) != calendar.component(.year, from: now) {
+                style = style.year()
+            }
+            return String(localized: "\(date.formatted(style)) at \(time)")
         }
     }
 }
@@ -2700,7 +3237,9 @@ enum AidenPendingApprovalResolution {
             hasRequiredWriteCapability: hasRequiredWriteCapability,
             hostCanAllow: approval.canAllow,
             canAllow: canAllow,
-            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once]
+            scopes: canAllow && kind == .action ? AidenApprovalScope.offered(approval.scopes) : [.once],
+            toolName: approval.toolName,
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
         )
     }
 }

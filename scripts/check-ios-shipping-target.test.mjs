@@ -767,13 +767,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /AidenActivityMark\(mark: activity\.mark, size: 20, color: palette\.foreground\)/u);
   assert.match(
     chat,
-    /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
-  );
-  assert.match(
-    chat,
     /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u,
   );
-  assert.match(chat, /Text\(summary\)[\s\S]*?font\(\.caption\.monospaced\(\)\)/u);
   assert.match(
     chat,
     /Text\(AidenApprovalPresentation\.denyTitle\(for: kind\)\)[\s\S]*?Text\(AidenApprovalPresentation\.allowTitle\(for: kind\)\)/u,
@@ -781,10 +776,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(
     chat,
     /String\(localized: "This request can only be approved on your paired desktop\."\)/u,
-  );
-  assert.match(
-    chat,
-    /Label\("This task must be approved on your paired desktop\.", systemImage: "desktopcomputer"\)/u,
   );
   assert.doesNotMatch(chat, /(?:request can only|task must) be approved on your Mac/iu);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);

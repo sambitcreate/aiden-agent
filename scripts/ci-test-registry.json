@@ -343,7 +343,12 @@
         "main/services/workspace-artifacts/store.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
-        "main/services/workspace-artifacts/runner.test.ts"
+        "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/web-fetch.test.ts",
+        "main/services/web-extract-core.test.ts",
+        "main/services/web-fetch-transport.test.ts",
+        "main/services/web-page-text.test.ts",
+        "main/handlers/web-fetch.test.ts"
       ],
       "preserved": [
         "browser",
@@ -383,6 +388,7 @@
         "main/services/mcp-dependents.test.ts",
         "main/services/mcp-exposure.test.ts",
         "main/services/mcp-field-secrets-core.test.ts",
+        "main/services/mcp-mac-apps.test.ts",
         "main/services/mcp-stdio-approvals.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
         "main/services/mcp-oauth-flow.test.ts",
@@ -408,6 +414,7 @@
         "main/services/schedule-execution-tool-policy.test.ts",
         "main/services/subagents/eligibility-harness.test.ts",
         "main/services/antigravity/definition.test.ts",
+        "main/services/aiden-remote-approval-schedule.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
         "main/services/aiden-remote-bot-files.test.ts",
         "main/services/aiden-remote-bots.test.ts",
@@ -1156,7 +1163,13 @@
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
         "renderer/components/artifacts-panel.test.tsx",
-        "renderer/lib/chat-prompt-bridge.test.ts"
+        "renderer/lib/chat-prompt-bridge.test.ts",
+        "renderer/shared/web-extract.test.ts",
+        "renderer/shared/web-fetch-settings.test.ts",
+        "renderer/components/settings/web-page-settings.test.tsx",
+        "renderer/components/web-extract-recap.test.tsx",
+        "renderer/components/chat-approval-card.test.tsx",
+        "renderer/shared/tool-approval-preview.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

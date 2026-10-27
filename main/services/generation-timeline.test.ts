@@ -917,6 +917,38 @@ test("an answered questionnaire keeps its recap through timeline replay, and onl
   assert.equal(parseGenerationTimeline(misplaced), undefined);
 });
 
+test("a web page step shows only the host, and an extract recap survives replay", () => {
+  const recap = {
+    version: 1,
+    host: "acme.example",
+    cut: false,
+    fields: [{ name: "price", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+  };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status, details, url] of [
+    ["read", "web_fetch", "completed", recap, "https://acme.example/pricing?token=secret"],
+    ["bare", "web_fetch", "completed", null, "acme.example/docs"],
+    ["other", "read_file", "completed", recap, undefined],
+    ["failed", "web_fetch", "failed", recap, "https://acme.example"],
+  ] as const) {
+    projector.toolStarted(id, tool, url === undefined ? {} : { url });
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.finish("completed");
+  const steps = toolSteps(snapshot);
+  assert.deepEqual(steps.map((step) => step.detail), ["acme.example", "acme.example", undefined, "acme.example"]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /token|secret|pricing/u);
+  assert.deepEqual(steps.map((step) => step.extraction), [recap, undefined, undefined, undefined]);
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+
+  const tampered = structuredClone(snapshot);
+  delete (toolSteps(tampered)[0]!.extraction!.fields[0] as { sourceLine?: string }).sourceLine;
+  assert.equal(parseGenerationTimeline(tampered), undefined);
+  const misplaced = structuredClone(snapshot);
+  toolSteps(misplaced)[2]!.extraction = toolSteps(snapshot)[0]!.extraction;
+  assert.equal(parseGenerationTimeline(misplaced), undefined);
+});
+
 test("form fill activity persists counts without source or field values", () => {
   const projector = new GenerationTimelineProjector("generation-1", () => {});
   projector.toolStarted("call-a", "form_fill", { attachment_id: "private-document", pid: 42, window_id: 7 });

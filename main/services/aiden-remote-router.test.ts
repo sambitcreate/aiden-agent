@@ -37,6 +37,26 @@ import {
   ASSISTANT_AUTOMATION_TOOL_NAME,
 } from "../../renderer/shared/assistant.js";
 import { AIDEN_REMOTE_MAX_SPEECH_REQUEST_BYTES } from "./aiden-remote-speech-codec.js";
+import type { AidenRemoteApprovalSchedule } from "./aiden-remote-approval-schedule.js";
+
+/** The card the stream service builds when the route asks for one. */
+const SCHEDULE_CARD: AidenRemoteApprovalSchedule = {
+  action: "create",
+  name: "Morning briefing",
+  cadence: "Weekdays at 9:00 AM",
+  timezone: "America/Los_Angeles",
+  nextRunAt: "2026-10-23T16:00:00.000Z",
+  mode: "llm",
+  permission: "read-only",
+  workspaceName: "Aiden Agent",
+  connectors: [],
+  providerName: "OpenRouter",
+  modelName: "Qwen3 Coder",
+  notify: true,
+  enabled: true,
+  schedulerEnabled: true,
+  prompt: "Summarize overnight commits.",
+};
 
 async function fixture(options: {
   appControls?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["appControls"];
@@ -62,6 +82,8 @@ async function fixture(options: {
   largeChatResponse?: boolean;
   approvalCanAllow?: boolean;
   approvalRequiredCapability?: AidenRemoteCapability;
+  /** `false` leaves the chat stream service unwired. */
+  streamsAvailable?: boolean;
   runInputAvailable?: boolean;
   questionsAvailable?: boolean;
   skillsAvailable?: boolean;
@@ -235,7 +257,8 @@ async function fixture(options: {
               capability !== "runs:control" &&
               capability !== "bot:activity" &&
               capability !== "bot:cards" &&
-              capability !== "bot:handoffs",
+              capability !== "bot:handoffs" &&
+              capability !== "schedule:cards",
           )
         ) {
           return null;
@@ -634,7 +657,7 @@ async function fixture(options: {
       },
     },
     ...(options.botSessions ? { botSessions: options.botSessions } : {}),
-    streams: {
+    ...(options.streamsAvailable === false ? {} : { streams: {
       streamChatId: () => "chat-1",
       status: (_deviceId, streamId) => ({
         streamId,
@@ -644,7 +667,7 @@ async function fixture(options: {
         lastSequence: 2,
         updatedAt: new Date(4_000).toISOString(),
       }),
-      pendingApproval: (_deviceId, streamId) => ({
+      pendingApproval: (_deviceId, streamId, approvalOptions) => ({
         approvalId: "approval-1",
         streamId,
         chatId: "chat-1",
@@ -653,6 +676,7 @@ async function fixture(options: {
         toolName: "bash",
         expiresAt: new Date(60_000).toISOString(),
         canAllow: options.approvalCanAllow ?? false,
+        ...(approvalOptions?.scheduleCard ? { schedule: SCHEDULE_CARD } : {}),
       }),
       approvalRequiredCapability: () =>
         options.approvalRequiredCapability,
@@ -778,7 +802,7 @@ async function fixture(options: {
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(`id: ${after + 1}\ndata: ${data}\n\n`);
       },
-    },
+    } }),
     files: {
       children: async (deviceId, workspaceId, directoryId, cursor) => {
         calls.push(`file-page:${deviceId}:${workspaceId}:${directoryId ?? "root"}:${cursor ?? "first"}`);
@@ -1614,6 +1638,7 @@ test("progress support is advertised and upgraded only when the Mac can serve it
       "git:write",
       "schedule:read",
       "schedule:write",
+      "schedule:cards",
       "skills:invoke",
     ]);
     assert.equal(server.features.includes("chat-tasks-v1"), false);
@@ -5771,6 +5796,64 @@ test("bot:handoffs is offered and negotiable only while the hand-off and pause r
   } finally {
     await legacy.close();
   }
+});
+
+test("schedule:cards is offered and negotiable while approvals are wired, and the card never decides whether a phone may allow", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["schedule:cards"] }) };
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "schedule:read"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      ...(wired ? {} : { streamsAvailable: false }),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("schedule:cards"), wired);
+      assert.equal(server.capabilities.includes("schedule:cards"), false, "offered, not yet granted");
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      const body = await response.json();
+      if (wired) assert.ok(body.capabilities.includes("schedule:cards"));
+      else assert.equal(body.error?.code, "not_found");
+    } finally {
+      await app.close();
+    }
+  }
+
+  // The card goes only to a device that asked for it and may read schedules.
+  const approvalFor = async (capabilities: AidenRemoteCapability[], extra: Parameters<typeof fixture>[0] = {}) => {
+    const app = await fixture({ capabilities, approvalCanAllow: true, ...extra });
+    try {
+      const response = await fetch(`${app.base}/streams/stream-1/approval`, { headers });
+      assert.equal(response.status, 200);
+      return (await response.json()).approval;
+    } finally {
+      await app.close();
+    }
+  };
+  const plain = await approvalFor(["chat:read", "approval:respond", "schedule:read"]);
+  assert.equal(plain.schedule, undefined);
+  assert.equal(
+    (await approvalFor(["chat:read", "approval:respond", "schedule:cards"])).schedule,
+    undefined,
+    "a card needs schedule:read too",
+  );
+  const carded = await approvalFor(["chat:read", "approval:respond", "schedule:read", "schedule:cards"]);
+  const { schedule, ...rest } = carded;
+  assert.deepEqual(schedule, SCHEDULE_CARD);
+  assert.deepEqual(rest, plain, "the card is the only difference");
+  assert.equal(carded.canAllow, true);
+  assert.equal(carded.details, undefined);
+
+  // A missing schedule-write grant still blocks Allow, with the card shown.
+  const blocked = await approvalFor(
+    ["chat:read", "approval:respond", "schedule:read", "schedule:cards"],
+    { approvalRequiredCapability: "schedule:write" },
+  );
+  assert.deepEqual(blocked.schedule, SCHEDULE_CARD);
+  assert.equal(blocked.canAllow, false);
 });
 
 test("the hand-off and pause routes need bot:write and bot:handoffs, an Idempotency-Key, and a wired host", async () => {

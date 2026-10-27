@@ -5,12 +5,13 @@ import {
   filterConnectorCatalog,
   getConnectorCatalogEntry,
   isConnectorAvailable,
+  isConnectorOffered,
 } from "./connector-catalog.js";
 
 const ids = (search: string, category: string | "all" = "all") =>
   filterConnectorCatalog(CONNECTOR_CATALOG, search, category).map((result) => result.entry.id);
 
-test("catalog entries are unique, documented, and reachable only over HTTPS or this device's loopback", () => {
+test("catalog entries are unique, documented, and reachable only over HTTPS, this device's loopback, or a Mac app's own server", () => {
   const seen = new Set<string>();
   for (const entry of CONNECTOR_CATALOG) {
     assert.match(entry.id, /^[a-z0-9-]+$/u);
@@ -19,6 +20,14 @@ test("catalog entries are unique, documented, and reachable only over HTTPS or t
     assert.ok(entry.name && entry.tagline && entry.category, entry.id);
     assert.ok(entry.vendor.startsWith("By "), entry.id);
     assert.equal(new URL(entry.docsUrl).protocol, "https:", `${entry.id} documentation is HTTPS`);
+    if (entry.macApp) {
+      // A Mac app runs its own server from inside its bundle; it is downloaded from the vendor over HTTPS.
+      assert.equal(entry.auth.kind, "none", "a Mac app's server never receives a credential");
+      assert.match(entry.macApp.bundleName, /^[^/]+\.app$/u);
+      assert.match(entry.macApp.serverPath, /^Contents\/MacOS\/[^/]+$/u);
+      assert.equal(new URL(entry.macApp.downloadUrl).protocol, "https:");
+      continue;
+    }
     const url = new URL(entry.url);
     assert.equal(url.username + url.password, "", `${entry.id} carries no credentials in its URL`);
     if (entry.local) {
@@ -64,4 +73,23 @@ test("a match on the card itself carries no alias hint, and category filters app
   assert.ok(ids("", "Developer Tools").every((id) => getConnectorCatalogEntry(id)?.category === "Developer Tools"));
   assert.equal(ids("").length, CONNECTOR_CATALOG.length);
   assert.deepEqual(ids("no such connector anywhere"), []);
+});
+
+test("a connector served by a Mac app is offered only where main reports Mac app connectors", () => {
+  const imcp = getConnectorCatalogEntry("imcp")!;
+  assert.equal(isConnectorOffered(imcp, { macAppConnectors: true }), true);
+  assert.equal(isConnectorOffered(imcp, { macAppConnectors: false }), false);
+  // Every other connector is offered everywhere.
+  for (const entry of CONNECTOR_CATALOG.filter((candidate) => candidate.id !== "imcp")) {
+    assert.equal(isConnectorOffered(entry, { macAppConnectors: false }), true, entry.id);
+  }
+});
+
+test("searching for a Mac app iMCP reaches finds the iMCP card with its hint", () => {
+  for (const app of ["iMessage", "messages", "reminders", "Apple Notes", "voice memos"]) {
+    const imcp = filterConnectorCatalog(CONNECTOR_CATALOG, app, "all").find((result) => result.entry.id === "imcp");
+    assert.ok(imcp?.matchedAlias, `${app} finds iMCP through an alias`);
+    assert.match(imcp.entry.aliasHint ?? "", /through iMCP/u);
+  }
+  assert.deepEqual(ids("imcp"), ["imcp"]);
 });

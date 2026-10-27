@@ -669,6 +669,7 @@ struct AidenBotSessionChatView: View {
                 // Mac says this tool can only be denied from a phone.
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: .action,
                     canRespond: canRespondToApprovals,
                     hasRequiredWriteCapability: canRespondToApprovals,

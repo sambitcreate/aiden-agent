@@ -655,6 +655,122 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
     }
 
+    private func extractStepJSON(
+        id: Int,
+        toolName: String = "web_fetch",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        extraction: String?
+    ) -> String {
+        let recap = extraction.map { #","extraction":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Fetch web page","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset),"detail":"acme.example"\#(recap)}"#
+    }
+
+    private func extractRecapJSON(_ fields: [String], extra: String = "") -> String {
+        #"{"version":1,"host":"acme.example","cut":false\#(extra),"fields":[\#(fields.joined(separator: ","))]}"#
+    }
+
+    private let extractedPrice = #"{"name":"pro_monthly","status":"extracted","value":"20","confidence":0.97,"sourceLine":"Pro is $20 per month."}"#
+
+    func testWebExtractRecapDecodesExtractedUncertainAndAbsentValues() throws {
+        let recap = extractRecapJSON([
+            extractedPrice,
+            #"{"name":"team_yearly","status":"uncertain","value":"1399","confidence":0.92,"notFound":true}"#,
+            #"{"name":"seats","status":"uncertain","value":"50","confidence":0.4,"sourceLine":"Up to 50 seats."}"#,
+            #"{"name":"enterprise","status":"null"}"#,
+        ])
+        let step = try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: recap))
+        let extraction = try XCTUnwrap(step.extraction)
+        XCTAssertEqual(extraction.host, "acme.example")
+        XCTAssertEqual(extraction.fields.map(\.status), [.extracted, .uncertain, .uncertain, .absent])
+        XCTAssertEqual(extraction.fields.map(\.label), ["pro monthly", "team yearly", "seats", "enterprise"])
+        XCTAssertEqual(extraction.fields[0].sourceLine, "Pro is $20 per month.")
+        XCTAssertEqual(extraction.fields[1].notFound, true)
+        XCTAssertNil(extraction.fields[1].sourceLine)
+        XCTAssertNil(extraction.fields[3].value)
+        // The step is still an activity line, not a questionnaire.
+        XCTAssertFalse(step.isQuestionnaire)
+
+        // A failed extraction carries its reason and no fields.
+        let failed = try XCTUnwrap(try decodeQuestionnaireStep(
+            extractStepJSON(id: 1, extraction: extractRecapJSON([], extra: #","error":"quota""#))
+        ).extraction)
+        XCTAssertEqual(failed.error, .quota)
+        XCTAssertEqual(failed.error?.message, "the extraction model is rate-limited or out of quota")
+
+        // The recap survives the chat cache's encode/decode round trip.
+        let roundTripped = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(roundTripped.extraction, extraction)
+    }
+
+    func testMalformedOrMisplacedWebExtractRecapIsDroppedButTheStepStillDecodes() throws {
+        let invalidRecaps: [(String, String)] = [
+            ("no fields and no error", extractRecapJSON([])),
+            ("an error with fields", extractRecapJSON([extractedPrice], extra: #","error":"quota""#)),
+            ("unknown error", extractRecapJSON([], extra: #","error":"teapot""#)),
+            ("seventeen fields", extractRecapJSON((0..<17).map { #"{"name":"f\#($0)","status":"null"}"# })),
+            ("duplicate names", extractRecapJSON([extractedPrice, extractedPrice])),
+            ("extracted without its page line", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9}"#])),
+            ("extracted marked not found", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9,"sourceLine":"Pro is $20.","notFound":true}"#])),
+            ("absent with a value", extractRecapJSON([#"{"name":"pro","status":"null","value":"20"}"#])),
+            ("notFound false", extractRecapJSON([#"{"name":"pro","status":"uncertain","notFound":false}"#])),
+            ("confidence above one", extractRecapJSON([#"{"name":"pro","status":"uncertain","confidence":1.2}"#])),
+            ("field name with a space", extractRecapJSON([#"{"name":"pro monthly","status":"null"}"#])),
+            ("field name starting with a digit", extractRecapJSON([#"{"name":"1price","status":"null"}"#])),
+            ("newline in a source line", extractRecapJSON([#"{"name":"pro","status":"uncertain","sourceLine":"Pro is\n$20"}"#])),
+            ("double space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20  USD"}"#])),
+            ("no-break space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20 USD"}"#])),
+            ("value over 200 characters", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "9", count: 201))"}"#])),
+            ("null value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":null}"#])),
+            ("unknown status", extractRecapJSON([#"{"name":"pro","status":"maybe"}"#])),
+            ("unknown version", #"{"version":2,"host":"acme.example","cut":false,"fields":[\#(extractedPrice)]}"#),
+            ("not an object", #""acme.example""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(extractStepJSON(id: 3, extraction: invalid))
+            XCTAssertNil(step.extraction, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "web_fetch", name)
+        }
+
+        // Boundary values the host accepts still decode.
+        let boundary = extractRecapJSON((0..<16).map { index in
+            index == 0
+                ? #"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "😀", count: 200))"}"#
+                : #"{"name":"f\#(index)","status":"null"}"#
+        })
+        XCTAssertEqual(try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: boundary)).extraction?.fields.count, 16)
+
+        let valid = extractRecapJSON([extractedPrice])
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, toolName: "web_search", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "running", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "failed", extraction: valid)).extraction)
+    }
+
+    func testChronologicalProjectionShowsExtractedValuesAfterTheLineThatReadThem() throws {
+        let recap = extractRecapJSON([extractedPrice])
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "web_search", contentOffset: 7, questionnaire: nil),
+            extractStepJSON(id: 2, contentOffset: 7, extraction: recap),
+            questionnaireStepJSON(id: 3, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .extraction, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1", "tool-2", "tool-3"], ["tool-2"], []])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        XCTAssertEqual(rows[2].steps.first?.extraction?.fields.first?.value, "20")
+
+        // The page read stays in the activity feed and its tally; fallback
+        // transcripts list its values after the feed.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-2", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.extractionSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, 1 web search, 1 web page")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Fetched web page acme.example")
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -5531,6 +5647,7 @@ final class AidenChatTests: XCTestCase {
             case .reasoning: return "reasoning"
             case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
             case .questionnaire: return "questionnaire"
+            case .extraction: return "extraction"
             case .visual(let visual): return "visual:\(visual.id)"
             }
         }
@@ -7983,12 +8100,282 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
-    func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
+    func testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
         XCTAssertEqual(
-            AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),
-            "Run command: find ~/Downloads -type f"
+            AidenApprovalPresentation.headline(toolName: "run_command", kind: .action, summary: "Run command: npm test"),
+            "Run this command?"
         )
-        XCTAssertEqual(AidenApprovalPresentation.oneLineSummary(" \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: find ~/Downloads\n  -type f"),
+            "find ~/Downloads\n  -type f",
+            "The command keeps its own line breaks and spacing."
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_file", kind: .action, summary: "Edit file: src/forecast.ts"),
+            "Edit forecast.ts?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit_file", summary: "Edit file: src/forecast.ts"),
+            "src/forecast.ts"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "write_file", kind: .action, summary: "Create or replace file: notes/todo.md"),
+            "Write todo.md?"
+        )
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit", summary: #"edit: {"path":"a.ts"}"#),
+            #"edit: {"path":"a.ts"}"#
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit", kind: .action, summary: #"edit: {"path":"a.ts"}"#),
+            "Edit files?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "bash", kind: .action, summary: "Run command: ls -la"),
+            "Run this command?"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "bash", summary: "Run command: ls -la"), "ls -la")
+        // A prefix is only removed for the tool that writes it.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "notion__search", summary: "Run command: rm -rf /"),
+            "Run command: rm -rf /"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "notion__search", kind: .action, summary: "Search Notion"),
+            "Approval needed"
+        )
+        // Scheduled-task titles match the Mac's card.
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "schedule_task", kind: .scheduledTask, summary: "Daily report"),
+            "Save this scheduled task?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_automation", kind: .scheduledTask, summary: "Daily report"),
+            "Change this automation?"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: " \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: "),
+            "Run command:",
+            "An empty command is shown as sent rather than as a blank block."
+        )
+    }
+
+    func testApprovalCardSaysWhyItCannotBeAnsweredHere() {
+        func limit(_ kind: AidenApprovalKind, respond: Bool = true, write: Bool = true, allow: Bool = true) -> AidenApprovalLimit? {
+            AidenApprovalPresentation.limit(kind: kind, canRespond: respond, hasRequiredWriteCapability: write, canAllow: allow)
+        }
+        XCTAssertNil(limit(.action), "An approval this phone can answer shows the paused note instead.")
+        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your Mac. You can deny it here.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired desktop.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, write: false), AidenApprovalLimit(text: "Schedule write access is required to approve this task.", symbol: "lock.fill"))
+        XCTAssertEqual(
+            limit(.scheduledTask, respond: false, write: false, allow: false),
+            AidenApprovalLimit(text: "This paired device can review approvals but cannot respond.", symbol: "lock.fill"),
+            "A review-only device says so before any other limit."
+        )
+    }
+
+    // MARK: Contract revision 39: scheduled-task approval cards
+
+    private func scheduleCard(
+        action: AidenApprovalSchedule.Action = .create,
+        nextRunAt: String? = "2026-10-23T16:00:00.000Z",
+        mode: AidenApprovalSchedule.Mode = .llm,
+        permission: AidenApprovalSchedule.Permission = .readOnly,
+        workspaceName: String? = nil,
+        connectors: [String] = [],
+        providerName: String? = "Provider A",
+        modelName: String? = "Model B",
+        notify: Bool = true,
+        enabled: Bool = true,
+        schedulerEnabled: Bool = true,
+        prompt: String? = "Summarize the overnight changes.",
+        script: String? = nil,
+        truncated: Bool = false
+    ) -> AidenApprovalSchedule {
+        AidenApprovalSchedule(
+            action: action, name: "Morning briefing", cadence: "Weekdays at 9:00 AM",
+            timezone: "America/Los_Angeles", nextRunAt: nextRunAt, mode: mode, permission: permission,
+            workspaceName: workspaceName, connectors: connectors, providerName: providerName,
+            modelName: modelName, notify: notify, enabled: enabled, schedulerEnabled: schedulerEnabled,
+            prompt: prompt, script: script, truncated: truncated
+        )
+    }
+
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    private func presentation(_ schedule: AidenApprovalSchedule, now: Date = Date(timeIntervalSince1970: 1_792_670_400)) -> AidenScheduleCardPresentation {
+        // 2026-10-22T12:00:00Z, a Thursday.
+        AidenScheduleCardPresentation(schedule, now: now, calendar: utcCalendar, locale: Locale(identifier: "en_US"))
+    }
+
+    func testScheduleCardTitleSaysWhatApprovingWouldDo() {
+        let titles = AidenApprovalSchedule.Action.allCases.map { presentation(scheduleCard(action: $0)).title }
+        XCTAssertEqual(titles, [
+            "Save this scheduled task?",
+            "Update this scheduled task?",
+            "Pause this scheduled task?",
+            "Resume this scheduled task?",
+            "Delete this scheduled task?",
+            "Run this scheduled task now?",
+        ])
+    }
+
+    func testScheduleCardRunsInNamesTheNarrowestScopeTheTaskHas() {
+        func runsIn(_ schedule: AidenApprovalSchedule) -> String { presentation(schedule).runsIn.value }
+        XCTAssertEqual(runsIn(scheduleCard(workspaceName: "Project A", connectors: ["Connector A"])), "Project A")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full, connectors: ["Connector A", "Connector B"])), "Connector A, Connector B")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full)), "Anywhere on your computer")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .readOnly)), "No project")
+    }
+
+    func testScheduleCardRowsDescribeAccessModelAndDelivery() {
+        let briefing = presentation(scheduleCard(workspaceName: "Project A"))
+        XCTAssertEqual(briefing.rows.map(\.label), ["Runs in", "Access", "Model", "Notifications", "Time zone"])
+        XCTAssertEqual(briefing.rows.map(\.value), ["Project A", "Read-only", "Provider A · Model B", "On", "America/Los_Angeles"])
+        XCTAssertEqual(briefing.access.accessibilityLabel, "Access, Read-only")
+        XCTAssertFalse(briefing.isFullAccess)
+        XCTAssertEqual(briefing.contentTitle, "Instructions")
+        XCTAssertEqual(briefing.content, "Summarize the overnight changes.")
+        XCTAssertFalse(briefing.contentIsScript)
+
+        let full = presentation(scheduleCard(permission: .full, notify: false))
+        XCTAssertTrue(full.isFullAccess)
+        XCTAssertEqual(full.access.value, "Full access")
+        XCTAssertTrue(full.access.isWarning)
+        XCTAssertEqual(full.notifications.value, "Off")
+        XCTAssertEqual(full.rows.filter(\.isWarning).map(\.label), ["Access"], "only full access is flagged")
+
+        XCTAssertEqual(presentation(scheduleCard(modelName: nil)).model?.value, "Provider A")
+        let unnamed = presentation(scheduleCard(providerName: nil, modelName: nil))
+        XCTAssertNil(unnamed.model, "no empty Model row")
+        XCTAssertEqual(unnamed.rows.map(\.label), ["Runs in", "Access", "Notifications", "Time zone"])
+
+        let script = presentation(scheduleCard(
+            mode: .script, providerName: nil, modelName: nil, prompt: nil,
+            script: "npm test", truncated: true
+        ))
+        XCTAssertEqual(script.model?.label, "Runs")
+        XCTAssertEqual(script.model?.value, "Script")
+        XCTAssertEqual(script.contentTitle, "Script")
+        XCTAssertEqual(script.content, "npm test")
+        XCTAssertTrue(script.contentIsScript)
+        XCTAssertTrue(script.isTruncated)
+        XCTAssertFalse(briefing.isTruncated)
+    }
+
+    func testScheduleCardNamesTheNextRunOnlyWhenTheTaskStartsOnItsOwn() throws {
+        XCTAssertTrue(try XCTUnwrap(presentation(scheduleCard()).nextRun).hasPrefix("tomorrow at "))
+        XCTAssertNil(presentation(scheduleCard(nextRunAt: nil)).nextRun)
+        // Even if a next run arrives, a paused, unscheduled or deleted task does not show one.
+        XCTAssertNil(presentation(scheduleCard(enabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(schedulerEnabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(action: .remove)).nextRun)
+        // The task as it will be once approved: resuming a paused task brings its next run back, pausing removes it.
+        XCTAssertNotNil(presentation(scheduleCard(action: .resume, enabled: false)).nextRun, "resumed")
+        XCTAssertNil(presentation(scheduleCard(action: .pause)).nextRun, "paused by this approval")
+    }
+
+    func testScheduleCardNextRunReadsAsADayInThePhonesTimeZone() throws {
+        let now = Date(timeIntervalSince1970: 1_792_670_400) // Thu 2026-10-22T12:00:00Z
+        let locale = Locale(identifier: "en_US")
+        func text(_ iso: String, now: Date = now, calendar: Calendar? = nil) throws -> String {
+            AidenScheduleCardPresentation.nextRunText(
+                try XCTUnwrap(AidenApprovalSchedule.utcInstant(iso)),
+                now: now, calendar: calendar ?? utcCalendar, locale: locale
+            )
+        }
+        let today = try text("2026-10-22T16:00:00Z")
+        XCTAssertTrue(today.hasPrefix("today at 4:00"), today)
+        XCTAssertTrue(try text("2026-10-23T09:00:00Z").hasPrefix("tomorrow at 9:00"))
+        // Calendar days, not 24-hour spans.
+        XCTAssertTrue(try text("2026-10-23T00:30:00Z", now: Date(timeIntervalSince1970: 1_792_711_800)).hasPrefix("tomorrow at "))
+        let saturday = try text("2026-10-24T16:00:00Z")
+        XCTAssertTrue(saturday.hasPrefix("Sat, Oct 24"), saturday)
+        XCTAssertFalse(saturday.contains("2026"), "this year's date leaves the year out")
+        let nextYear = try text("2027-01-05T16:00:00Z")
+        XCTAssertTrue(nextYear.contains("2027"), nextYear)
+        // Read in the phone's zone: 05:00 UTC on the 23rd is still the 22nd in Los Angeles.
+        var pacific = Calendar(identifier: .gregorian)
+        pacific.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        XCTAssertTrue(try text("2026-10-23T05:00:00Z", calendar: pacific).hasPrefix("today at 10:00"))
+    }
+
+    func testScheduleCardNotesExplainWhyATaskWillNotRun() {
+        XCTAssertNil(presentation(scheduleCard()).note)
+        XCTAssertEqual(presentation(scheduleCard(schedulerEnabled: false)).note, .schedulerOff)
+        XCTAssertEqual(
+            presentation(scheduleCard(enabled: false, schedulerEnabled: false)).note,
+            .schedulerOff,
+            "scheduling being off outranks a paused task"
+        )
+        XCTAssertEqual(presentation(scheduleCard(action: .update, enabled: false)).note, .paused)
+        XCTAssertNil(presentation(scheduleCard(action: .remove, enabled: false)).note, "a deleted task is not 'paused'")
+        // The Mac sends a card's state once approved: a pause arrives disabled and says so in its question.
+        XCTAssertNil(presentation(scheduleCard(action: .pause, enabled: false)).note, "a pause is not 'stays paused'")
+        XCTAssertNil(presentation(scheduleCard(action: .resume, enabled: false)).note, "a resumed task is not 'stays paused'")
+        XCTAssertEqual(presentation(scheduleCard(action: .runNow, enabled: false)).note, .paused, "running it once leaves it paused")
+        XCTAssertTrue(AidenScheduleCardPresentation.Note.schedulerOff.isWarning)
+        XCTAssertFalse(AidenScheduleCardPresentation.Note.paused.isWarning)
+    }
+
+    func testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "run_command"), "This exact command, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "run_command"), "This exact command in this workspace")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "edit_file"), "Any edit to this file, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "write_file"), "Any write to this file in this workspace")
+        XCTAssertNil(AidenApprovalPresentation.scopeDetail(.once, toolName: "edit_file"))
+    }
+
+    func testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        func step(_ index: Int, _ toolName: String, _ status: AidenAgentStepStatus) -> AidenAgentStep {
+            AidenAgentStep(
+                id: "tool-\(index)", order: index, kind: .tool, toolName: toolName,
+                label: "Tool", status: status, startedAt: 1_000, updatedAt: 2_000,
+                finishedAt: 2_000, contentOffset: 0, durationMs: 1_000,
+                target: nil, detail: nil, lineChanges: nil
+            )
+        }
+        func timeline(_ status: AidenGenerationTimelineStatus, _ steps: [AidenAgentStep]) -> AidenGenerationTimeline {
+            AidenGenerationTimeline(
+                version: 3, generationId: "stream-1", status: status,
+                startedAt: 1_000, finishedAt: status == .running ? nil : 2_000, steps: steps
+            )
+        }
+        // The same sentences as the desktop activity header.
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [step(0, "run_command", .blocked)])),
+            "Skipped 1 command"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "read_file", .completed), step(1, "edit_file", .blocked), step(2, "write_file", .blocked),
+            ])),
+            "Explored 1 file, skipped 2 file changes"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "run_command", .completed), step(1, "run_command", .blocked), step(2, "web_fetch", .blocked),
+            ])),
+            "Ran 1 command, skipped 2 actions"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.cancelled, [step(0, "run_command", .cancelled)])),
+            "Ran 1 command",
+            "A stopped call may have run partway, so it still counts."
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.running, [step(0, "run_command", .awaitingApproval)])),
+            "Waiting for approval"
+        )
     }
 
     @MainActor
