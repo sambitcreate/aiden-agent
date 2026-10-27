@@ -223,6 +223,11 @@ test("app guidance only describes the app tools a chat really has", () => {
   const phone = aidenAppGuidance(new Set(["aiden_help", "aiden_show_controls"]));
   assert.doesNotMatch(phone, /aiden_get_state|aiden_set_preference|aiden_open/u);
   assert.match(phone, /cannot read live values or change settings yourself in this chat; show the controls/u);
+  // Reading without changing: told to read live values, and only that it cannot change them.
+  const readOnly = aidenAppGuidance(new Set(["aiden_help", "aiden_get_state"]));
+  assert.match(readOnly, /aiden_get_state before stating a value/u);
+  assert.match(readOnly, /cannot change settings yourself in this chat\./u);
+  assert.doesNotMatch(readOnly, /cannot read live values/u);
 });
 
 test("authorization is rechecked after the durable intent and unknown policy fails closed", async () => {
