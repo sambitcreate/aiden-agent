@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import process from "node:process";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { parse } from "yaml";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,4 +59,40 @@ test("rewritten executable routes never call the original runtime installers", {
     `const installer = await import(${JSON.stringify(f.installer)}); process.stdout.write(await installer.installFromNpmTarball({packageName:"opencode-ai",version:"1.18.5"}));`],
     { encoding: "utf8", env: { ...process.env, GITHUB_ACTION_REPOSITORY: "pullfrog/pullfrog", GITHUB_ACTION_REF: "0657d542f2e34565c6254d5c84581313e631cd90" }, stdio: ["ignore", "pipe", "pipe"] });
   assert.equal(output, realpathSync(f.executable));
+});
+
+
+test("immutable bootstrap blob is integrity checked and survives a hostile review checkout", { skip: process.platform === "win32" }, (t) => {
+  const f = fixture(t);
+  const workflow = parse(readFileSync(new URL("../.github/workflows/pullfrog.yml", import.meta.url), "utf8"));
+  const step = workflow.jobs.pullfrog.steps.find(step => step.id === "bootstrap");
+  const preload = readFileSync(new URL("./pullfrog-runtime-preload.mjs", import.meta.url));
+  assert.equal(step.env.BOOTSTRAP_SHA256, createHash("sha256").update(preload).digest("hex"));
+  assert.equal(step.env.BOOTSTRAP_BLOB, createHash("sha1").update(`blob ${preload.length}\0`).update(preload).digest("hex"));
+  const bin = join(f.root, "bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "gh"), '#!/usr/bin/env node\nprocess.stdout.write(process.env.FAKE_GH_RESPONSE);\n', { mode: 0o700 });
+  const output = join(f.root, "outputs");
+  const response = { encoding: "base64", size: preload.length, content: preload.toString("base64") };
+  const env = { ...process.env, ...step.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: output, FAKE_GH_RESPONSE: JSON.stringify(response) };
+  execFileSync("bash", ["-e", "-c", step.run], { env, stdio: ["ignore", "pipe", "pipe"] });
+  const nodeOptions = readFileSync(output, "utf8").trim().slice("node_options=".length);
+  assert.ok(nodeOptions.startsWith("--import=data:text/javascript;base64,"));
+  // There is no enforcing module import from these mutable workspace files.
+  mkdirSync(join(f.root, "scripts"));
+  writeFileSync(join(f.root, "scripts/pullfrog-locked-runtime.mjs"), 'throw new Error("hostile checkout preload executed");');
+  writeFileSync(join(f.root, "scripts/pullfrog-locked-runtime-core.mjs"), 'throw new Error("hostile checkout core executed");');
+  const source = readFileSync(new URL("./fixtures/pullfrog-0.1.57-install.ts.fixture", import.meta.url), "utf8");
+  const installer = pathToFileURL(join(f.root, "utils/install.ts")).href;
+  writeFileSync(new URL(installer), source);
+  writeFileSync(join(f.root, "utils/cli.ts"), "export const log = {};\n");
+  const result = execFileSync(process.execPath, ["--input-type=module", "-e", `const m = await import(${JSON.stringify(installer)}); process.stdout.write(await m.installFromNpmTarball({packageName:"opencode-ai",version:"1.18.5"}));`], {
+    cwd: f.root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, NODE_OPTIONS: nodeOptions, GITHUB_ACTION_REPOSITORY: "pullfrog/pullfrog", GITHUB_ACTION_REF: "0657d542f2e34565c6254d5c84581313e631cd90" },
+  });
+  assert.equal(result, realpathSync(f.executable));
+  rmSync(output);
+  assert.throws(() => execFileSync("bash", ["-e", "-c", step.run], {
+    env: { ...env, FAKE_GH_RESPONSE: JSON.stringify({ ...response, content: Buffer.from("unreviewed").toString("base64") }) }, stdio: ["ignore", "pipe", "pipe"],
+  }));
+  assert.throws(() => readFileSync(output, "utf8"), { code: "ENOENT" });
 });
