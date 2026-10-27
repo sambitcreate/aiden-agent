@@ -150,7 +150,7 @@ test("late first-send receipt cannot navigate back or start a response in a diff
   await aiden.app.evaluate(() => (globalThis as unknown as { releaseDraftReceipt: () => void }).releaseDraftReceipt());
   // The published sidebar receipt proves the late save completed without
   // selecting or generating the previously committed conversation.
-  await expect(aiden.page.locator("[data-sidebar]").getByRole("button", { name: /Committed before navigating away/u })).toBeVisible();
+  await expect(aiden.page.locator("[data-sidebar]").getByRole("button", { name: /^Committed before navigating away/u })).toBeVisible();
   expect(aiden.page.url()).toBe(destination);
   await expect(aiden.page.locator("textarea")).toHaveValue("Keep the new draft here");
   const [chat] = await regularChats(aiden.userDataDir);
@@ -279,7 +279,7 @@ test("the sidebar + starts a draft in its workspace and reuses only an empty dra
   expect(chat.messages.filter((message) => message.role === "user").map((message) => message.content))
     .toEqual(["Started from the sidebar plus"]);
   await expect(draftRows).toHaveCount(0);
-  await expect(sidebar.getByRole("button", { name: /Started from the sidebar plus/u })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: /^Started from the sidebar plus/u })).toBeVisible();
 });
 
 test("New chat in… opens a draft in the chosen workspace from the chevron, the shortcut and the menu", async ({ aiden }) => {

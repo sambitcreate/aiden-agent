@@ -45,7 +45,7 @@ The approval keys are fixed rather than set in Settings. They act only on the
 open chat's approval (the first one in a Bot chat), and only from the message
 box or a button. They never act while the message box holds text, while focus
 is in another text field, the terminal or the file editor, or while a menu or
-dialog is open. The buttons show them. When an
+dialog is open. The buttons show them when the card is wide enough. When an
 approval appears, screen readers announce it.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,

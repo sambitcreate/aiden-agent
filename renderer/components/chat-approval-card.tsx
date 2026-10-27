@@ -361,7 +361,8 @@ export function ChatApprovalCard({
   });
   const shortcutHint = (shortcut: ApprovalShortcut) =>
     keyboardShortcuts && !disabled ? (
-      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
+      // Shown only where both buttons have room for it; a narrow card keeps plain labels.
+      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 hidden shrink-0 font-normal tabular-nums opacity-65 @md:inline">
         {approvalShortcutLabel(shortcut, keyboardPlatform)}
       </span>
     ) : null;
@@ -489,7 +490,7 @@ export function ChatApprovalCard({
             {disabledReason}
           </Text>
         ) : null}
-        <div className="mt-3.5 flex shrink-0 gap-2">
+        <div className="@container mt-3.5 flex shrink-0 gap-2">
           <Button
             ref={denyRef}
             variant="filled"
