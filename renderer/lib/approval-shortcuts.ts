@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { detectedKeyboardPlatform, type KeyboardPlatform } from "../shared/keybindings";
-import { typingRedirectBlockedByOverlay } from "./composer-type-focus";
+import { isEditableTypingTarget, isReservedTypingSurface, typingRedirectBlockedByOverlay } from "./composer-type-focus";
 
 export type ApprovalShortcut = "allow" | "deny";
 
@@ -39,13 +39,15 @@ function editableText(target: Element): string | null {
 const hasText = (element: Element) => (editableText(element) ?? "").trim() !== "";
 
 /**
- * Whether the keys are free for the approval: nothing typed where focus is or
- * in the message box (even after focus moves to a button), and no dialog,
- * menu or picker open on top.
+ * Whether the keys are free for the approval: focus is on the message box or
+ * on something that takes no typing (never another text field, the terminal,
+ * the file editor or a device screen), the message box is empty even after
+ * focus moves to a button, and no dialog, menu or picker is open on top.
  */
 export function approvalShortcutTargetIsFree(target: EventTarget | null, root: ParentNode): boolean {
   const focused = target instanceof Element ? target : null;
-  if (focused && hasText(focused)) return false;
+  if (isReservedTypingSurface(focused)) return false;
+  if (isEditableTypingTarget(focused) && !focused?.closest("[data-message-draft]")) return false;
   for (const draft of root.querySelectorAll("[data-message-draft]")) {
     if (hasText(draft)) return false;
   }

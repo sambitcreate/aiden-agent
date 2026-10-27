@@ -409,6 +409,25 @@ test("approval keys leave the message box alone once something is typed", () => 
   assert.deepEqual(decisions, []);
 });
 
+test("approval keys leave other text fields, the terminal and the file editor alone, even when empty", () => {
+  const { decisions } = mountWithComposer({ toolName: "bash", summary: "npm test" });
+  const surfaces = [
+    Object.assign(document.createElement("input"), { type: "search" }),
+    Object.assign(document.createElement("div"), { tabIndex: 0 }),
+    Object.assign(document.createElement("div"), { tabIndex: 0 }),
+  ];
+  surfaces[1]!.setAttribute("data-command-scope", "terminal");
+  surfaces[2]!.setAttribute("data-command-scope", "fileEditor");
+  for (const surface of surfaces) {
+    document.body.append(surface);
+    surface.focus();
+    fireEvent.keyDown(surface, primaryKey("Enter"));
+    fireEvent.keyDown(surface, primaryKey("Backspace"));
+    surface.remove();
+  }
+  assert.deepEqual(decisions, []);
+});
+
 test("approval keys stay off while a menu is open, without the modifier, or while deciding", () => {
   const typing = mountWithComposer({ toolName: "bash", summary: "npm test" });
   fireEvent.keyDown(typing.composer, { key: "Enter" });
