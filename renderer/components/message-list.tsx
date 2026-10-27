@@ -119,6 +119,8 @@ interface MessageListProps {
   readAloudMessageId?: string;
   /** The latest failed reply's next steps; older failure cards show none. */
   failureActions?: ProviderFailureActions & { messageId: string };
+  /** Offers Resume after the last message; set only while the transcript is idle. */
+  interruptedReply?: InterruptedReplyActions;
   readAloud?: ReadAloudActionProps;
   /** Fork the chat at a settled message; absent where forking is unsupported. */
   onFork?: (messageId: string, position: ChatForkPosition) => void;
@@ -567,6 +569,29 @@ export interface ProviderFailureActions {
   busy?: boolean;
 }
 
+export type InterruptedReplyActions = {
+  onResume: () => void;
+  /** True while Resume is sending. */
+  busy?: boolean;
+};
+
+/** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
+export function InterruptedReplyCallout({ actions }: { actions: InterruptedReplyActions }) {
+  return (
+    <Callout role="status" data-interrupted-reply="true">
+      <Text variant="small-strong">This reply was interrupted</Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block">
+        Aiden closed before it finished. Resume to pick up where it stopped.
+      </Text>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
+          Resume
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
 export function ProviderFailureCallout({
   failure,
   actions,
@@ -668,6 +693,7 @@ export function MessageList({
   error,
   readAloudMessageId,
   failureActions,
+  interruptedReply,
   readAloud,
   onFork,
   forkDisabledReason = null,
@@ -1019,6 +1045,9 @@ export function MessageList({
   }
 
   if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
+  if (interruptedReply && !streamingRowVisible) {
+    transcriptRows.push(<InterruptedReplyCallout key="interrupted-reply" actions={interruptedReply} />);
+  }
   React.useLayoutEffect(() => {
     settledReplyKeysRef.current = settledReplyKeys;
   });

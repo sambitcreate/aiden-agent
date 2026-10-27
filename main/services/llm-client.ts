@@ -5058,7 +5058,9 @@ export const llmClient = {
       generation.cancelRequested = true;
       generation.cancellationOrigin = origin;
       generation.stopCacheWarming?.();
-      generation.agent.abort();
+      // A quit leaves the reply resumable on the next launch; Stop does not.
+      if (origin === "application_shutdown") generation.agent.abortForShutdown();
+      else generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       generation.formFill?.revoke();
       void generation.computerUse?.close();

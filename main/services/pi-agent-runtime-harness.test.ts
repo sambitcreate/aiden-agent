@@ -1075,6 +1075,48 @@ test("managed effects record dispatch and terminal evidence outside the Pi journ
   assert.doesNotMatch(JSON.stringify(effect), /private argument/u);
 });
 
+test("a quit records the running reply as interrupted, while Stop records it as cancelled", async (t) => {
+  const effectStore = await effectStoreFixture(t);
+  const cancelRun = async (chatId: string, cancel: (harness: PiAgentRuntimeHarness) => void) => {
+    let toolStarted!: () => void;
+    const atTool = new Promise<void>((resolve) => { toolStarted = resolve; });
+    const tool: AgentTool = {
+      name: "long_running",
+      label: "Long running",
+      description: "Runs until the reply is cancelled.",
+      parameters: Type.Object({}),
+      execute: async (_id, _params, signal) => {
+        toolStarted();
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return { content: [{ type: "text", text: "stopped" }], details: null };
+      },
+    };
+    const { harness } = await managedTestHarness(
+      [
+        fauxAssistantMessage([fauxToolCall(tool.name, {})], { stopReason: "toolUse" }),
+        fauxAssistantMessage("must not run"),
+      ],
+      {
+        tools: [tool],
+        identity: { runId: `${chatId}-run`, sessionId: `${chatId}-session`, lane: "foreground" },
+        effects: { store: effectStore, chatId },
+      },
+    );
+    const running = harness.runManaged({
+      kind: "append-and-run",
+      message: { role: "user", content: "run", timestamp: 1 },
+    });
+    await atTool;
+    cancel(harness);
+    assert.equal((await running).kind, "app_cancelled");
+    const [operation] = await effectStore.listOperationsByChat(chatId);
+    return operation?.state;
+  };
+
+  assert.equal(await cancelRun("quit-chat", (harness) => harness.abortForShutdown()), "interrupted");
+  assert.equal(await cancelRun("stop-chat", (harness) => harness.abort()), "app_cancelled");
+});
+
 test("managed effects allow provider tool-call IDs to repeat across turns", async (t) => {
   const effectStore = await effectStoreFixture(t);
   let toolCalls = 0;

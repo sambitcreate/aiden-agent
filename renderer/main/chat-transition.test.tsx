@@ -810,3 +810,32 @@ test("a pending failure-card compaction keeps its chat busy while another chat s
     queryClient.clear();
   }
 });
+
+test("a pending Resume in one chat leaves another interrupted chat's Resume usable", async () => {
+  let rejectAppend!: (error: Error) => void;
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:replyInterrupted": () => true,
+    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+  });
+  const resume = async () => (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await resume());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal((await resume()).disabled, false, "Chat B must not inherit chat A's pending Resume");
+    await act(async () => {
+      rejectAppend(new Error("The follow-up could not be saved."));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+    assert.equal((await resume()).disabled, false);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});

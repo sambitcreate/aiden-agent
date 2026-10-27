@@ -75,7 +75,7 @@ import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -171,6 +171,7 @@ import {
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
+import { INTERRUPTED_REPLY_FOLLOW_UP } from "../shared/interrupted-reply";
 import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
@@ -3089,6 +3090,43 @@ export function ChatPane({ chatId }: { chatId: string }) {
     [commandSystem, failedReplyId, failureActionBusy, runFailureAction],
   );
 
+  // A reply cut short by a quit or crash offers Resume; it never resumes itself.
+  const replyInterruptedQuery = useQuery({
+    queryKey: ["chat-reply-interrupted", chatId, messages.length],
+    queryFn: () => chatsApi.replyInterrupted(chatId),
+    enabled: transcriptIdle && !draft && messages.length > 0,
+    staleTime: Infinity,
+    // An unreadable run history only hides the offer; don't keep asking.
+    retry: false,
+  });
+  // Like the failure card, a Resume press is busy only in its own chat.
+  const resumeTokenRef = React.useRef(0);
+  const [resumeOwners, setResumeOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const resumeBusy = resumeOwners[chatId] !== undefined;
+  const resumeInterruptedReply = React.useCallback(async () => {
+    const token = ++resumeTokenRef.current;
+    setResumeOwners((owners) => ({ ...owners, [chatId]: token }));
+    try {
+      await handleSend(INTERRUPTED_REPLY_FOLLOW_UP, []);
+    } catch (resumeError) {
+      if (chatIdRef.current !== chatId) return;
+      toast.error(userFacingErrorMessage(resumeError, "Couldn’t resume this chat."));
+    } finally {
+      setResumeOwners((owners) => {
+        if (owners[chatId] !== token) return owners;
+        const { [chatId]: _settled, ...rest } = owners;
+        return rest;
+      });
+    }
+  }, [chatId, handleSend]);
+  const interruptedReply = React.useMemo(
+    () =>
+      transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true
+        ? { busy: resumeBusy, onResume: () => void resumeInterruptedReply() }
+        : undefined,
+    [draft, failedReplyId, replyInterruptedQuery.data, resumeBusy, resumeInterruptedReply, transcriptIdle],
+  );
+
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
     return () => readAloudController.stop();
@@ -3664,6 +3702,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
             failureActions={failureActions}
+            interruptedReply={interruptedReply}
             readAloud={readAloudProps}
             onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}

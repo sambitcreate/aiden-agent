@@ -923,6 +923,8 @@ export class PiAgentRuntimeHarness {
   private appCancelRequested = false;
   /** An abort() that arrived while no managed run was active; the next run honours it. */
   private pendingAbort = false;
+  /** Set by abortForShutdown: the cancelled run's operation is recorded as interrupted. */
+  private shutdownInterrupted = false;
   private managedAbortController: AbortController | undefined;
   private lastManagedOutcome: PiRuntimeTerminalOutcome | undefined;
   private managedRunning = false;
@@ -1917,12 +1919,14 @@ export class PiAgentRuntimeHarness {
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
+      const interruptedByShutdown = this.shutdownInterrupted;
+      this.shutdownInterrupted = false;
       try {
         await this.finishEffectOperation(
           outcome.kind === "completed"
             ? "completed"
             : outcome.kind === "app_cancelled"
-              ? "app_cancelled"
+              ? interruptedByShutdown ? "interrupted" : "app_cancelled"
               : outcome.kind === "provider_failed"
                 ? "provider_failed"
                 : "host_failed",
@@ -2657,6 +2661,15 @@ export class PiAgentRuntimeHarness {
     return { messages, late };
   }
 
+  /**
+   * Cancels like abort(), but records the run as interrupted rather than
+   * cancelled: the app is quitting, so the person can resume it next launch.
+   */
+  abortForShutdown(): void {
+    this.shutdownInterrupted = true;
+    this.abort();
+  }
+
   abort(): void {
     if (!this.managedRunning) this.pendingAbort = true;
     this.appCancelRequested = true;
@@ -2862,7 +2875,7 @@ export class PiAgentRuntimeHarness {
   }
 
   private async finishEffectOperation(
-    state: Exclude<DurablePiRuntimeOperationState, "running" | "interrupted">,
+    state: Exclude<DurablePiRuntimeOperationState, "running">,
   ): Promise<void> {
     const binding = this.durability?.effects;
     const operation = this.activeEffectOperation;

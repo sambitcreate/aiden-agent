@@ -1512,6 +1512,8 @@ export const chatsApi = {
     invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
+  /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
+  replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
