@@ -7,6 +7,9 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
+import { once } from "node:events";
 
 const pkgDir = path.dirname(fileURLToPath(import.meta.url)) + "/..";
 const cli = path.join(pkgDir, "dist", "app", "cli.js");
@@ -501,4 +504,45 @@ test("bundled ChatGPT OAuth module loads and rejects missing installation identi
     prompt: async () => { throw new Error("Unexpected prompt before identity validation"); },
     notify: () => { throw new Error("Unexpected network login before identity validation"); },
   }), /requires a device ID/);
+});
+
+
+test("built CLI transport rejects excessive encodings and remains usable", async (t) => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-http-security-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    if (request.url === "/excessive") {
+      response.writeHead(200, { "content-encoding": "gzip, gzip, gzip, gzip, gzip, gzip", "content-length": "1" });
+      response.end();
+    } else {
+      response.writeHead(200, { "content-encoding": "gzip", "content-type": "text/plain" });
+      response.end(gzipSync("transport remains usable"));
+    }
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  const resultFile = path.join(agentDir, "transport-result.json");
+  const extension = path.join(agentDir, "transport-probe.mjs");
+  writeFileSync(extension, `import { writeFileSync } from "node:fs";
+export default function (pi) { pi.on("session_start", async () => {
+  let refused = false;
+  try { await fetch(${JSON.stringify(endpoint + "/excessive")}); } catch { refused = true; }
+  const text = await (await fetch(${JSON.stringify(endpoint + "/healthy")})).text();
+  writeFileSync(${JSON.stringify(resultFile)}, JSON.stringify({ refused, text }));
+}); }`);
+  const child = spawn(process.execPath, [cli, "--mode", "rpc", "--no-session", "--extension", extension], {
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", NO_PROXY: "*" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  t.after(() => { if (child.exitCode === null) child.kill("SIGKILL"); });
+  let stderr = ""; child.stdout.resume(); child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const completion = once(child, "close");
+  child.stdin.end('{"id":"transport","type":"get_state"}\n');
+  const [code] = await completion;
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(JSON.parse(readFileSync(resultFile, "utf8")), { refused: true, text: "transport remains usable" });
+  assert.deepEqual(requests, ["/excessive", "/healthy"]);
 });

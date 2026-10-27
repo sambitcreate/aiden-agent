@@ -22,7 +22,7 @@ const SOURCE_LABELS = {
   check: "Done-when check",
 } as const;
 
-export function AgentNoticeCard({ notice, content }: { notice: AgentNoticeV1; content: string }) {
+export function AgentNoticeCard({ notice, content, imageScope }: { notice: AgentNoticeV1; content: string; imageScope?: string }) {
   const [open, setOpen] = React.useState(false);
   const detailsId = React.useId();
   const Icon = SOURCE_ICONS[notice.source];
@@ -80,7 +80,7 @@ export function AgentNoticeCard({ notice, content }: { notice: AgentNoticeV1; co
         {open ? (
           <div id={detailsId} className="mt-2 min-w-0 select-text text-small">
             <p className="mb-1 text-mini text-tertiary">What Aiden told the agent</p>
-            <Markdown content={content} />
+            <Markdown content={content} imageScope={imageScope} />
           </div>
         ) : null}
       </div>

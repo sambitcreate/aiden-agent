@@ -297,6 +297,7 @@
         "main/windows/pill-window-security.test.ts",
         "renderer/shared/images/ports.test.ts",
         "scripts/check-ci-policy.test.mjs",
+        "scripts/pullfrog-locked-runtime.test.mjs",
         "scripts/ci-changes.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
         "scripts/ci-required.test.mjs",
@@ -346,6 +347,7 @@
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
         "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/workspace-artifacts/file-policy.linux.test.ts",
         "main/services/web-fetch.test.ts",
         "main/services/web-extract-core.test.ts",
         "main/services/web-fetch-transport.test.ts",
@@ -390,6 +392,7 @@
         "main/services/mcp-dependents.test.ts",
         "main/services/mcp-exposure.test.ts",
         "main/services/mcp-field-secrets-core.test.ts",
+        "main/services/mcp-launch-review-core.test.ts",
         "main/services/mcp-mac-apps.test.ts",
         "main/services/mcp-stdio-approvals.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
@@ -1175,7 +1178,10 @@
         "main/handlers/telegram.test.ts",
         "main/services/telegram/telegram-pairing.test.ts",
         "main/services/telegram/telegram-delivery.test.ts",
-        "renderer/components/settings/telegram-pairing-panel.test.tsx"
+        "renderer/components/settings/telegram-pairing-panel.test.tsx",
+        "main/services/transcript-image-fetch.test.ts",
+        "main/handlers/transcript-images.test.ts",
+        "renderer/components/transcript-image.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

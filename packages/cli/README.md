@@ -133,7 +133,7 @@ Delegation in the TUI uses private child inference processes, parent-owned tools
 capability gates, one-shot effect approvals, and durable native history (`/subagents`).
 Standalone generative HTML bundles the vendored chart/math libraries for offline viewing.
 Daemon state and the Unix control socket live in the agent directory; each daemon requires
-its own directory. Shutdown cancels active generations, settles scheduled work, and closes
+its own owned private directory (`0700` on macOS/Linux). Daemon start, status, stop, stale-lease recovery and control connections reject symlinked, shared/permissive or foreign-owned existing roots before reading or removing their contents. Repair the dedicated directory deliberately before retrying; do not use home itself as the agent directory. Newly created roots are private, and normal macOS ancestor aliases remain supported. Socket chmod is additional protection; no Windows ACL equivalence is claimed. Shutdown cancels active generations, settles scheduled work, and closes
 connector/worker resources.
 
 ## Linux container

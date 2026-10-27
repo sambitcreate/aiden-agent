@@ -704,7 +704,7 @@ export function TranscriptEntries({
           case "assistant":
             return (
               <BotMessageActions key={row.id} text={row.text} from={name} align="start" onReply={onReply}>
-                <SafeMessageBubble role="assistant" content={row.text} showCopy={false} streaming={row.streaming} />
+                <SafeMessageBubble imageScope={row.id} role="assistant" content={row.text} showCopy={false} streaming={row.streaming} />
               </BotMessageActions>
             );
           case "recap":

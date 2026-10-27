@@ -329,6 +329,7 @@ test("Pullfrog uses immutable action source and frozen local runtime with OIDC",
   const agent = job.steps.find((step) => step.name === "Run agent");
   assert.equal(agent.uses, "pullfrog/pullfrog@0657d542f2e34565c6254d5c84581313e631cd90");
   assert.equal(agent.env.PULLFROG_FORCE_LOCAL_CLI, "1");
+  assert.equal(agent.env.NODE_OPTIONS, "--import=${{ github.workspace }}/scripts/pullfrog-locked-runtime.mjs");
   assert.equal(agent.with.timeout, "2h");
 });
 
@@ -405,7 +406,7 @@ test("Linux provenance policy rejects bypasses, incomplete subjects, and custom 
   const workflow = await readFile(releaseWorkflowUrl, "utf8");
   for (const [name, mutate] of [
     ["moving action ref", source => source.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4")],
-    ["branch dispatch bypass", source => source.replace(/(  linux-release:\n[\s\S]*?    if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u, "$1vars.RELEASES_ENABLED == 'true'")],
+    ["branch dispatch bypass", source => source.replace(/( {2}linux-release:\n[\s\S]*? {4}if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u, "$1vars.RELEASES_ENABLED == 'true'")],
     ["missing publish gate", source => source.replace("github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'", "github.ref == 'refs/heads/main'")],
     ["unnecessary content writes", source => source.replace("      contents: read", "      contents: write")],
     ["extra metadata permission", source => source.replace("      attestations: write", "      attestations: write\n      artifact-metadata: write")],

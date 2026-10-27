@@ -8,7 +8,7 @@ Research addition 2026-10-03 against `main` at `3f86d41af` (0.52.0): [all-PR inv
 
 ## Active and partial
 
-- [Security remediation from the October 27 audit](security-remediation-plan-2026-10-27.md) — In progress (2026-10-27). Focused stacked PRs cover verified fixes, source-backed hardening and explicit validation of conditional findings. The plan records all 23 dispositions, the T3 comparison, review gates and separate release/device acceptance. W1 Telegram pairing and the D1 ordinary-workspace ceiling are implemented locally, pending fresh review and attended pairing acceptance. W12 update authenticity and production CSP are implemented locally with source/behavioral/build evidence; hosted release and packaged runtime acceptance remain. V2 has a measured installed-process entitlement inventory and bounded signed-candidate follow-up, with exceptions retained.
+- [Security remediation from the October 27 audit](security-remediation-plan-2026-10-27.md) — In progress (2026-10-27). Focused stacked PRs cover verified fixes, source-backed hardening and conditional validations. All 23 dispositions and the T3 comparison remain tracked. Telegram, CLI consent, storage, mobile, Remote admission, transcript images, diagnostics, CI/dependencies and distribution have local implementations and fresh review. Exact-head CI and separate release/device acceptance remain in progress; existing entitlements are retained pending signed-candidate necessity checks.
 
 - [Renderer custom-protocol compatibility](renderer-protocol-compatibility-plan.md) — Deferred (2026-10-27). Separate W12 compatibility work must prove packaged scheme, asset, preload, worker, navigation and platform behavior before disabling the file-protocol fuse.
 

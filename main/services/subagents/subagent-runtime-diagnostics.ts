@@ -84,10 +84,15 @@ export function sanitizeSubagentDiagnosticText(value: string): string {
   try {
     // Preserve line boundaries through the richer subagent grammar so one
     // assigned credential cannot consume unrelated diagnostic lines.
-    const controlSafe = value
-      .replace(ANSI_ESCAPE_PATTERN, "")
-      .replace(CONTROL_CHARACTER_PATTERN, " ");
-    const normalized = redactDevLogSecrets(sanitizeSubagentText(controlSafe));
+    // The richer sanitizer must see C0 characters to detect credentials split
+    // across controls. Replacing them first would preserve the secret's bytes.
+    const controlSafe = value.replace(ANSI_ESCAPE_PATTERN, "");
+    // Inspect control-bearing lines first so a sensitive line cannot erase
+    // unrelated loader evidence. Then retain the full multiline assignment pass.
+    const inspected = controlSafe.split("\n").map((line) =>
+      line.replace(CONTROL_CHARACTER_PATTERN, " ") !== line ? sanitizeSubagentText(line) : line,
+    ).join("\n");
+    const normalized = redactDevLogSecrets(sanitizeSubagentText(inspected).replace(CONTROL_CHARACTER_PATTERN, " "));
     return normalized
       .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/giu, "[REDACTED URL]")
       .replace(/\bfile:\/\/\/[^\s"'<>]+/giu, "[REDACTED PATH]")
@@ -221,7 +226,9 @@ function boundedRecord(record: SubagentRuntimeFailureRecord): string {
     ...(diagnostic.providerCategory === undefined
       ? {}
       : { providerCategory: diagnostic.providerCategory }),
-    ...(diagnostic.detail
+    // Provider text can echo prompts or opaque credentials. Typed category,
+    // stage and code are sufficient. Other sanitized lifecycle evidence remains.
+    ...(diagnostic.detail && diagnostic.stage !== "provider" && diagnostic.stage !== "provider_hook"
       ? { detail: sanitizeSubagentDiagnosticText(diagnostic.detail).slice(0, MAX_DETAIL_CHARS) }
       : {}),
   }));

@@ -111,7 +111,7 @@ export function ForkSummaryCard({
         <div id={bodyId} className="mt-1 flex min-w-0 flex-col gap-2">
           <FocusLine instructions={summary.instructions} />
           <div className="select-text text-small">
-            <Markdown content={summary.text ?? ""} />
+            <Markdown content={summary.text ?? ""} imageScope={summary.afterMessageId} />
           </div>
           <FileList label="Read" paths={read} />
           <FileList label="Modified" paths={modified} />
