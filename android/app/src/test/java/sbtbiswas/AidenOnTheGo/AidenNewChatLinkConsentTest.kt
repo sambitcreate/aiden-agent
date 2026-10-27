@@ -5,6 +5,10 @@ import org.junit.Assert.*
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.features.remote.AidenPairingIdentity
 import sbtbiswas.AidenOnTheGo.notifications.AidenNewChatLinkConsent
+import sbtbiswas.AidenOnTheGo.notifications.AidenExternalNewChatQueue
+import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
+import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
+import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationRequest
 import java.time.Instant
 
 class AidenNewChatLinkConsentTest {
@@ -12,6 +16,37 @@ class AidenNewChatLinkConsentTest {
         AidenPairingIdentity("mac", "phone", Instant.EPOCH), "My Mac", workspace, "Project",
         AidenPairingIdentity("mac", "phone", Instant.EPOCH)
     )
+
+    @Test fun externalNewChatWaitsThroughConnectionAndWorkspaceRefreshThenOffersConsentOnce() {
+        val queue = AidenExternalNewChatQueue()
+        val pairing = target().pairing
+        queue.receive(AidenDeepLink.parse("aiden-otg://new-chat-voice?instance=mac&workspace=project"), pairing, pairing)
+        var presentations = 0
+        repeat(3) { if (queue.takeIfReady(false) { true } != null) presentations++ }
+        assertEquals(0, presentations)
+        assertEquals("project", queue.waiting?.request?.workspaceId)
+        val ready = queue.takeIfReady(true) { true }
+        if (ready != null) presentations++
+        assertFalse(ready?.request?.startsVoice == true)
+        assertNull(queue.takeIfReady(true) { true })
+        assertEquals(1, presentations)
+    }
+
+    @Test fun newerNavigationOrRevocationCannotResurrectAnOlderWaitingRequest() {
+        val queue = AidenExternalNewChatQueue()
+        val pairing = target().pairing
+        fun request(workspace: String) = AidenNavigationRequest(AidenNavigationDestination.NewChat, "mac", workspace)
+        queue.receive(request("old"), pairing, pairing)
+        assertNull(queue.takeIfReady(false) { true })
+        queue.receive(request("new"), pairing, pairing)
+        assertEquals("new", queue.takeIfReady(true) { true }?.request?.workspaceId)
+        queue.receive(request("revoked"), pairing, pairing)
+        assertNull(queue.takeIfReady(false) { false })
+        assertNull(queue.takeIfReady(true) { true })
+        queue.receive(request("superseded"), pairing, pairing)
+        queue.receive(AidenNavigationRequest(AidenNavigationDestination.Chat("existing"), "mac"), pairing, pairing)
+        assertNull(queue.takeIfReady(true) { true })
+    }
 
     @Test fun cancellationAndRevokedPairingNeverCreate() = runBlocking {
         val consent = AidenNewChatLinkConsent()

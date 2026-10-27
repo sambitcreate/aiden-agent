@@ -131,12 +131,19 @@ actor AidenChatDraftStore {
                 .appending(path: "AidenOnTheGo", directoryHint: .isDirectory)
                 .appending(path: "ChatDrafts-v1", directoryHint: .isDirectory)
         }
-        // Upgrade existing stores immediately, including a launch that only restores a draft.
-        // Failure keeps the old draft readable; every write retries this required preparation.
-        if fileManager.fileExists(atPath: self.root.path) {
-            do { try Self.prepareRoot(self.root, fileManager: fileManager, excludeFromBackup: excludeFromBackup) }
-            catch { AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown) }
-        }
+        Self.migrateExistingRoot(self.root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+    }
+
+    /// Called unconditionally by app startup, even when no conversation is opened.
+    func migrateExistingStorage() {
+        Self.migrateExistingRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+    }
+
+    private static func migrateExistingRoot(_ root: URL, fileManager: FileManager,
+                                            excludeFromBackup: (URL) throws -> Void) {
+        guard fileManager.fileExists(atPath: root.path) else { return }
+        do { try prepareRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup) }
+        catch { AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown) }
     }
 
     private static func prepareRoot(_ root: URL, fileManager: FileManager,

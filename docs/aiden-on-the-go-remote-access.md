@@ -129,8 +129,8 @@ attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records
 stay in the app's private storage and are scoped to that pairing. Editable mobile
 drafts and unconfirmed-send records are excluded from backups and do not move to
-a replacement phone through backup restore. iOS retains its existing protected
-storage class; Android keeps its backup and device-transfer exclusions.
+a replacement phone through backup restore. iOS marks existing draft storage during app startup even when no chat is opened
+and retains its existing protected storage class; Android keeps its backup and device-transfer exclusions.
 
 On Android, **Nearby** discovers desktops on the local network. New Android pairings
 require a desktop supporting the Android device identity (contract revision 31); an
@@ -143,7 +143,10 @@ than a trust-bypass retry.
 
 ## External links and shortcuts
 
-On iOS and Android, an external new-chat link asks before creating a chat. The
+On iOS and Android, an external new-chat link waits for connection and workspace
+readiness, then asks before creating a chat. Waiting grants no installation
+switch, chat creation or recording authority; newer navigation supersedes the
+waiting request. The
 confirmation names its desktop installation and workspace before any installation
 switch or host write. The legacy `aiden-otg://new-chat-voice` link opens this same
 confirmation and cannot start the microphone, even when microphone permission is

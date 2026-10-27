@@ -42,14 +42,39 @@ final class AidenNewChatLinkConsent {
     }
 }
 
+/// One navigation request can wait for a connection, without granting mutation authority.
+@MainActor @Observable
+final class AidenExternalNewChatQueue {
+    struct Entry: Equatable {
+        let request: AidenNavigationRequest
+        let origin: AidenRemoteRequestContext?
+        let instanceID: String
+        let deviceID: String
+        let pairedAt: Date
+    }
+    private(set) var waiting: Entry?
+    func receive(_ entry: Entry) { waiting = entry }
+    func invalidate() { waiting = nil }
+    func takeIfReady(_ ready: Bool, isValid: (Entry) -> Bool) -> Entry? {
+        guard let entry = waiting else { return nil }
+        guard isValid(entry) else { waiting = nil; return nil }
+        guard ready else { return nil }
+        waiting = nil
+        return entry
+    }
+}
+
 struct ContentView: View {
     @Bindable var coordinator: AidenRemoteCoordinator
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("aiden.mobileOnboarding.v1.complete") private var hasCompletedMobileOnboarding = false
     @State private var newChatConsent = AidenNewChatLinkConsent()
+    @State private var externalNewChats = AidenExternalNewChatQueue()
+    @State private var lastExternalNewChat: AidenNavigationRequest?
     @State private var foregroundIntents = AidenForegroundIntentRouter.shared
     @State private var showsNewChatConsent = false
     @State private var navigationRequest: AidenNavigationRequest?
+    @State private var sceneConnectionRefreshInProgress = false
     @State private var sceneRefreshGate = AidenSceneRefreshGate(refreshOnFirstActivation: true)
 
     var body: some View {
@@ -100,8 +125,16 @@ struct ContentView: View {
                 return
             }
             if request.destination == .newChat {
-                prepareNewChat(request, startsVoice: false, requiresConfirmation: true)
+                if request == lastExternalNewChat,
+                   externalNewChats.waiting != nil || newChatConsent.pending != nil || newChatConsent.active != nil { return }
+                externalNewChats.invalidate()
+                newChatConsent.invalidate()
+                showsNewChatConsent = false
+                lastExternalNewChat = request
+                receiveExternalNewChat(request)
             } else {
+                externalNewChats.invalidate()
+                lastExternalNewChat = nil
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
                 Task { await open(request) }
@@ -114,33 +147,46 @@ struct ContentView: View {
             Text("Create a chat in \(target.workspaceName) on \(target.installationName)? Use the microphone button when you are ready to dictate.")
         }
         .task(id: foregroundIntents.pending?.id) {
-            // A cold App Intent may arrive before this view or the connection is ready.
+            // A newer native intent supersedes a link still waiting for readiness.
+            if foregroundIntents.pending != nil {
+                externalNewChats.invalidate()
+                newChatConsent.invalidate()
+                showsNewChatConsent = false
+            }
             await consumeForegroundIntentIfReady()
         }
         .onDisappear {
+            externalNewChats.invalidate()
             newChatConsent.invalidate()
             _ = foregroundIntents.take()
         }
         .onChange(of: coordinator.connectionState) { _, state in
-            if state == .connected { Task { await consumeForegroundIntentIfReady() } }
-            else if newChatConsent.active == nil {
+            if state == .needsPairing { externalNewChats.invalidate() }
+            if state == .connected {
+                consumeExternalNewChatIfReady()
+                Task { await consumeForegroundIntentIfReady() }
+            } else if newChatConsent.active == nil {
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
             }
         }
         .onChange(of: coordinator.activeInstanceId) { _, _ in
+            consumeExternalNewChatIfReady()
             if newChatConsent.active == nil {
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await consumeForegroundIntentIfReady() } }
             switch sceneRefreshGate.transition(to: phase) {
             case .refresh:
                 guard coordinator.connectionState != .needsPairing else { return }
+                sceneConnectionRefreshInProgress = true
                 Task {
                     await coordinator.connectActiveInstallation()
+                    sceneConnectionRefreshInProgress = false
+                    consumeExternalNewChatIfReady()
+                    await consumeForegroundIntentIfReady()
                     // Bot routine results land as local notifications when
                     // the app comes to the foreground (there is no push).
                     Task { await AidenBotRoutineNotifier.shared.deliverIfSupported(coordinator: coordinator) }
@@ -154,11 +200,16 @@ struct ContentView: View {
                     }
                 }
             case .suspend:
+                externalNewChats.invalidate()
                 newChatConsent.invalidate()
                 showsNewChatConsent = false
                 _ = foregroundIntents.take()
                 Task { await AidenRemoteLiveActivityManager.shared.markAllStale() }
             case .resume, .none:
+                if phase == .active {
+                    consumeExternalNewChatIfReady()
+                    Task { await consumeForegroundIntentIfReady() }
+                }
                 // Returning from a transient `.inactive` (Control Center,
                 // app switcher, system prompts) keeps the live connection.
                 break
@@ -167,8 +218,39 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func receiveExternalNewChat(_ request: AidenNavigationRequest) {
+        guard coordinator.connectionState != .needsPairing,
+              let instanceID = request.instanceId ?? coordinator.activeInstanceId,
+              let installation = coordinator.installationStore.installations.first(where: { $0.id == instanceID }),
+              let origin = try? coordinator.requestContext() else {
+            coordinator.presentedError = String(localized: "Connect to Aiden Agent before opening this link.")
+            return
+        }
+        externalNewChats.receive(.init(request: request, origin: origin, instanceID: instanceID,
+            deviceID: installation.deviceId, pairedAt: installation.createdAt))
+        consumeExternalNewChatIfReady()
+        if case .offline = coordinator.connectionState {
+            Task { await coordinator.connectActiveInstallation() }
+        }
+    }
+
+    @MainActor
+    private func consumeExternalNewChatIfReady() {
+        if foregroundIntents.pending != nil { externalNewChats.invalidate(); return }
+        if coordinator.connectionState == .needsPairing { externalNewChats.invalidate(); return }
+        let ready = coordinator.connectionState == .connected && scenePhase == .active && !sceneConnectionRefreshInProgress
+        guard let entry = externalNewChats.takeIfReady(ready, isValid: { entry in
+            entry.origin.map(coordinator.isCurrent) == true && coordinator.installationStore.installations.contains {
+                $0.id == entry.instanceID && $0.deviceId == entry.deviceID && $0.createdAt == entry.pairedAt
+            }
+        }) else { return }
+        prepareNewChat(.init(destination: .newChat, instanceId: entry.instanceID,
+            workspaceId: entry.request.workspaceId, startsVoice: false), startsVoice: false, requiresConfirmation: true)
+    }
+
+    @MainActor
     private func consumeForegroundIntentIfReady() async {
-        guard scenePhase == .active, coordinator.connectionState == .connected,
+        guard scenePhase == .active, !sceneConnectionRefreshInProgress, coordinator.connectionState == .connected,
               let action = foregroundIntents.take() else { return }
         prepareNewChat(AidenNavigationRequest(destination: .newChat, instanceId: action.instanceID,
             workspaceId: action.workspaceID, startsVoice: false), startsVoice: action.startsVoice, requiresConfirmation: false)

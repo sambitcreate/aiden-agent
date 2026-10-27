@@ -25,6 +25,7 @@ class AidenNewChatLinkConsent {
     private val _approved = MutableStateFlow<Target?>(null)
     val approved = _approved.asStateFlow()
     private var active: Target? = null
+    val hasPendingOrActive: Boolean get() = _pending.value != null || _approved.value != null || active != null
 
     fun propose(target: Target): Boolean {
         if (_pending.value != null || _approved.value != null || active != null) return false
@@ -55,5 +56,24 @@ class AidenNewChatLinkConsent {
         } finally {
             if (active?.id == target.id) active = null
         }
+    }
+}
+
+/** Waiting for readiness is navigation, never approval to mutate or record. */
+class AidenExternalNewChatQueue {
+    data class Entry(val request: AidenNavigationRequest, val origin: AidenPairingIdentity?, val target: AidenPairingIdentity?)
+    var waiting: Entry? = null
+        private set
+    fun receive(request: AidenNavigationRequest?, origin: AidenPairingIdentity?, target: AidenPairingIdentity?) {
+        waiting = request?.takeIf { it.destination == AidenNavigationDestination.NewChat }
+            ?.let { Entry(it.copy(startsVoice = false), origin, target) }
+    }
+    fun invalidate() { waiting = null }
+    fun takeIfReady(ready: Boolean, isValid: (Entry) -> Boolean): Entry? {
+        val entry = waiting ?: return null
+        if (!isValid(entry)) { waiting = null; return null }
+        if (!ready) return null
+        waiting = null
+        return entry
     }
 }

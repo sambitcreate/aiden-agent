@@ -1328,6 +1328,30 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAppStartupMigratesExistingDraftStorageWithoutOpeningAConversation() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "launch-draft-migration-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let drafts = AidenChatDraftStore(root: root)
+        let session = await drafts.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await drafts.save("Draft from an earlier app version", session: session)
+        var existingRoot = root
+        var legacyValues = URLResourceValues()
+        legacyValues.isExcludedFromBackup = false
+        try existingRoot.setResourceValues(legacyValues)
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: AidenInstallationStore(keychain: AidenChatProgressMemoryKeychain()),
+            chatDraftStore: drafts,
+            clientFactory: { _, _ in XCTFail("Unpaired startup migration must be offline"); throw AidenRemoteClientError.installationChanged }
+        )
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, false)
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        let retained = await drafts.load(session: session)
+        XCTAssertEqual(retained, "Draft from an earlier app version")
+    }
+
+    @MainActor
     func testDictationLaunchCannotRecordAfterPairingRemoval() async throws {
         var coordinator: AidenRemoteCoordinator!
         let model = try await makeProgressLifecycleModel(mode: .denied, onCoordinator: { coordinator = $0 })

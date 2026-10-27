@@ -16,6 +16,45 @@ final class AidenNativeIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testExternalNewChatWaitsForReadinessThenOffersConsentOnlyOnce() throws {
+        let queue = AidenExternalNewChatQueue()
+        let request = try XCTUnwrap(AidenDeepLink.request(from: URL(string: "aiden-otg://new-chat-voice?instance=mac&workspace=project")!))
+        let entry = AidenExternalNewChatQueue.Entry(request: request, origin: nil, instanceID: "mac", deviceID: "phone", pairedAt: Date())
+        queue.receive(entry)
+        var presentations = 0
+        for _ in 0..<3 {
+            if queue.takeIfReady(false, isValid: { _ in true }) != nil { presentations += 1 }
+        }
+        XCTAssertEqual(presentations, 0)
+        XCTAssertEqual(queue.waiting?.request.workspaceId, "project")
+        if let ready = queue.takeIfReady(true, isValid: { _ in true }) {
+            presentations += 1
+            XCTAssertFalse(ready.request.startsVoice)
+        }
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+        XCTAssertEqual(presentations, 1)
+    }
+
+    @MainActor
+    func testNewerNavigationAndRevocationDiscardWaitingNewChatRequests() throws {
+        let queue = AidenExternalNewChatQueue()
+        func entry(_ workspace: String) -> AidenExternalNewChatQueue.Entry {
+            .init(request: .init(destination: .newChat, instanceId: "mac", workspaceId: workspace, startsVoice: false),
+                  origin: nil, instanceID: "mac", deviceID: "phone", pairedAt: Date())
+        }
+        queue.receive(entry("older"))
+        XCTAssertNil(queue.takeIfReady(false, isValid: { _ in true }))
+        queue.receive(entry("newer"))
+        XCTAssertEqual(queue.takeIfReady(true, isValid: { _ in true })?.request.workspaceId, "newer")
+        queue.receive(entry("revoked"))
+        XCTAssertNil(queue.takeIfReady(false, isValid: { _ in false }))
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+        queue.receive(entry("superseded-by-shortcut"))
+        queue.invalidate()
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+    }
+
+    @MainActor
     func testForegroundIntentIsRetainedBeforeConsumerMountsThenConsumedOnceAndExpires() async throws {
         let router = AidenForegroundIntentRouter.shared
         _ = router.take()

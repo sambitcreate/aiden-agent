@@ -31,6 +31,7 @@ import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationRequest
 import sbtbiswas.AidenOnTheGo.notifications.AidenNewChatLinkConsent
+import sbtbiswas.AidenOnTheGo.notifications.AidenExternalNewChatQueue
 import sbtbiswas.AidenOnTheGo.features.remote.pairing
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
@@ -51,6 +52,8 @@ class MainActivity : ComponentActivity() {
     private val pendingNavigationRequest = mutableStateOf<AidenNavigationRequest?>(null)
     private var pendingDeepLink: String? = null
     private val newChatConsent = AidenNewChatLinkConsent()
+    private val externalNewChats = AidenExternalNewChatQueue()
+    private var lastExternalNewChat: AidenNavigationRequest? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -159,14 +162,24 @@ class MainActivity : ComponentActivity() {
                 val request = pendingNavigationRequest.value ?: return@LaunchedEffect
                 val requestedInstance = request.instanceId
                 if (request.destination == AidenNavigationDestination.NewChat) {
-                    // Freeze displayed target before any installation switch or host mutation.
-                    if (connectionState != AidenConnectionState.CONNECTED || !hasCompletedWorkspaceRefresh) {
-                        coordinator.presentError("Connect to Aiden Agent before opening this link.")
-                        clearPendingNavigation()
+                    // Keep the latest navigation pending through connection/workspace refresh.
+                    // The request still owns no switch, creation or microphone authority.
+                    val entry = externalNewChats.takeIfReady(
+                        connectionState == AidenConnectionState.CONNECTED && hasCompletedWorkspaceRefresh
+                    ) { candidate ->
+                        candidate.origin != null && candidate.origin == coordinator.activePairing &&
+                            candidate.target != null && installations.any { it.pairing == candidate.target }
+                    }
+                    if (entry == null) {
+                        if (externalNewChats.waiting == null || connectionState == AidenConnectionState.NEEDS_PAIRING) {
+                            externalNewChats.invalidate()
+                            coordinator.presentError("Connect to the paired Aiden installation before opening this link.")
+                            clearPendingNavigation()
+                        }
                         return@LaunchedEffect
                     }
-                    val instanceId = requestedInstance ?: coordinator.activeInstanceId
-                    val installation = installations.firstOrNull { it.id == instanceId }
+                    val instanceId = entry.target?.instanceId
+                    val installation = installations.firstOrNull { it.pairing == entry.target }
                     val catalog = container.intentCatalogStore.load()
                     val candidates = if (coordinator.activeInstanceId == instanceId) {
                         workspaces.map { sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord(it.id, instanceId.orEmpty(), it.name) }
@@ -479,7 +492,18 @@ class MainActivity : ComponentActivity() {
     private fun acceptDeepLink(data: String?) {
         if (data == null) return
         val request = AidenDeepLink.parse(data)
-        if (request != null && request.destination != AidenNavigationDestination.NewChat) newChatConsent.invalidate()
+        if (request?.destination == AidenNavigationDestination.NewChat) {
+            if (request == lastExternalNewChat && (externalNewChats.waiting != null || newChatConsent.hasPendingOrActive)) return
+            newChatConsent.invalidate()
+            lastExternalNewChat = request
+        } else if (request != null) {
+            newChatConsent.invalidate()
+            lastExternalNewChat = null
+        }
+        val container = (application as AidenOnTheGoApp).container
+        val targetInstance = request?.instanceId ?: container.coordinator.activeInstanceId
+        externalNewChats.receive(request, container.coordinator.activePairing,
+            container.installationStore.installations.value.firstOrNull { it.id == targetInstance }?.pairing)
         pendingDeepLink = data.takeIf { request != null }
         pendingNavigationRequest.value = request
     }
