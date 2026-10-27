@@ -184,6 +184,24 @@ test("release notes name the Beta channel and lead the generated changelog", asy
   );
 });
 
+test("the workflow's relative invocation reads the release's checked-in notes", async () => {
+  const setup = await fixture({});
+  const repoRoot = new URL("..", import.meta.url).pathname;
+  const env = { ...setup.env, RELEASE_TAG: "v0.62.0" };
+  delete env.AIDEN_RELEASE_NOTES_DIR;
+  await execFileAsync("bash", ["scripts/publish-github-release.sh", setup.distribution], {
+    cwd: repoRoot,
+    env,
+  });
+  const state = JSON.parse(await readFile(setup.statePath, "utf8"));
+  const checkedIn = (await readFile(new URL("../docs/release-notes/v0.62.0.md", import.meta.url), "utf8")).trim();
+  assert.equal(state.createCalls, 1);
+  assert.equal(
+    state.notes,
+    `Aiden Agent beta release.\n\n${checkedIn}\n\nChanges since the previous release:`,
+  );
+});
+
 test("fails closed before upload when the release tag already exists", async () => {
   const setup = await fixture({
     exists: true,
