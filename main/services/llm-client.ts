@@ -5220,14 +5220,6 @@ export const llmClient = {
   },
 
   /** Discard active snapshots when the user disables skills across the app. */
-  cancelForSkillsDisabled(): void {
-    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
-      this.cancel(streamId, "user_stop");
-    }
-    // Detached children may retain skill instructions in their forked context.
-    subagentRuntimeRegistry.abortAll();
-  },
-
   /** Closing the global gate cancels every snapshot that could race the setting change. */
   cancelComputerUseGenerations(): void {
     computerUseGenerationGate.close();
