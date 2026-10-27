@@ -109,6 +109,8 @@ Aiden feature parity landed in phases (todo, btw, advisor, memory, subagents, `a
 
 `aiden --help` lists the complete command surface. Register a directory with
 `aiden workspace add /absolute/project`, then use `aiden workspace access <id> full|ask|none`.
+Model-originated schedule saves, pauses, resumes and removals require a separate foreground confirmation even in Full access. The confirmation identifies the target workspace, task and selected model. Denial, cancellation, expired approval or a changed workspace/provider/task prevents publication; without an interactive UI the mutation is refused. Listing, previewing and inspecting runs remain read-only. Direct user-invoked schedule administration remains available.
+
 Ask mode requires one approval per tool call; unattended Telegram and schedule execution
 require explicit Full workspace access. Schedules also retain their own read-only/Full tool
 selection and exact MCP connection bindings.
@@ -170,3 +172,5 @@ Ask what Aiden can do or how its agent works: `aiden_help` reads bundled help of
 `/aiden-settings appearance|memory|web-search|skills` opens Pi's native settings selector inside the conversation. Theme changes use Pi's real theme API and verify the saved terminal default. Memory and Web Search switches persist in this CLI's actual agent directory; restart the CLI to rebuild feature tools after enablement. Desktop chat width, workspace memory and the desktop Skills gate are shown as unsupported. Nothing changes just by displaying a card, and no app operation controls an open Electron window.
 
 For explicit headless administration, use `aiden app help [query]`, `aiden app status`, `aiden app get memory`, then `aiden app set memory.enabled false <revision> [operation-id]`. Supply the revision returned by the read; retry an uncertain request with the same operation ID. Headless agent tool calls cannot mutate app preferences. Set `appControlPolicy` in device-local `aiden.json` to `disabled`, `ask`, or `safe`; interactive enablement always requires a foreground choice.
+
+Telegram ownership remains an explicit terminal configuration: `telegram configure` requires a positive owner ID and a registered Full-access workspace. Existing configured owners do not need the desktop pairing flow. The shared transport refuses first-message auto-pairing; desktop pairing uses a host-issued, five-minute, single-use command.

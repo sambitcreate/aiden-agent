@@ -40,3 +40,12 @@ test("Telegram workspace options retain an unavailable saved selection", () => {
     { value: "missing", label: "Selected workspace is unavailable", unavailable: true },
   ]);
 });
+
+test("No Access folders cannot be selected but a saved denied selection stays visible as unavailable", () => {
+  const denied = { id: "denied", name: "Private", folderPath: "/private", permission: "none" as const, createdAt: 1, updatedAt: 1 };
+  const options = telegramWorkspaceOptions([denied], "denied");
+  assert.deepEqual(options, [
+    { value: TELEGRAM_ASSISTANT_ONLY_VALUE, label: "Assistant-only mode" },
+    { value: "denied", label: "Selected workspace is unavailable", unavailable: true },
+  ]);
+});

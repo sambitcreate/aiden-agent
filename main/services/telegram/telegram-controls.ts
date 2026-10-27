@@ -350,6 +350,7 @@ export function buildWorkspaceMenu(
       ...(workspaces.length
         ? ["", "You can also use <code>/workspace &lt;number&gt;</code>."]
         : []),
+      "Selecting a folder grants unattended file edits and shell commands, including in Ask workspaces. No Access folders are unavailable.",
       "Workspace authority is captured when each prompt enters the queue.",
     ].join("\n"),
     markup: {

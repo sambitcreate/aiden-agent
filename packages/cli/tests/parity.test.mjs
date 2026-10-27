@@ -14,9 +14,9 @@ import * as api from "../dist/parity-test-api.js";
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function temporary(t) { const dir = mkdtempSync(join(tmpdir(), "aiden-parity-")); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
-function extension(extension) {
+function extension(extension, extra = {}) {
   const events = new Map(), commands = new Map(), tools = new Map(); let name;
-  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; } });
+  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; }, ...extra });
   return { events, commands, tools, name: () => name };
 }
 
@@ -311,15 +311,136 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
 });
 
+async function scheduleToolFixture(t) {
+  const dir = temporary(t);
+  const workspace = await api.workspaceCommand(dir, ["add", dir]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const model = { id: "offline", name: "Offline", provider: "schedule-fixture", api: "openai-completions", baseUrl: "http://127.0.0.1:1/v1", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  api.atomicJson(join(dir, "models.json"), { providers: { [model.provider]: { api: model.api, baseUrl: model.baseUrl, apiKey: "test-only", models: [model] } } });
+  const harness = extension(api.createScheduleExtension(dir));
+  const tool = harness.tools.get("schedule_task");
+  const input = { action: "save", name: "Daily review", cron: "0 9 * * *", timezone: "UTC", prompt: "Review this workspace", permission: "full", enabled: true, workspaceId: workspace.id };
+  return { dir, workspace, model, tool, input, context: { cwd: dir, model, hasUI: true, ui: { confirm: async () => true } } };
+}
+
+test("owned schedule reads retain Ask-mode consent, including headless calls", async (t) => {
+  const { dir, workspace, context } = await scheduleToolFixture(t);
+  await api.workspaceCommand(dir, ["access", workspace.id, "ask"]);
+  const harness = extension(api.createSessionParityExtension(dir), {
+    getAllTools: () => [{ name: "schedule_task", sourceInfo: { path: "<inline:aiden-schedule>" } }],
+  });
+  const hook = harness.events.get("tool_call");
+  for (const action of ["list", "preview", "runs"]) {
+    const result = await hook({ toolName: "schedule_task", input: { action, id: "task" } }, { ...context, hasUI: false });
+    assert.equal(result.block, true, action);
+  }
+  let prompts = 0;
+  assert.equal(await hook({ toolName: "schedule_task", input: { action: "list" } }, {
+    ...context, ui: { confirm: async () => { prompts++; return true; } },
+  }), undefined);
+  assert.equal(prompts, 1);
+});
+
+test("a long existing prompt does not prevent approving pause or removal", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Read this detailed instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  await tool.execute("pause-long", { action: "pause", id: task.id }, undefined, undefined, context);
+  await tool.execute("remove-long", { action: "remove", id: task.id }, undefined, undefined, context);
+  assert.equal(confirmations, 2);
+  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 0);
+});
+
+test("model scheduling in a Full workspace requires consent and leaves no state on denial or missing UI", async (t) => {
+  const { dir, tool, input, context } = await scheduleToolFixture(t);
+  await assert.rejects(tool.execute("headless", input, undefined, undefined, { ...context, hasUI: false }), /not approved/);
+  await assert.rejects(tool.execute("denied", input, undefined, undefined, { ...context, ui: { confirm: async () => false } }), /not approved/);
+  assert.equal(existsSync(join(dir, "schedules.json")), false);
+  assert.equal(existsSync(join(dir, "schedule-proposals")), false);
+});
+
+test("approved model scheduling persists one exact task and replay does not duplicate it", async (t) => {
+  const { dir, tool, input, context } = await scheduleToolFixture(t);
+  let consent;
+  context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
+  await tool.execute("one-approved-call", input, undefined, undefined, context);
+  const tasks = await api.scheduleCommand(dir, ["list"]);
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].prompt, "Review this workspace");
+  assert.equal(tasks[0].permission, "full");
+  assert.equal(tasks[0].enabled, true);
+  assert.equal(tasks[0].workspaceId, consent.workspace.id);
+  assert.equal(consent.request.cron, "0 9 * * *");
+  assert.equal(consent.model.provider, "schedule-fixture");
+  await assert.rejects(tool.execute("one-approved-call", input, undefined, undefined, context), /already submitted/);
+  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
+});
+
+test("schedule consent cannot survive changed arguments, provider configuration, workspace authority or cancellation", async (t) => {
+  for (const change of ["arguments", "provider", "workspace", "cancel"]) {
+    await t.test(change, async (t) => {
+      const { dir, workspace, tool, input, context } = await scheduleToolFixture(t);
+      const controller = new AbortController();
+      context.ui.confirm = async () => {
+        if (change === "arguments") input.permission = "read-only";
+        if (change === "provider") api.atomicJson(join(dir, "models.json"), { providers: {} });
+        if (change === "workspace") await api.workspaceCommand(dir, ["access", workspace.id, "none"]);
+        if (change === "cancel") controller.abort();
+        return true;
+      };
+      await assert.rejects(tool.execute("changed-call", input, controller.signal, undefined, context));
+      assert.equal(existsSync(join(dir, "schedules.json")), false);
+    });
+  }
+});
+
+test("an approved schedule mutation rechecks authority at publication, after asynchronous preparation", async (t) => {
+  const { dir, tool, input, context } = await scheduleToolFixture(t);
+  await tool.execute("create", input, undefined, undefined, context);
+  const [task] = await api.scheduleCommand(dir, ["list"]);
+  const approved = { cwd: dir, action: "pause", input: { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "approved.json") };
+  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
+  api.atomicJson(approved.approvalFile, approved.snapshot);
+  api.atomicJson(join(dir, "models.json"), { providers: {} });
+  await assert.rejects(api.scheduleCommand(dir, ["pause", task.id, JSON.stringify(approved)]), /changed after approval/);
+  assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
+});
+
+test("a cancelled or expired publication receipt cannot change an existing task", async (t) => {
+  const { dir, tool, input, context } = await scheduleToolFixture(t);
+  await tool.execute("create", input, undefined, undefined, context);
+  const [task] = await api.scheduleCommand(dir, ["list"]);
+  const approved = { cwd: dir, action: "remove", input: { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "cancelled.json") };
+  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
+  await assert.rejects(api.scheduleCommand(dir, ["remove", task.id, JSON.stringify(approved)]), /cancelled/);
+  api.atomicJson(approved.approvalFile, approved.snapshot);
+  await assert.rejects(api.scheduleCommand(dir, ["remove", task.id, JSON.stringify({ ...approved, expiresAt: 1 })]), /expired/);
+  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
+});
+
+test("pause, resume and removal require their own approval, while listing is read-only", async (t) => {
+  const { dir, tool, input, context } = await scheduleToolFixture(t);
+  await tool.execute("create", input, undefined, undefined, context);
+  const [task] = await api.scheduleCommand(dir, ["list"]);
+  const denied = { ...context, ui: { confirm: async () => false } };
+  for (const action of ["pause", "resume", "remove"]) {
+    await assert.rejects(tool.execute(action, { action, id: task.id }, undefined, undefined, denied), /not approved/);
+  }
+  const listed = await tool.execute("list", { action: "list" }, undefined, undefined, denied);
+  assert.equal(JSON.parse(listed.content[0].text).length, 1);
+  assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
+});
+
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
   const dir = temporary(t), controller = new AbortController();
-  const promise = api.serve(dir, controller.signal);
+  const ready = Promise.withResolvers();
+  const promise = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void promise.catch(ready.reject);
   t.after(async () => { controller.abort(); await promise; });
-  // Wait on filesystem readiness rather than a fixed startup delay.
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* Process may already have exited. */ }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await ready.promise;
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
   controller.abort(); await promise;
   const release = api.acquireLease(join(dir, "serve")); release();
@@ -350,12 +471,11 @@ test("daemon control socket decodes multi-byte UTF-8 split across chunks on both
 
   // Server side: a request whose non-ASCII argument straddles two socket writes.
   const dir = temporary(t), controller = new AbortController();
-  const promise = api.serve(dir, controller.signal);
+  const ready = Promise.withResolvers();
+  const promise = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void promise.catch(ready.reject);
   t.after(async () => { controller.abort(); await promise; });
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await ready.promise;
   const folder = join(dir, "wörkspace-☕"); mkdirSync(folder);
   const request = Buffer.from(JSON.stringify({ command: "workspace", args: ["add", folder] }) + "\n", "utf8");
   const cut = request.indexOf(Buffer.from("☕", "utf8")) + 1; // inside the 3-byte coffee cup
@@ -381,18 +501,12 @@ test("foreground serve recovers a legacy stale lease naming a recycled foreign p
   api.atomicJson(join(lock, "owner.json"), { pid: foreign.pid, startedAt: 1 });
   writeFileSync(api.daemonSocket(dir), "stale socket");
   const controller = new AbortController();
-  const serving = api.serve(dir, controller.signal);
-  let failure;
-  void serving.catch((error) => { failure = error; });
+  const ready = Promise.withResolvers();
+  const serving = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
   try {
-    let listening = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (failure) throw failure;
-      try { listening = statSync(api.daemonSocket(dir)).isSocket(); } catch { /* starting */ }
-      if (listening) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(listening, true, "foreground serve should replace the stale socket");
+    await ready.promise;
+    assert.equal(statSync(api.daemonSocket(dir)).isSocket(), true, "foreground serve should replace the stale socket");
     assert.equal(api.pidAlive(foreign.pid), true, "recovery must not signal the foreign process");
     assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid, process.pid);
   } finally {

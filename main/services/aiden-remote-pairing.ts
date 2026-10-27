@@ -373,6 +373,13 @@ export class AidenRemotePairingService {
     window?.manualSalt.fill(0);
   }
 
+  /** Main-owned admission authority; never serialized in a client response. */
+  admissionWindow(): { id: string; expiresAt: number } | undefined {
+    const current = this.window;
+    if (!current || this.status()?.state !== "awaiting_scan") return undefined;
+    return { id: current.sessionId, expiresAt: current.expiresAt };
+  }
+
   status(): AidenRemotePairingWindowStatus | undefined {
     const current = this.window;
     if (!current) return undefined;

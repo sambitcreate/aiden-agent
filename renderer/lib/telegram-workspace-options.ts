@@ -15,7 +15,7 @@ export function telegramWorkspaceOptions(
   const options: TelegramWorkspaceOption[] = [
     { value: TELEGRAM_ASSISTANT_ONLY_VALUE, label: "Assistant-only mode" },
     ...workspaces
-      .filter((workspace) => workspace.folderPath)
+      .filter((workspace) => workspace.folderPath && workspace.permission !== "none")
       .map((workspace) => ({
         value: workspace.id,
         label: `${workspace.name} — ${workspace.folderPath}`,

@@ -44,7 +44,7 @@ Any computer running Aiden Agent can use the chats, workspaces and Bots of anoth
 
 ### Pair a computer
 
-1. On the computer you want to control, open **Settings → Connections → Control this device** and leave **Accept connection requests** on.
+1. On the computer you want to control, open **Settings → Connections → Control this device** enable **Accept connection requests** (off on new installations), and open **Add device**. Requests are accepted only while that host window is open. Existing paired devices continue to work.
 2. On this Mac, open **Settings → Connections → Control other devices** and choose **Add device**. While the sheet is open, Aiden looks for computers on the same network and on your Tailscale tailnet. It never searches in the background.
 3. Choose **Connect** beside the computer. Both screens show the same six-digit match code.
 4. On the other computer, check the code and choose **Allow**. A request that is denied, cancelled or left for two minutes pairs nothing.

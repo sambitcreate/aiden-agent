@@ -566,6 +566,12 @@ export function createScheduleServiceCore(
     pendingRetryAt.clear();
   }
 
+  async function rearmCurrentTask(previous: ScheduledTask | undefined): Promise<void> {
+    if (!previous?.enabled) return;
+    const current = await store.get(previous.id);
+    if (current?.enabled) await schedule(current);
+  }
+
   return {
     async start(): Promise<void> {
       if (started) return;
@@ -764,7 +770,12 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "removal");
         }
-        await store.remove(id);
+        try {
+          await store.remove(id);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         dependencies.broadcast({ taskId: id, removed: true });
       });
     },
@@ -785,7 +796,13 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "pause");
         }
-        const task = await store.setEnabled(id, false);
+        let task: ScheduledTask;
+        try {
+          task = await store.setEnabled(id, false);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         if (options.signal?.aborted) {
           if (current) {
             const restored = await store.setEnabled(id, current.enabled);

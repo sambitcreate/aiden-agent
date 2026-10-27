@@ -89,6 +89,8 @@ If only two changes can be completed, finish W1 and W2. Do not combine them into
 
 ## W1: Require a host-issued Telegram pairing code
 
+Implementation status: implemented locally in the Telegram remediation slice, pending fresh patch review and attended real-bot acceptance. The shared gate now requires an ephemeral five-minute proof, bound to profile and token identity, with single-use consumption and guarded owner persistence. Existing desktop and CLI owners remain valid. No Access admission and queued revocation follow the D1 decision below.
+
 Observed boundary: the bridge currently persists the first eligible private sender as owner. Knowing a bot handle must not be sufficient to acquire this authority.
 
 Proposed behavior:
@@ -300,7 +302,7 @@ Primary files: main/services/app-updater.ts, app-updater-linux.ts, main-window.h
 
 | Item | Recommended direction | Required evidence before implementation |
 | --- | --- | --- |
-| D1, Telegram versus workspace permission | Make No Access block regular-workspace Telegram admission. For Ask workspaces, either reject unattended use or require an explicit separately displayed Telegram automation grant. Preserve Bot policy ownership. | Read the current selector, command path, queued/active-turn behavior and Bot bindings; agree the user-facing rule and revocation behavior. No generic min(options.permission, workspace.permission) patch. |
+| D1, Telegram versus workspace permission | Decision implemented locally: No Access blocks ordinary Telegram selection, admission and dispatch; workspace downgrades revoke queued work and cancel active ordinary turns. Ask retains its explicit, separately disclosed unattended Full automation grant in Settings and the connection review. Bot policies remain authoritative. | Focused behavioral coverage exercises denied selection/ingress, queued downgrade, dispatch recheck and valid Bot ingress. Fresh review and attended acceptance remain. The generic permission resolver is unchanged. |
 | D2, desktop/mobile device grants | Host chooses consequential grants; client device type remains display metadata. | Inventory existing host/simulator/mobile grants, compatibility and notice requirements. Coordinate with W5; do not demand unverifiable hardware attestation. |
 | D3, mobile draft backups | Chosen: exclude unsent drafts and pending-send text from backup to retain them only on the original device. Implemented as privacy hardening, without claiming previous upload or a proven policy violation. | iOS marks existing storage during unconditional app startup without opening a chat and rechecks before every protected write; tests cover migration, pending sends, deletion/recreation and exclusion failures. Backup restore does not migrate these records. Android backup/device-transfer exclusions remain unchanged. |
 | V1, remembered approval identity | Validate a normal workspace deleted/recreated at the same path and a rebuilt managed worktree. Add incarnation binding only where current admission does not already reject it. | Reproduce approved exact-command reuse with a surviving workspace record. Include workspace removal, path relocation and normal atomic file changes. |
@@ -393,6 +395,12 @@ Keep public diagnostics content-free. Track only bounded stage/result codes need
 The release gate is per slice: local source/tests, exact-head CI/reviews, packaged app, physical devices and live networks are separate evidence. Mark each as passed, failed or pending with its exact revision/build. A merged PR is not proof that the installed app or a phone build contains the fix.
 
 After a slice lands, update this plan and its index row with the PR/head and outstanding acceptance. Move this plan into completed/ only when every item has a recorded disposition, selected fixes have shipped through their required gates, and remaining decisions/validation tasks have explicit owners or linked follow-ups. Do not mark a deferred task complete merely because the first four fixes shipped.
+
+## Execution record
+
+- W5 implementation candidate: unknown desktop requests require a current host-opened Add device window, are bound to its incarnation and are cancelled on close/renewal/expiry. New installations default off; existing paired devices and saved settings remain. Local and fresh-review acceptance pending.
+
+- W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 146 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh independent review found and closed Ask-mode read approval bypass, oversized existing-task confirmation and rejected-persistence cron restoration gaps. Desktop scheduling (238 tests), automation suites and root types passed. Exact-head hosted CI remains pending.
 
 ## Completion checklist
 
