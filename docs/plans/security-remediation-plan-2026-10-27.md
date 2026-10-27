@@ -396,7 +396,7 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 ## Execution record
 
-- W5 implementation candidate: unknown desktop requests require a current host-opened Add device window, are bound to its incarnation and are cancelled on close/renewal/expiry. New installations default off; existing paired devices and saved settings remain. Local and fresh-review acceptance pending.
+- W5 implementation candidate: unknown desktop requests require a current host-opened Add device window, are bound to its incarnation and are cancelled on close/renewal/expiry. New installations default off; existing paired devices and saved settings remain. Fresh review closed an expiry-during-sealing gap with a final publication check and rollback; 129 focused tests, root types and lint pass. Existing already-approved sealed grants remain collectable after closing the admission window; no pending request can gain new authority. Hosted and real-client acceptance remain pending.
 
 - W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 146 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh independent review found and closed Ask-mode read approval bypass, oversized existing-task confirmation and rejected-persistence cron restoration gaps. Desktop scheduling (238 tests), automation suites and root types passed. Exact-head hosted CI remains pending.
 

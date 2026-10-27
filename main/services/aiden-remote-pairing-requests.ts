@@ -634,6 +634,11 @@ export class AidenRemotePairingRequestService {
       return { requestId: record.requestId, state: publicState(record.state), failed: true };
     }
 
+    if (!stillApproving()) {
+      await this.revokeIssued(issued.device.id);
+      if (record.state === "approving") this.finish(record, "cancelled");
+      return { requestId: record.requestId, state: publicState(record.state) };
+    }
     record.issuedDeviceId = issued.device.id;
     record.envelope = envelope;
     this.finish(record, "approved");
