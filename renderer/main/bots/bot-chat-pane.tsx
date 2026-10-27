@@ -503,18 +503,18 @@ function useSendMorph(
       ghost = copy;
       const dx = origin.left - (target.left + (parseFloat(style.paddingLeft) || 0));
       const dy = origin.top - (target.top + (parseFloat(style.paddingTop) || 0));
-      // The two axes ease apart so the words arc into place: across first, then
-      // up, instead of sliding along a straight line.
+      // Both axes ease in and out, the sideways one ahead of the rise, so the
+      // words arc into place (across first, then up) instead of sliding straight.
       sideways = copy.animate([{ translate: `${dx}px 0` }, { translate: "0 0" }], {
         duration: SEND_MORPH_MS,
-        easing: "cubic-bezier(0.2, 0.9, 0.3, 1)",
+        easing: "cubic-bezier(0.35, 0, 0.15, 1)",
       });
       animation = copy.animate(
         [
           { transform: `translateY(${dy}px)`, backgroundColor: "transparent" },
           { transform: "translateY(0)", backgroundColor: style.backgroundColor },
         ],
-        { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.55, 0, 0.6, 1)" },
+        { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.6, 0, 0.35, 1)" },
       );
       animation.onfinish = finish;
       animation.oncancel = finish;
