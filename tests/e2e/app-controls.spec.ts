@@ -177,4 +177,16 @@ test("Aiden changes the color theme and the model for new chats from chat, and t
     (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>("settings:get"),
   );
   expect(saved.lastModel).toBe("aiden-e2e-second");
+
+  // A send in this chat, which keeps its own first model, leaves the new-chat model alone.
+  const followUp = "App control test: thanks, one more question in this chat.";
+  const reply = lmStudio.enqueueToolScenario!({ prompt: followUp, calls: [], finalText: "Sure." });
+  await page.locator("textarea").first().fill(followUp);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => reply.completed).toBe(true);
+  const after = await page.evaluate(() =>
+    (window as unknown as { aidenAPI: { ipc: Ipc } }).aidenAPI.ipc.invoke<AppSettings>("settings:get"),
+  );
+  expect(after.lastModel).toBe("aiden-e2e-second");
+  expect(await page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("aiden-e2e-second");
 });

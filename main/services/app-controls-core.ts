@@ -16,6 +16,7 @@ import {
 } from "../../renderer/shared/app-controls.js";
 import type { AppSettings } from "./types.js";
 import { isModelHidden } from "../../renderer/shared/model-visibility.js";
+import { isNonChatModel } from "../../renderer/shared/model-eligibility.js";
 
 export interface AppControlContext {
   actor: string;
@@ -59,12 +60,20 @@ export interface AppControlDependencies {
   onChanged(): void;
 }
 /**
- * The models a new chat may use: every visible model of a provider that is
- * ready to answer (has models and a key when it needs one). A card offers
- * pinned and recent models first, then the rest, at most 20.
+ * The models a new chat may use: every visible chat model of a provider that
+ * is ready to answer (has models and a key when it needs one). Embedding,
+ * reranking and other non-chat models are left out, as in the model picker.
+ * A card offers pinned and recent models first, then the rest, at most 20.
  */
 export function newChatModelChoices(
-  providers: readonly { id: string; label: string; models: string[]; hasKey: boolean; needsKey: boolean }[],
+  providers: readonly {
+    id: string;
+    label: string;
+    models: string[];
+    hasKey: boolean;
+    needsKey: boolean;
+    modelMetadata?: Record<string, { type?: unknown } | undefined>;
+  }[],
   settings: Pick<AppSettings, "hiddenModelsByProvider" | "pinnedModels" | "recentModels">,
 ): NonNullable<AppControlState["newChatModels"]> {
   const labels = new Map<string, string>();
@@ -72,6 +81,7 @@ export function newChatModelChoices(
     if (provider.models.length === 0 || (provider.needsKey && !provider.hasKey)) continue;
     for (const model of provider.models) {
       if (isModelHidden(settings.hiddenModelsByProvider, provider.id, model)) continue;
+      if (isNonChatModel({ model, metadataType: provider.modelMetadata?.[model]?.type })) continue;
       labels.set(newChatModelValue(provider.id, model), `${provider.label} · ${model}`);
     }
   }

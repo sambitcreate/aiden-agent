@@ -185,3 +185,36 @@ test("a new-chat model Aiden sets on the host reaches the window, and a pick her
   unsubscribe();
   assert.equal(deliver, undefined);
 });
+
+test("at startup the host's new-chat model is brought in line with this window's pick", async () => {
+  const values = new Map<string, string>([
+    ["aiden-agent.providerId", "lmstudio"],
+    ["aiden-agent.model", "model-b"],
+  ]);
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  });
+  const { mirrorNewChatModelToHost } = await import("./use-model-selection");
+  // The host still names the model an older version wrote after a send in another chat.
+  let host = { lastProviderId: "lmstudio", lastModel: "model-a" };
+  const writes: unknown[] = [];
+  const api = {
+    get: async () => structuredClone(host),
+    set: async (patch: typeof host) => {
+      writes.push(patch);
+      host = { ...host, ...patch };
+    },
+  };
+  await mirrorNewChatModelToHost(api);
+  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-b" });
+  await mirrorNewChatModelToHost(api);
+  assert.equal(writes.length, 1, "nothing is written when they already match");
+  values.clear();
+  host = { lastProviderId: "lmstudio", lastModel: "model-a" };
+  await mirrorNewChatModelToHost(api);
+  assert.equal(host.lastModel, "model-a", "a window with no pick yet leaves the host alone");
+});

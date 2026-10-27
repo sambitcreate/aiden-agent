@@ -278,6 +278,46 @@ test("new-chat model choices list ready, visible models with pinned and recent f
   assert.equal(choices.selectable.has("anthropic::claude-x"), false);
 });
 
+test("new-chat model choices leave out embedding and reranking models", async () => {
+  const choices = newChatModelChoices(
+    [
+      {
+        id: "custom",
+        label: "Custom",
+        models: ["chat-a", "text-embedding-nomic-embed-text-v1.5", "bge-reranker-v2-m3", "vision-x"],
+        hasKey: true,
+        needsKey: true,
+        modelMetadata: { "vision-x": { type: "image" } },
+      },
+    ],
+    {},
+  );
+  assert.deepEqual([...choices.selectable], ["custom::chat-a"]);
+  assert.deepEqual(choices.options.map((option) => option.value), ["custom::chat-a"]);
+  // And the control refuses one even when asked by value.
+  const state: AppControlState = { settings: { appControlPolicy: "safe" }, newChatModels: choices };
+  const service = new AppControlsService({
+    read: async () => structuredClone(state),
+    loadOperations: async () => [],
+    saveOperations: async () => {},
+    onChanged() {},
+    commit: async () => assert.fail("a non-chat model must never be committed"),
+  });
+  const user: AppControlContext = { actor: "user", target: "This desktop", humanGesture: true, isCurrent: () => true };
+  await assert.rejects(
+    service.apply(
+      {
+        control: "models.newChat",
+        value: "custom::text-embedding-nomic-embed-text-v1.5",
+        expectedRevision: appControlRevision(state, "models.newChat"),
+        operationId: "op-embed",
+      },
+      user,
+    ),
+    /not available for new chats/u,
+  );
+});
+
 test("theme and new-chat model controls: custom colors need a click, unknown models are refused, phones never see them", async () => {
   const { getPresetVariant, normalizeAppearanceConfig } = await import("../../renderer/shared/appearance.js");
   const appearance = normalizeAppearanceConfig(undefined);

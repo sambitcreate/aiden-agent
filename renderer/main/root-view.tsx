@@ -11,8 +11,8 @@ import { PairingRequestSheet } from "../components/remote-pairing-request-sheet"
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification, workspacesApi } from "../lib/ipc";
-import { subscribeHostNewChatModel } from "../lib/use-model-selection";
+import { appApi, chatsApi, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
+import { mirrorNewChatModelToHost, subscribeHostNewChatModel } from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -390,6 +390,9 @@ function RootContent() {
 
   React.useEffect(() => subscribeGitQuerySync(queryClient, onNotification), [queryClient]);
   React.useEffect(() => subscribeHostNewChatModel(onNotification), []);
+  React.useEffect(() => {
+    void mirrorNewChatModelToHost(settingsApi).catch(() => undefined);
+  }, []);
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {

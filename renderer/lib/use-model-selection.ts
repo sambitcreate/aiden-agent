@@ -188,6 +188,23 @@ export function persistModelSelection(providerId: string, model: string): void {
   }
 }
 
+/**
+ * At startup, make the host's copy match this window's new-chat model. Sends
+ * never write it, so this keeps Aiden's "Model for new chats" control and
+ * paired phones on the pick the desktop will really use, even if the two drifted
+ * apart while the app was closed or before the copy existed.
+ */
+export async function mirrorNewChatModelToHost(api: {
+  get(): Promise<Pick<AppSettings, "lastProviderId" | "lastModel">>;
+  set(patch: Pick<AppSettings, "lastProviderId" | "lastModel">): Promise<unknown>;
+}): Promise<void> {
+  const selection = readModelSelection();
+  if (!selection.providerId || !selection.model) return;
+  const host = await api.get();
+  if (host.lastProviderId === selection.providerId && host.lastModel === selection.model) return;
+  await api.set({ lastProviderId: selection.providerId, lastModel: selection.model });
+}
+
 /** Follow a new-chat model the host changed (Aiden's chat control). */
 export function subscribeHostNewChatModel(
   subscribe: typeof onNotification,
