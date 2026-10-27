@@ -6,7 +6,8 @@ import {
   setChatDraftGitMode,
   type ChatDraftGitMode,
 } from "../lib/chat-draft";
-import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
+import { historyNavigationAvailability } from "../lib/history-navigation";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
@@ -201,6 +202,41 @@ function RootContent() {
   );
   useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
+  const goTo = React.useCallback(
+    (to: "/bots" | "/scheduled" | "/profile") => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      void navigate({ to });
+    },
+    [navigate, navigationBlockedReason],
+  );
+  useCommandHandler("bots.open", () => goTo("/bots"), capabilities.bots);
+  useCommandHandler("scheduled.open", () => goTo("/scheduled"));
+  useCommandHandler("profile.open", () => goTo("/profile"));
+  // ⌘[ and ⌘] walk the same in-app history as the title bar's arrows.
+  const router = useRouter();
+  const historyEntryIndex = useRouterState({
+    select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
+  });
+  const { canGoBack, canGoForward } = historyNavigationAvailability(
+    historyEntryIndex,
+    router.history.length,
+  );
+  const traverseHistory = (go: () => void) => {
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    go();
+  };
+  useCommandHandler("navigate.back", () => traverseHistory(() => router.history.back()), canGoBack);
+  useCommandHandler(
+    "navigate.forward",
+    () => traverseHistory(() => router.history.forward()),
+    canGoForward,
+  );
   // Every new-chat entry point lands here: an empty draft already open in the
   // workspace is reused and focused; otherwise a fresh draft opens there.
   const openNewChatIn = React.useCallback(

@@ -14,6 +14,13 @@ import { RoutineProposalCard } from "../../components/bots/routine-proposal-card
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
+import { detectedKeyboardPlatform } from "../../shared/keybindings";
+import {
+  approvalAriaKeyShortcut,
+  approvalShortcutLabel,
+  useApprovalShortcuts,
+  type ApprovalShortcut,
+} from "../../lib/approval-shortcuts";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
@@ -155,40 +162,69 @@ export function BotApprovalCard({
   prompt,
   onAnswer,
   allowElsewhere,
+  keyboardShortcuts = false,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
   onAnswer(decision: "allow" | "deny"): void;
   /** Set when this device may only deny: where the person can allow it instead. */
   allowElsewhere?: string;
+  /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
+  keyboardShortcuts?: boolean;
 }) {
+  const platform = detectedKeyboardPlatform();
+  useApprovalShortcuts({ enabled: keyboardShortcuts, canAllow: !allowElsewhere, onShortcut: onAnswer });
+  const hint = (shortcut: ApprovalShortcut) =>
+    keyboardShortcuts ? (
+      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
+        {approvalShortcutLabel(shortcut, platform)}
+      </span>
+    ) : null;
   return (
-    <BotNoticeCard
-      label={`${name} needs approval`}
-      elevated
-      icon={<ShieldQuestion />}
-      iconTone="warning"
-      title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-      actions={
-        <>
-          <Button variant="transparent" size="small" onClick={() => onAnswer("deny")}>
-            Deny
-          </Button>
-          {allowElsewhere ? null : (
-            <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
-              Allow
-            </Button>
-          )}
-        </>
-      }
-    >
-      {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
-      {prompt.summary ? (
-        <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
-          {prompt.summary}
-        </p>
+    <>
+      {/* The first card says it arrived, as the workspace approval card does. */}
+      {keyboardShortcuts ? (
+        <p className="sr-only" role="status">{`${name} needs approval to use ${toolLabel(prompt.toolName)}`}</p>
       ) : null}
-    </BotNoticeCard>
+      <BotNoticeCard
+        label={`${name} needs approval`}
+        elevated
+        icon={<ShieldQuestion />}
+        iconTone="warning"
+        title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
+        actions={
+          <>
+            <Button
+              variant="transparent"
+              size="small"
+              aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
+              onClick={() => onAnswer("deny")}
+            >
+              Deny
+              {hint("deny")}
+            </Button>
+            {allowElsewhere ? null : (
+              <Button
+                variant="accent"
+                size="small"
+                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
+                onClick={() => onAnswer("allow")}
+              >
+                Allow
+                {hint("allow")}
+              </Button>
+            )}
+          </>
+        }
+      >
+        {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
+        {prompt.summary ? (
+          <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
+            {prompt.summary}
+          </p>
+        ) : null}
+      </BotNoticeCard>
+    </>
   );
 }
 
@@ -1276,11 +1312,12 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
             />
           ) : null}
-          {approvals.prompts.map((prompt) => (
+          {approvals.prompts.map((prompt, index) => (
             <BotApprovalCard
               key={prompt.waitId}
               name={current.name}
               prompt={prompt}
+              keyboardShortcuts={index === 0}
               onAnswer={(decision) => {
                 approvals.remove(prompt.waitId);
                 void botsApi.approve(prompt.waitId, decision).catch((error) => {

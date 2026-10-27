@@ -929,6 +929,66 @@ test("sent user prompts can be selected with the pointer", async ({ aiden }) => 
   expect(expected).toContain(selected.trim());
 });
 
+test("chats can be moved between, opened from their menu and deleted from the keyboard alone", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  const first = page.getByText("Opened palette-chat-first", { exact: true });
+  const second = page.getByText("Opened palette-chat-second", { exact: true });
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(first).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+2`);
+  await expect(second).toBeVisible();
+  // ⌘[ and ⌘] walk the history, even from the message box.
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketLeft`);
+  await expect(first).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketRight`);
+  await expect(second).toBeVisible();
+
+  // Shift+F10 opens the open chat's row menu where the row is.
+  const row = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  await row.focus();
+  await page.keyboard.press("Shift+F10");
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  // The row's ••• button is a keyboard stop with the same items.
+  await row.focus();
+  await page.keyboard.press("Tab");
+  const more = row.locator("xpath=following-sibling::button");
+  await expect(more).toHaveAccessibleName("More for Repeated palette title");
+  await expect(more).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // ⌘K reaches chat actions and places.
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  const palette = page.locator("[data-command-palette-content]");
+  await palette.getByRole("combobox").fill("Delete chat");
+  await palette.getByRole("combobox").press("Enter");
+  await expect(palette).toBeHidden();
+  const confirm = page.getByRole("alertdialog", { name: "Delete this chat?" });
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(second).toBeVisible();
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  await palette.getByRole("combobox").fill("Go to Scheduled");
+  await palette.getByRole("combobox").press("Enter");
+  await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
+  await expect(second).toBeHidden();
+  await page.locator("body").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketLeft`);
+  await expect(second).toBeVisible();
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {

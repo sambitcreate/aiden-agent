@@ -12,6 +12,8 @@ import {
 } from "./ui";
 import { CopyButton } from "./copy-button";
 import { cn } from "../lib/ui-utils";
+import { approvalAriaKeyShortcut, approvalShortcutLabel, useApprovalShortcuts, type ApprovalShortcut } from "../lib/approval-shortcuts";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import {
   SubagentWorkspaceWriteApproval,
   subagentWorkspaceWriteOperationLabel,
@@ -295,6 +297,7 @@ export function ChatApprovalCard({
   disabledReason,
   pendingCount = 1,
   computerUseHost = "local",
+  keyboardShortcuts = false,
 }: {
   pending: ApprovalPrompt;
   deciding: boolean;
@@ -310,6 +313,11 @@ export function ChatApprovalCard({
    * permissions live; "remote" leaves setup to the host Mac.
    */
   computerUseHost?: "local" | "remote";
+  /**
+   * ⌘↩ allows once and ⌘⌫ denies while the message box is empty. Only the
+   * chat's own card takes them, so one key never answers two approvals.
+   */
+  keyboardShortcuts?: boolean;
 }) {
   const details = pending.details as unknown;
   const schedule = isScheduledTaskApprovalDetails(details) || isAssistantAutomationApprovalDetails(details) ? details : undefined;
@@ -339,7 +347,25 @@ export function ChatApprovalCard({
     !pendingClassifier.details && !pendingFormFill && !pendingMcpMutation && !pendingRunGrant
       ? rememberableApprovalScopes(pending.scopes, pendingCanAllow)
       : [];
-  if (isComputerUseAccessApprovalDetails(details)) {
+  const computerUseAccess = isComputerUseAccessApprovalDetails(details);
+  const disabled = deciding || disabledReason !== undefined;
+  const keyboardPlatform = detectedKeyboardPlatform();
+  useApprovalShortcuts({
+    // Computer Use access sets up permissions first, so it keeps its own buttons.
+    enabled: keyboardShortcuts && !computerUseAccess && !disabled,
+    canAllow: pendingCanAllow,
+    onShortcut: (shortcut) =>
+      shortcut === "deny"
+        ? onDecide("deny")
+        : onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined),
+  });
+  const shortcutHint = (shortcut: ApprovalShortcut) =>
+    keyboardShortcuts && !disabled ? (
+      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
+        {approvalShortcutLabel(shortcut, keyboardPlatform)}
+      </span>
+    ) : null;
+  if (computerUseAccess) {
     return (
       <ComputerUseAccessApproval
         pending={pending}
@@ -353,7 +379,6 @@ export function ChatApprovalCard({
       />
     );
   }
-  const disabled = deciding || disabledReason !== undefined;
   const summaryId = `approval-summary-${pending.approvalId}`;
   // Plain coding approvals show the exact command or file change; specialized
   // and invalid approvals keep their own review bodies.
@@ -465,8 +490,17 @@ export function ChatApprovalCard({
           </Text>
         ) : null}
         <div className="mt-3.5 flex shrink-0 gap-2">
-          <Button ref={denyRef} variant="filled" size="large" className="flex-1" disabled={disabled} onClick={() => onDecide("deny")}>
+          <Button
+            ref={denyRef}
+            variant="filled"
+            size="large"
+            className="flex-1"
+            disabled={disabled}
+            aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", keyboardPlatform) : undefined}
+            onClick={() => onDecide("deny")}
+          >
             {pendingFormFill ? "Cancel" : "Deny"}
+            {shortcutHint("deny")}
           </Button>
           {pendingCanAllow ? (
             <div className={cn("flex min-w-0 flex-1", pendingRememberScopes.length > 0 && "squircle-action-group squircle-control shadow-control")}>
@@ -475,6 +509,7 @@ export function ChatApprovalCard({
                 size="large"
                 className={cn("min-w-0 flex-1", pendingRememberScopes.length > 0 && "shadow-none hover:shadow-none active:shadow-none")}
                 disabled={disabled}
+                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", keyboardPlatform) : undefined}
                 onClick={() => onDecide("allow", pendingFormFill ? { formFillExcludedOrders } : undefined)}
               >
                 {deciding
@@ -486,6 +521,7 @@ export function ChatApprovalCard({
                       : pendingRunGrant
                         ? "Allow for run"
                         : "Allow once"}
+                {deciding ? null : shortcutHint("allow")}
               </Button>
               {pendingRememberScopes.length > 0 ? (
                 <DropdownMenu>

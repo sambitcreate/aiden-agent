@@ -36,6 +36,7 @@ import {
   toast,
 } from "./ui";
 import { WORKSPACE_TOOLS } from "./workspace-tool-launcher";
+import { useCommandHandler } from "../lib/command-system";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac/u.test(navigator.userAgent);
 
@@ -385,6 +386,20 @@ export function WorkspaceToolButtons({
     else panel.showTools(id);
   };
   const buttons = TOOL_BUTTON_ORDER.filter(available);
+  // ⌘K "Open Files" and friends open the same tabs the buttons do, while those tools exist here.
+  const commandReady = (id: EnvironmentPanelTab) =>
+    available(id) && !blockedReason(id) && !panel.gitOperationBusy;
+  useCommandHandler("tools.review", () => panel.showTools("review"), commandReady("review"));
+  useCommandHandler("tools.files", () => panel.showTools("files"), commandReady("files"));
+  useCommandHandler("tools.browser", () => panel.showTools("browser"), commandReady("browser"));
+  useCommandHandler("tools.devices", () => panel.showTools("devices"), commandReady("devices"));
+  useCommandHandler("tools.context", () => panel.showTools("context"), commandReady("context"));
+  useCommandHandler("tools.subagents", () => panel.showTools("subagents"), commandReady("subagents"));
+  useCommandHandler(
+    "tools.artifacts",
+    () => panel.showTools("artifacts"),
+    commandReady("artifacts") && panel.artifacts.views.length > 0,
+  );
   const menuTools: EnvironmentPanelTab[] = hasWorkspace
     ? [...(compact ? buttons : []), "context", ...(available("subagents") ? (["subagents"] as const) : [])]
     : [];
