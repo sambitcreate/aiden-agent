@@ -581,6 +581,51 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(transport.imageRequests.count, 2, "an id the transcript doesn't hold never reaches the Mac")
     }
 
+    /// Revision 41: shared images stay within a byte budget. The least
+    /// recently drawn image is dropped and read again when it is drawn next;
+    /// images the transcript no longer shows are dropped; closing the chat
+    /// lets every image go.
+    func testSharedImagesStayWithinTheirBudgetAndAreReadAgainAfterBeingDropped() async throws {
+        let transport = FakeBotSessionTransport()
+        func image(_ id: String) -> AidenBotSharedImage {
+            AidenBotSharedImage(id: id, name: "\(id).png", mimeType: "image/png", size: 4)
+        }
+        for id in ["entry_1", "entry_2", "entry_3", "entry_4"] {
+            transport.holdImage(Data(repeating: UInt8(id.last!.asciiValue!), count: 4), entryId: id)
+        }
+        transport.queueSession(.success(try session(
+            seq: 1,
+            entries: [.sharedImage(image("entry_1")), .sharedImage(image("entry_2")), .sharedImage(image("entry_3"))]
+        )))
+        // Room for two 4-byte images.
+        let model = AidenBotSessionModel(botID: botID, transport: transport, sharedImageBudget: 8)
+        await model.load()
+
+        _ = await model.sharedImageData(entryId: "entry_1")
+        _ = await model.sharedImageData(entryId: "entry_2")
+        _ = await model.sharedImageData(entryId: "entry_1")
+        XCTAssertEqual(transport.imageRequests, ["entry_1", "entry_2"], "both fit, so the second draw of entry_1 is kept")
+        _ = await model.sharedImageData(entryId: "entry_3")
+        let again = await model.sharedImageData(entryId: "entry_2")
+        XCTAssertEqual(
+            transport.imageRequests, ["entry_1", "entry_2", "entry_3", "entry_2"],
+            "entry_3 pushed out the least recently drawn image, entry_2, which is read again"
+        )
+        XCTAssertEqual(again, Data(repeating: UInt8(ascii: "2"), count: 4))
+        XCTAssertLessThanOrEqual(model.sharedImageByteCount, 8)
+
+        // entry_2 leaves the transcript: once another image is read, it is no longer kept.
+        let rewritten = try session(seq: 2, entries: [.sharedImage(image("entry_3")), .sharedImage(image("entry_4"))])
+        _ = await model.apply(event(seq: 2, .snapshot(rewritten)))
+        _ = await model.sharedImageData(entryId: "entry_4")
+        XCTAssertEqual(model.sharedImageByteCount, 8, "entry_3 and entry_4 only")
+        let gone = await model.sharedImageData(entryId: "entry_2")
+        XCTAssertNil(gone, "an image the transcript no longer shows is not read")
+
+        model.release()
+        XCTAssertEqual(model.sharedImageByteCount, 0, "closing the chat dropped what it held")
+    }
+
     func testEntryWithAKnownIDReplacesItInPlaceAndEmptyPartialClears() async throws {
         let transport = FakeBotSessionTransport()
         let card = AidenBotConnectCard(
