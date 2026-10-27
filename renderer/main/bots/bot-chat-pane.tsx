@@ -11,6 +11,7 @@ import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
@@ -43,6 +44,7 @@ import {
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -633,6 +635,7 @@ export function TranscriptEntries({
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onActOnIssue,
   connectLabel,
   connecting,
 }: {
@@ -657,6 +660,8 @@ export function TranscriptEntries({
     proposalId: string,
     decision: BotRoutineProposalDecision,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  /** One action on a "Needs you" issue card. */
+  onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
   /** Connect cards' button text, e.g. where the connection is finished. */
   connectLabel?: string;
   /** A connection request is being sent. */
@@ -775,6 +780,15 @@ export function TranscriptEntries({
                 proposal={row.proposal}
                 status={row.status}
                 onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
+              />
+            ) : null;
+          case "issue":
+            return onActOnIssue ? (
+              <BotIssueCard
+                key={row.id}
+                issue={row.issue}
+                status={row.status}
+                onAct={(action) => onActOnIssue(row.issue.id, action)}
               />
             ) : null;
         }
@@ -1252,6 +1266,23 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /**
+   * One action on a "Needs you" issue: the service records the answer, and
+   * the live transcript settles the card. Open chat is this surface already.
+   */
+  const actOnIssue = async (issueId: string, action: BotIssueAction) => {
+    if (action.kind === "open_chat") {
+      void navigate({ to: "/bots/$botId/chat", params: { botId } });
+      return;
+    }
+    try {
+      await botsApi.issues.act({ botId: current.id, issueId, action });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t do that."));
+      throw error;
+    }
+  };
+
   const dismissConnection = async (pluginId: string) => {
     try {
       await botsApi.dismissConnection(current.id, pluginId);
@@ -1396,6 +1427,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
+          onActOnIssue={actOnIssue}
         />
         {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);

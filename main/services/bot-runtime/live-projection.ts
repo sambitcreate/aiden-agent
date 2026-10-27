@@ -60,6 +60,13 @@ import {
   type BotRoutineProposalEntryData,
   type BotRoutineProposalStatusEntryData,
 } from "../../../renderer/shared/bot-routine-proposals.js";
+import {
+  BOT_ISSUE_ENTRY_KIND,
+  BOT_ISSUE_STATUS_ENTRY_KIND,
+  botIssueOf,
+  botIssueStatusOf,
+  type BotIssueResolution,
+} from "../../../renderer/shared/bot-issues.js";
 import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
@@ -237,6 +244,9 @@ function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): strin
  * - `aiden.routine-proposal` → a `routine_proposal` card whose status is the
  *   newest `aiden.routine-proposal-status` for its `proposalId` (pending
  *   without one); status entries themselves are not shown.
+ * - `aiden.bot-issue` → an `issue` card whose status is the newest
+ *   `aiden.bot-issue-status` for its `issueId` (`open` without one); status
+ *   entries themselves are not shown.
  * - A confirmed `write_file` / `edit_file` result in the Bot's folder → a file.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
@@ -256,6 +266,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   let turn: Turn | null = null;
   /** The newest decision on each proposal: cards show what is true now. */
   const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
+  /** The newest settlement on each issue: its card shows what is true now. */
+  const issueStatus = new Map<string, BotIssueResolution>();
   /**
    * The person's answer to each rule hand-off, by the call the rule stopped
    * (the last entry for a call wins), and the calls whose blocked result is
@@ -278,6 +290,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
       if (status) proposalStatus.set(status.proposalId, status);
+    } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
+      const status = botIssueStatusOf(record.data);
+      if (status) issueStatus.set(status.issueId, status.resolution);
     } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       const result = botHandoffResultOf(record.data);
       if (result?.toolCallId !== undefined && result.rule !== undefined) {
@@ -365,6 +380,24 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_ISSUE_ENTRY_KIND) {
+      const issue = botIssueOf(record.data);
+      if (issue) {
+        // Host entries sit between turns: a [SILENT] routine never hides one.
+        mapped.push({
+          entry: {
+            id,
+            type: "issue",
+            issue,
+            status: issueStatus.get(issue.id) ?? issue.resolution ?? "open",
+            at: issue.createdAt,
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) continue;
     if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       // Read after the blocked call's result; here only when that result never landed.
       const result = botHandoffResultOf(record.data);
@@ -814,6 +847,8 @@ export interface BotLiveProjectionDeps {
   quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
   /** Whether a tool approval is waiting on the person. */
   approvalPending?(botId: string): boolean;
+  /** Whether an open "Needs you" issue is waiting on the person for this Bot. */
+  issuePending?(botId: string): Promise<boolean> | boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
   now?(): number;
   /**
@@ -1352,10 +1387,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = () =>
+      const needsYouNow = async () =>
         (deps.question?.(botId) ?? null) !== null ||
         (deps.handoff?.(botId) ?? null) !== null ||
-        deps.approvalPending?.(botId) === true;
+        deps.approvalPending?.(botId) === true ||
+        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1365,7 +1401,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: needsYouNow(),
+          needsYou: await needsYouNow(),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1381,7 +1417,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         preview: preview?.text ?? null,
         updatedAt: preview?.at ?? null,
         state,
-        needsYou: needsYouNow(),
+        needsYou: await needsYouNow(),
         lastReplyAt: botLastReplyAt(entries),
       };
     },

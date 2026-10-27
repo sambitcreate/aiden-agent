@@ -387,6 +387,7 @@
         "main/handlers/mcp-provider-auth.test.ts",
         "main/handlers/mcp-preset-states.test.ts",
         "main/handlers/mcp-controls.test.ts",
+        "main/services/bot-issues/service.test.ts",
         "main/services/mcp-dependents.test.ts",
         "main/services/mcp-exposure.test.ts",
         "main/services/mcp-field-secrets-core.test.ts",
@@ -729,6 +730,8 @@
         "lease-flock-build"
       ],
       "files": [
+        "main/handlers/bot-issues.test.ts",
+        "renderer/components/bots/bot-issue-card.test.tsx",
         "renderer/components/follow-through-chips.test.tsx",
         "renderer/components/settings/harness-runtime-section.test.tsx",
         "renderer/components/agent-approval-card.test.tsx",

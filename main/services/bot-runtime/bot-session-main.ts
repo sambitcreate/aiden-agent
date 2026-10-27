@@ -74,6 +74,7 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
+import { botIssues } from "../bot-issues/service-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
@@ -457,12 +458,14 @@ botApprovals.onChange((botId) => {
   );
 });
 
-// "Needs you" in the Bots sidebar follows questions, approvals and hand-offs
-// as they appear and settle; the renderer re-reads that Bot's summary.
+// "Needs you" in the Bots sidebar follows questions, approvals, hand-offs and
+// host-raised issues as they appear and settle; the renderer re-reads that
+// Bot's summary, whose open-issue check is the same file the card comes from.
 wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
   handoffs: botHandoffs,
+  issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
@@ -481,6 +484,7 @@ export function botLiveProjection(): BotLiveProjection {
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
+    issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
     onRunSettled: broadcastState,
@@ -526,6 +530,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       },
       deleteRoutines,
       forgetDeliveries,
+      (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
       (botId) => botRules.forgetBot(botId),

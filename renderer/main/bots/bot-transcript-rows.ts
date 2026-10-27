@@ -14,6 +14,7 @@ import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-h
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
 import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
@@ -51,6 +52,8 @@ export type BotTranscriptRow =
       status: BotRoutineProposalStatus;
       routineId?: string;
     }
+  /** A "Needs you" issue the host raised; settles to one quiet line. */
+  | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
   | {
       kind: "routines_skipped";
@@ -147,6 +150,9 @@ export function botTranscriptRows(
           break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
+          break;
+        case "issue":
+          rows.push({ kind: "issue", id: entry.id, issue: entry.issue, status: entry.status });
           break;
         case "tool_result":
           break;

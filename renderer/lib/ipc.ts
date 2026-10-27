@@ -1738,6 +1738,14 @@ export const botsApi = {
         input,
       ),
   },
+  /** "Needs you" issues the host raised for a Bot, and the person's answers. */
+  issues: {
+    list: (input: { botId: string; open?: boolean }) =>
+      invoke<import("../shared/bot-issues").BotIssue[]>("bots:issues:list", input),
+    /** One of the card's actions; a settled issue answers `not_open`. */
+    act: (input: { botId: string; issueId: string; action: import("../shared/bot-issues").BotIssueAction }) =>
+      invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>

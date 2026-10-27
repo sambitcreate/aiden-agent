@@ -27,6 +27,7 @@ import { registerBotLiveHandlers } from "./bot-live.js";
 import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
+import { registerBotIssueHandlers } from "./bot-issues.js";
 import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
 import { botRules } from "../services/bot-rules/store-main.js";
@@ -36,6 +37,7 @@ import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
 import { botHandoffs } from "../services/bot-runtime/bot-handoffs-main.js";
+import { botIssues } from "../services/bot-issues/service-main.js";
 import { botBrowserWorkspace } from "../services/bot-runtime/bot-browser-main.js";
 import { openBotHandoffById } from "../services/bot-runtime/bot-handoff-open-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
@@ -211,6 +213,11 @@ export function registerBotHandlers(): void {
       // A link opens in the Bot's own browser, shown in this window.
       return openBotHandoffById(botId, waitId, "desktop", owner);
     },
+  });
+  // "Needs you" issues: the card's actions and the Bot's open list.
+  registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    issues: botIssues,
   });
   // The Bot store answers null for a Bot it doesn't have.
   const botExists = botExistsIn(botApplicationService);

@@ -11,6 +11,7 @@ import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
+import type { BotIssue, BotIssueResolution } from "./bot-issues.js";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
 import {
   botHandoffResultLine,
@@ -182,6 +183,17 @@ export type BotTranscriptEntry =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      at?: number;
+    }
+  /**
+   * A "Needs you" issue the host raised for this Bot (plan F2). `status` is
+   * `open` until a status entry settles it; a settled card keeps one quiet line.
+   */
+  | {
+      id: string;
+      type: "issue";
+      issue: BotIssue;
+      status: "open" | BotIssueResolution;
       at?: number;
     }
   /** Shown on unpause: the routines that fired while the Bot was paused, each with Run now. */
