@@ -329,7 +329,12 @@ test("Pullfrog uses immutable action source and frozen local runtime with OIDC",
   const agent = job.steps.find((step) => step.name === "Run agent");
   assert.equal(agent.uses, "pullfrog/pullfrog@0657d542f2e34565c6254d5c84581313e631cd90");
   assert.equal(agent.env.PULLFROG_FORCE_LOCAL_CLI, "1");
-  assert.equal(agent.env.NODE_OPTIONS, "--import=${{ github.workspace }}/scripts/pullfrog-locked-runtime.mjs");
+  assert.equal(job.steps[0].with.ref, "main");
+  assert.equal(job.steps[0].with["persist-credentials"], false);
+  const bootstrap = job.steps.find((step) => step.id === "bootstrap");
+  assert.match(bootstrap.env.BOOTSTRAP_BLOB, /^[a-f0-9]{40}$/u);
+  assert.match(bootstrap.env.BOOTSTRAP_SHA256, /^[a-f0-9]{64}$/u);
+  assert.equal(agent.env.NODE_OPTIONS, "${{ steps.bootstrap.outputs.node_options }}");
   assert.equal(agent.with.timeout, "2h");
 });
 
