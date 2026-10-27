@@ -19,6 +19,8 @@ export const FILE_TOUCHING_TOOL_NAMES: ReadonlySet<string> = new Set([
 export const WORKSPACE_FILES_TOUCHED_DELAY_MS = 750;
 
 export interface WorkspaceFilesTouchedOptions {
+  /** Drops main-process caches of the folder (the skill registry) before windows re-read them. */
+  invalidate?(workspaceId: string): void;
   broadcast(workspaceId: string): void;
   delayMs?: number;
   schedule?(callback: () => void, delayMs: number): unknown;
@@ -33,6 +35,7 @@ export function createWorkspaceFilesTouchedNotifier(options: WorkspaceFilesTouch
     pending.add(workspaceId);
     schedule(() => {
       pending.delete(workspaceId);
+      options.invalidate?.(workspaceId);
       options.broadcast(workspaceId);
     }, delayMs);
   };

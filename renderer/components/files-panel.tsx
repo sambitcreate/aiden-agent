@@ -289,22 +289,24 @@ export function FilesPanel({
   }, [workspace?.id]);
 
   // Re-read the open file after the agent may have changed it. A file with
-  // unsaved edits is left alone; its save reports the change on disk.
+  // unsaved edits is left alone; its save reports the change on disk. A file
+  // that could not be opened (a link the agent wrote before the file) is read
+  // again too, so it opens once the agent creates it.
   const refreshOpenFile = React.useCallback(async () => {
     const shown = documentState.data;
     if (!workspace?.id || !selectedPath || !active || interactionBlocked || saving) return;
-    if (!shown || dirty || loadedPathRef.current !== selectedPath) return;
+    if ((!shown && !documentState.error) || dirty || loadedPathRef.current !== selectedPath) return;
     const request = ++loadRequestRef.current;
     try {
       const data = await workspacesApi.readFile(workspace.id, selectedPath);
-      if (request !== loadRequestRef.current || draftRef.current !== shown.content) return;
+      if (request !== loadRequestRef.current || draftRef.current !== (shown?.content ?? "")) return;
       setDocumentState({ data, error: null, loading: false });
       draftRef.current = data.content;
       setDraft(data.content);
     } catch {
       // Keep showing what was loaded; opening the file again reports the error.
     }
-  }, [active, dirty, documentState.data, interactionBlocked, saving, selectedPath, workspace?.id]);
+  }, [active, dirty, documentState.data, documentState.error, interactionBlocked, saving, selectedPath, workspace?.id]);
 
   const chooseFile = React.useCallback(
     (path: string) => {

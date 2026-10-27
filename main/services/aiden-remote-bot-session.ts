@@ -1124,7 +1124,12 @@ class BotLiveProjector {
     }
   }
 
-  private async publish(view: ConversationView): Promise<void> {
+  /**
+   * `snapshotChanges` sends any changed entry as a fresh snapshot instead of an
+   * entry event: a refresh can touch an old entry outside a phone's window,
+   * which an entry event would append at the bottom of its chat.
+   */
+  private async publish(view: ConversationView, { snapshotChanges = false } = {}): Promise<void> {
     if (this.closed) return;
     const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);
@@ -1151,7 +1156,10 @@ class BotLiveProjector {
     // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
     const kept = previous.filter((entry) => nextIds.has(entry.id)).map((entry) => entry.id);
     const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
-    const rewritten = kept.length !== previous.length || kept.some((id, index) => order[index] !== id);
+    const rewritten =
+      kept.length !== previous.length ||
+      kept.some((id, index) => order[index] !== id) ||
+      (snapshotChanges && next.some((entry) => previousById.get(entry.id) !== JSON.stringify(withoutSubmissionId(entry))));
 
     this.entries = next;
     if (rewritten) {
@@ -1217,7 +1225,7 @@ class BotLiveProjector {
   /** Re-reads the transcript's connect cards, so one finished on the Mac shows Connected. */
   refreshCards(): Promise<void> {
     return this.serial(async () => {
-      if (!this.closed && this.view) await this.publish(this.view);
+      if (!this.closed && this.view) await this.publish(this.view, { snapshotChanges: true });
     });
   }
 

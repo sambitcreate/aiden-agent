@@ -734,9 +734,47 @@ test("a phone watching the chat sees a connect card turn connected once the app 
     // What main does when an app's connection status changes on the Mac.
     await service.refreshConnectCards();
     await stream.until(
-      () => stream.frames.some((frame) => frame.type === "entry" && frame.payload.entry.type === "connect_card" && frame.payload.entry.status === "connected"),
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "snapshot" &&
+            frame.payload.session.entries.some((entry: any) => entry.type === "connect_card" && entry.status === "connected"),
+        ) && stream.frames.length >= 2,
       "the connected card",
     );
+    const last = stream.frames[stream.frames.length - 1]!;
+    assert.equal(last.seq, stream.frames[0]!.seq + 1, "the refresh is the next frame in sequence");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a connect card refreshed outside the phone's window does not reappear at the bottom of the chat", async () => {
+  const history = [card(1, "gmail"), ...Array.from({ length: 201 }, (_, index) => user(index + 2, `Message ${index + 2}`))];
+  const driven = drivenConversation(history);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const first = stream.frames[0]!.payload.session;
+    assert.equal(first.hasOlder, true);
+    assert.equal(first.entries.some((entry: any) => entry.type === "connect_card"), false, "the card starts outside the window");
+    connected.add("gmail");
+    await service.refreshConnectCards();
+    await stream.until(() => stream.frames.length >= 2, "the refresh");
+    assert.equal(stream.frames.some((frame) => frame.type === "entry"), false, "no entry event appends the old card");
+    const refreshed = stream.frames[stream.frames.length - 1]!;
+    assert.equal(refreshed.type, "snapshot");
+    const texts = refreshed.payload.session.entries.map((entry: any) => entry.text);
+    assert.equal(texts.at(-1), "Message 202", "the newest message stays last");
+    assert.deepEqual(texts, first.entries.map((entry: any) => entry.text));
   } finally {
     await stream.close();
     await service.close();

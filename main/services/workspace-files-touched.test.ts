@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SkillRegistry } from "./skill-registry";
+import type { DiscoveredSkill } from "./types";
 import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched";
 
 function harness() {
@@ -41,4 +43,40 @@ test("reads and chats without a folder send nothing", () => {
   notify(undefined, "write_file");
   flush();
   assert.deepEqual(sent, []);
+});
+
+test("a skill the agent writes is in the catalog a window reads after the notice", async () => {
+  let discovered: DiscoveredSkill[] = [];
+  const registry = new SkillRegistry({
+    getWorkspace: async (id) => ({ id, name: id, folderPath: "/trusted/ws-a", permission: "ask", createdAt: 1, updatedAt: 1 }),
+    listConfigured: async () => [],
+    discover: async (root) => (root === undefined ? [] : structuredClone(discovered)),
+    now: () => 100,
+    invocationKey: new Uint8Array(32).fill(7),
+    cacheTtlMs: 5_000,
+    cacheLimit: 4,
+  });
+  assert.deepEqual((await registry.snapshot("ws-a")).catalog, []);
+  discovered = [
+    {
+      id: "workspace:/trusted/ws-a/.agents/skills/release/SKILL.md",
+      name: "Release",
+      description: "Cut a release.",
+      instructions: "Steps.",
+      source: "workspace",
+      path: "/trusted/ws-a/.agents/skills/release/SKILL.md",
+    },
+  ];
+  const timers: Array<() => void> = [];
+  const read: Promise<string[]>[] = [];
+  const notify = createWorkspaceFilesTouchedNotifier({
+    invalidate: (workspaceId) => registry.invalidate(workspaceId),
+    // A window re-reads the catalog as soon as the notice arrives, inside the cache's lifetime.
+    broadcast: (workspaceId) =>
+      read.push(registry.snapshot(workspaceId).then((snapshot) => snapshot.catalog.map((entry) => entry.name))),
+    schedule: (callback) => timers.push(callback),
+  });
+  notify("ws-a", "write_file");
+  timers.splice(0).forEach((run) => run());
+  assert.deepEqual(await Promise.all(read), [["Release"]]);
 });

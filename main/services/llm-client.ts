@@ -750,6 +750,8 @@ async function prepareBotSkillAuthority(
 }
 
 const notifyWorkspaceFilesTouched = createWorkspaceFilesTouchedNotifier({
+  // A skill the agent just wrote must not be hidden by the registry's short-lived snapshot.
+  invalidate: (workspaceId) => skillRegistry.invalidate(workspaceId),
   broadcast: (workspaceId) => ipcMain.broadcast("workspace:files-touched", { workspaceId }),
 });
 

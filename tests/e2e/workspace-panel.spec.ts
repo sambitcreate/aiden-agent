@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
@@ -96,6 +96,35 @@ test("the Files panel shows the agent's edits and new files while it is open", a
   // No refresh, reopen or tab switch: the open editor and the tree follow the agent.
   await expect(editor).toHaveValue("second draft\n");
   await expect(tree.getByRole("button", { name: /added\.md/u }).first()).toBeVisible();
+});
+
+test("a file the Files panel couldn't open opens once the agent writes it", async ({ aiden }) => {
+  const { page, lmStudio, workspaceDir } = aiden;
+  await writeFile(path.join(workspaceDir, "notes.md"), "first draft\n");
+  await writeFile(path.join(workspaceDir, "plan.md"), "the plan\n");
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 900));
+  const panel = page.getByRole("complementary", { name: "Environment work surface" });
+  await page.locator("[data-environment-toggle]").click();
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  const tree = panel.getByRole("region", { name: "Workspace files" });
+  await tree.getByRole("button", { name: /plan\.md/u }).first().click();
+  await expect(panel.getByRole("textbox", { name: "Edit plan.md" })).toHaveValue("the plan\n");
+  // The tree still lists notes.md, but it is gone from disk when it is opened.
+  await rm(path.join(workspaceDir, "notes.md"));
+  await tree.getByRole("button", { name: /notes\.md/u }).first().click();
+  await expect(panel.getByRole("button", { name: "Try again" })).toBeVisible();
+  const prompt = "Files panel test: write my notes again.";
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [{ name: "write_file", arguments: { path: "notes.md", content: "rewritten\n" } }],
+    finalText: "Wrote notes.md.",
+  });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => scenario.completed).toBe(true);
+  expect(scenario.error).toBeUndefined();
+  await expect(panel.getByRole("textbox", { name: "Edit notes.md" })).toHaveValue("rewritten\n");
 });
 
 test("Environment keeps its tabs, width and open state across a relaunch and answers its toggle command", async ({
