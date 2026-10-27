@@ -1049,7 +1049,6 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
     }
 }
 
-@MainActor
 /// Revision 41 (`bot:images`): the bytes of images a Bot shared, kept while
 /// its chat is open within a byte budget. The least recently drawn image goes
 /// first; one that is dropped is read from the Mac again the next time it is
@@ -1100,6 +1099,7 @@ struct AidenSharedImageBytes {
     }
 }
 
+@MainActor
 @Observable
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
