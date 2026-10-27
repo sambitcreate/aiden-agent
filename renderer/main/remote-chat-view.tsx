@@ -46,7 +46,6 @@ import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import {
   REMOTE_QUEUE_FENCE_STALL_MS,
-  observeRemoteQueueFenceActivity,
   remoteQueueFence,
   remoteQueueFenceHolds,
   setRemoteQueueFence,
@@ -73,7 +72,13 @@ import {
   type ChatForkPosition,
 } from "../shared/chat-copy-contract";
 import type { ChatRunInputMode, ChatRunInputRejectionReason } from "../shared/chat-run-input";
-import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
+import {
+  hostResourceKey,
+  type PeerHostFeedSnapshot,
+  type PeerHostStatus,
+  type PeerHostView,
+  type PeerRunState,
+} from "../shared/peer-host";
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { isToolStep } from "../shared/generation-timeline";
@@ -89,6 +94,7 @@ import { isToolStep } from "../shared/generation-timeline";
  */
 
 const NO_SUBAGENTS: [] = [];
+const NO_HOST_RUNS: readonly PeerRunState[] = [];
 const noop = () => {};
 const subscribeNothing = () => noop;
 const nothing = () => null;
@@ -319,8 +325,8 @@ export interface RemoteChatPaneProps {
   onOpenChat?(chatId: string): void;
   /** Called as a summary action starts; the returned function takes the action's answer. */
   beginLineageChange?(): (lineage: HostChatLineage) => void;
-  /** The chat's activity in the host's live chat list (`idle` once a turn is released). */
-  hostActivity?: "idle" | "active";
+  /** This chat's runs as the host feed reports them (`run.state`, keyed by run id). */
+  hostRuns?: readonly PeerRunState[];
   /** The host's models, for this chat's model and effort controls. */
   models?: HostModelCatalog;
   modelsLoading?: boolean;
@@ -349,7 +355,7 @@ export function RemoteChatPane({
   beginLineageChange,
   models,
   modelsLoading = false,
-  hostActivity,
+  hostRuns,
 }: RemoteChatPaneProps) {
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
@@ -425,17 +431,9 @@ export function RemoteChatPane({
   const [fenceClock, setFenceClock] = React.useState(() => Date.now());
   const fenceHolds = remoteQueueFenceHolds(fence, {
     run: run ? { runId: run.runId, ended: run.ended } : null,
-    hostActivity,
+    hostRunState: fence ? hostRuns?.find((entry) => entry.runId === fence.runId)?.state : undefined,
     now: Math.max(fenceClock, fence?.since ?? 0),
   });
-  React.useEffect(() => {
-    // Follow the host's list under this fence: a change to working, then idle, means the turn is done.
-    if (!fence || !turnKey || remoteQueueFence(turnKey) !== fence) return;
-    const next = observeRemoteQueueFenceActivity(fence, hostActivity);
-    if (next !== fence) setRemoteQueueFence(turnKey, next);
-  }, [fence, hostActivity, turnKey]);
-  const hostActivityRef = React.useRef(hostActivity);
-  hostActivityRef.current = hostActivity;
   React.useEffect(() => {
     if (fence && !fenceHolds && turnKey && remoteQueueFence(turnKey) === fence) setRemoteQueueFence(turnKey, null);
   }, [fence, fenceHolds, turnKey]);
@@ -470,10 +468,7 @@ export function RemoteChatPane({
       // Bound now, so a receipt that lands after this pane closes still fences its chat.
       const key = turnKey;
       const receipt = await sendTurn(message.text, message.attachments, message.skillInvocation);
-      if (receipt && key) {
-        const lastActivity = hostActivityRef.current;
-        setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now(), ...(lastActivity ? { lastActivity } : {}) });
-      }
+      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now() });
     },
   });
   const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {
@@ -1390,7 +1385,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     onRemoved,
     // Bot chats are never listed, and the host refuses to fork them.
     forkable: summary !== undefined,
-    ...(summary?.activity === "idle" || summary?.activity === "active" ? { hostActivity: summary.activity } : {}),
+    hostRuns: feed.data?.runs.filter((entry) => entry.chatId === chatId) ?? NO_HOST_RUNS,
     ...(onOpenChat ? { onOpenChat } : {}),
   };
 

@@ -14,53 +14,33 @@ export interface RemoteQueueFence {
   runId: string;
   /** When it was accepted, for the stall fallback. */
   since: number;
-  /**
-   * The chat's activity in the host's list as last seen under this fence,
-   * starting with what the list said when the turn was accepted.
-   */
-  lastActivity?: "idle" | "active";
-  /**
-   * The list turned to working after the turn was accepted. A row that was
-   * already `active` then may still describe the previous run, so only a
-   * change to `active` counts.
-   */
-  sawActive?: boolean;
-}
-
-/** The fence after the host's list reports `activity`; the same fence when nothing changed. */
-export function observeRemoteQueueFenceActivity(
-  fence: RemoteQueueFence,
-  activity: "idle" | "active" | undefined,
-): RemoteQueueFence {
-  if (activity === undefined || activity === fence.lastActivity) return fence;
-  const turnedActive = activity === "active" && fence.lastActivity !== "active" && fence.lastActivity !== undefined;
-  return { ...fence, lastActivity: activity, ...(turnedActive ? { sawActive: true } : {}) };
 }
 
 export interface RemoteQueueFenceView {
+  /** The run this pane follows on the host's run stream. */
   run: { runId: string | null; ended: boolean } | null;
-  /** The chat's activity as the host's live chat list reports it, when listed. */
-  hostActivity: "idle" | "active" | undefined;
+  /** The host feed's `run.state` for the fenced run, when the feed has sent one. */
+  hostRunState: string | undefined;
   now: number;
 }
 
 /** A run this Mac never hears about must not hold the queue for good. */
 export const REMOTE_QUEUE_FENCE_STALL_MS = 120_000;
 
+/** Feed states the host publishes only after it has released the turn. */
+const SETTLED_RUN_STATES = new Set(["done", "failed", "cancelled"]);
+
 /**
- * Whether the fence still holds. It lifts only on the host's own word that the
- * turn settled: its run was seen ending, or the host's chat list turned to
- * working after the turn was accepted and then back to idle. The host saves the reply before it lets
- * the turn go, so a transcript ending in that reply proves nothing; the list
- * turns idle and the run ends only after the turn is released.
+ * Whether the fence still holds. It lifts only on evidence about that very
+ * run: the run stream saw it end, or the host feed reports it settled. The
+ * host saves a reply before it releases the turn, and a chat's idle/active
+ * row can't say which run it describes, so neither counts.
  */
 export function remoteQueueFenceHolds(fence: RemoteQueueFence | null, view: RemoteQueueFenceView): boolean {
   if (!fence) return false;
   if (view.now - fence.since >= REMOTE_QUEUE_FENCE_STALL_MS) return false;
-  const run = view.run;
-  if (run?.runId === fence.runId) return !run.ended;
-  const runActive = Boolean(run && run.runId !== null && !run.ended);
-  return runActive || !(fence.sawActive && view.hostActivity === "idle");
+  if (view.hostRunState !== undefined && SETTLED_RUN_STATES.has(view.hostRunState)) return false;
+  return !(view.run?.runId === fence.runId && view.run.ended);
 }
 
 const fences = new Map<string, RemoteQueueFence>();
