@@ -574,6 +574,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
+            // Revision 42: phones play the agent's browser recordings their chats name.
+            browserRecordings: {
+              read: async (recordingId: string) =>
+                (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
+            },
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>
               normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,

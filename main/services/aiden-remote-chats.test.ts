@@ -83,6 +83,7 @@ function fixture(
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
     inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
     visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
+    browserRecordings?: ConstructorParameters<typeof AidenRemoteChatService>[0]["browserRecordings"];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -284,6 +285,7 @@ function fixture(
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
     ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
     ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
+    ...(fixtureOptions.browserRecordings ? { browserRecordings: fixtureOptions.browserRecordings } : {}),
   });
   return {
     service,
@@ -1245,6 +1247,53 @@ test("visual documents refuse visuals the chat does not project and hosts withou
   const without = fixture(chat({ messages: [visualsMessage()] }));
   assert.equal(without.service.supportsVisualViewer, false);
   await assert.rejects(without.service.visualDocument("chat-1", "html-1", light), hasCode("not_found", 404));
+});
+
+function recordingMessage(recordingId: string): ChatMessage {
+  return {
+    id: "assistant-recording",
+    role: "assistant",
+    content: "Here is the checkout flow.",
+    createdAt: 2_000,
+    timeline: {
+      version: 3,
+      generationId: "stream-recording",
+      status: "completed",
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      steps: [{
+        id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "browser_recording_stop",
+        label: "Stop browser recording", status: "completed", startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset: 0,
+        recording: { id: recordingId, mimeType: "video/mp4", durationMs: 4_000, sizeBytes: 32 },
+      }],
+    },
+  };
+}
+
+test("a chat's browser recordings are read only by the id its own timeline names", async () => {
+  const named = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const other = "recording-11111111-2222-4333-8444-555555555555";
+  const video = Buffer.from("video bytes");
+  const reads: string[] = [];
+  const recordings = {
+    read: async (id: string) => {
+      reads.push(id);
+      return id === named || id === other ? { mimeType: "video/mp4", data: video } : undefined;
+    },
+  };
+  const { service } = fixture(chat({ messages: [recordingMessage(named)] }), { browserRecordings: recordings });
+  assert.equal(service.supportsBrowserRecordings, true);
+  assert.deepEqual(await service.browserRecording("chat-1", named), { bytes: video, mimeType: "video/mp4" });
+  // Another chat's recording, though it is on the Mac, is not this chat's to read.
+  await assert.rejects(service.browserRecording("chat-1", other), hasCode("not_found", 404));
+  await assert.rejects(service.browserRecording("chat-1", "../secret"), hasCode("invalid_request", 400));
+  assert.deepEqual(reads, [named]);
+
+  const gone = fixture(chat({ messages: [recordingMessage(named)] }), { browserRecordings: { read: async () => undefined } });
+  await assert.rejects(gone.service.browserRecording("chat-1", named), hasCode("not_found", 404));
+  const without = fixture(chat({ messages: [recordingMessage(named)] }));
+  assert.equal(without.service.supportsBrowserRecordings, false);
+  await assert.rejects(without.service.browserRecording("chat-1", named), hasCode("not_found", 404));
 });
 
 test("chat projection omits visuals for a message without any", () => {
