@@ -22,6 +22,7 @@ import {
   Switch,
   toast,
 } from "../ui";
+import { TelegramPairingPanel } from "./telegram-pairing-panel";
 import { telegramApi } from "../../lib/ipc";
 import {
   queryKeys,
@@ -53,6 +54,9 @@ export function TelegramSettings() {
   const [keyDraft, setKeyDraft] = React.useState("");
   const [profileDraft, setProfileDraft] = React.useState("");
   const [deleteProfileOpen, setDeleteProfileOpen] = React.useState(false);
+  const [pairing, setPairing] = React.useState<{ code: string; expiresAt: number }>();
+  const [pairingBusy, setPairingBusy] = React.useState(false);
+  const pairingGeneration = React.useRef(0);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.telegram });
   const enabled = telegram.data?.enabled ?? false;
@@ -77,8 +81,49 @@ export function TelegramSettings() {
     (workspace) => workspace.value !== TELEGRAM_ASSISTANT_ONLY_VALUE && !workspace.unavailable,
   ).length;
 
+  React.useEffect(() => {
+    pairingGeneration.current += 1;
+    setPairing(undefined);
+    setPairingBusy(false);
+    return () => { pairingGeneration.current += 1; void telegramApi.cancelPairing(activeProfile).catch(() => undefined); };
+  }, [activeProfile]);
+
+  React.useEffect(() => {
+    if (!polling || allowedUserId !== undefined) setPairing(undefined);
+  }, [polling, allowedUserId]);
+
+  React.useEffect(() => {
+    if (telegram.data && !telegram.data.pairing?.expiresAt) setPairing(undefined);
+  }, [telegram.data]);
+
+  React.useEffect(() => {
+    if (!pairing) return;
+    const expiry = setTimeout(() => setPairing(undefined), Math.max(0, pairing.expiresAt - Date.now()));
+    const refresh = setInterval(() => { void qc.invalidateQueries({ queryKey: queryKeys.telegram }); }, 2_000);
+    return () => { clearTimeout(expiry); clearInterval(refresh); };
+  }, [pairing, qc]);
+
+  const beginPairing = async () => {
+    const generation = ++pairingGeneration.current;
+    setPairingBusy(true);
+    try {
+      const challenge = await telegramApi.beginPairing(activeProfile);
+      await qc.invalidateQueries({ queryKey: queryKeys.telegram });
+      if (generation === pairingGeneration.current) setPairing(challenge);
+    } catch (error) {
+      if (generation === pairingGeneration.current) toast.error(error instanceof Error ? error.message : "Could not start pairing.");
+    } finally { if (generation === pairingGeneration.current) setPairingBusy(false); }
+  };
+  const cancelPairing = async () => {
+    pairingGeneration.current += 1;
+    setPairing(undefined);
+    setPairingBusy(false);
+    await telegramApi.cancelPairing(activeProfile);
+  };
+
   const saveKey = async () => {
     const value = keyDraft.trim();
+    await cancelPairing();
     await telegramApi.setKey(value);
     setKeyDraft("");
     await invalidate();
@@ -108,15 +153,17 @@ export function TelegramSettings() {
   };
 
   const disconnect = async () => {
+    await cancelPairing();
     await telegramApi.setEnabled(false);
     await invalidate();
     toast.success("Telegram turned off.");
   };
 
   const resetPairing = async () => {
+    await cancelPairing();
     await telegramApi.resetPairing();
     await invalidate();
-    toast.success("Pairing reset. The next /start will claim a new owner.");
+    toast.success("Pairing reset. Start pairing to authorize another account.");
   };
 
   const selectProfile = async (profile: string) => {
@@ -255,7 +302,7 @@ export function TelegramSettings() {
     <FieldSet title="2. Review model and access">
       <Field
         label="Workspace"
-        description="Project automation runs only in this folder. Assistant-only mode cannot access project files or tools."
+        description="Telegram can edit files and run commands here without asking, including in Ask workspaces. No Access workspaces are unavailable. Assistant-only mode cannot access project files or tools."
       >
         <Select
           value={telegramWorkspaceId ?? TELEGRAM_ASSISTANT_ONLY_VALUE}
@@ -362,7 +409,7 @@ export function TelegramSettings() {
       {hasToken && (
         <Field
           label="Connection"
-          description="Keep Aiden running on this device. After connecting, send /start to your bot from your own Telegram account."
+          description="Keep Aiden running on this device. Connect, then start pairing below to authorize your Telegram account."
         >
           <div className="flex flex-wrap items-center gap-3">
             <Button size="medium" variant="filled" onClick={() => { setConnectionError(null); setConnectionReview(true); }} disabled={polling || connecting}>
@@ -381,6 +428,7 @@ export function TelegramSettings() {
 
       {!hasToken ? <Text as="p" variant="small" color="secondary" className="p-4">Save your bot token in step 1 to connect.</Text> : null}
       {connectionError ? <Callout color="red" role="alert">{connectionError}</Callout> : null}
+      {hasToken && allowedUserId === undefined ? <TelegramPairingPanel pending={pairing} busy={pairingBusy} disabled={!enabled || !polling} onBegin={() => { void beginPairing(); }} onCancel={() => { void cancelPairing(); }} /> : null}
       {allowedUserId !== undefined && (
         <Field
           label="Paired owner"
@@ -605,7 +653,7 @@ export function TelegramSettings() {
           </li>
           <li>Choose a provider above (or set one up in Settings → Providers).</li>
           <li>
-            Choose Connect in step 3, review access, then send <code>/start</code> to your bot from Telegram to pair.
+            Choose Connect in step 3, review access, then choose Start pairing and send the one-time command to your bot.
           </li>
         </ol>
       </Field>
@@ -624,8 +672,8 @@ export function TelegramSettings() {
     </details>
     <Dialog open={connectionReview} onOpenChange={setConnectionReview}
       title="Connect Telegram?" confirmLabel="Enable and connect" busy={connecting} onConfirm={connect}
-      description="Aiden will connect this bot and keep checking for messages while the app is running. Send /start from your own account to pair it. Keep the bot private.">
-      <Text as="p" variant="small" color="secondary">Messages go through Telegram and your selected AI service. Workspace tasks run unattended: they can edit files and run commands without asking. Only the paired owner can trigger them.</Text>
+      description="Aiden will connect this bot and keep checking for messages while the app is running. Then choose Start pairing and send its one-time command from your own account. Keep the command private.">
+      <Text as="p" variant="small" color="secondary">Messages go through Telegram and your selected AI service. Workspace tasks run unattended, including in Ask workspaces: they can edit files and run commands without asking. No Access workspaces are blocked. Only the paired owner can trigger them.</Text>
       <Field label="Profile"><Text>{activeProfile}</Text></Field>
       <Field label="Model"><Text>{selectedProvider?.label ?? "Not configured"} · {selectedModel || "Choose a model before chatting"}</Text></Field>
       <Field label="Workspace"><Text>{workspaceOptions.find((option) => option.value === telegramWorkspaceId)?.label ?? "Assistant-only — no project files or tools"}</Text></Field>

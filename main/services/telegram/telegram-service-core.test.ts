@@ -33,6 +33,7 @@ import type {
 import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps } from "./telegram-turn.js";
 import type { AppSettings } from "../types.js";
+import { TelegramWorkspaceAccessError } from "./telegram-workspace-core.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
 import type {
   ContextLifecycleAudience,
@@ -503,6 +504,8 @@ function createLogs() {
 // ---------------------------------------------------------------------------
 
 interface HarnessOptions {
+  now?: () => number;
+  assertWorkspaceAccess?: import("./telegram-service-core.js").TelegramServiceDeps["assertWorkspaceAccess"];
   listPromptCommands?: import("./telegram-service-core.js").TelegramServiceDeps["listPromptCommands"];
   validateSkillInvocation?: import("./telegram-service-core.js").TelegramServiceDeps["validateSkillInvocation"];
   enabled?: boolean;
@@ -614,7 +617,8 @@ function harness(o: HarnessOptions = {}) {
     storeInboundFile: o.storeInboundFile,
     botIngress: o.botIngress,
     getToken: () => Promise.resolve("mock-token"),
-    now: () => 0,
+    now: o.now ?? (() => 0),
+    assertWorkspaceAccess: o.assertWorkspaceAccess,
     sleep: sleepMock.sleep,
     info: logs.infoFn,
     warn: logs.warnFn,
@@ -735,27 +739,41 @@ test("disconnect() clears polling and resets the persisted offset", async () => 
 // Authorization / pairing
 // ---------------------------------------------------------------------------
 
-test("first message from a non-bot user pairs the owner (sets telegramAllowedUserId)", async () => {
+test("unsolicited text, plain /start, edits and callbacks cannot establish an owner", async () => {
   const newcomer = person(777, "newcomer");
-  const { service, api, config } = harness({
-    enabled: true,
-    hasToken: true,
-    allowedUserId: undefined,
-    batches: [[makeUpdate(1, makeMessage(10, newcomer, "hi"))]],
+  const message = makeMessage(10, newcomer, "/start");
+  const { service, api, config, turnMock } = harness({
+    enabled: true, allowedUserId: undefined,
+    batches: [[makeUpdate(1, { ...message, text: "hi" }), makeUpdate(2, message),
+      { update_id: 3, edited_message: message },
+      { update_id: 4, callback_query: { id: "q", from: newcomer, message, data: "menu:back" } }]],
     autoStop: true,
   });
-
   await service.start();
-  await waitFor(() => config.setSettingsCalls.length >= 1);
+  await waitFor(() => api.getUpdatesCalls() > 1);
+  assert.deepEqual(config.setSettingsCalls, []);
+  assert.equal(config.state.allowedUserId, undefined);
+  assert.equal(turnMock.startCalls(), 0);
+  assert.equal(api.sentMessages.length, 0);
+});
 
-  assert.deepEqual(config.setSettingsCalls[0], { telegramAllowedUserId: 777 });
-  assert.equal(config.state.allowedUserId, 777, "pairing reflected in snapshot state");
-
-  await waitFor(() => api.sentMessages.some((m) => m.text.includes("paired")));
-  assert.ok(
-    api.sentMessages.some((m) => m.text.includes("paired")),
-    "pairing acknowledgement sent",
-  );
+test("a host proof pairs only a fresh private human message and never reaches logs or inference", async () => {
+  const newcomer = person(777, "newcomer");
+  const message = makeMessage(10, newcomer, "/start");
+  const batch: TelegramUpdate[] = [];
+  const live = harness({ enabled: true, batches: [batch], autoStop: true });
+  const challenge = await live.service.beginPairing();
+  const valid = { ...message, text: `/start ${challenge.code}` };
+  batch.push({ update_id: 1, edited_message: valid },
+    { update_id: 2, callback_query: { id: "q", from: newcomer, message: valid } },
+    makeUpdate(3, { ...valid, from: { ...newcomer, is_bot: true } }),
+    makeUpdate(4, { ...valid, chat: { id: -100, type: "group" } }),
+    makeUpdate(5, valid));
+  await live.service.start();
+  await waitFor(() => live.api.sentMessages.some((m) => m.text.includes("paired")));
+  assert.equal(live.config.state.allowedUserId, 777);
+  assert.equal(live.turnMock.startCalls(), 0);
+  assert.equal(JSON.stringify([live.logs, live.service.getStatus(), live.config.setSettingsCalls, live.api.sentMessages]).includes(challenge.code), false);
 });
 
 test("unhealthy binding authority blocks both pairing and ordinary Telegram fallback", async (t) => {
@@ -2591,3 +2609,111 @@ for (const command of ["/queue", "/continue", "/interrupt"]) {
     h.service.stop(); h.turnMock.completePendingTurn();
   });
 }
+
+test("No Access blocks ordinary Telegram before extensions or inference; owner can clear the denied selection", async () => {
+  const owner = person(42);
+  let extensionCalls = 0;
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "denied",
+    assertWorkspaceAccess: async (id) => { if (id === "denied") throw new TelegramWorkspaceAccessError(); },
+    handleExtensionUpdate: async () => { extensionCalls++; return false; },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "read the folder")), makeUpdate(2, makeMessage(11, owner, "/workspace off"))]],
+    autoStop: false,
+  });
+  await h.service.start();
+  await waitFor(() => h.config.state.telegramWorkspaceId === undefined);
+  assert.equal(extensionCalls, 0);
+  assert.equal(h.turnMock.startCalls(), 0);
+  assert.equal(h.service.queueSize, 0);
+  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("No Access")), true);
+  h.service.stop();
+});
+
+test("a workspace downgrade revokes queued ordinary work and cancels its active turn", async () => {
+  const owner = person(42);
+  let denied = false;
+  let aborted = 0;
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "project", pendingTurn: true,
+    workspaces: [{ id: "project", name: "Project", folderPath: "/project" }],
+    assertWorkspaceAccess: async (id) => { if (id === "project" && denied) throw new Error("No Access"); },
+    abortChat: async () => { aborted++; h.turnMock.completePendingTurn(); },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "first")), makeUpdate(2, makeMessage(11, owner, "second"))]], autoStop: false,
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+  assert.equal(h.service.queueSize, 1);
+  denied = true;
+  await h.service.revalidateWorkspaces();
+  await waitFor(() => !h.service.isActive);
+  assert.equal(h.service.queueSize, 0);
+  assert.equal(aborted, 1);
+  assert.equal(h.turnMock.startCalls(), 1);
+  h.service.stop();
+});
+
+test("a queued ordinary turn rechecks No Access at dispatch even without a workspace notification", async () => {
+  const owner = person(42);
+  let denied = false;
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "project", pendingTurn: true,
+    workspaces: [{ id: "project", name: "Project", folderPath: "/project" }],
+    assertWorkspaceAccess: async (id) => { if (id === "project" && denied) throw new Error("No Access at dispatch"); },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "first")), makeUpdate(2, makeMessage(11, owner, "second"))]], autoStop: false,
+  });
+  await h.service.start();
+  await waitFor(() => h.turnMock.startCalls() === 1);
+  denied = true;
+  h.turnMock.completePendingTurn();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("No Access at dispatch")));
+  assert.equal(h.turnMock.startCalls(), 1);
+  assert.equal(h.service.queueSize, 0);
+  h.service.stop();
+});
+
+test("Bot-bound Telegram retains its managed authority when ordinary workspace access is denied", async () => {
+  const owner = person(42);
+  let admitted = 0;
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "denied",
+    assertWorkspaceAccess: async () => { throw new Error("Ordinary workspace is No Access"); },
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    validateBotBinding: async () => true,
+    botIngress: { admit: async () => { admitted++; return { requestId: "tg:submission", deduped: false, paused: true }; } },
+    batches: [[makeUpdate(1, makeMessage(10, owner, "Bot task"))]], autoStop: true,
+  });
+  await h.service.start();
+  await waitFor(() => admitted === 1);
+  assert.equal(h.turnMock.startCalls(), 0);
+  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("No Access")), false);
+});
+
+test("reset and transport stop invalidate a pending proof before updates can claim", async (t) => {
+  for (const action of ["reset", "stop"]) await t.test(action, async () => {
+    const batch: TelegramUpdate[] = [];
+    const h = harness({ enabled: true, batches: [batch], autoStop: true });
+    const proof = await h.service.beginPairing();
+    if (action === "reset") await h.service.resetPairing(); else h.service.stop();
+    batch.push(makeUpdate(1, makeMessage(10, person(42), `/start ${proof.code}`)));
+    await h.service.start();
+    await waitFor(() => h.api.getUpdatesCalls() > 1);
+    assert.equal(h.config.state.allowedUserId, undefined);
+    assert.equal(h.turnMock.startCalls(), 0);
+  });
+});
+
+test("No Access prevents a reaction extension from receiving project authority", async () => {
+  let extensionCalls = 0;
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "denied",
+    assertWorkspaceAccess: async () => { throw new TelegramWorkspaceAccessError(); },
+    handleExtensionUpdate: async () => { extensionCalls++; return true; },
+    batches: [[{ update_id: 1, message_reaction: { chat: { id: 100, type: "private" }, message_id: 10, user: person(42), date: 1, old_reaction: [], new_reaction: [{ type: "emoji", emoji: "👍" }] } }]],
+    autoStop: true,
+  });
+  await h.service.start();
+  await waitFor(() => h.api.getUpdatesCalls() > 1);
+  assert.equal(extensionCalls, 0);
+  assert.equal(h.turnMock.startCalls(), 0);
+});

@@ -36,3 +36,7 @@ Tests cover workspace chat identity, selected-workspace generation mode and ID, 
 ## Onboarding
 
 The final feature-tour bento gallery gets a Telegram Remote Control tile plus its optimized 1024 × 1024 transparent PNG, covered by the existing onboarding asset contract.
+
+## October 27, 2026 security update
+
+The original selected-workspace Full automation grant remains explicit for Ask and Full folders. Ordinary Telegram admission now refuses No Access folders at selection, ingress and dispatch. A downgrade revokes queued work and cancels active ordinary Telegram work. Bot-managed capability authority remains separate. Ownership bootstrap now requires a host-issued, five-minute, single-use pairing command; existing owners remain configured. See [current Telegram guide](../../telegram.md).

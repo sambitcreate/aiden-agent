@@ -7,6 +7,9 @@
 // Design reference: pi-telegram (https://github.com/llblab/pi-telegram, MIT).
 
 import { createHash } from "node:crypto";
+import { TelegramWorkspaceAccessError } from "./telegram-workspace-core.js";
+import { createTelegramPairing } from "./telegram-pairing.js";
+import type { TelegramProfileMutationFence } from "./telegram-profile-mutation-fence.js";
 
 import type {
   TelegramBotApi,
@@ -121,6 +124,9 @@ export interface TelegramServiceDeps {
   turn: TelegramTurnDeps;
   /** Telegram profile namespace. Required by production wiring to isolate chats. */
   profile?: string;
+  profileFence?: TelegramProfileMutationFence;
+  /** Ordinary Telegram workspace authority; Bot routes keep their separate grants. */
+  assertWorkspaceAccess?(workspaceId: string | undefined): Promise<void>;
   /** Resolve an exact private-chat/topic route after owner authorization. */
   resolveBotBinding?(input: TelegramBotBindingLookup): Promise<TelegramBotBindingSnapshot | null | undefined>;
   /**
@@ -256,6 +262,7 @@ export function telegramCompactionCallback(binding?: TelegramBotBindingSnapshot)
 }
 
 export function createTelegramServiceCore(deps: TelegramServiceDeps) {
+  const pairing = createTelegramPairing({ profile: deps.profile ?? "default", config: deps.config, getToken: deps.getToken, now: deps.now, fence: deps.profileFence });
   const buttonStore = createTelegramButtonStore(deps.now);
   const queue: TelegramQueue = createTelegramQueue({
     isActive: () => activeTurn,
@@ -408,6 +415,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   }
 
   function stop(): void {
+    pairing.invalidate();
     started = false;
     abortController?.abort();
     abortController = undefined;
@@ -452,7 +460,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     deps.info("Telegram bridge connected.");
   }
 
-  /** Disconnect and clear pairing (keeps the token). */
+  /** Disconnect and clear the polling offset; the configured owner remains. */
   async function disconnect(): Promise<void> {
     stop();
     await deps.config.clearOffset();
@@ -531,7 +539,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           await handleUpdate(update);
           handled = true;
         } catch (cause) {
-          if (cause instanceof TelegramQueueCapacityError && (update.message || update.edited_message)) {
+          if ((cause instanceof TelegramQueueCapacityError || cause instanceof TelegramWorkspaceAccessError) && (update.message || update.edited_message)) {
             const message = (update.message ?? update.edited_message)!;
             await deps.api.sendMessage({ chatId: message.chat.id, threadId: message.message_thread_id, text: cause.message }).catch(() => undefined);
             handled = true;
@@ -602,7 +610,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     if (!message || !from) return;
 
     deps.info(
-      `Telegram update ${update.update_id}: from=${from.id} (${from.username ?? "no-username"}) chat=${message.chat.id} type=${message.chat.type} text="${(message.text ?? "").slice(0, 80)}"`,
+      `Telegram update ${update.update_id}: from=${from.id} (${from.username ?? "no-username"}) chat=${message.chat.id} type=${message.chat.type}`,
     );
 
     // Restrict to private chats — group/supergroup messages are ignored.
@@ -619,13 +627,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
     // Authorization / pairing gate (checked before answering callbacks).
     if (snap.allowedUserId === undefined) {
-      // First non-bot user to message becomes the owner.
-      if (from.is_bot) return;
-      await deps.config.setSettings({ telegramAllowedUserId: from.id });
-      // Answer any pending callback after pairing.
-      if (update.callback_query) {
-        await deps.api.answerCallbackQuery(update.callback_query.id);
-      }
+      // Only a fresh private human message can present the host-issued proof.
+      const match = update.message && !from.is_bot
+        ? /^\/start(?:@([A-Za-z0-9_]+))? ([A-Za-z0-9_-]+)$/u.exec(update.message.text ?? "")
+        : null;
+      if (!match || (match[1] && match[1].toLowerCase() !== botUsername?.toLowerCase())) return;
+      if (!await pairing.claim(match[2], from.id)) return;
       await deps.api.sendMessage({
         chatId: message.chat.id,
         text: "✅ Telegram bridge paired with this account.\n\nSend any message and I'll respond. Use /stop to clear queued messages.",
@@ -664,7 +671,17 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       : undefined;
     const selectedWorkspaceId = binding?.backingWorkspaceId ?? threadWorkspaceId ?? settings.telegramWorkspaceId;
 
-    if (deps.handleExtensionUpdate) {
+    const recoveryCommand = ["/start", "/help", "/status", "/workspace", "/stop", "/queue", "/next"].includes(commandName(extractText(message) ?? ""));
+    let workspaceDenied = false;
+    if (!binding) {
+      try { await deps.assertWorkspaceAccess?.(selectedWorkspaceId); }
+      catch (cause) {
+        if (!recoveryCommand && !update.callback_query) throw cause;
+        workspaceDenied = true;
+      }
+    }
+
+    if (deps.handleExtensionUpdate && !workspaceDenied) {
       const handled = await deps.handleExtensionUpdate(update, {
         chatId: message.chat.id,
         threadId: message.message_thread_id,
@@ -906,6 +923,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       const threadWorkspaceId = reactionThreadId === undefined
         ? undefined
         : await deps.resolveThreadWorkspace?.(reactionThreadId);
+      if (!binding) {
+        try { await deps.assertWorkspaceAccess?.(threadWorkspaceId ?? settings.telegramWorkspaceId); }
+        catch { return; }
+      }
       const handled = await deps.handleExtensionUpdate({ update_id: 0, message_reaction: reaction }, {
         chatId: reaction.chat.id,
         threadId: reactionThreadId,
@@ -956,8 +977,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const settings = workspaceCaptured ? undefined : await deps.config.getSettings();
     const duplicate = turn.sourceMessageId === undefined ? undefined : queue.findBySource(turn.chatId, turn.sourceMessageId, turn.threadId, turn.binding);
     if (duplicate) return false;
+    const selectedWorkspaceId = workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId;
+    if (!turn.binding) await deps.assertWorkspaceAccess?.(selectedWorkspaceId);
     checkPendingCapacity(turn);
-    queue.enqueue({ ...turn, workspaceId: workspaceCaptured ? workspaceId : settings?.telegramWorkspaceId });
+    queue.enqueue({ ...turn, workspaceId: selectedWorkspaceId });
     if (options.acknowledgeBusy !== false && !turn.dispatchNext && (activeTurn || dispatchPending)) {
       // Admission already succeeded; a failed acknowledgement must not replay it.
       await deps.api.sendMessage({ chatId: turn.chatId, threadId: turn.threadId, text: "⏳ Queued for the next turn. Use /queue to manage pending prompts or /stop to clear them." }).catch(() => undefined);
@@ -1369,6 +1392,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         const workspaces = await deps.listWorkspaces();
         const workspace = selection === "off" ? undefined : workspaces[Number(selection)];
         if (selection !== "off" && !workspace) throw new Error("That workspace is unavailable.");
+        await deps.assertWorkspaceAccess?.(workspace?.id);
         const cleared = clearQueued(binding, message);
         await deps.config.setSettings({ telegramWorkspaceId: workspace?.id });
         await openMainMenu(message, true, binding);
@@ -1448,6 +1472,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         const threadWorkspaceId = message.message_thread_id !== undefined
           ? await deps.resolveThreadWorkspace?.(message.message_thread_id)
           : undefined;
+        if (!binding) await deps.assertWorkspaceAccess?.(threadWorkspaceId ?? settings.telegramWorkspaceId);
         const reply = await deps.handleExtensionCallback(data, {
           chatId: message.chat.id,
           threadId: message.message_thread_id,
@@ -1635,13 +1660,14 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         return;
       }
 
+      await deps.assertWorkspaceAccess?.(workspace.id);
       const hadQueued = clearQueued(binding, message);
       await deps.config.setSettings({ telegramWorkspaceId: workspace.id });
       await deps.api.sendMessage({
         chatId,
         threadId: message.message_thread_id,
         text: [
-          `Telegram workspace set to ${workspace.name}. Future turns will run in ${workspace.folderPath}.`,
+          `Telegram workspace set to ${workspace.name}. Future turns will run in ${workspace.folderPath} and can edit files and run commands without asking.`,
           ...(hadQueued > 0 ? [`Cleared ${hadQueued} queued message(s).`] : []),
         ].join("\n"),
       });
@@ -1733,6 +1759,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     const cancellation = new AbortController();
     dispatchCancellation = cancellation;
     try {
+      if (!turn.binding) await deps.assertWorkspaceAccess?.(turn.workspaceId);
       if (turn.binding) {
         const validation = await deps.validateBotBinding?.(turn.binding);
         if (validation === false) throw new Error("This Telegram bot is unavailable or archived.");
@@ -1862,7 +1889,25 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
   }
 
+  async function revalidateWorkspaces(): Promise<void> {
+    const turns = [...queue.list(), ...[...mediaGroups.values()].map((group) => group.turn)];
+    for (const turn of turns) {
+      if (turn.binding) continue;
+      try { await deps.assertWorkspaceAccess?.(turn.workspaceId); }
+      catch {
+        if (turn.id !== undefined) queue.remove(turn.id);
+        for (const [key, group] of mediaGroups) if (group.turn === turn) { clearTimeout(group.timer); mediaGroups.delete(key); }
+      }
+    }
+    const current = activeInput;
+    if (current && !current.binding) {
+      try { await deps.assertWorkspaceAccess?.(current.workspaceId); }
+      catch { if (activeInput === current) await abortCurrentTurn(); }
+    }
+  }
+
   async function resetPairing(): Promise<void> {
+    pairing.invalidate();
     dispatchCancellation?.abort();
     queue.clear();
     clearMediaGroups();
@@ -2098,6 +2143,10 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     connect,
     disconnect,
     resetPairing,
+    beginPairing: pairing.begin,
+    cancelPairing: pairing.invalidate,
+    pairingStatus: pairing.status,
+    revalidateWorkspaces,
     refreshCommands,
     ensureThreads,
     clearThreads,

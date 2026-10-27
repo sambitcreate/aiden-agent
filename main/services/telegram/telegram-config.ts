@@ -25,7 +25,7 @@ export interface TelegramConfigSnapshot {
 
 export interface TelegramConfigDeps {
   getSettings(): Promise<AppSettings>;
-  setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+  setSettings(patch: Partial<AppSettings>, isCurrent?: () => boolean): Promise<AppSettings>;
   hasToken(): Promise<boolean>;
   resolveRootDir(): string;
   runtimeFileName?: string;
@@ -76,8 +76,8 @@ export function createTelegramConfig(deps: TelegramConfigDeps) {
     return deps.getSettings();
   }
 
-  async function setSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
-    return deps.setSettings(patch);
+  async function setSettings(patch: Partial<AppSettings>, isCurrent?: () => boolean): Promise<AppSettings> {
+    return deps.setSettings(patch, isCurrent);
   }
 
   async function hasToken(): Promise<boolean> {
