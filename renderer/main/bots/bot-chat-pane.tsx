@@ -384,19 +384,39 @@ function BotQueuedBubble({
  * chat leaves out the actions its host does not offer remotely.
  */
 /**
- * A message the person just sent, shown at once while main accepts it. It is
- * faded like a queued message and leaves when the projected entry (or the
- * queued message) with the same words arrives, or when the send fails.
+ * A message the person just sent, shown at once while main accepts it. It
+ * looks like the entry it becomes (same row, same Copy and Reply), so the
+ * hand-over is invisible; "Sending…" shows only when main is slow to answer.
+ * A message sent while the Bot works shows as Queued straight away. It leaves
+ * when the projected entry (or the queued message) with the same words
+ * arrives, or when the send fails.
  */
-function BotPendingSendBubble({ text }: { text: string }) {
+function BotPendingSendBubble({ send, onReply }: { send: BotPendingSend; onReply(text: string): void }) {
+  const slow = useSlowSend(send);
+  if (send.queued) return <BotQueuedBubble text={send.text} removing={false} />;
   return (
-    <div className="flex flex-col items-end gap-1" data-bot-pending-send aria-busy="true">
-      <div className="max-w-full [&_.bg-control]:bg-[color-mix(in_srgb,var(--color-control)_55%,transparent)]">
-        <SafeMessageBubble role="user" content={text} showCopy={false} />
-      </div>
-      <span className="text-small text-tertiary">Sending…</span>
+    <div className="flex flex-col gap-1" data-bot-pending-send aria-busy={!send.accepted}>
+      <BotMessageActions text={send.text} from="You" align="end" onReply={onReply}>
+        <SafeMessageBubble role="user" content={send.text} showCopy={false} />
+      </BotMessageActions>
+      {slow ? <span className="self-end text-small text-tertiary">Sending…</span> : null}
     </div>
   );
+}
+
+/** Whether a send main has not answered has waited long enough to say "Sending…". */
+function useSlowSend(send: BotPendingSend): boolean {
+  const waiting = !send.accepted;
+  const [slow, setSlow] = React.useState(() => waiting && Date.now() - send.at >= SLOW_SEND_MS);
+  React.useEffect(() => {
+    if (!waiting) {
+      setSlow(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlow(true), Math.max(0, send.at + SLOW_SEND_MS - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [waiting, send.at]);
+  return waiting && slow;
 }
 
 /** A send shown before main answers; `seen` names what was already on screen when it was made. */
@@ -405,6 +425,12 @@ interface BotPendingSend {
   text: string;
   /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
   seen: ReadonlySet<string>;
+  /** When it was sent, for "Sending…" and the "Getting ready" line. */
+  at: number;
+  /** Sent while the Bot worked: it shows as Queued, and starts no turn of its own. */
+  queued: boolean;
+  /** Main took it; only its entry is still on the way. */
+  accepted: boolean;
 }
 
 /** The ids of everything a snapshot shows that a pending send could settle into. */
@@ -436,6 +462,9 @@ export function settleBotPendingSends(
     return false;
   });
 }
+
+/** How long main may take to accept a send before its message says "Sending…". */
+const SLOW_SEND_MS = 2000;
 
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
 const PENDING_SEND_SETTLE_MS = 4000;
@@ -809,16 +838,28 @@ export function BotChatPane({ botId }: { botId: string }) {
     (snapshot.partial?.trim().length ?? 0) > 0 &&
     (activityPhase === "writing" || activityPhase === "thinking") &&
     !snapshot.activity?.step;
-  const statusActivity = snapshot.activity && !replyStreaming ? snapshot.activity : null;
+  // A message just sent says "Getting ready" at once, before main's state
+  // catches up (as on the phones); a failed send drops its echo and the line.
+  const startingTurn = !running && !question && !handoff ? pendingSends.find((send) => !send.queued) : undefined;
+  const statusActivity =
+    snapshot.activity && !replyStreaming
+      ? snapshot.activity
+      : startingTurn
+        ? { phase: "preparing" as const, startedAt: startingTurn.at }
+        : null;
 
   /** Shows the echo now; drops it once its entry shows, or shortly after main accepted a send that shows nothing. */
   const echoSend = (requestId: string, text: string) => {
     const seen = snapshot ? botVisibleSendIds(snapshot) : new Set<string>();
-    setPendingSends((current) => [...current.filter((send) => send.requestId !== requestId), { requestId, text, seen }]);
+    const echo: BotPendingSend = { requestId, text, seen, at: Date.now(), queued: running, accepted: false };
+    setPendingSends((current) => [...current.filter((send) => send.requestId !== requestId), echo]);
   };
   const dropEcho = (requestId: string) =>
     setPendingSends((current) => current.filter((send) => send.requestId !== requestId));
   const settleEchoLater = (requestId: string) => {
+    setPendingSends((current) =>
+      current.map((send) => (send.requestId === requestId ? { ...send, accepted: true } : send)),
+    );
     setTimeout(() => dropEcho(requestId), PENDING_SEND_SETTLE_MS);
   };
 
@@ -854,8 +895,8 @@ export function BotChatPane({ botId }: { botId: string }) {
     } catch (error) {
       dropEcho(requestId);
       unsettledSend.current = { text: body, images: imageIdentity, requestId };
-      toast.error(userFacingErrorMessage(error, `Aiden couldn’t send to ${current.name}.`));
-      throw error;
+      // The composer gives the words back and shows this as the one error toast.
+      throw new Error(userFacingErrorMessage(error, `Aiden couldn’t send to ${current.name}.`));
     }
   };
 
@@ -1166,7 +1207,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRespondToProposal={respondToProposal}
         />
         {pendingSends.map((send) => (
-          <BotPendingSendBubble key={send.requestId} text={send.text} />
+          <BotPendingSendBubble key={send.requestId} send={send} onReply={reply} />
         ))}
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
@@ -1179,7 +1220,8 @@ export function BotChatPane({ botId }: { botId: string }) {
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}
-      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId ? (
+      {/* A new message dismisses the interrupted turn, so the card leaves with the send and comes back if it fails. */}
+      {state?.kind === "interrupted" && hiddenInterruptedSubmission !== state.submissionId && !startingTurn ? (
         <BotInterruptedCard
           name={current.name}
           {...(state.blocked ? { blocked: state.blocked } : {})}
