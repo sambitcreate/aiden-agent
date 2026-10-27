@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { BotChatRoute } from "../bot-chat-route";
+import { settleBotPendingSends } from "./bot-chat-pane";
 import { BotPanelHandoff } from "./bot-panel-handoff";
 import { mountWithBotRouter } from "./test-providers";
 import { toast } from "../../components/ui";
@@ -1457,6 +1458,25 @@ test("a sent message shows at once as a sent message with Getting ready, and the
   }));
   await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
   assert.equal(screen.getAllByText("Plan dinner").length, 1, "the echo gave way to the entry, not doubled it");
+});
+
+test("a send still moving into place keeps its echo when its entry arrives, and settles once it lands", () => {
+  const pending = [
+    { requestId: "r1", text: "Plan dinner", seen: new Set(["u0"]), at: 0, queued: false, accepted: true },
+    { requestId: "r2", text: "Plan lunch", seen: new Set(["u0"]), at: 0, queued: false, accepted: true },
+  ];
+  const arrived = snapshot({ entries: [userEntry("u0", "Plan dinner"), userEntry("u1", "Plan dinner"), userEntry("u2", "Plan lunch")] });
+  assert.deepEqual(
+    settleBotPendingSends(pending, arrived, new Set(["r1"])).map((send) => send.requestId),
+    ["r1"],
+    "the moving send waits; the other settles into its entry",
+  );
+  assert.deepEqual(settleBotPendingSends(pending, arrived).map((send) => send.requestId), []);
+  // An entry that was already on screen when the echo was made never settles it.
+  assert.deepEqual(
+    settleBotPendingSends(pending.slice(0, 1), snapshot({ entries: [userEntry("u0", "Plan dinner")] })).map((send) => send.requestId),
+    ["r1"],
+  );
 });
 
 test("a send main is slow to accept says Sending… after two seconds, and never once main took it", async () => {

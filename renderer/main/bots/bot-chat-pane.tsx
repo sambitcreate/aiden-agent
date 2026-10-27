@@ -25,6 +25,7 @@ import type { Attachment } from "../../lib/types";
 import { resolveBotChatActivity, type BotChatActivityLevel } from "../../shared/bots";
 import { queryKeys, useBot } from "../../lib/queries";
 import { useBotLive } from "../../lib/use-bot-live";
+import { prefersReducedMotion } from "../../lib/appearance-runtime";
 import {
   BOT_FAILED_TURN_TEXT,
   botLastReplyAt,
@@ -391,17 +392,132 @@ function BotQueuedBubble({
  * when the projected entry (or the queued message) with the same words
  * arrives, or when the send fails.
  */
-function BotPendingSendBubble({ send, onReply }: { send: BotPendingSend; onReply(text: string): void }) {
+function BotPendingSendBubble({
+  send,
+  morphFrom,
+  onMorphEnd,
+  onReply,
+}: {
+  send: BotPendingSend;
+  /** Where the words sat in the composer: the bubble grows out of them. */
+  morphFrom?: BotSendMorphOrigin;
+  onMorphEnd(): void;
+  onReply(text: string): void;
+}) {
   const slow = useSlowSend(send);
-  if (send.queued) return <BotQueuedBubble text={send.text} removing={false} />;
+  const rowRef = React.useRef<HTMLDivElement | null>(null);
+  useSendMorph(rowRef, morphFrom, onMorphEnd);
   return (
-    <div className="flex flex-col gap-1" data-bot-pending-send aria-busy={!send.accepted}>
-      <BotMessageActions text={send.text} from="You" align="end" onReply={onReply}>
-        <SafeMessageBubble role="user" content={send.text} showCopy={false} />
-      </BotMessageActions>
-      {slow ? <span className="self-end text-small text-tertiary">Sending…</span> : null}
+    <div ref={rowRef}>
+      {send.queued ? (
+        <BotQueuedBubble text={send.text} removing={false} />
+      ) : (
+        <div className="flex flex-col gap-1" data-bot-pending-send aria-busy={!send.accepted}>
+          <BotMessageActions text={send.text} from="You" align="end" onReply={onReply}>
+            <SafeMessageBubble role="user" content={send.text} showCopy={false} />
+          </BotMessageActions>
+          {slow ? <span className="self-end text-small text-tertiary">Sending…</span> : null}
+        </div>
+      )}
     </div>
   );
+}
+
+/** The top-left of the text in the composer when Send was pressed, in viewport pixels. */
+interface BotSendMorphOrigin {
+  left: number;
+  top: number;
+}
+
+/** Where the composer's words start, or null when nothing should move (Reduce Motion, no layout). */
+function botSendMorphOrigin(box: HTMLTextAreaElement | null): BotSendMorphOrigin | null {
+  if (!box || typeof box.animate !== "function" || prefersReducedMotion()) return null;
+  const rect = box.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return null;
+  const style = getComputedStyle(box);
+  return {
+    left: rect.left + (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.paddingLeft) || 0) - box.scrollLeft,
+    top: rect.top + (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.paddingTop) || 0) - box.scrollTop,
+  };
+}
+
+/** How long the words take to travel from the composer into their bubble. */
+const SEND_MORPH_MS = 360;
+
+/**
+ * The sent words leave the composer and become their bubble: a copy of the
+ * bubble starts as bare text where the words sat in the composer, then moves
+ * to the bubble's place as its fill comes in. The copy floats above the chat
+ * (the transcript clips anything over the composer) while the real bubble
+ * holds its space unseen, and it is swapped for the real one when it lands.
+ */
+function useSendMorph(
+  rowRef: React.RefObject<HTMLDivElement | null>,
+  morphFrom: BotSendMorphOrigin | undefined,
+  onMorphEnd: () => void,
+) {
+  const [origin] = React.useState(morphFrom);
+  const ended = React.useRef(onMorphEnd);
+  ended.current = onMorphEnd;
+  React.useLayoutEffect(() => {
+    if (!origin) return;
+    const bubble = rowRef.current?.querySelector<HTMLElement>(".bg-control");
+    if (!bubble) {
+      ended.current();
+      return;
+    }
+    bubble.style.visibility = "hidden";
+    let ghost: HTMLElement | null = null;
+    let animation: Animation | null = null;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      ghost?.remove();
+      bubble.style.visibility = "";
+      ended.current();
+    };
+    // After layout and the transcript's scroll to its end, so the bubble's place is final.
+    const frame = requestAnimationFrame(() => {
+      const target = bubble.getBoundingClientRect();
+      const style = getComputedStyle(bubble);
+      const copy = bubble.cloneNode(true) as HTMLElement;
+      copy.setAttribute("aria-hidden", "true");
+      copy.style.cssText = "";
+      Object.assign(copy.style, {
+        position: "fixed",
+        left: `${target.left}px`,
+        top: `${target.top}px`,
+        width: `${target.width}px`,
+        height: `${target.height}px`,
+        margin: "0",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+        zIndex: "60",
+        font: style.font,
+        color: style.color,
+        letterSpacing: style.letterSpacing,
+      });
+      document.body.appendChild(copy);
+      ghost = copy;
+      const dx = origin.left - (target.left + (parseFloat(style.paddingLeft) || 0));
+      const dy = origin.top - (target.top + (parseFloat(style.paddingTop) || 0));
+      animation = copy.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px)`, backgroundColor: "transparent" },
+          { transform: "translate(0, 0)", backgroundColor: style.backgroundColor },
+        ],
+        { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+      );
+      animation.onfinish = finish;
+      animation.oncancel = finish;
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      animation?.cancel();
+      finish();
+    };
+  }, [origin, rowRef]);
 }
 
 /** Whether a send main has not answered has waited long enough to say "Sending…". */
@@ -442,25 +558,39 @@ function botVisibleSendIds(snapshot: BotLiveSnapshot): Set<string> {
 }
 
 /**
- * Drops every pending send that the snapshot now shows: a user entry, or a
- * queued message, with the same text that was not there when the echo was made.
+ * Pairs each pending send with what the snapshot now shows for it: a user
+ * entry, or a queued message, with the same text that was not there when the
+ * echo was made. Keyed by request id; the value is the arrival's id.
  */
-export function settleBotPendingSends(
-  pending: readonly BotPendingSend[],
-  snapshot: BotLiveSnapshot,
-): BotPendingSend[] {
-  if (pending.length === 0) return pending as BotPendingSend[];
+function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotLiveSnapshot): Map<string, string> {
+  const matches = new Map<string, string>();
+  if (pending.length === 0) return matches;
   const arrivals = [
     ...snapshot.entries.flatMap((entry) => (entry.type === "user" ? [{ id: entry.id, text: entry.text }] : [])),
     ...(snapshot.queued ?? []).map((message) => ({ id: `queued:${message.submissionId}`, text: message.text })),
   ];
   const taken = new Set<string>();
-  return pending.filter((send) => {
+  for (const send of pending) {
     const match = arrivals.find((arrival) => !taken.has(arrival.id) && !send.seen.has(arrival.id) && arrival.text === send.text);
-    if (!match) return true;
+    if (!match) continue;
     taken.add(match.id);
-    return false;
-  });
+    matches.set(send.requestId, match.id);
+  }
+  return matches;
+}
+
+/**
+ * Drops every pending send that the snapshot now shows, except those in
+ * `holding` (still moving into place), whose arrival stays hidden meanwhile.
+ */
+export function settleBotPendingSends(
+  pending: readonly BotPendingSend[],
+  snapshot: BotLiveSnapshot,
+  holding: ReadonlySet<string> = new Set(),
+): BotPendingSend[] {
+  if (pending.length === 0) return pending as BotPendingSend[];
+  const matches = matchBotPendingSends(pending, snapshot);
+  return pending.filter((send) => holding.has(send.requestId) || !matches.has(send.requestId));
 }
 
 /** How long main may take to accept a send before its message says "Sending…". */
@@ -672,6 +802,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   // that failed keeps its id, so the same words sent again are deduplicated by
   // main instead of delivered twice; Retry reuses one id per failed turn.
   const [pendingSends, setPendingSends] = React.useState<readonly BotPendingSend[]>([]);
+  // Sends whose words are still moving from the composer into their bubble:
+  // each keeps its echo until it lands, and the entry that answers it waits unseen.
+  const sendMorphs = React.useRef(new Map<string, BotSendMorphOrigin>());
+  const [morphing, setMorphing] = React.useState<ReadonlySet<string>>(() => new Set());
   const unsettledSend = React.useRef<{ text: string; images: string; requestId: string } | null>(null);
   const retryRequestIds = React.useRef(new Map<string, string>());
   // Failed turns whose Retry was sent: main keeps the failed entry in the view, so the card
@@ -700,10 +834,10 @@ export function BotChatPane({ botId }: { botId: string }) {
   React.useEffect(() => {
     if (!snapshot) return;
     setPendingSends((current) => {
-      const next = settleBotPendingSends(current, snapshot);
+      const next = settleBotPendingSends(current, snapshot, morphing);
       return next.length === current.length ? current : next;
     });
-  }, [snapshot]);
+  }, [snapshot, morphing]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
   React.useEffect(() => {
@@ -838,6 +972,14 @@ export function BotChatPane({ botId }: { botId: string }) {
     (snapshot.partial?.trim().length ?? 0) > 0 &&
     (activityPhase === "writing" || activityPhase === "thinking") &&
     !snapshot.activity?.step;
+  // What already answers a send that is still moving into place stays unseen until it lands.
+  const heldArrivals = new Set(
+    morphing.size
+      ? [...matchBotPendingSends(pendingSends, snapshot)]
+          .filter(([requestId]) => morphing.has(requestId))
+          .map(([, arrivalId]) => arrivalId)
+      : [],
+  );
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
   const startingTurn = !running && !question && !handoff ? pendingSends.find((send) => !send.queued) : undefined;
@@ -856,6 +998,15 @@ export function BotChatPane({ botId }: { botId: string }) {
   };
   const dropEcho = (requestId: string) =>
     setPendingSends((current) => current.filter((send) => send.requestId !== requestId));
+  const endMorph = (requestId: string) => {
+    sendMorphs.current.delete(requestId);
+    setMorphing((current) => {
+      if (!current.has(requestId)) return current;
+      const next = new Set(current);
+      next.delete(requestId);
+      return next;
+    });
+  };
   const settleEchoLater = (requestId: string) => {
     setPendingSends((current) =>
       current.map((send) => (send.requestId === requestId ? { ...send, accepted: true } : send)),
@@ -882,6 +1033,12 @@ export function BotChatPane({ botId }: { botId: string }) {
     const requestId =
       unsettled && unsettled.text === body && unsettled.images === imageIdentity ? unsettled.requestId : crypto.randomUUID();
     unsettledSend.current = null;
+    // Read before the composer redraws empty: the words still sit where they were typed.
+    const origin = text.trim() ? botSendMorphOrigin(composerRef.current) : null;
+    if (origin) {
+      sendMorphs.current.set(requestId, origin);
+      setMorphing((current) => new Set(current).add(requestId));
+    }
     echoSend(requestId, body);
     try {
       await botsApi.send({
@@ -893,6 +1050,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       });
       settleEchoLater(requestId);
     } catch (error) {
+      endMorph(requestId);
       dropEcho(requestId);
       unsettledSend.current = { text: body, images: imageIdentity, requestId };
       // The composer gives the words back and shows this as the one error toast.
@@ -1189,11 +1347,19 @@ export function BotChatPane({ botId }: { botId: string }) {
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={current.name}
-          entries={hiddenFailedTurns.size ? snapshot.entries.filter((entry) => !hiddenFailedTurns.has(entry.id)) : snapshot.entries}
+          entries={
+            hiddenFailedTurns.size || heldArrivals.size
+              ? snapshot.entries.filter((entry) => !hiddenFailedTurns.has(entry.id) && !heldArrivals.has(entry.id))
+              : snapshot.entries
+          }
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
-          queued={snapshot.queued ?? []}
+          queued={
+            heldArrivals.size
+              ? (snapshot.queued ?? []).filter((message) => !heldArrivals.has(`queued:${message.submissionId}`))
+              : (snapshot.queued ?? [])
+          }
           removing={removing}
           onRemoveQueued={(id, button) => void removeQueued(id, button)}
           retrying={retrying}
@@ -1206,9 +1372,18 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
         />
-        {pendingSends.map((send) => (
-          <BotPendingSendBubble key={send.requestId} send={send} onReply={reply} />
-        ))}
+        {pendingSends.map((send) => {
+          const morphFrom = sendMorphs.current.get(send.requestId);
+          return (
+            <BotPendingSendBubble
+              key={send.requestId}
+              send={send}
+              {...(morphFrom ? { morphFrom } : {})}
+              onMorphEnd={() => endMorph(send.requestId)}
+              onReply={reply}
+            />
+          );
+        })}
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
       {statusActivity ? (
