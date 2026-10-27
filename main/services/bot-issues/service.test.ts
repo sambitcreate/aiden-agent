@@ -10,7 +10,12 @@ import {
   type BotIssueAction,
 } from "../../../renderer/shared/bot-issues.js";
 import type { BotDeliveryInput } from "../bot-delivery/funnel.js";
-import { createBotIssueService, type BotIssueService } from "./service.js";
+import {
+  createBotIssueService,
+  resolveDeletedRoutineIssues,
+  type BotIssueResumeResult,
+  type BotIssueService,
+} from "./service.js";
 import { createBotIssueStore } from "./store.js";
 
 const BOT_ID = "bot:ada";
@@ -43,20 +48,39 @@ interface Appended {
   data: unknown;
 }
 
-function setup() {
+function setup(
+  options: {
+    /** Fail this many `appendEntry` calls before the next one lands. */
+    appendFailures?: number;
+    /** Fail this many funnel deliveries before the next one lands. */
+    deliveryFailures?: number;
+    /** What the routine service says when Resume is pressed. */
+    resume?: () => Promise<BotIssueResumeResult>;
+  } = {},
+) {
   const profile = tempProfile();
   const store = createBotIssueStore({ profileDir: () => profile });
   const appends: Appended[] = [];
   const deliveries: BotDeliveryInput[] = [];
   const calls: string[] = [];
   let clock = 1_000;
+  let appendFailures = options.appendFailures ?? 0;
+  let deliveryFailures = options.deliveryFailures ?? 0;
   const issues: BotIssueService = createBotIssueService({
     store,
     appendEntry: async (botId, kind, data) => {
+      if (appendFailures > 0) {
+        appendFailures -= 1;
+        throw new Error("the conversation could not be written");
+      }
       appends.push({ botId, kind, data });
     },
     funnel: {
       deliver: async (input) => {
+        if (deliveryFailures > 0) {
+          deliveryFailures -= 1;
+          throw new Error("the funnel could not reach the person");
+        }
         deliveries.push(input);
         return "sent";
       },
@@ -64,6 +88,7 @@ function setup() {
     actions: {
       resumeRoutine: async (botId, id) => {
         calls.push(`resume:${botId}:${id}`);
+        return options.resume ? await options.resume() : "resumed";
       },
       stopRun: async (botId) => {
         calls.push(`stop:${botId}`);
@@ -80,6 +105,7 @@ function setup() {
   return {
     issues,
     store,
+    profile,
     appends,
     deliveries,
     calls,
@@ -254,4 +280,100 @@ test("raise keeps the title and body within the card's limits", async () => {
   assert.equal([...issue.body].length, 280);
   assert.equal(harness.deliveries[0]!.title, issue.title, "the banner shows the same words");
   assert.equal(harness.deliveries[0]!.body, issue.body);
+});
+
+test("raise refuses an issue it could not read back, and stores nothing", async () => {
+  const harness = setup();
+  const unusable = [
+    { ...ISSUE, dedupeKey: "k".repeat(401) },
+    { ...ISSUE, routineId: "r/1" },
+    { ...ISSUE, kind: "made_up" as never },
+    { ...ISSUE, actions: [{ kind: "resume_routine", routineId: "r/1" }] as never },
+  ];
+  for (const input of unusable) {
+    await assert.rejects(harness.issues.raise(input), /can’t be stored/u, JSON.stringify(input));
+  }
+
+  assert.deepEqual(await harness.issues.list(BOT_ID), [], "a row the reader would drop is never written");
+  assert.deepEqual(harness.appends, []);
+  assert.deepEqual(harness.deliveries, []);
+
+  const issue = await harness.issues.raise(ISSUE);
+  assert.equal(issue.dedupeKey, ISSUE.dedupeKey, "the key is still free for a usable raise");
+});
+
+test("a raise repairs the chat entry and banner a failed attempt left unwritten", async () => {
+  const harness = setup({ appendFailures: 1 });
+  await assert.rejects(harness.issues.raise(ISSUE));
+  assert.equal(harness.appends.length, 0, "the failed write left no card");
+  assert.equal(harness.deliveries.length, 0, "and no banner");
+
+  const issue = await harness.issues.raise(ISSUE);
+  assert.deepEqual(harness.appends.map((entry) => entry.data), [issue], "the retry writes the one card");
+  assert.deepEqual(harness.deliveries.map((delivery) => delivery.dedupeKey), [`issue:${issue.id}`]);
+
+  await harness.issues.raise(ISSUE);
+  assert.equal(harness.appends.length, 1, "a repaired raise never doubles the card");
+  assert.equal(harness.deliveries.length, 1, "or the banner");
+});
+
+test("a raise retries delivery the funnel never took", async () => {
+  const harness = setup({ deliveryFailures: 1 });
+  await assert.rejects(harness.issues.raise(ISSUE));
+  assert.equal(harness.appends.length, 1, "the card is already durable");
+  assert.equal(harness.deliveries.length, 0);
+
+  const issue = await harness.issues.raise(ISSUE);
+  assert.equal(harness.appends.length, 1, "the card is not appended twice");
+  assert.deepEqual(harness.deliveries.map((delivery) => delivery.dedupeKey), [`issue:${issue.id}`]);
+
+  await harness.issues.raise(ISSUE);
+  assert.equal(harness.deliveries.length, 1, "and the retry is not retried again");
+});
+
+test("two concurrent answers run the host action once", async () => {
+  const harness = setup();
+  const issue = await harness.issues.raise(ISSUE);
+
+  const answers = await Promise.all([
+    harness.issues.act(BOT_ID, issue.id, { kind: "resume_routine", routineId: "r1" }),
+    harness.issues.act(BOT_ID, issue.id, { kind: "stop_run" }),
+  ]);
+
+  assert.deepEqual(answers.sort(), ["done", "not_open"], "the second answer finds the issue already taken");
+  assert.deepEqual(harness.calls, [`resume:${BOT_ID}:r1`], "only the winning answer ran");
+  assert.equal(statusEntries(harness.appends).length, 1, "and it settled the issue once");
+  assert.deepEqual(await harness.issues.list(BOT_ID, { open: true }), []);
+});
+
+test("resume settles as dismissed when the routine no longer exists", async () => {
+  const harness = setup({ resume: async () => "missing" });
+  const issue = await harness.issues.raise(ISSUE);
+  const resolvedAt = harness.tick(4);
+
+  assert.equal(await harness.issues.act(BOT_ID, issue.id, { kind: "resume_routine", routineId: "r1" }), "done");
+  assert.deepEqual(statusEntries(harness.appends), [
+    { botId: BOT_ID, kind: BOT_ISSUE_STATUS_ENTRY_KIND, data: { issueId: issue.id, resolution: "dismissed", resolvedAt } },
+  ]);
+  assert.deepEqual(await harness.issues.list(BOT_ID, { open: true }), [], "the card can no longer fail forever");
+});
+
+test("deleting a routine settles the issues that asked about it", async () => {
+  const harness = setup();
+  const paused = await harness.issues.raise({
+    ...ISSUE,
+    kind: "routine_paused",
+    dedupeKey: "routine:r1:paused",
+    actions: [],
+  });
+  await harness.issues.raise({ ...ISSUE, dedupeKey: "routine:r2:failed", routineId: "r2" });
+
+  assert.equal(await resolveDeletedRoutineIssues(harness.issues, BOT_ID, "r1"), 1);
+  const open = await harness.issues.list(BOT_ID, { open: true });
+  assert.deepEqual(open.map((issue) => issue.dedupeKey), ["routine:r2:failed"], "only deleted r1 settled");
+  const settled = (await harness.issues.list(BOT_ID)).find((issue) => issue.id === paused.id);
+  assert.equal(settled?.resolution, "dismissed");
+  assert.deepEqual(statusEntries(harness.appends).map((entry) => entry.data), [
+    { issueId: paused.id, resolution: "dismissed", resolvedAt: settled?.resolvedAt },
+  ]);
 });

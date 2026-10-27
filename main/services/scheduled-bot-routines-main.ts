@@ -42,7 +42,15 @@ export const botRoutineService = createBotRoutineService({
   defaultTimezone: systemTimezone,
   // Routine changes ride the existing Bot invalidation channel so Bot views refresh.
   notifyChanged: (payload) => ipcMain.broadcast("bots:changed", payload),
-  routineDeleted: (botId, routineId) => botRoutineNotes.clear(botId, routineId),
+  routineDeleted: async (botId, routineId) => {
+    await botRoutineNotes.clear(botId, routineId);
+    try {
+      const { settleBotIssuesForRoutine } = await import("./bot-issues/service-main.js");
+      await settleBotIssuesForRoutine(botId, routineId);
+    } catch (error) {
+      logger.warn("bots", `Bot ${botId} routine ${routineId} issues could not be settled.`, error);
+    }
+  },
 });
 
 const catchUp = createBotRoutineCatchUp({ store: scheduleStore, scheduler: scheduleService });

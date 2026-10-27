@@ -12,7 +12,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { app, logger } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { botDeliveryFunnel } from "../bot-delivery/funnel-main.js";
-import { createBotIssueService } from "./service.js";
+import { createBotIssueService, resolveDeletedRoutineIssues } from "./service.js";
 import { createBotIssueStore } from "./store.js";
 
 const store = createBotIssueStore({ profileDir: () => app.getPath("userData") });
@@ -36,12 +36,15 @@ export const botIssues = createBotIssueService({
   actions: {
     // The routine service's own enable path: read the revision, then turn it
     // back on. Already enabled stays as it is (no needless next-run rewrite).
+    // A routine deleted since the card was raised is reported, not thrown: the
+    // card settles instead of failing every time the person presses Resume.
     resumeRoutine: async (botId, id) => {
       const { botRoutineService } = await import("../scheduled-bot-routines-main.js");
       const routine = (await botRoutineService.list(botId)).find((candidate) => candidate.id === id);
-      if (!routine) throw new Error("This routine no longer exists.");
-      if (routine.enabled) return;
+      if (!routine) return "missing";
+      if (routine.enabled) return "resumed";
       await botRoutineService.update({ botId, id, expectedUpdatedAt: routine.updatedAt, enabled: true });
+      return "resumed";
     },
     stopRun: async (botId) => {
       const [{ botSessionRuntime }, { stopWithIntents }, { botTurnIntents }] = await Promise.all([
@@ -62,3 +65,12 @@ export const botIssues = createBotIssueService({
   },
   now: Date.now,
 });
+
+/**
+ * Deleting a routine settles the cards that asked about it: nothing can answer
+ * them any more, so they leave the person's list instead of waiting forever.
+ * Called from the routine-delete fan-out beside `botRoutineNotes.clear`.
+ */
+export function settleBotIssuesForRoutine(botId: string, routineId: string): Promise<number> {
+  return resolveDeletedRoutineIssues(botIssues, botId, routineId);
+}

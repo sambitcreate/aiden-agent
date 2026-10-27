@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
@@ -30,7 +30,8 @@ import {
 import { createBotQuestions } from "./bot-questions.js";
 import { createBotHandoffs } from "./bot-handoffs.js";
 import { createBotIssueService, type BotIssueService } from "../bot-issues/service.js";
-import type { BotIssueStore } from "../bot-issues/store.js";
+import { BOT_ISSUES_FILE, createBotIssueStore, type BotIssueStore } from "../bot-issues/store.js";
+import { botSessionDirectory } from "../bot-routine-notes.js";
 import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
 import { createBotTurnIntents, stopWithIntents, wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { spawnHarnessChild } from "./test-support/child.js";
@@ -596,7 +597,7 @@ test("an open issue marks the Bot as needing the person; resolving it clears tha
     appendEntry: async () => undefined,
     funnel: { deliver: async () => "sent" },
     actions: {
-      resumeRoutine: async () => undefined,
+      resumeRoutine: async () => "resumed",
       stopRun: async () => undefined,
       snoozeStall: () => undefined,
       openSettings: () => undefined,
@@ -622,6 +623,79 @@ test("an open issue marks the Bot as needing the person; resolving it clears tha
     assert.equal((await live.projection.summary("bot:a")).needsYou, true, "the sidebar says Needs you");
     await issues.resolve("bot:a", "routine:r1:failed", "fixed");
     assert.equal((await live.projection.summary("bot:a")).needsYou, false, "settled, the row clears");
+  } finally {
+    await live.close();
+  }
+});
+
+test("a malformed or another Bot's issue row never breaks the Bot’s Needs you state", async () => {
+  const profile = tempProfile();
+  const directory = botSessionDirectory(profile, "bot:a");
+  const file = path.join(directory, BOT_ISSUES_FILE);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify([
+      { id: "not-an-issue" },
+      {
+        id: "i-other",
+        botId: "bot:b",
+        kind: "routine_failed",
+        dedupeKey: "routine:r9:failed",
+        title: "Another Bot’s problem",
+        body: "",
+        actions: [],
+        createdAt: 1,
+      },
+      {
+        id: "i-long-title",
+        botId: "bot:a",
+        kind: "routine_failed",
+        dedupeKey: "routine:r8:failed",
+        title: "x".repeat(400),
+        body: "",
+        actions: [],
+        createdAt: 2,
+      },
+    ]),
+  );
+
+  const issues: BotIssueService = createBotIssueService({
+    store: createBotIssueStore({ profileDir: () => profile }),
+    appendEntry: async () => undefined,
+    funnel: { deliver: async () => "sent" },
+    actions: {
+      resumeRoutine: async () => "resumed",
+      stopRun: async () => undefined,
+      snoozeStall: () => undefined,
+      openSettings: () => undefined,
+    },
+    now: () => 1_000,
+  });
+  const live = await start(createFauxModels([fauxAssistantMessage("Hello.")]), {
+    projection: {
+      issuePending: async (botId) => (await issues.list(botId, { open: true })).length > 0,
+    },
+  });
+  try {
+    assert.equal((await live.projection.summary("bot:a")).needsYou, false, "unreadable rows never reach the sidebar");
+    assert.deepEqual(await issues.list("bot:a"), [], "and listing reads past them");
+
+    const raised = await issues.raise({
+      botId: "bot:a",
+      kind: "routine_failed",
+      dedupeKey: "routine:r1:failed",
+      title: "Couldn’t finish the morning briefing",
+      body: "The model was unavailable.",
+      routineId: "r1",
+      actions: [{ kind: "resume_routine", routineId: "r1" }],
+    });
+    assert.equal((await live.projection.summary("bot:a")).needsYou, true, "a usable raise still needs the person");
+    assert.deepEqual(
+      (JSON.parse(readFileSync(file, "utf8")) as Array<{ id: string }>).map((row) => row.id),
+      [raised.id],
+      "the next write drops the rows no reader can use",
+    );
   } finally {
     await live.close();
   }

@@ -15,29 +15,40 @@ import { writeJsonAtomic } from "../durable-fs.js";
 
 export const BOT_ISSUES_FILE = "issues.json";
 
+/**
+ * A stored row: the issue the rest of the app reads, plus the service's own
+ * bookkeeping. Neither flag is part of the shared contract or the chat card;
+ * they only say which side effects a raise has already finished, so a retry
+ * can send what is still missing instead of repeating a whole raise.
+ */
+export interface StoredBotIssue extends BotIssue {
+  entryAppended?: boolean;
+  delivered?: boolean;
+}
+
 export interface BotIssueChange<T> {
   /** The full file after the change, newest first. */
-  issues: readonly BotIssue[];
+  issues: readonly StoredBotIssue[];
   /** What the caller gets back. */
   result: T;
 }
 
 export interface BotIssueStore {
   /** Every issue this Bot kept, newest first. */
-  read(botId: string): Promise<BotIssue[]>;
+  read(botId: string): Promise<StoredBotIssue[]>;
   /**
    * One read-modify-write for this Bot, serialized with every other change to
    * it. The change returns the whole file, so a caller never patches a row.
    */
-  change<T>(botId: string, change: (issues: readonly BotIssue[]) => BotIssueChange<T>): Promise<T>;
+  change<T>(botId: string, change: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>): Promise<T>;
   forgetBot(botId: string): Promise<void>;
 }
 
 /** Keep the newest open issues and the newest settled ones; older rows fall off. */
-function retain(issues: readonly BotIssue[]): BotIssue[] {
+function retain(issues: readonly StoredBotIssue[]): StoredBotIssue[] {
   let open = 0;
   let settled = 0;
-  const kept: BotIssue[] = [];
+  const kept: StoredBotIssue[] = [];
   for (const issue of issues) {
     if (issue.resolvedAt === undefined) {
       if (open >= BOT_ISSUE_LIMITS.openPerBot) continue;
@@ -51,8 +62,20 @@ function retain(issues: readonly BotIssue[]): BotIssue[] {
   return kept;
 }
 
+/** One row, or null when it is malformed, another Bot's, or not an issue at all. */
+function storedOf(row: unknown, botId: string): StoredBotIssue | null {
+  const issue = botIssueOf(row, botId);
+  if (issue === null) return null;
+  const fields = row as Record<string, unknown>;
+  return {
+    ...issue,
+    ...(typeof fields.entryAppended === "boolean" ? { entryAppended: fields.entryAppended } : {}),
+    ...(typeof fields.delivered === "boolean" ? { delivered: fields.delivered } : {}),
+  };
+}
+
 /** Every issue this Bot kept; unreadable or malformed content reads as none. */
-function parseFile(text: string, botId: string): BotIssue[] {
+function parseFile(text: string, botId: string): StoredBotIssue[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -62,8 +85,8 @@ function parseFile(text: string, botId: string): BotIssue[] {
   if (!Array.isArray(parsed)) return [];
   return retain(
     parsed
-      .map((row) => botIssueOf(row, botId))
-      .filter((issue): issue is BotIssue => issue !== undefined),
+      .map((row) => storedOf(row, botId))
+      .filter((issue): issue is StoredBotIssue => issue !== null),
   );
 }
 
@@ -71,7 +94,7 @@ export function createBotIssueStore(options: { profileDir(): string }): BotIssue
   const serial = createKeyedSerial();
   const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_ISSUES_FILE);
 
-  async function load(botId: string): Promise<BotIssue[]> {
+  async function load(botId: string): Promise<StoredBotIssue[]> {
     try {
       return parseFile(await fs.readFile(fileOf(botId), "utf8"), botId);
     } catch (error) {
@@ -80,14 +103,14 @@ export function createBotIssueStore(options: { profileDir(): string }): BotIssue
     }
   }
 
-  async function save(botId: string, issues: readonly BotIssue[]): Promise<void> {
+  async function save(botId: string, issues: readonly StoredBotIssue[]): Promise<void> {
     await writeJsonAtomic(fileOf(botId), retain(issues), { mode: 0o600, mkdirMode: 0o700 });
   }
 
   return {
     read: (botId) => load(botId),
 
-    change<T>(botId: string, apply: (issues: readonly BotIssue[]) => BotIssueChange<T>): Promise<T> {
+    change<T>(botId: string, apply: (issues: readonly StoredBotIssue[]) => BotIssueChange<T>): Promise<T> {
       return serial(botId, async () => {
         const { issues, result } = apply(await load(botId));
         await save(botId, issues);

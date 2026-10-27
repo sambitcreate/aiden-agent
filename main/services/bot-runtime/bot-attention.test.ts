@@ -39,7 +39,7 @@ function setup() {
     appendEntry: async () => undefined,
     funnel: { deliver: async () => "sent" },
     actions: {
-      resumeRoutine: async () => undefined,
+      resumeRoutine: async () => "resumed",
       stopRun: async () => undefined,
       snoozeStall: () => undefined,
       openSettings: () => undefined,
