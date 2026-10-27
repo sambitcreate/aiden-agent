@@ -10,3 +10,7 @@
 - Open: no Electron release carries Node 24.22.1 yet (43.8.3, 44.9.3 and 45.0.0 all ship 24.22.0). Bump Electron again when one does; that closes the Brotli decoder flaw (CVE-2026-111497) and the TLS hostname-check bypasses in the app's main process.
 - `main/services/gemini-live/sdk-contract.test.ts` checks the Electron major (43) plus the display-media declarations; it no longer pins the exact patch.
 - Electron 43.8.3 bundles Node 24.22.0, whose `fs.glob` no longer steps into a symlink after `**` (Node 22.23.4 and 24.18.0 still do). The foreground glob worker (`main/services/coding-tool-glob-worker.ts`) now follows the newer rule on every runtime, because the Electron smoke compares it with Electron's native glob. `coding-tools.test.ts` gives the five affected patterns fixed answers instead of the native oracle, so the unit test passes on any local Node. Run the Electron smoke as root with `--no-sandbox` appended after the script arguments.
+
+## October 27 remediation refresh
+
+Zod4.6.7, CLI undici8.12.3, KaTeX0.18.2, HappyDOM21.0.4, body-parser2.4.0 and tinypool2.1.2 are evaluated in the security dependency PR. Pi remains1.4.0 and electron-builder26.15.3. See docs/security/dependency-maintenance-2026-10-27.md and the remediation plan for checks and acceptance. StableElectron stillcarriesNode24.22.0; prerelease46/nightly47 have24.22.1, so stablefixremainsupstream.

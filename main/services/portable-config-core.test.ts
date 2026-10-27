@@ -1,3 +1,4 @@
+import { ensurePrivateDirectory } from "./private-storage.js";
 // Migration tests for the ~/.aiden split.
 //
 // The load-bearing guarantee here is negative: once an install has migrated,
@@ -1279,28 +1280,16 @@ test("retry reuses an existing complete recovery archive", async (t) => {
   assert.equal((await fs.readFile(recovery)).equals(completeLegacy), true);
 });
 
-test("an archive symlink cannot masquerade as a durable legacy copy", async (t) => {
+test("an archive symlink blocks migration without changing the linked legacy bytes", async (t) => {
   const r = await roots(t);
   await writeLegacy(r);
   const completeLegacy = await fs.readFile(r.localFile);
   await fs.symlink(r.localFile, r.archiveFile);
-
-  assert.equal(await stores(r).ensureMigrated(), true);
-
-  const recoveryNames = (await fs.readdir(r.localRoot)).filter((name) =>
-    name.startsWith(`${path.basename(r.archiveFile)}.recovery-`),
-  );
-  assert.equal(recoveryNames.length, 1);
-  assert.equal(
-    (await fs.readFile(path.join(r.localRoot, recoveryNames[0]))).equals(completeLegacy),
-    true,
-  );
+  const bundle = stores(r);
+  assert.equal(await bundle.ensureMigrated(), false);
+  await assert.rejects(bundle.local.load(), /storage must be a private/u);
+  assert.equal((await fs.readFile(r.localFile)).equals(completeLegacy), true);
   assert.equal((await fs.lstat(r.archiveFile)).isSymbolicLink(), true);
-  assert.notEqual(
-    await fs.readFile(r.archiveFile, "utf-8"),
-    completeLegacy.toString("utf-8"),
-    "the symlink follows the slimmed source, so only the recovery file is durable",
-  );
 });
 
 test("a corrupt portable file is treated as present, so migration cannot clobber it", async (t) => {
@@ -1501,4 +1490,82 @@ test("portable classifier capability accepts explicit local custom intent only",
   for (const change of [{ llamaCppClassifierEnabled: "yes" }, { llamaCppClassifierEnabled: true, deployment: "hosted" }, { llamaCppClassifierEnabled: true, kind: "anthropic" }, { llamaCppClassifierEnabled: true, id: "openai" }, { llamaCppClassifierEnabled: true, isBuiltin: true }]) {
     assert.equal(isPortableProvider({ ...provider, ...change }), false);
   }
+});
+
+test("portable files and owned recovery archives are private without changing their bytes", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  await fs.mkdir(r.portableRoot, { mode: 0o755 });
+  const payload = JSON.stringify({ providers: [], mcpServers: [], skills: [] });
+  const copies = [r.portableFile,
+    path.join(r.portableRoot, ".config.json.12345678-1234-4234-8234-123456789abc.tmp"),
+    path.join(r.portableRoot, "config.json.invalid-2026-10-27T01-02-03-000Z-deadbeef"),
+    path.join(r.portableRoot, `.config.json.${"a".repeat(64)}.12345678-1234-4234-8234-123456789abc.previous`),
+    r.archiveFile, `${r.archiveFile}.recovery-2026-10-27T01-02-03-000Z-12345678-1234-4234-8234-123456789abc`];
+  for (const file of copies) { await fs.writeFile(file, payload); await fs.chmod(file, 0o666); }
+  const unrelated = path.join(r.portableRoot, "someone-elses-config.json");
+  await fs.writeFile(unrelated, "ordinary"); await fs.chmod(unrelated, 0o644);
+  const bundle = stores(r);
+  await bundle.portable.load(); await bundle.local.load();
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o700);
+  const recovered = (await fs.readdir(r.portableRoot)).find((name) => name.startsWith("config.json.conflict-"));
+  assert.ok(recovered, "changed recovery bytes remain available as a conflict");
+  const retainedCopies = copies.map((file) => file.endsWith(".previous") ? path.join(r.portableRoot, recovered) : file);
+  for (const file of retainedCopies) {
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    assert.equal(await fs.readFile(file, "utf8"), payload);
+  }
+  assert.equal((await fs.stat(unrelated)).mode & 0o777, 0o644);
+  const oldUmask = process.umask(0);
+  try { await bundle.portable.update((draft) => { draft.skills = []; }); }
+  finally { process.umask(oldUmask); }
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o600);
+});
+
+test("portable root/file aliases fail visibly without chmod or replacing their targets", async (t) => {
+  for (const variant of ["root-symlink", "file-symlink", "file-hardlink"] as const) {
+    const r = await roots(t);
+    const outside = path.join(r.localRoot, "outside"); await fs.mkdir(outside);
+    const victim = path.join(outside, "important.json"); await fs.writeFile(victim, "keep these bytes");
+    const before = (await fs.stat(victim)).mode;
+    if (variant === "root-symlink") await fs.symlink(outside, r.portableRoot);
+    else {
+      await fs.mkdir(r.portableRoot);
+      if (variant === "file-symlink") await fs.symlink(victim, r.portableFile);
+      else await fs.link(victim, r.portableFile);
+    }
+    const bundle = stores(r);
+    await assert.rejects(bundle.portable.load(), /storage must be a private/u);
+    await assert.rejects(bundle.portable.update(() => {}), /storage must be a private/u);
+    assert.equal(await fs.readFile(victim, "utf8"), "keep these bytes");
+    assert.equal((await fs.stat(victim)).mode, before);
+  }
+});
+
+
+test("private storage rejects canonical home aliases and replaceable ancestors without changing permissions", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const parentAlias = path.join(r.localRoot, "parent-alias");
+  await fs.symlink(path.dirname(os.homedir()), parentAlias);
+  const homeAlias = path.join(parentAlias, path.basename(os.homedir()));
+  const beforeHome = (await fs.stat(os.homedir())).mode;
+  assert.throws(() => ensurePrivateDirectory(homeAlias), /storage must be a private/u);
+  assert.equal((await fs.stat(os.homedir())).mode, beforeHome);
+  const sharedParent = path.join(r.localRoot, "shared-parent");
+  await fs.mkdir(sharedParent); await fs.chmod(sharedParent, 0o777);
+  const child = path.join(sharedParent, "private-child"); await fs.mkdir(child, { mode: 0o700 });
+  assert.throws(() => ensurePrivateDirectory(child, "reject"), /storage must be a private/u);
+  assert.equal((await fs.stat(sharedParent)).mode & 0o777, 0o777);
+});
+
+test("private storage rejects ownership mismatches before changing root or config modes", { skip: !process.getuid }, async (t) => {
+  const r = await roots(t);
+  await fs.mkdir(r.portableRoot); await fs.chmod(r.portableRoot, 0o755);
+  await fs.writeFile(r.portableFile, "preserve"); await fs.chmod(r.portableFile, 0o644);
+  const uid = process.getuid!();
+  const posixProcess = process as NodeJS.Process & { getuid(): number };
+  t.mock.method(posixProcess, "getuid", () => uid + 1);
+  await assert.rejects(stores(r).portable.load(), /storage must be a private/u);
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o755);
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o644);
+  assert.equal(await fs.readFile(r.portableFile, "utf8"), "preserve");
 });

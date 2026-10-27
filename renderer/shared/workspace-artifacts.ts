@@ -88,6 +88,8 @@ export interface WorkspaceArtifactV1 {
 
 export interface WorkspaceArtifactSourceResultV1 {
   status: "ok" | "error" | "blocked";
+  /** A policy denial invalidates cached good data rather than retaining it. */
+  policyDenied?: true;
   at: number;
   /** The parsed value as JSON, present when `status` is ok. */
   dataJson?: string;
@@ -96,6 +98,8 @@ export interface WorkspaceArtifactSourceResultV1 {
 
 /** The last read of each source; failing reads keep the last good data. */
 export interface WorkspaceArtifactSnapshotV1 {
+  /** Legacy file-source caches are invalidated once before being returned. */
+  filePolicyVersion?: 1;
   revision: number;
   refreshedAt: number;
   sources: Record<string, WorkspaceArtifactSourceResultV1>;
@@ -716,9 +720,9 @@ export function parseWorkspaceArtifactSnapshotV1(value: unknown): WorkspaceArtif
         ? entry.dataJson
         : undefined;
     const error = typeof entry.error === "string" ? entry.error.slice(0, WORKSPACE_ARTIFACT_LIMITS.errorChars) : undefined;
-    sources[name] = { status: entry.status, at, ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}) };
+    sources[name] = { status: entry.status, at, ...(entry.policyDenied === true ? { policyDenied: true as const } : {}), ...(dataJson !== undefined ? { dataJson } : {}), ...(error ? { error } : {}) };
   }
-  return { revision, refreshedAt, sources };
+  return { revision, refreshedAt, sources, ...(value.filePolicyVersion === 1 ? { filePolicyVersion: 1 as const } : {}) };
 }
 
 /**
