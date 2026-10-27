@@ -178,6 +178,26 @@ class AidenModelPreferenceTest {
     }
 
     @Test
+    fun unsentChatPicksLastUntilSentOrUnpaired() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        val pick = AidenChatModelSelection("openai", "gpt-5.6", "max")
+        store.rememberChat("mac-a", "chat-a", pick)
+        store.rememberChat("mac-a", "chat-b", AidenChatModelSelection("google", "gemini-flash", null))
+
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(pick, relaunched.chatSelection("mac-a", "chat-a"))
+        assertNull("chat picks are not the new-chat default", relaunched.selection("mac-a"))
+        assertNull(relaunched.chatSelection("mac-b", "chat-a"))
+
+        relaunched.forgetChat("mac-a", "chat-a")
+        assertNull(AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-a"))
+        assertEquals("gemini-flash", AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-b")?.modelId)
+
+        relaunched.purge("mac-a")
+        assertNull(AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-b"))
+    }
+
+    @Test
     fun aPickInAnExistingChatJoinsRecentsWithoutChangingTheNewChatDefault() {
         val store = AidenModelPreferenceStore(tempFolder.root)
         store.remember("mac-a", AidenChatModelSelection("google", "gemini-flash", null))
@@ -434,9 +454,9 @@ class AidenModelPreferenceTest {
                 // The model new chats on this Mac start with.
                 coordinator.modelPreferenceStore.remember("instance-models", AidenChatModelSelection("google", "gemini-flash", null))
 
-                suspend fun open(chat: AidenChat): AidenChatViewModel =
+                suspend fun open(chat: AidenChat, key: String = chat.id): AidenChatViewModel =
                     AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
-                        viewModels.put(chat.id, it)
+                        viewModels.put(key, it)
                         withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
                     }
 
@@ -452,6 +472,12 @@ class AidenModelPreferenceTest {
                 val b = open(chatB)
                 assertEquals("google", b.selectedProviderId.value)
                 assertEquals("gemini-flash", b.selectedModelId.value)
+
+                // Left without sending, chat A reopens on its pick.
+                val reopened = open(chatA, key = "chat-a-reopened")
+                assertEquals("openai", reopened.selectedProviderId.value)
+                assertEquals("gpt-5.6", reopened.selectedModelId.value)
+                assertEquals("max", reopened.selectedThinkingLevel.value)
             }
         } finally {
             runBlocking(main) {

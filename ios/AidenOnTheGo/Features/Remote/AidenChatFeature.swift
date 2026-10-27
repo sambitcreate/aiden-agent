@@ -2891,23 +2891,25 @@ final class AidenChatViewModel {
     }
 
     /// An explicit composer choice stays with this chat. In a new chat (no
-    /// messages yet) it also becomes this paired Mac's remembered default for
-    /// later Workspace chats and launches; a pick in an existing chat never
-    /// changes the model other chats start with.
+    /// messages yet) it becomes this paired Mac's remembered default for later
+    /// Workspace chats and launches. In an existing chat it is kept for that
+    /// chat alone until its next send, so reopening the chat still shows it and
+    /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
-        guard chat.messages.isEmpty else { return }
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = modelPreferenceContext,
               coordinator.isCurrent(context) else { return }
-        modelPreferenceStore.remember(
-            AidenChatModelSelection(
-                providerId: selectedProviderId,
-                modelId: selectedModelId,
-                thinkingLevel: selectedThinkingLevel
-            ),
-            for: context.instanceId
+        let selection = AidenChatModelSelection(
+            providerId: selectedProviderId,
+            modelId: selectedModelId,
+            thinkingLevel: selectedThinkingLevel
         )
+        if chat.messages.isEmpty {
+            modelPreferenceStore.remember(selection, for: context.instanceId)
+        } else {
+            modelPreferenceStore.rememberChat(selection, for: context.instanceId, chatID: chat.id)
+        }
     }
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
@@ -2962,6 +2964,10 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
+        // Once sent, the Mac holds this pick as the chat's own model.
+        if !chat.isBotChat {
+            modelPreferenceStore.forgetChat(for: context.instanceId, chatID: chat.id)
+        }
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
@@ -4150,6 +4156,15 @@ final class AidenChatViewModel {
     }
 
     private func resolveModelSelection() {
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
+           let pick = modelPreferenceStore.chatSelection(for: instanceId, chatID: chat.id) {
+            selectedProviderId = pick.providerId
+            selectedModelId = pick.modelId
+            selectedThinkingLevel = pick.thinkingLevel
+            hasExplicitModelSelection = true
+        }
         let selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,

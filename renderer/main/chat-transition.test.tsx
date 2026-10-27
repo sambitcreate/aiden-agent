@@ -239,15 +239,24 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
   };
   const chatModels: Record<string, string> = { "chat-a": "model-a", "chat-b": "model-a" };
   const setModelCalls: unknown[][] = [];
+  // When set, the next chat read answers with what was stored when it started,
+  // but only once released.
+  let holdNextRead = false;
+  let releaseHeldRead: (() => void) | undefined;
   localStorage.setItem("aiden-agent.providerId", "acme");
   localStorage.setItem("aiden-agent.model", "app-model");
   const { router, queryClient } = await mountRoutedChatPane("chat-a", {
     "chats:get": (id) => {
       const response = chatReadResponse(String(id));
-      return {
+      const snapshot = {
         ...response,
         chat: { ...response.chat, providerId: "acme", model: chatModels[String(id)] },
       };
+      if (!holdNextRead) return snapshot;
+      holdNextRead = false;
+      return new Promise((resolve) => {
+        releaseHeldRead = () => resolve(snapshot);
+      });
     },
     "chats:setModel": (...args) => {
       setModelCalls.push(args);
@@ -270,9 +279,18 @@ test("picking a model in one chat leaves other chats and the new-chat model alon
       assert.ok(option);
       return option;
     });
+    // A read of chat A that started before the pick answers after it is saved.
+    holdNextRead = true;
+    void queryClient.refetchQueries({ queryKey: queryKeys.chat("chat-a"), exact: true });
+    await waitFor(() => assert.ok(releaseHeldRead));
     await act(async () => { fireEvent.click(optionB); });
     await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b"]]));
+    await act(async () => {
+      releaseHeldRead?.();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model B/iu));
+    assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.model, "model-b");
     assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
 
     await act(async () => {

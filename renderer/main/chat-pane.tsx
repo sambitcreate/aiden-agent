@@ -351,6 +351,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
   const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
   const selectAppModel = appModel.select;
+  // The latest pick per chat, so an older pick's answer never replaces a newer one.
+  const chatModelPicksRef = React.useRef(new Map<string, number>());
   const select = React.useCallback(
     (nextProviderId: string, nextModel: string) => {
       if (!chatOwnsModel) {
@@ -358,22 +360,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
         return;
       }
       const key = queryKeys.chat(chatId);
+      const pick = (chatModelPicksRef.current.get(chatId) ?? 0) + 1;
+      chatModelPicksRef.current.set(chatId, pick);
+      const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
+      const withModel = (pair: Pick<Chat, "providerId" | "model">) => (current: Chat | null | undefined) =>
+        current ? { ...current, providerId: pair.providerId, model: pair.model } : current;
       const previous = qc.getQueryData<Chat | null>(key);
-      const withModel = (current: Chat | null | undefined) =>
-        current ? { ...current, providerId: nextProviderId, model: nextModel } : current;
-      qc.setQueryData<Chat | null>(key, withModel);
-      void chatsApi.setModel(chatId, nextProviderId, nextModel).then(
-        () => void qc.invalidateQueries({ queryKey: queryKeys.chats }),
-        (error: unknown) => {
-          // Put back the chat's own model unless a newer pick already replaced this one.
-          qc.setQueryData<Chat | null>(key, (current) =>
-            current?.providerId === nextProviderId && current.model === nextModel && previous
-              ? { ...current, providerId: previous.providerId, model: previous.model }
-              : current,
-          );
+      void (async () => {
+        // A read started before this pick must not land on top of it.
+        await qc.cancelQueries({ queryKey: key, exact: true });
+        if (!isLatestPick()) return;
+        qc.setQueryData<Chat | null>(key, withModel({ providerId: nextProviderId, model: nextModel }));
+        try {
+          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
+          // A read that overlapped the save may still carry the old model.
+          if (saved && isLatestPick()) qc.setQueryData<Chat | null>(key, withModel(saved));
+          void qc.invalidateQueries({ queryKey: queryKeys.chats });
+        } catch (error) {
+          if (isLatestPick() && previous) qc.setQueryData<Chat | null>(key, withModel(previous));
           toast.error(error instanceof Error ? error.message : "This chat's model could not be changed.");
-        },
-      );
+        }
+      })();
     },
     [chatId, chatOwnsModel, qc, selectAppModel],
   );

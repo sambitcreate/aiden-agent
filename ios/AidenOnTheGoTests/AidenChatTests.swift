@@ -6614,29 +6614,83 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
-    func testPickInAnExistingChatStaysWithThatChatAndLeavesTheNewChatDefault() async throws {
+    func testPickInAnExistingChatStaysWithThatChatAcrossReopeningAndLeavesTheNewChatDefault() async throws {
         let suiteName = "AidenModelPreferencePerChat.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-per-chat-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
         let store = AidenModelPreferenceStore(defaults: defaults)
         let newChatDefault = AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
         store.remember(newChatDefault, for: "instance-progress-lifecycle")
-        var existing = sampleChat()
-        existing.botId = nil
-        let model = try await makeProgressLifecycleModel(
-            mode: .denied,
-            modelPreferenceStore: store,
-            initialChat: existing
-        )
+        let catalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+        // An existing chat: it has messages and the Mac's record of its own model.
+        let hostChat = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"google","modelId":"gemini-flash","messages":[{"id":"message-1","role":"user","text":"Hello","createdAt":"2026-09-14T12:00:00Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#
 
-        model.selectModel(providerId: "anthropic", modelId: "claude", thinkingLevel: nil)
+        func open() async throws -> AidenChatViewModel {
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                modelPreferenceStore: AidenModelPreferenceStore(defaults: defaults)
+            )
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/models") {
+                    return (200, "application/json", Data(catalog.utf8))
+                }
+                if path == "/api/aiden/v1/chats/chat-progress-lifecycle" {
+                    return (200, "application/json", Data(hostChat.utf8))
+                }
+                return nil
+            }
+            await model.load(observeProgress: false)
+            return model
+        }
 
-        XCTAssertEqual(model.selectedModelId, "claude")
-        XCTAssertEqual(store.selection(for: "instance-progress-lifecycle"), newChatDefault)
+        let first = try await open()
+        XCTAssertEqual(first.selectedModelId, "gemini-flash", "an existing chat opens on its own model")
+        first.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
         XCTAssertEqual(
             AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"),
-            newChatDefault
+            newChatDefault,
+            "a pick in an existing chat never changes the model new chats start with"
         )
+
+        // Left without sending, the chat reopens on the pick.
+        let reopened = try await open()
+        XCTAssertEqual(reopened.selectedProviderId, "openai")
+        XCTAssertEqual(reopened.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(reopened.selectedThinkingLevel, "max")
+    }
+
+    func testModelPreferenceStoreKeepsUnsentChatPicksUntilSentOrUnpaired() throws {
+        let suiteName = "AidenModelPreferenceChatPicks.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let pick = AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        store.rememberChat(pick, for: "mac-a", chatID: "chat-a")
+        store.rememberChat(
+            AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil),
+            for: "mac-a",
+            chatID: "chat-b"
+        )
+
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(relaunched.chatSelection(for: "mac-a", chatID: "chat-a"), pick)
+        XCTAssertNil(relaunched.selection(for: "mac-a"), "chat picks are not the new-chat default")
+        XCTAssertNil(relaunched.chatSelection(for: "mac-b", chatID: "chat-a"))
+
+        relaunched.forgetChat(for: "mac-a", chatID: "chat-a")
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-a"))
+        XCTAssertEqual(
+            AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-b")?.modelId,
+            "gemini-flash"
+        )
+
+        relaunched.purge(instanceID: "mac-a")
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-b"))
     }
 
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
