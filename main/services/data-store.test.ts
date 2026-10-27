@@ -94,3 +94,16 @@ test("a compact store writes single-line JSON and still loads an indented file",
   assert.equal(written, `${JSON.stringify(next)}\n`);
   assert.deepEqual(await new DataStore("journal.json", { version: 1, streams: [] as unknown[] }, () => directory).load(), next);
 });
+
+test("a storage preparation failure does not load defaults or publish over existing data", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-storage-access-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const target = path.join(root, "config.json");
+  await fs.writeFile(target, '{"value":"preserve"}');
+  const store = new DataStore("config.json", { value: "default" }, () => root, {
+    beforeAccess: async () => { throw Object.assign(new Error("permission hardening failed"), { code: "EACCES" }); },
+  });
+  await assert.rejects(store.load(), /permission hardening failed/u);
+  await assert.rejects(store.update((draft) => { draft.value = "lost"; }), /permission hardening failed/u);
+  assert.equal(await fs.readFile(target, "utf8"), '{"value":"preserve"}');
+});

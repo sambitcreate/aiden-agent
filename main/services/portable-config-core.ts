@@ -26,7 +26,8 @@ import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { DataStore, DataStoreExternalChangeError } from "./data-store.js";
+import { ensurePrivateDirectory, hardenPrivateFile } from "./private-storage.js";
+import { DataStore, DataStoreExternalChangeError, isDataStoreRecoveryFile } from "./data-store.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -933,7 +934,7 @@ async function writeFileAtomicallyIfAbsent(
   );
   let published = false;
   try {
-    await fs.writeFile(staged, contents, { flag: "wx" });
+    await fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 });
     const stagedHandle = await fs.open(staged, "r");
     try {
       await stagedHandle.sync();
@@ -1111,6 +1112,12 @@ trips in both directions. Invalid JSON is ignored in favour of the built-in
 defaults, and nothing is written back until you next change one of these settings
 from the UI.
 
+On macOS and Linux this directory is private (0700), and configuration and
+migration/recovery files are owner-only (0600). A symlinked root or config file,
+foreign ownership, or a hard-linked config file blocks access. Use a dedicated
+owned directory for AIDEN_CONFIG_DIR, never your home or a shared directory.
+Windows permissions depend on its ACLs; chmod is not an equivalent guarantee.
+
 ## What is deliberately not here
 
 **API keys and OAuth tokens, plus MCP environment and header values.** They are
@@ -1224,6 +1231,22 @@ export function createPortableConfigStores(
     ) => void;
   } = {},
 ) {
+  async function protectConfigDirectory(root: string, portableDirectory: boolean): Promise<void> {
+    ensurePrivateDirectory(root);
+    const file = path.join(root, PORTABLE_CONFIG_FILENAME);
+    hardenPrivateFile(file);
+    for (const entry of await fs.readdir(root)) {
+      const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
+      const isArchive = !portableDirectory && (entry === archive ||
+        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9-]{36}$/u.test(entry));
+      const isCorrupt = /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(entry);
+      const isConflict = /^config\.json\.conflict-[a-f0-9-]{36}$/u.test(entry);
+      if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
+      if (isArchive || isCorrupt || isConflict || isDataStoreRecoveryFile(entry, file)) hardenPrivateFile(path.join(root, entry));
+    }
+  }
+  const protectPortable = () => protectConfigDirectory(portableRoot(), true);
+  const protectLocal = async () => protectConfigDirectory(localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData"), false);
   const portable = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),
@@ -1231,6 +1254,8 @@ export function createPortableConfigStores(
     // This is the one file a person edits by hand, so a JSON typo must not be
     // silently overwritten with defaults the next time anything writes.
     {
+      beforeAccess: protectPortable,
+      fileMode: 0o600,
       maxBytes: PORTABLE_CONFIG_MAX_BYTES,
       normalize: normalizePortableSkillBounds,
       isSafe: portableSkillBoundsAreSafe,
@@ -1259,6 +1284,8 @@ export function createPortableConfigStores(
     { workspaces: [], seeded: false },
     localRoot,
     {
+      beforeAccess: protectLocal,
+      fileMode: 0o600,
       maxBytes: PORTABLE_CONFIG_MAX_BYTES,
       normalize: normalizeLocalConfigShape,
       isSafe: isLocalConfigShapeSafe,
@@ -1288,7 +1315,7 @@ export function createPortableConfigStores(
   /** Seed the README if absent. Never overwrites a copy the user has edited. */
   async function ensureReadme(): Promise<void> {
     const target = path.join(portableRoot(), PORTABLE_README_FILENAME);
-    await fs.mkdir(path.dirname(target), { recursive: true });
+    await protectPortable();
     try {
       await fs.writeFile(target, portableReadme(), { encoding: "utf-8", flag: "wx" });
     } catch (error) {
