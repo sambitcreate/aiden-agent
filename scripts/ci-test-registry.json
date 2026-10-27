@@ -946,6 +946,7 @@
         "renderer/lib/hosts/chat-session-control.test.ts",
         "renderer/lib/hosts/host-resources.test.ts",
         "renderer/lib/hosts/remote-turn-selection.test.ts",
+        "renderer/lib/hosts/remote-queue-fence.test.ts",
         "renderer/lib/hosts/local-host-adapter.test.ts",
         "renderer/lib/hosts/new-chat-targets.test.ts",
         "renderer/lib/hosts/observed-local-run.test.ts",

@@ -175,6 +175,20 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
     return () => observer.disconnect();
   }, [content]);
 
+  // Find selects its match without focusing anything, so a match (or any
+  // selection) inside a folded body opens it; otherwise the match stays clipped.
+  React.useEffect(() => {
+    const body = bodyRef.current;
+    if (!folded || !body || typeof document === "undefined") return;
+    const reveal = () => {
+      const selection = document.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+      if (body.contains(selection.anchorNode) || body.contains(selection.focusNode)) setExpanded(true);
+    };
+    document.addEventListener("selectionchange", reveal);
+    return () => document.removeEventListener("selectionchange", reveal);
+  }, [folded]);
+
   // Collapsing a prompt read from below its top would leave the reader where
   // its hidden tail used to be, so bring its top back into view.
   React.useLayoutEffect(() => {

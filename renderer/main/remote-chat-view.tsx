@@ -45,6 +45,13 @@ import {
 import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import {
+  REMOTE_QUEUE_FENCE_STALL_MS,
+  remoteQueueFence,
+  remoteQueueFenceHolds,
+  setRemoteQueueFence,
+  useRemoteQueueFence,
+} from "../lib/hosts/remote-queue-fence";
+import {
   resolveRemoteTurnSelection,
   useRemoteTurnPick,
   type RemoteTurnSelection,
@@ -81,7 +88,6 @@ import { isToolStep } from "../shared/generation-timeline";
  */
 
 const NO_SUBAGENTS: [] = [];
-const QUEUED_RUN_WAIT_MS = 120_000;
 const noop = () => {};
 const subscribeNothing = () => noop;
 const nothing = () => null;
@@ -409,18 +415,24 @@ export function RemoteChatPane({
   const runActive = live && run?.runId != null;
 
   // A queued turn's run reaches this Mac over the run stream a moment after
-  // the host accepts it, so the queue waits until it has seen that run end.
-  const [awaitingRunId, setAwaitingRunId] = React.useState<string | null>(null);
-  const awaitedRunEnded = awaitingRunId !== null && run?.runId === awaitingRunId && run.ended;
+  // the host accepts it, so the queue waits until that turn has finished.
+  // The fence is kept per host and chat, so reopening the chat keeps it.
+  const fence = useRemoteQueueFence(turnKey);
+  const [fenceClock, setFenceClock] = React.useState(() => Date.now());
+  const fenceHolds = remoteQueueFenceHolds(fence, {
+    run: run ? { runId: run.runId, ended: run.ended } : null,
+    transcript: { revision: snapshot?.transcript.revision ?? null, lastRole: messages[messages.length - 1]?.role },
+    now: Math.max(fenceClock, fence?.since ?? 0),
+  });
   React.useEffect(() => {
-    if (awaitedRunEnded) setAwaitingRunId(null);
-  }, [awaitedRunEnded]);
+    if (fence && !fenceHolds && turnKey && remoteQueueFence(turnKey) === fence) setRemoteQueueFence(turnKey, null);
+  }, [fence, fenceHolds, turnKey]);
   React.useEffect(() => {
-    if (!awaitingRunId) return;
-    // A run this Mac never hears about must not hold the queue for good.
-    const timer = setTimeout(() => setAwaitingRunId(null), QUEUED_RUN_WAIT_MS);
+    if (!fence) return;
+    // Re-read when the stall fallback is due.
+    const timer = setTimeout(() => setFenceClock(Date.now()), Math.max(0, fence.since + REMOTE_QUEUE_FENCE_STALL_MS - Date.now()));
     return () => clearTimeout(timer);
-  }, [awaitingRunId]);
+  }, [fence]);
 
   // Queued follow-ups wait on this Mac, as in a local chat, and go to the host
   // one at a time as new turns once its run has settled. Steer still joins the
@@ -430,7 +442,7 @@ export function RemoteChatPane({
     contextKey: JSON.stringify([selection.model?.providerId, selection.model?.modelId]),
     enabled:
       turnKey !== null &&
-      awaitingRunId === null &&
+      !fenceHolds &&
       !unavailable &&
       !stale &&
       Boolean(capabilities?.has("send")) &&
@@ -443,8 +455,11 @@ export function RemoteChatPane({
     // `enabled` already waits for the host's run to end.
     waitUntilIdle: () => Promise.resolve(true),
     send: async (message) => {
+      // Bound now, so a receipt that lands after this pane closes still fences its chat.
+      const key = turnKey;
+      const revision = snapshot?.transcript.revision ?? null;
       const receipt = await sendTurn(message.text, message.attachments, message.skillInvocation);
-      if (receipt) setAwaitingRunId(receipt.streamId);
+      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, revision, since: Date.now() });
     },
   });
   const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {

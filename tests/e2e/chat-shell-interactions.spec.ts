@@ -1414,6 +1414,18 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect.poll(bodyHeight).toBeLessThanOrEqual(lineHeight * 6 + 1);
 
+  // Find selects a match in the hidden tail without focusing it; the fold opens so it shows.
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
+        .find("END-OF-PROMPT", false, false, true),
+    ),
+  ).toBe(true);
+  await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await showLess.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
   // Copy waits for the pointer (or focus inside the bubble, which the chevron
   // just had), then sits in the bubble's top-right corner.
   const copy = bubble.getByRole("button", { name: "Copy message" });
