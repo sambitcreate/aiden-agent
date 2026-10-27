@@ -83,7 +83,7 @@ When the agent reads a page in extract mode, the Mac (contract revision 38) send
 
 ## Paired-Mac voice input
 
-In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
+In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit dictation action in the app or the intentional iOS voice shortcut; externally opened URLs never start recording. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
 
 The Mac processes that recording locally. Aiden does not persist the recording or transcript, include either in Remote Access diagnostics, or send them to Aiden's model-provider integrations or an Aiden-operated service. Normal chat submission remains a separate user action.
 
@@ -127,7 +127,10 @@ key within the safe retry window; it never runs automatically. When the window e
 review the conversation on the host before dismissing the notice and making a new
 attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records
-stay in the app's private storage and are scoped to that pairing.
+stay in the app's private storage and are scoped to that pairing. Editable mobile
+drafts and unconfirmed-send records are excluded from backups and do not move to
+a replacement phone through backup restore. iOS retains its existing protected
+storage class; Android keeps its backup and device-transfer exclusions.
 
 On Android, **Nearby** discovers desktops on the local network. New Android pairings
 require a desktop supporting the Android device identity (contract revision 31); an

@@ -48,8 +48,7 @@ actor AidenChatDraftStore {
         }
         let data = try JSONEncoder().encode(pending)
         guard data.count <= maximumDraftBytes else { throw AidenRemoteContractError.payloadTooLarge }
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try prepareDirectory(for: url)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
@@ -82,7 +81,12 @@ actor AidenChatDraftStore {
         guard let next = try? JSONEncoder().encode(Envelope(
             version: 1, instanceId: session.instanceId, chatId: session.chatId, text: remaining
         )) else { return }
-        try? next.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        do {
+            try prepareDirectory(for: url)
+            try next.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
+        }
     }
 
     private func attemptURL(_ session: Session) -> URL {
@@ -99,13 +103,21 @@ actor AidenChatDraftStore {
     }
 
     private let beforeWrite: (@Sendable () async -> Void)?
+    private let excludeFromBackup: @Sendable (URL) throws -> Void
     private let root: URL
     private let fileManager: FileManager
     private let maximumDraftScalars = 100_000
     private let maximumDraftBytes = 400_000
     private var generations: [String: UInt64] = [:]
 
-    init(root: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil, fileManager: FileManager = .default) {
+    init(root: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil, fileManager: FileManager = .default,
+         excludeFromBackup: @escaping @Sendable (URL) throws -> Void = { url in
+             var excludedURL = url
+             var values = URLResourceValues()
+             values.isExcludedFromBackup = true
+             try excludedURL.setResourceValues(values)
+         }) {
+        self.excludeFromBackup = excludeFromBackup
         self.beforeWrite = beforeWrite
         self.fileManager = fileManager
         if let root {
@@ -119,6 +131,26 @@ actor AidenChatDraftStore {
                 .appending(path: "AidenOnTheGo", directoryHint: .isDirectory)
                 .appending(path: "ChatDrafts-v1", directoryHint: .isDirectory)
         }
+        // Upgrade existing stores immediately, including a launch that only restores a draft.
+        // Failure keeps the old draft readable; every write retries this required preparation.
+        if fileManager.fileExists(atPath: self.root.path) {
+            do { try Self.prepareRoot(self.root, fileManager: fileManager, excludeFromBackup: excludeFromBackup) }
+            catch { AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown) }
+        }
+    }
+
+    private static func prepareRoot(_ root: URL, fileManager: FileManager,
+                                    excludeFromBackup: (URL) throws -> Void) throws {
+        let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
+        try fileManager.setAttributes(protection, ofItemAtPath: root.path)
+        try excludeFromBackup(root)
+    }
+
+    private func prepareDirectory(for url: URL) throws {
+        try Self.prepareRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
     }
 
     func beginSession(instanceId: String, chatId: String) -> Session {
@@ -162,11 +194,7 @@ actor AidenChatDraftStore {
         ))
         guard data.count <= maximumDraftBytes else { return false }
         let url = fileURL(instanceId: session.instanceId, chatId: session.chatId)
-        try fileManager.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
-        )
+        try prepareDirectory(for: url)
         guard !Task.isCancelled, isCurrent(session) else { return false }
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return true
