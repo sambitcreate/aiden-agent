@@ -1,3 +1,4 @@
+import { ensurePrivateDirectory } from "./private-storage.js";
 // Migration tests for the ~/.aiden split.
 //
 // The load-bearing guarantee here is negative: once an install has migrated,
@@ -1496,6 +1497,7 @@ test("portable files and owned recovery archives are private without changing th
   await fs.mkdir(r.portableRoot, { mode: 0o755 });
   const payload = JSON.stringify({ providers: [], mcpServers: [], skills: [] });
   const copies = [r.portableFile,
+    path.join(r.portableRoot, ".config.json.12345678-1234-4234-8234-123456789abc.tmp"),
     path.join(r.portableRoot, "config.json.invalid-2026-10-27T01-02-03-000Z-deadbeef"),
     path.join(r.portableRoot, `.config.json.${"a".repeat(64)}.12345678-1234-4234-8234-123456789abc.previous`),
     r.archiveFile, `${r.archiveFile}.recovery-2026-10-27T01-02-03-000Z-12345678-1234-4234-8234-123456789abc`];
@@ -1537,4 +1539,33 @@ test("portable root/file aliases fail visibly without chmod or replacing their t
     assert.equal(await fs.readFile(victim, "utf8"), "keep these bytes");
     assert.equal((await fs.stat(victim)).mode, before);
   }
+});
+
+
+test("private storage rejects canonical home aliases and replaceable ancestors without changing permissions", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const parentAlias = path.join(r.localRoot, "parent-alias");
+  await fs.symlink(path.dirname(os.homedir()), parentAlias);
+  const homeAlias = path.join(parentAlias, path.basename(os.homedir()));
+  const beforeHome = (await fs.stat(os.homedir())).mode;
+  assert.throws(() => ensurePrivateDirectory(homeAlias), /storage must be a private/u);
+  assert.equal((await fs.stat(os.homedir())).mode, beforeHome);
+  const sharedParent = path.join(r.localRoot, "shared-parent");
+  await fs.mkdir(sharedParent); await fs.chmod(sharedParent, 0o777);
+  const child = path.join(sharedParent, "private-child"); await fs.mkdir(child, { mode: 0o700 });
+  assert.throws(() => ensurePrivateDirectory(child, "reject"), /storage must be a private/u);
+  assert.equal((await fs.stat(sharedParent)).mode & 0o777, 0o777);
+});
+
+test("private storage rejects ownership mismatches before changing root or config modes", { skip: !process.getuid }, async (t) => {
+  const r = await roots(t);
+  await fs.mkdir(r.portableRoot); await fs.chmod(r.portableRoot, 0o755);
+  await fs.writeFile(r.portableFile, "preserve"); await fs.chmod(r.portableFile, 0o644);
+  const uid = process.getuid!();
+  const posixProcess = process as NodeJS.Process & { getuid(): number };
+  t.mock.method(posixProcess, "getuid", () => uid + 1);
+  await assert.rejects(stores(r).portable.load(), /storage must be a private/u);
+  assert.equal((await fs.stat(r.portableRoot)).mode & 0o777, 0o755);
+  assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o644);
+  assert.equal(await fs.readFile(r.portableFile, "utf8"), "preserve");
 });

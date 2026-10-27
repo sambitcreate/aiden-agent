@@ -4,3 +4,4 @@
 - Fresh isolated checkout has no dependencies; installed locally with npm ci --ignore-scripts before focused tests.
 - Initial focused tests exposed older defaults-on-special-file and migrate-through-archive-symlink expectations. Updated those behavior cases for explicit rejection. A recovery fixture is renamed to a retained conflict by normal DataStore recovery; mode assertions now follow the preserved bytes.
 - Fresh checkout coding-tool tests require the native subagent mutator as well as workspace-file IO; built both locally rather than interpreting missing-helper failures as product regressions.
+- Final self-review found that lexical home checks miss parent aliases and that Windows mode bits cannot support POSIX ancestry checks; added canonical inode rejection and platform-aware ancestry validation before handoff.

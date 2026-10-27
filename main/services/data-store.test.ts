@@ -1,3 +1,4 @@
+import { hardenPrivateFile } from "./private-storage.js";
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -106,4 +107,27 @@ test("a storage preparation failure does not load defaults or publish over exist
   await assert.rejects(store.load(), /permission hardening failed/u);
   await assert.rejects(store.update((draft) => { draft.value = "lost"; }), /permission hardening failed/u);
   assert.equal(await fs.readFile(target, "utf8"), '{"value":"preserve"}');
+});
+
+
+test("a concurrent private-store read accepts only its own active publication link", async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-private-publication-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const file = path.join(root, "config.json"), outside = path.join(root, "unapproved-link");
+  await fs.writeFile(file, '{"value":1}');
+  const store: DataStore<{ value: number }> = new DataStore("config.json", { value: 0 }, () => root, {
+    fileMode: 0o600, reloadBeforeWrite: true, rejectExternalChanges: true,
+    beforeAccess: async (ownedPaths) => hardenPrivateFile(file, ownedPaths),
+    afterProtectedPublish: async (): Promise<void> => {
+      assert.equal((await fs.stat(file)).nlink, 2, "publication temporarily owns canonical and staging names");
+      assert.equal((await store.load()).value, 2);
+      await fs.link(file, outside);
+      await assert.rejects(store.load(), /storage must be a private/u);
+      await fs.unlink(outside);
+      assert.equal((await store.load()).value, 2);
+    },
+  });
+  await store.update((draft) => { draft.value = 2; });
+  assert.equal((await fs.stat(file)).nlink, 1);
+  assert.equal((await store.load()).value, 2);
 });

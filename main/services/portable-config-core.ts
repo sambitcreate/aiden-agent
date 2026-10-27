@@ -926,6 +926,7 @@ async function fileEqualsContents(contents: Buffer, target: string): Promise<boo
 async function writeFileAtomicallyIfAbsent(
   contents: Buffer,
   destination: string,
+  ownedPublicationPaths: Set<string>,
 ): Promise<boolean> {
   if (await exists(destination)) return false;
   const staged = path.join(
@@ -933,6 +934,8 @@ async function writeFileAtomicallyIfAbsent(
     `.${path.basename(destination)}.${randomUUID()}.tmp`,
   );
   let published = false;
+  ownedPublicationPaths.add(destination);
+  ownedPublicationPaths.add(staged);
   try {
     await fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 });
     const stagedHandle = await fs.open(staged, "r");
@@ -958,6 +961,8 @@ async function writeFileAtomicallyIfAbsent(
     }
   } finally {
     await fs.rm(staged, { force: true }).catch(() => undefined);
+    ownedPublicationPaths.delete(staged);
+    ownedPublicationPaths.delete(destination);
   }
   return published;
 }
@@ -965,9 +970,10 @@ async function writeFileAtomicallyIfAbsent(
 async function ensureCompleteLegacyArchive(
   sourceContents: Buffer,
   destination: string,
+  ownedPublicationPaths: Set<string>,
 ): Promise<string> {
   if (await fileEqualsContents(sourceContents, destination)) return destination;
-  if (await writeFileAtomicallyIfAbsent(sourceContents, destination)) return destination;
+  if (await writeFileAtomicallyIfAbsent(sourceContents, destination, ownedPublicationPaths)) return destination;
   if (await fileEqualsContents(sourceContents, destination)) return destination;
 
   // An older non-atomic migration may already have left the canonical archive
@@ -983,7 +989,7 @@ async function ensureCompleteLegacyArchive(
   const recovery = `${destination}.recovery-${new Date()
     .toISOString()
     .replace(/[:.]/g, "-")}-${randomUUID()}`;
-  if (!(await writeFileAtomicallyIfAbsent(sourceContents, recovery))) {
+  if (!(await writeFileAtomicallyIfAbsent(sourceContents, recovery, ownedPublicationPaths))) {
     throw new Error("Could not preserve the legacy config recovery archive.");
   }
   return recovery;
@@ -1234,22 +1240,25 @@ export function createPortableConfigStores(
     ) => void;
   } = {},
 ) {
-  async function protectConfigDirectory(root: string, portableDirectory: boolean): Promise<void> {
+  const archivePublicationPaths = new Set<string>();
+  async function protectConfigDirectory(root: string, portableDirectory: boolean, ownedPublicationPaths: readonly string[] = []): Promise<void> {
+    const ownedPaths = [...ownedPublicationPaths, ...archivePublicationPaths];
     ensurePrivateDirectory(root);
     const file = path.join(root, PORTABLE_CONFIG_FILENAME);
-    hardenPrivateFile(file);
+    hardenPrivateFile(file, ownedPaths);
     for (const entry of await fs.readdir(root)) {
       const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
       const isArchive = !portableDirectory && (entry === archive ||
-        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9-]{36}$/u.test(entry));
+        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry));
       const isCorrupt = /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(entry);
-      const isConflict = /^config\.json\.conflict-[a-f0-9-]{36}$/u.test(entry);
+      const isConflict = /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry);
       if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
-      if (isArchive || isCorrupt || isConflict || isDataStoreRecoveryFile(entry, file)) hardenPrivateFile(path.join(root, entry));
+      const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
+      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) hardenPrivateFile(path.join(root, entry), ownedPaths);
     }
   }
-  const protectPortable = () => protectConfigDirectory(portableRoot(), true);
-  const protectLocal = async () => protectConfigDirectory(localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData"), false);
+  const protectPortable = (ownedPaths: readonly string[] = []) => protectConfigDirectory(portableRoot(), true, ownedPaths);
+  const protectLocal = async (ownedPaths: readonly string[] = []) => protectConfigDirectory(localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData"), false, ownedPaths);
   const portable = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),
@@ -1516,7 +1525,7 @@ export function createPortableConfigStores(
         throw new Error("Cannot archive a legacy config that was not loaded from disk.");
       }
       await testHooks.beforeLegacyArchive?.();
-      await ensureCompleteLegacyArchive(loadedLegacyContents, archivePath);
+      await ensureCompleteLegacyArchive(loadedLegacyContents, archivePath, archivePublicationPaths);
     }
 
     try {
