@@ -1171,7 +1171,11 @@
         "renderer/components/settings/web-page-settings.test.tsx",
         "renderer/components/web-extract-recap.test.tsx",
         "renderer/components/chat-approval-card.test.tsx",
-        "renderer/shared/tool-approval-preview.test.ts"
+        "renderer/shared/tool-approval-preview.test.ts",
+        "main/handlers/telegram.test.ts",
+        "main/services/telegram/telegram-pairing.test.ts",
+        "main/services/telegram/telegram-delivery.test.ts",
+        "renderer/components/settings/telegram-pairing-panel.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",
