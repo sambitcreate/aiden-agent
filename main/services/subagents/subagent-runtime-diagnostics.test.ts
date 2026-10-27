@@ -166,3 +166,41 @@ test("oversized retained subagent rotation is removed at startup", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test("persisted runtime evidence strips bare vendor credentials and omits provider free text", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-credentials-"));
+  const target = path.join(root, "runtime.log");
+  const secrets = [
+    "r8_ReplicateCredentialValue123456789",
+    "gsk_GroqCredentialValue123456789",
+    "pplx-PerplexityCredentialValue123456789",
+    "csk-CerebrasCredentialValue123456789",
+    "nvapi-NvidiaCredentialValue123456789",
+    "tskey-auth-TailscaleCredentialValue123456789",
+    "ASIAABCDEFGHIJKLMNOP",
+    "12345678-1234-1234-1234-123456789abc:CompositeCredentialValue123456789",
+  ];
+  try {
+    initSubagentRuntimeDiagnostics(target);
+    writeSubagentRuntimeFailure({
+      diagnosticId: "SA-safe-corpus", providerId: "test", modelId: "test-model", failure: "provider", attempts: 1,
+      diagnostics: [
+        { stage: "bootstrap", code: "pre_ready_exit", detail: `Loader failed. ${secrets.join(" ")}` },
+        { stage: "bootstrap", code: "pre_ready_exit", detail: encodeURIComponent(`x-api-key: ${secrets[0]}\nloader cause retained`) },
+        { stage: "provider", code: "provider_failure", providerCategory: "authentication", detail: "unlabelled-private-provider-response" },
+        { stage: "provider_hook", code: "provider_hook_failed", detail: "opaque-private-request" },
+      ],
+    });
+    await flushSubagentRuntimeDiagnostics();
+    const raw = await readFile(target, "utf8");
+    const record = JSON.parse(raw);
+    for (const secret of secrets) assert.equal(raw.includes(secret), false);
+    assert.equal(raw.includes("unlabelled-private-provider-response"), false);
+    assert.equal(raw.includes("opaque-private-request"), false);
+    assert.equal(record.diagnostics[2].providerCategory, "authentication");
+    assert.equal(record.diagnostics[2].detail, undefined);
+    assert.match(record.diagnostics[0].detail, /Loader failed/u);
+    assert.equal(record.diagnostics[0].code, "pre_ready_exit");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

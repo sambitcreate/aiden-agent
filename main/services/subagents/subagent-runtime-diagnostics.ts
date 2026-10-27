@@ -221,7 +221,9 @@ function boundedRecord(record: SubagentRuntimeFailureRecord): string {
     ...(diagnostic.providerCategory === undefined
       ? {}
       : { providerCategory: diagnostic.providerCategory }),
-    ...(diagnostic.detail
+    // Provider text can echo prompts or opaque credentials. Typed category,
+    // stage and code are sufficient; keep detailed evidence for bootstrap only.
+    ...(diagnostic.detail && diagnostic.stage !== "provider" && diagnostic.stage !== "provider_hook"
       ? { detail: sanitizeSubagentDiagnosticText(diagnostic.detail).slice(0, MAX_DETAIL_CHARS) }
       : {}),
   }));
