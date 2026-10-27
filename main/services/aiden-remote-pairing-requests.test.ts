@@ -220,6 +220,26 @@ test("the request expires with its host window even during long polling", async 
   assert.equal(liveDevices().length, 0);
 });
 
+test("expiry during envelope construction rolls back the credential before publishing a grant", async () => {
+  let expiresAt = Number.MAX_SAFE_INTEGER;
+  let advanceDuringSeal = false;
+  const { service, clock, liveDevices } = harness({
+    admission: () => ({ id: "first", expiresAt }),
+    displayName: () => {
+      if (advanceDuringSeal) clock.current = expiresAt;
+      return "Studio Mac";
+    },
+  });
+  expiresAt = clock.now() + 100;
+  const { created } = await open(service);
+  advanceDuringSeal = true;
+  assert.equal((await service.respond(created.requestId, "allow"))?.state, "cancelled");
+  assert.equal(liveDevices().length, 0);
+  const status = await service.poll(created.requestId, created.pollSecret);
+  assert.equal(status.state, "cancelled");
+  assert.equal(status.envelope, undefined);
+});
+
 test("an allowed request delivers the desktop exchange grants, sealed, and the credential authenticates", async () => {
   const { service, registry, stored } = harness();
   const { keys, created, hostNonce, matchCode } = await open(service);
