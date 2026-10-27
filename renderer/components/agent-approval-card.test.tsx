@@ -27,14 +27,14 @@ function heading(request: Omit<AcpApprovalRequest, "toolCallId" | "paths" | "off
 }
 
 test("each kind of agent approval names its action the way Aiden's own cards do", () => {
-  assert.equal(heading({ kind: "command", title: "npm test" }), "Run command needs approval");
-  assert.equal(heading({ kind: "file_change", title: "Edit a.ts" }), "Edit file needs approval");
+  assert.equal(heading({ kind: "command", title: "npm test" }), "Run this command?");
+  assert.equal(heading({ kind: "file_change", title: "Edit a.ts" }), "Edit files?");
   // Removing or relocating files is not presented as an edit.
-  assert.equal(heading({ kind: "file_change", fileChange: "delete", title: "Delete old.ts" }), "Delete file needs approval");
-  assert.equal(heading({ kind: "file_change", fileChange: "move", title: "Move a.ts" }), "Move file needs approval");
-  assert.equal(heading({ kind: "file_read", title: "Read .env" }), "Read file needs approval");
-  assert.equal(heading({ kind: "fetch", title: "example.com" }), "Fetch web page needs approval");
-  assert.equal(heading({ kind: "other", title: "Lookup" }), "Agent tool needs approval");
+  assert.equal(heading({ kind: "file_change", fileChange: "delete", title: "Delete old.ts" }), "Delete files?");
+  assert.equal(heading({ kind: "file_change", fileChange: "move", title: "Move a.ts" }), "Move files?");
+  assert.equal(heading({ kind: "file_read", title: "Read .env" }), "Read a file?");
+  assert.equal(heading({ kind: "fetch", title: "example.com" }), "Open a web page?");
+  assert.equal(heading({ kind: "other", title: "Lookup" }), "Use a tool?");
 });
 
 test("a delete approval says it deletes, in the summary too", () => {
@@ -57,5 +57,5 @@ test("an unknown tool's heading is sentence case, never a raw snake_case name", 
       onDecide={() => undefined}
     />,
   );
-  assert.match(html, /id="approval-title-x"[^>]*>Future agent tool needs approval</u);
+  assert.match(html, /id="approval-title-x"[^>]*>Allow Future agent tool\?</u);
 });

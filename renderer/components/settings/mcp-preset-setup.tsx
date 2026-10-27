@@ -2,7 +2,8 @@
 // Mirrors the custom connector editor but everything is prefilled from the
 // catalog: API-key connectors collect a key stored encrypted on this device
 // (never in config.json), OAuth connectors reuse the browser sign-in flow, and
-// a connector running on this device needs only Test and Connect.
+// a connector running on this device needs only Test and Connect. A connector
+// served by a Mac app (iMCP) has its own dialog (`mcp-mac-app-setup.tsx`).
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -14,15 +15,11 @@ import { mcpApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
 import { mcpPresetCredentialReady } from "../../lib/mcp-preset-state";
 import type { McpPresetState, McpServer } from "../../lib/types";
+import type { HttpMcpPreset } from "../../shared/connector-catalog";
 import { McpPresetIcon } from "./mcp-preset-icons";
+import { MacAppSetupDialog } from "./mcp-mac-app-setup";
 
-export function PresetSetupDialog({
-  state,
-  server,
-  open,
-  onOpenChange,
-  onSaved,
-}: {
+export interface PresetSetupDialogProps {
   state: McpPresetState;
   /** Existing server record when the preset is already configured. */
   server?: McpServer;
@@ -30,8 +27,23 @@ export function PresetSetupDialog({
   onOpenChange: (open: boolean) => void;
   /** Extra refresh after a save; server and preset caches are always refreshed. */
   onSaved?: () => Promise<void> | void;
-}) {
-  const { preset } = state;
+}
+
+export function PresetSetupDialog(props: PresetSetupDialogProps) {
+  const { preset } = props.state;
+  return preset.transport === "stdio"
+    ? <MacAppSetupDialog {...props} preset={preset} />
+    : <HttpPresetSetupDialog {...props} preset={preset} />;
+}
+
+function HttpPresetSetupDialog({
+  state,
+  preset,
+  server,
+  open,
+  onOpenChange,
+  onSaved,
+}: PresetSetupDialogProps & { preset: HttpMcpPreset }) {
   const available = isConnectorAvailable(preset);
   const queryClient = useQueryClient();
   // Every caller (Settings, Bot setup) must see the saved record and its new
@@ -94,6 +106,9 @@ export function PresetSetupDialog({
     oauth: preset.auth.kind === "oauth" ? true : undefined,
     presetId: preset.id,
     enabled,
+    // Model access is chosen elsewhere in Settings; saving here keeps it.
+    exposure: server?.exposure,
+    hiddenTools: server?.hiddenTools,
   });
 
   const credentialReady = mcpPresetCredentialReady({

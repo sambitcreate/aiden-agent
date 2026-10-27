@@ -348,6 +348,8 @@ test("a failed Authorize from Settings records a classified sign-in failure", as
     pendingLaunchApprovals: async () => [],
     approveLaunch: unused,
     launchApproved: unused,
+    macAppStatus: unused,
+    openMacApp: unused,
   };
   registerMcpControlHandlers(deps);
   const server = { id: "custom-acme", name: "Acme", transport: "http", url: "https://mcp.acme.test/v1?key=SECRET-QUERY", oauth: true, enabled: true };

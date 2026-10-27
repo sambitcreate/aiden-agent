@@ -585,8 +585,6 @@ fun AidenChatDetailScreen(
                     exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingApproval?.let { approval ->
-                        val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -595,59 +593,12 @@ fun AidenChatDetailScreen(
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
                             shape = MaterialTheme.shapes.extraLarge
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (isAutomation) Icons.Default.Schedule else Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = palette.warning,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = AidenApprovalPresentation.title(approval.toolName),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.warning
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = AidenApprovalPresentation.oneLineSummary(approval.summary),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.foreground
-                                )
-                                if (!approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_review_only),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (isAutomation && !approval.hasRequiredWriteCapability) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_schedule_write_required),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (requiresDesktopConfirmation) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                }
-                                if (approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    AidenApprovalActions(
-                                        approval = approval,
-                                        enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                        onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) }
-                                    )
-                                }
-                            }
+                            AidenApprovalCardContent(
+                                approval = approval,
+                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
+                                onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) },
+                                modifier = Modifier.padding(16.dp)
+                            )
                         }
                     }
                 }
@@ -1457,6 +1408,14 @@ private fun AssistantMessageRow(
                     }
                 }
             }
+            AidenAgentActivityPresentation.extractionSteps(timeline).forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
         }
 
         // Progress disclosure for bot chats
@@ -1744,6 +1703,7 @@ internal fun ActiveStreamingCard(
     // Without chronological rows, the timeline still lists the calls and their recaps.
     val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
+    val fallbackExtractions = AidenAgentActivityPresentation.extractionSteps(activityTimeline)
     val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
     val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
     // Recaps that already sprang in during this reply. The card moves between the
@@ -1850,6 +1810,14 @@ internal fun ActiveStreamingCard(
                     key(step.id) {
                         val firstAppearance = remember { enteredRecaps.add(step.id) }
                         AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            fallbackExtractions.forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1989,6 +1957,9 @@ private fun AidenChronologicalTranscript(
                             }
                             AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         }
+                    }
+                    AidenChronologicalRow.Kind.EXTRACTION -> {
+                        row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
                 }

@@ -19,6 +19,7 @@ import {
   splitStoredProvider,
 } from "./portable-config-core.js";
 import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
 function expectedWebSearchSettings(enabled: boolean) {
@@ -1601,6 +1602,47 @@ test("Web Search config updates are durable and do not touch provider transport"
     selected.webSearch?.selection,
   );
   assert.equal(h.secrets.keys.exa, undefined, "settings persistence must not create a credential");
+});
+
+test("web page settings persist through their own seam and never through a broad settings patch", async (t) => {
+  const h = await harness(t);
+  assert.deepEqual(await h.store.getWebFetchSettings(), defaultWebFetchSettings());
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const saved = await h.store.updateWebFetchSettings((current) => ({
+    ...current,
+    extract: { ...current.extract, accountId },
+  }));
+  assert.equal(saved.extract.accountId, accountId);
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    h.secrets.port,
+  );
+  assert.deepEqual(await restarted.getWebFetchSettings(), saved);
+  // Machine-local: the account ID never reaches the portable config.
+  assert.doesNotMatch(await fs.readFile(h.portableFile, "utf-8").catch(() => ""), new RegExp(accountId, "u"));
+  await assert.rejects(
+    () => h.store.setSettings({ webFetch: { ...saved, enabled: false } }),
+    /own settings call/u,
+  );
+  await assert.rejects(
+    () => h.store.updateWebFetchSettings((current) => ({ ...current, extract: { ...current.extract, accountId: "nope" } })),
+    /supported version 1/u,
+  );
+  assert.deepEqual(await restarted.getWebFetchSettings(), saved);
+});
+
+test("a future web page settings document survives and reads as off", async (t) => {
+  const h = await harness(t);
+  const future = { version: 2, enabled: true, extract: { enabled: true, model: "future-model" } };
+  await fs.writeFile(h.settingsFile, JSON.stringify({ settings: { webFetch: future, profileName: "Before" } }), "utf-8");
+  assert.equal((await h.store.getSettings()).webFetch, undefined);
+  assert.equal((await h.store.getWebFetchSettings()).enabled, false);
+  await h.store.setSettings({ profileName: "After" });
+  assert.deepEqual((await readJson<{ settings: { webFetch: unknown } }>(h.settingsFile)).settings.webFetch, future);
+  await assert.rejects(() => h.store.updateWebFetchSettings((current) => current), /newer version/u);
 });
 
 test("future Web Search settings survive unrelated writes and project closed across restart", async (t) => {

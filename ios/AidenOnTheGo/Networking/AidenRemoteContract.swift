@@ -668,10 +668,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 30 adds `bot:activity`, which only opts the device into
     /// the activity and queued session frames and Bot detail `chatActivity`.
     /// Contract revision 37 adds `bot:handoffs`, asked for in a call of its own.
+    /// Contract revision 39 adds `schedule:cards`, also asked for alone, after
+    /// any other negotiation.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
+        Self(rawValue: "schedule:cards"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -688,6 +691,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// needs `bot:write`). A Mac that predates it refuses the whole request
     /// that names it, so the device asks for it alone.
     static let botHandoffs = Self(rawValue: "bot:handoffs")
+
+    /// Revision 39: the device receives the display-only
+    /// `schedule` card on scheduled-task approvals, which the host adds only
+    /// while the device also holds `schedule:read`. It grants no authority. A
+    /// host older than revision 39 refuses the whole request that names it
+    /// (`400`), and one without approvals answers `404`, so the device asks for
+    /// it alone, after any other negotiation.
+    static let scheduleCards = Self(rawValue: "schedule:cards")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -3401,6 +3412,285 @@ enum AidenRemoteRunEndState: String, Codable, Equatable, Sendable {
     case cancelled
 }
 
+// MARK: - Scheduled-task approval cards (contract revision 39, `schedule:cards`)
+
+/// The display-only card a host adds to a `schedule_task` approval for a device
+/// holding `schedule:cards` and `schedule:read`. It mirrors the host's wire
+/// validator exactly: exact keys, enum values, and trimmed, bounded text free of
+/// control and bidirectional characters, with lengths in UTF-16 code units.
+/// Decoding throws on any violation; approval decoders wrap it with `try?` so an
+/// invalid card is dropped and never fails the approval or changes what it allows.
+struct AidenApprovalSchedule: Codable, Equatable, Sendable {
+    enum Action: String, Codable, CaseIterable, Sendable {
+        case create, update, pause, resume, remove
+        case runNow = "run_now"
+    }
+
+    enum Mode: String, Codable, Sendable {
+        case llm, script
+    }
+
+    enum Permission: String, Codable, Sendable {
+        case readOnly = "read-only"
+        case full
+    }
+
+    static let nameLimit = 120
+    static let cadenceLimit = 200
+    static let timezoneLimit = 128
+    static let nextRunLimit = 40
+    static let workspaceNameLimit = 120
+    static let connectorLimit = 16
+    static let connectorNameLimit = 120
+    static let providerNameLimit = 120
+    static let modelNameLimit = 256
+    static let contentLimit = 2_000
+
+    let action: Action
+    let name: String
+    /// Human cadence such as "Every day at 9:00 AM"; never cron syntax.
+    let cadence: String
+    let timezone: String
+    /// The exact RFC 3339 UTC wire value, present only while the task will run on its own.
+    let nextRunAt: String?
+    let mode: Mode
+    let permission: Permission
+    let workspaceName: String?
+    let connectors: [String]
+    let providerName: String?
+    let modelName: String?
+    let notify: Bool
+    /// The task's state once approved: true for a resume, false for a pause.
+    let enabled: Bool
+    let schedulerEnabled: Bool
+    let prompt: String?
+    let script: String?
+    /// The prompt or script was shortened to fit. Sent only as `true`.
+    let truncated: Bool
+
+    /// The next run as an instant, read the way the host's `Date.parse` reads it.
+    var nextRun: Date? { nextRunAt.flatMap(Self.utcInstant) }
+
+    /// The card a `schedule_task` approval may show. Any other tool never gets one.
+    static func card(_ schedule: AidenApprovalSchedule?, toolName: String) -> AidenApprovalSchedule? {
+        toolName == "schedule_task" ? schedule : nil
+    }
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case action, name, cadence, timezone, nextRunAt, mode, permission, workspaceName
+        case connectors, providerName, modelName, notify, enabled, schedulerEnabled, prompt, script, truncated
+    }
+
+    init(
+        action: Action,
+        name: String,
+        cadence: String,
+        timezone: String,
+        nextRunAt: String? = nil,
+        mode: Mode,
+        permission: Permission,
+        workspaceName: String? = nil,
+        connectors: [String] = [],
+        providerName: String? = nil,
+        modelName: String? = nil,
+        notify: Bool,
+        enabled: Bool,
+        schedulerEnabled: Bool,
+        prompt: String? = nil,
+        script: String? = nil,
+        truncated: Bool = false
+    ) {
+        self.action = action
+        self.name = name
+        self.cadence = cadence
+        self.timezone = timezone
+        self.nextRunAt = nextRunAt
+        self.mode = mode
+        self.permission = permission
+        self.workspaceName = workspaceName
+        self.connectors = connectors
+        self.providerName = providerName
+        self.modelName = modelName
+        self.notify = notify
+        self.enabled = enabled
+        self.schedulerEnabled = schedulerEnabled
+        self.prompt = prompt
+        self.script = script
+        self.truncated = truncated
+    }
+
+    init(from decoder: Decoder) throws {
+        let dynamic = try decoder.container(keyedBy: AidenDynamicCodingKey.self)
+        try assertKnownKeys(dynamic, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        action = try values.decode(Action.self, forKey: .action)
+        mode = try values.decode(Mode.self, forKey: .mode)
+        permission = try values.decode(Permission.self, forKey: .permission)
+        let connectors = try values.decode([String].self, forKey: .connectors)
+        guard connectors.count <= Self.connectorLimit,
+              connectors.allSatisfy({ Self.isSafeText($0, limit: Self.connectorNameLimit) }) else {
+            throw AidenRemoteContractError.unsafePayloadField("schedule.connectors")
+        }
+        self.connectors = connectors
+        nextRunAt = try Self.optionalText(values, .nextRunAt, limit: Self.nextRunLimit)
+        if let nextRunAt, Self.utcInstant(nextRunAt) == nil {
+            throw AidenRemoteContractError.unsafePayloadField("schedule.nextRunAt")
+        }
+        providerName = try Self.optionalText(values, .providerName, limit: Self.providerNameLimit)
+        modelName = try Self.optionalText(values, .modelName, limit: Self.modelNameLimit)
+        prompt = try Self.optionalText(values, .prompt, limit: Self.contentLimit, multiline: true)
+        script = try Self.optionalText(values, .script, limit: Self.contentLimit, multiline: true)
+        let matchesMode = mode == .llm
+            ? script == nil
+            : prompt == nil && providerName == nil && modelName == nil
+        guard matchesMode else { throw AidenRemoteContractError.unsafePayloadField("schedule.mode") }
+        if values.contains(.truncated) {
+            guard try values.decode(Bool.self, forKey: .truncated), prompt != nil || script != nil else {
+                throw AidenRemoteContractError.unsafePayloadField("schedule.truncated")
+            }
+            truncated = true
+        } else {
+            truncated = false
+        }
+        workspaceName = try Self.optionalText(values, .workspaceName, limit: Self.workspaceNameLimit)
+        name = try Self.text(values, .name, limit: Self.nameLimit)
+        cadence = try Self.text(values, .cadence, limit: Self.cadenceLimit)
+        timezone = try Self.text(values, .timezone, limit: Self.timezoneLimit)
+        notify = try values.decode(Bool.self, forKey: .notify)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        schedulerEnabled = try values.decode(Bool.self, forKey: .schedulerEnabled)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(action, forKey: .action)
+        try values.encode(name, forKey: .name)
+        try values.encode(cadence, forKey: .cadence)
+        try values.encode(timezone, forKey: .timezone)
+        try values.encodeIfPresent(nextRunAt, forKey: .nextRunAt)
+        try values.encode(mode, forKey: .mode)
+        try values.encode(permission, forKey: .permission)
+        try values.encodeIfPresent(workspaceName, forKey: .workspaceName)
+        try values.encode(connectors, forKey: .connectors)
+        try values.encodeIfPresent(providerName, forKey: .providerName)
+        try values.encodeIfPresent(modelName, forKey: .modelName)
+        try values.encode(notify, forKey: .notify)
+        try values.encode(enabled, forKey: .enabled)
+        try values.encode(schedulerEnabled, forKey: .schedulerEnabled)
+        try values.encodeIfPresent(prompt, forKey: .prompt)
+        try values.encodeIfPresent(script, forKey: .script)
+        if truncated { try values.encode(true, forKey: .truncated) }
+    }
+
+    private static func text(
+        _ values: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys,
+        limit: Int,
+        multiline: Bool = false
+    ) throws -> String {
+        let value = try values.decode(String.self, forKey: key)
+        guard isSafeText(value, limit: limit, multiline: multiline) else {
+            throw AidenRemoteContractError.unsafePayloadField("schedule.\(key.stringValue)")
+        }
+        return value
+    }
+
+    /// Absent is nil; a present key must hold valid text (`null` included is invalid).
+    private static func optionalText(
+        _ values: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys,
+        limit: Int,
+        multiline: Bool = false
+    ) throws -> String? {
+        guard values.contains(key) else { return nil }
+        return try text(values, key, limit: limit, multiline: multiline)
+    }
+
+    /// The host's `safeApprovalText`: non-empty, at most `limit` UTF-16 code
+    /// units, equal to its own JavaScript `trim()`, and free of control and
+    /// bidirectional characters (tab, line feed and carriage return only when
+    /// multiline).
+    static func isSafeText(_ value: String, limit: Int, multiline: Bool = false) -> Bool {
+        let length = value.utf16.count
+        guard length > 0, length <= limit,
+              let first = value.unicodeScalars.first, let last = value.unicodeScalars.last,
+              !isJavaScriptWhitespace(first.value), !isJavaScriptWhitespace(last.value) else { return false }
+        return !value.unicodeScalars.contains { isUnsafeScalar($0.value, multiline: multiline) }
+    }
+
+    /// What JavaScript's `String.prototype.trim` removes. Unlike Foundation's
+    /// whitespace set it includes U+FEFF and excludes U+0085.
+    private static func isJavaScriptWhitespace(_ value: UInt32) -> Bool {
+        switch value {
+        case 0x09...0x0D, 0x20, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+            true
+        default:
+            false
+        }
+    }
+
+    private static func isUnsafeScalar(_ value: UInt32, multiline: Bool) -> Bool {
+        if multiline && (value == 0x09 || value == 0x0A || value == 0x0D) { return false }
+        switch value {
+        case 0x00...0x1F, 0x7F...0x9F, 0x061C, 0x200E, 0x200F, 0x202A...0x202E, 0x2028, 0x2029, 0x2066...0x2069:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$` read with the
+    /// host's `Date.parse` field ranges: day 1...31 rolls into the next month
+    /// as JavaScript does, and hour 24 is accepted only as exactly midnight.
+    static func utcInstant(_ value: String) -> Date? {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 20 || (22...30).contains(bytes.count),
+              bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-"), bytes[10] == UInt8(ascii: "T"),
+              bytes[13] == UInt8(ascii: ":"), bytes[16] == UInt8(ascii: ":"), bytes.last == UInt8(ascii: "Z")
+        else { return nil }
+        func number(_ range: Range<Int>) -> Int? {
+            var result = 0
+            for index in range {
+                guard (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(bytes[index]) else { return nil }
+                result = result * 10 + Int(bytes[index] - UInt8(ascii: "0"))
+            }
+            return result
+        }
+        guard let year = number(0..<4), let month = number(5..<7), let day = number(8..<10),
+              let hour = number(11..<13), let minute = number(14..<16), let second = number(17..<19)
+        else { return nil }
+        var fractionDigits = 0..<0
+        if bytes.count > 20 {
+            guard bytes[19] == UInt8(ascii: ".") else { return nil }
+            fractionDigits = 20..<(bytes.count - 1)
+        }
+        // Hour 24 needs every fraction digit zero, as in `Date.parse`.
+        guard let fraction = number(fractionDigits),
+              (1...12).contains(month), (1...31).contains(day), (0...24).contains(hour),
+              (0...59).contains(minute), (0...59).contains(second),
+              hour < 24 || (minute == 0 && second == 0 && fraction == 0)
+        else { return nil }
+        // Like `Date.parse`, keep milliseconds and drop finer digits.
+        var milliseconds = 0
+        for offset in 0..<3 {
+            let index = fractionDigits.lowerBound + offset
+            milliseconds = milliseconds * 10 + (index < fractionDigits.upperBound ? Int(bytes[index] - UInt8(ascii: "0")) : 0)
+        }
+        let seconds = daysFromCivil(year: year, month: month, day: day) * 86_400 + hour * 3_600 + minute * 60 + second
+        return Date(timeIntervalSince1970: Double(seconds) + Double(milliseconds) / 1_000)
+    }
+
+    /// Days since 1970-01-01 in the proleptic Gregorian calendar; linear in `day`.
+    private static func daysFromCivil(year: Int, month: Int, day: Int) -> Int {
+        let shiftedYear = month <= 2 ? year - 1 : year
+        let era = (shiftedYear >= 0 ? shiftedYear : shiftedYear - 399) / 400
+        let yearOfEra = shiftedYear - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        return era * 146_097 + dayOfEra - 719_468
+    }
+}
+
 /// The phone projection of a run approval (contract revision 24). It never
 /// carries tool details; `canAllow` is false for approvals only the desktop may
 /// allow, and `scopes` appears only when the phone may allow.
@@ -3411,6 +3701,8 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
     let toolName: String
     let canAllow: Bool
     let scopes: [AidenApprovalScope]?
+    /// Contract revision 39 (`schedule:cards`): display-only, nil when absent or invalid.
+    let schedule: AidenApprovalSchedule?
 
     init(
         approvalId: String,
@@ -3418,7 +3710,8 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         toolCallId: String?,
         toolName: String,
         canAllow: Bool,
-        scopes: [AidenApprovalScope]?
+        scopes: [AidenApprovalScope]?,
+        schedule: AidenApprovalSchedule? = nil
     ) {
         self.approvalId = approvalId
         self.summary = summary
@@ -3426,6 +3719,7 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         self.toolName = toolName
         self.canAllow = canAllow
         self.scopes = scopes
+        self.schedule = schedule
     }
 
     init(from decoder: Decoder) throws {
@@ -3460,10 +3754,12 @@ struct AidenRemoteRunApproval: Decodable, Equatable, Sendable {
         } else {
             scopes = nil
         }
+        // A card that fails validation is dropped; the approval still decodes.
+        schedule = try? values.decodeIfPresent(AidenApprovalSchedule.self, forKey: .schedule)
     }
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case approvalId, summary, toolCallId, toolName, canAllow, scopes
+        case approvalId, summary, toolCallId, toolName, canAllow, scopes, schedule
     }
 }
 

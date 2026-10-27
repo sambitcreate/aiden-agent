@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ToolApprovalDetails } from "../../renderer/shared/assistant.js";
+import type { ToolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import {
   parseToolApprovalScope,
   type ToolApprovalScope,
@@ -12,6 +13,11 @@ export interface ToolApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /**
+   * The exact command or file change, for the owning desktop window only.
+   * Remote and run-journal projections copy named fields and leave it out.
+   */
+  preview?: ToolApprovalPreview;
   /**
    * Scopes the approval surface may offer. Absent means "once" only. A scope
    * broader than once is honored only when it was offered here.

@@ -1,9 +1,9 @@
 import * as React from "react";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, ShieldQuestion, TriangleAlert } from "lucide-react";
+import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { ChatApprovalCard, toolLabel, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
+import { ApprovalIcon, ChatApprovalCard, approvalHeadline, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
 import { Composer, type ComposerSkillCatalog } from "../components/composer";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
 import { MessageList } from "../components/message-list";
@@ -19,6 +19,7 @@ import {
   EmptyState,
   Input,
   ScrollArea,
+  ScrollAreaFooterStack,
   Text,
   toast,
 } from "../components/ui";
@@ -192,24 +193,20 @@ function ReadOnlyApprovalCard({ prompt, reason }: { prompt: ApprovalPrompt; reas
     <section
       aria-labelledby={titleId}
       data-remote-approval={prompt.approvalId}
-      className="rounded-card bg-popover p-3 shadow-popover"
+      className="approval-shell composer-shell bg-popover p-4 shadow-composer"
     >
-      <div className="flex items-start gap-2.5">
-        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
-          <ShieldQuestion className="size-4" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <Text variant="small-strong" as="p" id={titleId}>
-            {`${toolLabel(prompt.toolName)} needs approval`}
-          </Text>
-          <Text variant="small" color="secondary" as="p" className="mt-0.5 break-words">
-            {prompt.summary}
-          </Text>
-          <Text variant="small" color="tertiary" as="p" className="mt-1.5">
-            {reason}
-          </Text>
-        </div>
+      <div className="flex flex-col items-center text-center">
+        <ApprovalIcon preview={undefined} command={false} />
+        <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
+          {approvalHeadline(prompt)}
+        </Text>
       </div>
+      <Text variant="small" as="p" className="approval-well mt-3 break-words bg-well px-4 py-3 font-mono whitespace-pre-wrap">
+        {prompt.summary}
+      </Text>
+      <Text variant="small" color="secondary" as="p" className="mt-2.5 text-center text-pretty">
+        {reason}
+      </Text>
     </section>
   );
 }
@@ -600,7 +597,7 @@ export function RemoteChatPane({
         showScrollToBottomButton
         streaming={isGenerating}
         footer={
-          <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
+          <ScrollAreaFooterStack className="aiden-dock-inset chat-content-column gap-2 pb-3">
             {openApproval ? (
               <ChatApprovalCard
                 key={openApproval.approvalId}
@@ -750,7 +747,7 @@ export function RemoteChatPane({
                 {`This chat runs on ${host.label}. ${sendRefusal ?? ""}`.trim()}
               </Text>
             ) : null}
-          </div>
+          </ScrollAreaFooterStack>
         }
       >
         {loading ? (

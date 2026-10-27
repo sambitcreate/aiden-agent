@@ -89,6 +89,11 @@ import {
   normalizeWebSearchSettings,
   type WebSearchSettingsV2,
 } from "./web-search-provider-registry-core.js";
+import {
+  defaultWebFetchSettings,
+  parseWebFetchSettings,
+  type WebFetchSettingsV1,
+} from "../../renderer/shared/web-fetch-settings.js";
 import type {
   AppSettings,
   McpServer,
@@ -961,6 +966,38 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /** Read the `web_fetch` document; a future or invalid one reads as off. */
+    async getWebFetchSettings(): Promise<WebFetchSettingsV1> {
+      await ensureSeeded();
+      const stored = (await settingsStore.load()).settings;
+      const settings = runtimeSettingsFrom(stored);
+      if (settings.webFetch) return settings.webFetch;
+      return Object.prototype.hasOwnProperty.call(stored, "webFetch")
+        ? { ...defaultWebFetchSettings(), enabled: false }
+        : defaultWebFetchSettings();
+    },
+
+    /** Atomically update only the `web_fetch` document; keys stay in the key pool. */
+    async updateWebFetchSettings(
+      mutation: (current: WebFetchSettingsV1) => WebFetchSettingsV1,
+      isCurrent: () => boolean = () => true,
+    ): Promise<WebFetchSettingsV1> {
+      const saved = await mutateSettings((config) => {
+        const stored = Object.prototype.hasOwnProperty.call(config.settings, "webFetch");
+        const current = parseWebFetchSettings(config.settings.webFetch);
+        if (!current && stored) {
+          throw new Error(
+            "Web page settings are invalid or from a newer version; repair settings.json before changing them.",
+          );
+        }
+        const next = parseWebFetchSettings(mutation(structuredClone(current ?? defaultWebFetchSettings())));
+        if (!next) throw new Error("Web page settings must be a supported version 1 document.");
+        config.settings.webFetch = next;
+        return structuredClone(config.settings);
+      }, isCurrent);
+      return parseWebFetchSettings(saved.webFetch) ?? defaultWebFetchSettings();
+    },
+
     /** Read the normalized Text to Speech document after startup migration. */
     async getTtsSettings(): Promise<{
       settings: TtsSettingsV1;
@@ -1065,6 +1102,10 @@ export function createConfigStore(
           if (!parseWebSearchSettings(patch.webSearch)) {
             throw new Error("Web Search settings must be a supported version 2 document.");
           }
+        }
+        // web_fetch has its own seam too; the broad patch API never writes it.
+        if (Object.prototype.hasOwnProperty.call(patch, "webFetch")) {
+          throw new Error("Web page settings change only through their own settings call.");
         }
         const lastProviderId =
           typeof patch.lastProviderId === "string"

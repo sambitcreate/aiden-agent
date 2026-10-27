@@ -17,6 +17,7 @@ import {
   type AidenRemoteRunInputMode,
   type AidenRemoteRunState,
 } from "./aiden-remote-protocol.js";
+import { approvalScheduleCard } from "./aiden-remote-approval-schedule.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AidenIdempotencyLedger,
@@ -176,9 +177,11 @@ function ownRecord(value: unknown): Record<string, unknown> | undefined {
 /**
  * Strip host-only approval facts for observers without `runs:control`. Those
  * observers keep the mobile summary projection; controllers get the details
- * they need to decide.
+ * they need to decide. `phone-schedule` is the phone projection for a device
+ * holding `schedule:cards` and `schedule:read` (contract revision 39): it adds
+ * the display-only `schedule` card to scheduled-task approvals.
  */
-export type RunProjection = "full" | "observer" | "phone";
+export type RunProjection = "full" | "observer" | "phone" | "phone-schedule";
 
 function projectPayload(
   type: string,
@@ -191,11 +194,23 @@ function projectPayload(
   // The phone projection matches the phone's own stream approvals: a summary,
   // whether it may allow from the phone, and allow scopes only when it may.
   const canAllow = phoneMayAllow(payload);
+  const schedule = projection === "phone-schedule" ? approvalScheduleCard(payload.details) : undefined;
   return {
     ...summary,
     canAllow,
     ...(canAllow && scopes !== undefined ? { scopes } : {}),
+    ...(schedule ? { schedule } : {}),
   };
+}
+
+/** The run projection for a reader, from its device type and grants. */
+export function runProjectionForDevice(device: AidenRemoteHostRunDevice): RunProjection {
+  if (isPhoneRunDevice(device)) {
+    return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read")
+      ? "phone-schedule"
+      : "phone";
+  }
+  return device.capabilities.has("runs:control") ? "full" : "observer";
 }
 
 /**
@@ -418,11 +433,7 @@ export class AidenRemoteHostRunService {
     if (after > initial.lastSequence) {
       throw new AidenRemoteServiceError("invalid_request", "The run cursor is ahead of Aiden.", 400);
     }
-    const projection: RunProjection = isPhoneRunDevice(device)
-      ? "phone"
-      : device.capabilities.has("runs:control")
-        ? "full"
-        : "observer";
+    const projection = runProjectionForDevice(device);
     let cursor = after;
     let endedSent = false;
     let unsubscribe: () => void = () => {};
