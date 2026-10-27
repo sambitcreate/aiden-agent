@@ -58,6 +58,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
         return chat("created", input.workspaceId);
       },
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async (id: string, workspaceId: string) =>
         chat(id, workspaceId),
       remove: async () => undefined,
@@ -251,6 +252,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { events.push("chat"); },
     },
@@ -268,6 +270,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { throw new Error("disk failed"); },
     } as ChatApplicationDependencies["chatStore"],

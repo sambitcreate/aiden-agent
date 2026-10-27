@@ -52,7 +52,12 @@ import type { WorkspacePathRow } from "../lib/workspace-menu";
 import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
 import { providersApi, settingsApi } from "../lib/ipc";
-import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
+import {
+  readActiveChatModelTarget,
+  readModelSelectionRevision,
+  useActiveChatModelTarget,
+  useModelSelection,
+} from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { availableSettingsDestinations } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -153,6 +158,9 @@ export function AppCommandPalette({
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
+  // In an open chat with messages, a model change applies to that chat only.
+  const chatModelTarget = useActiveChatModelTarget();
+  const currentModel = chatModelTarget?.selection ?? selection;
   const [query, setQuery] = React.useState("");
   const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -416,6 +424,7 @@ export function AppCommandPalette({
   const selectModel = async (providerId: string, model: string) => {
     const epoch = ++modelSelectionEpoch.current;
     const selectionRevision = readModelSelectionRevision();
+    const targetChatId = readActiveChatModelTarget()?.chatId;
     // This action belongs to the palette session where the click happened.
     // Close that session synchronously so a delayed provider revalidation
     // cannot close a newer session the user opens while this work is pending.
@@ -434,7 +443,14 @@ export function AppCommandPalette({
         toast.error("That model is no longer available. The model list has been refreshed.");
         return;
       }
-      selection.select(providerId, model);
+      if (targetChatId) {
+        // The pick belongs to the chat that was open; drop it if that chat closed.
+        const target = readActiveChatModelTarget();
+        if (target?.chatId !== targetChatId) return;
+        target.select(providerId, model);
+      } else {
+        selection.select(providerId, model);
+      }
       rememberCommand("model.change");
       toast.success(`Model changed to ${model}`);
     } catch (error) {
@@ -843,8 +859,8 @@ export function AppCommandPalette({
                   modelResults
                     .map(({ entry, result }) => {
                       const selected =
-                        selection.providerId === entry.providerId &&
-                        selection.model === entry.model;
+                        currentModel.providerId === entry.providerId &&
+                        currentModel.model === entry.model;
                       return (
                         <PaletteResultItem
                           key={entry.value}

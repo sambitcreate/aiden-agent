@@ -6381,30 +6381,32 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: bot, catalog: catalog, replyModelLabel: "Gemini Flash"))
     }
 
-    func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
+    func testRememberedHostModelChoiceSeedsOnlyAChatWithoutItsOwnModel() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
             from: Data(
-                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
             )
         )
-        var chat = sampleChat()
-        chat.botId = nil
-        chat.providerId = "google"
-        chat.modelId = "gemini-flash"
+        let rememberedChoice = AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        var newChat = sampleChat()
+        newChat.botId = nil
+        newChat.providerId = nil
+        newChat.modelId = nil
+        newChat.messages = []
 
-        let remembered = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+        let seeded = AidenChatModelAuthority.resolvedSelection(
+            chat: newChat,
             catalog: catalog,
-            selectedProviderId: "google",
-            selectedModelId: "gemini-flash",
+            selectedProviderId: nil,
+            selectedModelId: nil,
             selectedThinkingLevel: nil,
-            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+            remembered: rememberedChoice
         )
-        XCTAssertEqual(remembered, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"))
+        XCTAssertEqual(seeded, rememberedChoice)
 
         let staleLevel = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+            chat: newChat,
             catalog: catalog,
             selectedProviderId: nil,
             selectedModelId: nil,
@@ -6412,6 +6414,63 @@ final class AidenChatTests: XCTestCase {
             remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "ultra")
         )
         XCTAssertEqual(staleLevel.thinkingLevel, "medium")
+
+        // A new chat the host gave its default pair still takes the remembered choice.
+        var hostDefaultChat = newChat
+        hostDefaultChat.providerId = "google"
+        hostDefaultChat.modelId = "gemini-flash"
+        XCTAssertEqual(
+            AidenChatModelAuthority.resolvedSelection(
+                chat: hostDefaultChat,
+                catalog: catalog,
+                selectedProviderId: "google",
+                selectedModelId: "gemini-flash",
+                selectedThinkingLevel: nil,
+                remembered: rememberedChoice
+            ),
+            rememberedChoice
+        )
+
+        // A chat that already has messages keeps its own model, even when the
+        // selection was seeded from the remembered choice before its
+        // transcript arrived.
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "google"
+        chat.modelId = "gemini-flash"
+        let own = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: "max",
+            remembered: rememberedChoice
+        )
+        XCTAssertEqual(own, AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil))
+
+        // A hidden model the chat already uses stays its model.
+        var hiddenChat = chat
+        hiddenChat.providerId = "openai"
+        hiddenChat.modelId = "gpt-hidden"
+        let hidden = AidenChatModelAuthority.resolvedSelection(
+            chat: hiddenChat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-hidden",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        )
+        XCTAssertEqual(hidden, AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil))
+
+        // A pick in this chat (no remembered value passed) still wins.
+        let picked = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: "low"
+        )
+        XCTAssertEqual(picked, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low"))
 
         var botChat = chat
         botChat.botId = "bot-life-manager"
@@ -6421,7 +6480,7 @@ final class AidenChatTests: XCTestCase {
             selectedProviderId: nil,
             selectedModelId: nil,
             selectedThinkingLevel: nil,
-            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+            remembered: rememberedChoice
         )
         XCTAssertEqual(bot.providerId, "google")
         XCTAssertEqual(bot.modelId, "gemini-flash")
@@ -6448,8 +6507,12 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(hidden.providerId, "openai")
         XCTAssertEqual(hidden.modelId, "gpt-5.6")
 
+        var newChat = chat
+        newChat.providerId = nil
+        newChat.modelId = nil
+        newChat.messages = []
         let removed = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+            chat: newChat,
             catalog: catalog,
             selectedProviderId: nil,
             selectedModelId: nil,
@@ -6548,6 +6611,32 @@ final class AidenChatTests: XCTestCase {
         // is still running. It must not recreate the entry after the purge.
         model.selectModel(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
         XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"))
+    }
+
+    @MainActor
+    func testPickInAnExistingChatStaysWithThatChatAndLeavesTheNewChatDefault() async throws {
+        let suiteName = "AidenModelPreferencePerChat.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let newChatDefault = AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        store.remember(newChatDefault, for: "instance-progress-lifecycle")
+        var existing = sampleChat()
+        existing.botId = nil
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            modelPreferenceStore: store,
+            initialChat: existing
+        )
+
+        model.selectModel(providerId: "anthropic", modelId: "claude", thinkingLevel: nil)
+
+        XCTAssertEqual(model.selectedModelId, "claude")
+        XCTAssertEqual(store.selection(for: "instance-progress-lifecycle"), newChatDefault)
+        XCTAssertEqual(
+            AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"),
+            newChatDefault
+        )
     }
 
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {

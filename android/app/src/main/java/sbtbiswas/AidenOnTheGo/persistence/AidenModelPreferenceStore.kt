@@ -8,7 +8,7 @@ import java.io.File
 
 /**
  * Device-local memory of the last provider, model and thinking level the user
- * explicitly chose in a Workspace chat composer, plus the last few distinct
+ * explicitly chose in a new Workspace chat's composer, plus the last few distinct
  * provider/model routes chosen (the model picker's Recent section), kept
  * separately for each paired Mac. Only opaque catalog identifiers are stored —
  * never prompts, credentials or chat content — and both are removed with the
@@ -57,8 +57,12 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         return snapshot.recents[instanceId].orEmpty().map { AidenChatModelSelection(it.providerId, it.modelId, null) }
     }
 
+    /**
+     * Records [selection] in [instanceId]'s Recent routes and, when [asDefault]
+     * (a pick in a new chat), as the choice later new chats start with.
+     */
     @Synchronized
-    fun remember(instanceId: String, selection: AidenChatModelSelection) {
+    fun remember(instanceId: String, selection: AidenChatModelSelection, asDefault: Boolean = true) {
         if (!isSafeId(instanceId)) return
         val providerId = selection.providerId?.takeIf(::isSafeId) ?: return
         val modelId = selection.modelId?.takeIf(::isSafeId) ?: return
@@ -67,13 +71,9 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         val route = Route(providerId, modelId)
         val existing = snapshot.recents[instanceId].orEmpty()
         val recents = (listOf(route) + existing.filter { it != route }).take(MAXIMUM_RECENTS)
-        if (snapshot.selections[instanceId] == entry && existing == recents) return
-        save(
-            snapshot.copy(
-                selections = snapshot.selections + (instanceId to entry),
-                recents = snapshot.recents + (instanceId to recents)
-            )
-        )
+        val selections = if (asDefault) snapshot.selections + (instanceId to entry) else snapshot.selections
+        if (snapshot.selections == selections && existing == recents) return
+        save(snapshot.copy(selections = selections, recents = snapshot.recents + (instanceId to recents)))
     }
 
     @Synchronized

@@ -227,6 +227,68 @@ test("switching chats keeps the routed ChatPane mounted and shows the new chat",
   }
 });
 
+test("picking a model in one chat leaves other chats and the new-chat model alone", async () => {
+  const provider = {
+    id: "acme",
+    kind: "openai-compatible",
+    label: "Acme Cloud",
+    baseUrl: "https://acme.invalid/v1",
+    models: ["app-model", "model-a", "model-b"],
+    needsKey: false,
+    hasKey: true,
+  };
+  const chatModels: Record<string, string> = { "chat-a": "model-a", "chat-b": "model-a" };
+  const setModelCalls: unknown[][] = [];
+  localStorage.setItem("aiden-agent.providerId", "acme");
+  localStorage.setItem("aiden-agent.model", "app-model");
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => {
+      const response = chatReadResponse(String(id));
+      return {
+        ...response,
+        chat: { ...response.chat, providerId: "acme", model: chatModels[String(id)] },
+      };
+    },
+    "chats:setModel": (...args) => {
+      setModelCalls.push(args);
+      const [id, , model] = args as [string, string, string];
+      chatModels[id] = model;
+      return { ...chatReadResponse(id).chat, providerId: "acme", model };
+    },
+    "providers:list": () => [provider],
+    "settings:get": () => ({}),
+    "models:info": () => ({}),
+    "modelPace:summaries": () => ({}),
+  });
+  const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
+  try {
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
+
+    await act(async () => { fireEvent.click(trigger()); });
+    const optionB = await waitFor(() => {
+      const option = screen.queryAllByRole("option").find((row) => row.textContent?.includes("Model B"));
+      assert.ok(option);
+      return option;
+    });
+    await act(async () => { fireEvent.click(optionB); });
+    await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b"]]));
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model B/iu));
+    assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
+
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+    });
+    await waitFor(() => screen.getByText("Hello from chat chat-b"));
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
+    assert.equal(setModelCalls.length, 1, "opening another chat changes no model");
+  } finally {
+    cleanup();
+    queryClient.clear();
+    localStorage.removeItem("aiden-agent.providerId");
+    localStorage.removeItem("aiden-agent.model");
+  }
+});
+
 test("a refused follow-up side question keeps the card and the typed text", async () => {
   const { queryClient } = await mountRoutedChatPane("chat-a", {
     "chats:btwStart": () => {

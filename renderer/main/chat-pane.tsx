@@ -147,8 +147,10 @@ import {
 } from "../lib/queries";
 import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
 import {
+  chatModelSelection,
   isModelSelectionReadyForNewWork,
   resolveVisibleModelSelection,
+  setActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
@@ -338,12 +340,47 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(
+  const appModel = useModelSelection(
     providers.data,
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
   const hasMessages = (chat.data?.messages.length ?? 0) > 0;
+  // A chat with messages owns its model: picking one here changes this chat
+  // only. An empty chat follows, and sets, the app's model for new chats.
+  const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
+  const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
+  const selectAppModel = appModel.select;
+  const select = React.useCallback(
+    (nextProviderId: string, nextModel: string) => {
+      if (!chatOwnsModel) {
+        selectAppModel(nextProviderId, nextModel);
+        return;
+      }
+      const key = queryKeys.chat(chatId);
+      const previous = qc.getQueryData<Chat | null>(key);
+      const withModel = (current: Chat | null | undefined) =>
+        current ? { ...current, providerId: nextProviderId, model: nextModel } : current;
+      qc.setQueryData<Chat | null>(key, withModel);
+      void chatsApi.setModel(chatId, nextProviderId, nextModel).then(
+        () => void qc.invalidateQueries({ queryKey: queryKeys.chats }),
+        (error: unknown) => {
+          // Put back the chat's own model unless a newer pick already replaced this one.
+          qc.setQueryData<Chat | null>(key, (current) =>
+            current?.providerId === nextProviderId && current.model === nextModel && previous
+              ? { ...current, providerId: previous.providerId, model: previous.model }
+              : current,
+          );
+          toast.error(error instanceof Error ? error.message : "This chat's model could not be changed.");
+        },
+      );
+    },
+    [chatId, chatOwnsModel, qc, selectAppModel],
+  );
+  React.useEffect(() => {
+    if (!chatOwnsModel) return;
+    return setActiveChatModelTarget({ chatId, selection: { providerId, model }, select });
+  }, [chatId, chatOwnsModel, model, providerId, select]);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&

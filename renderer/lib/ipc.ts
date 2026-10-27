@@ -1480,6 +1480,9 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
+  /** Change the model this chat answers with; other chats and new chats keep theirs. */
+  setModel: (id: string, providerId: string, model: string) =>
+    invoke<Chat | null>("chats:setModel", id, providerId, model),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.

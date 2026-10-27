@@ -1302,20 +1302,25 @@ class AidenChatViewModel(
     }
 
     /**
-     * An explicit composer choice becomes this paired Mac's remembered
-     * default for later Workspace chats and launches, and it stops this chat
-     * from being re-seeded by the remembered value on catalog refreshes.
+     * An explicit composer choice stays with this chat and stops it from being
+     * re-seeded by the remembered value on catalog refreshes. It always joins
+     * the picker's Recent list; only in a new chat (no messages yet) does it
+     * also become this paired Mac's remembered default for later Workspace
+     * chats, so a pick in an existing chat never changes the model other chats
+     * start with.
      */
     private fun rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         if (instanceId.isEmpty()) return
+        val currentChat = _chat.value
         modelPreferenceStore.remember(
             instanceId,
             AidenChatModelSelection(
                 providerId = _selectedProviderId.value,
                 modelId = _selectedModelId.value,
                 thinkingLevel = _selectedThinkingLevel.value
-            )
+            ),
+            asDefault = currentChat == null || currentChat.messages.isEmpty()
         )
     }
 
