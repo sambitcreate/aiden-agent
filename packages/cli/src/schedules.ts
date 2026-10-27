@@ -13,6 +13,8 @@ import { JsonStore, acquireLease, readJson } from "./state.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
 import { resolveScheduledScript, runScheduledScript } from "../../../main/services/schedule-script.js";
 import { createCliModelRuntime } from "./providers.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { assertScheduleApproval, isScheduleMutation, type ScheduleToolApproval } from "./schedule-tool-approval.ts";
 
 async function providerFingerprint(agentDir: string, providerId?: string, modelId?: string): Promise<string> {
   if (!providerId || !modelId) throw new Error("Select an explicit provider and model for unattended inference.");
@@ -23,7 +25,23 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 }
 
 export function createCliScheduler(agentDir: string) {
-  const store = createScheduleStore(new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []), new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
+  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; active: boolean; firstWrite: boolean }>();
+  const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
+  const tasks = {
+    load: () => persistence.load(),
+    update<R>(mutation: (draft: unknown[]) => R | Promise<R>, isCurrent?: () => boolean): Promise<R> {
+      return persistence.update(mutation, () => {
+        if (isCurrent && !isCurrent()) return false;
+        const current = approvedMutation.getStore();
+        if (current?.active) {
+          assertScheduleApproval(agentDir, current.approval, current.firstWrite);
+          current.firstWrite = false;
+        }
+        return true;
+      });
+    },
+  };
+  const store = createScheduleStore(tasks, new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
   const active = new Map<string, AbortController>();
   let botPorts: BotRoutineExecutorPorts | undefined;
   const routineExecutor = createBotRoutineExecutor({ store, ports: () => {
@@ -81,8 +99,25 @@ export function createCliScheduler(agentDir: string) {
         }
     return service.save(input, options);
   }
-  async function command(args: string[]) {
+  async function command(args: string[]): Promise<unknown> {
     const [action = "list", value, timezone] = args;
+    if (isScheduleMutation(action) && timezone !== undefined) {
+      const approval = JSON.parse(timezone) as ScheduleToolApproval;
+      if (approval.action !== action) throw new Error("The approved schedule action changed.");
+      assertScheduleApproval(agentDir, approval);
+      const current = { approval, active: true, firstWrite: true };
+      try {
+        return await approvedMutation.run(current, () => command(args.slice(0, 2)));
+      } finally {
+        // Cron callbacks can inherit this async context, but never its one-shot consent.
+        current.active = false;
+      }
+    }
+    const currentApproval = approvedMutation.getStore();
+    const revision = currentApproval?.active
+      ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
+      : undefined;
+    const mutationOptions = revision === undefined ? undefined : { expectedUpdatedAt: revision };
     switch (action) {
       case "list": return store.list();
       case "status": {
@@ -135,11 +170,11 @@ export function createCliScheduler(agentDir: string) {
       case "save": {
         if (!value) throw new Error("Provide a JSON file containing ScheduledTaskInput.");
         const input = JSON.parse(readFileSync(value, "utf8")) as ScheduledTaskInput;
-        return saveInput(input);
+        return saveInput(input, mutationOptions);
       }
-      case "remove": await service.remove(value); return { removed: value };
-      case "pause": return service.pause(value);
-      case "resume": return service.resume(value);
+      case "remove": await service.remove(value, mutationOptions); return { removed: value };
+      case "pause": return service.pause(value, mutationOptions);
+      case "resume": return service.resume(value, mutationOptions);
       case "run": return service.runNow(value);
       default: throw new Error("Usage: schedule list|status | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
     }

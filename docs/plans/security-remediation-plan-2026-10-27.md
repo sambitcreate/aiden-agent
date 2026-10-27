@@ -392,6 +392,10 @@ The release gate is per slice: local source/tests, exact-head CI/reviews, packag
 
 After a slice lands, update this plan and its index row with the PR/head and outstanding acceptance. Move this plan into completed/ only when every item has a recorded disposition, selected fixes have shipped through their required gates, and remaining decisions/validation tasks have explicit owners or linked follow-ups. Do not mark a deferred task complete merely because the first four fixes shipped.
 
+## Execution record
+
+- W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 144 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh patch review and exact-head hosted CI remain pending.
+
 ## Completion checklist
 
 - [ ] Refresh source/configuration baselines and retain the original audit as history.

@@ -109,6 +109,8 @@ Aiden feature parity landed in phases (todo, btw, advisor, memory, subagents, `a
 
 `aiden --help` lists the complete command surface. Register a directory with
 `aiden workspace add /absolute/project`, then use `aiden workspace access <id> full|ask|none`.
+Model-originated schedule saves, pauses, resumes and removals require a separate foreground confirmation even in Full access. The confirmation identifies the target workspace, task and selected model. Denial, cancellation, expired approval or a changed workspace/provider/task prevents publication; without an interactive UI the mutation is refused. Listing, previewing and inspecting runs remain read-only. Direct user-invoked schedule administration remains available.
+
 Ask mode requires one approval per tool call; unattended Telegram and schedule execution
 require explicit Full workspace access. Schedules also retain their own read-only/Full tool
 selection and exact MCP connection bindings.

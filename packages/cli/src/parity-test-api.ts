@@ -14,6 +14,8 @@ export * from "./remote.ts";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
 export * from "./usage-ledger.ts";
 export * from "./extensions/session-parity.ts";
+export { createScheduleExtension } from "./extensions/schedule-tool.ts";
+export { scheduleApprovalSnapshot } from "./schedule-tool-approval.ts";
 export * from "./extensions/subagents.ts";
 export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
