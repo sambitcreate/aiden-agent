@@ -148,7 +148,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 41)
+        XCTAssertEqual(fixture.contractRevision, 42)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.

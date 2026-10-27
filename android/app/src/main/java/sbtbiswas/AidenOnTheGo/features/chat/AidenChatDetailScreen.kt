@@ -902,6 +902,16 @@ fun AidenChatDetailScreen(
             }
         }
 
+        // Revision 42: a browser recording's Play reads the video from a Mac that serves it.
+        val canPlayBrowserRecordings = remember(serverInfo, viewModel) { viewModel.canPlayBrowserRecordings }
+        val recordingPlayback = remember(viewModel, canPlayBrowserRecordings) {
+            if (canPlayBrowserRecordings) {
+                AidenBrowserRecordingPlayback(load = viewModel::browserRecording, release = viewModel::releaseBrowserRecording)
+            } else {
+                null
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -910,160 +920,162 @@ fun AidenChatDetailScreen(
                 // own bottom inset still makes the latest message fully reachable.
                 .padding(top = padding.calculateTopPadding())
         ) {
-            LazyColumn(
-                reverseLayout = true,
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .aidenTranscriptFollow(follow)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(
-                    top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 16.dp
-                )
-            ) {
-                // Only a chat with nothing saved previews its transcript; a saved one renders
-                // at once and refreshes underneath.
-                if (chat == null && isLoadingTranscript) {
-                    item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
-                }
-
-                // When streaming, active generation is the latest item (index 0 in reverse layout)
-                if (showsLiveCard) {
-                    item(key = LIVE_STREAM_ITEM_KEY) {
-                        // Per-token state is read inside the item so each
-                        // update recomposes only this card, not the screen.
-                        val liveText by liveTextState
-                        val reasoning by liveReasoningState
-                        val tools by liveToolsState
-                        val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
-                        val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
-                        val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
-                        ActiveStreamingCard(
-                            liveText = liveText,
-                            reasoning = reasoning,
-                            tools = tools,
-                            activityTimeline = activityTimeline,
-                            isBotChat = isBotChat,
-                            palette = palette,
-                            onCopyMessage = onCopyMessage,
-                            onOpenMessageUrl = onOpenMessageUrl,
-                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
-                            isWaitingForNetwork = isWaitingForNetwork,
-                            pendingApprovalToolName = livePendingApproval?.toolName,
-                            isActive = isStreaming
-                        )
-                        AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
-                    }
-                }
-
-                itemsIndexed(
-                    items = reversedMessages,
-                    key = { _, msg -> msg.id }
-                ) { index, message ->
-                    val pos = calculateClusterPosition(index, reversedMessages)
-                    val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
-                    val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
-                        if (!canForkMessages) return@remember null
-                        val actions = AidenMessageForkActions(
-                            onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
-                                { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
-                            } else null,
-                            onForkWithSummary = if (canForkMessagesWithSummary &&
-                                AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
-                            ) {
-                                { forkWithSummaryMessageId = message.id }
-                            } else null,
-                            onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
-                                { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
-                            } else null
-                        )
-                        actions.takeUnless { it.isEmpty }
+            CompositionLocalProvider(LocalAidenBrowserRecordingPlayback provides recordingPlayback) {
+                LazyColumn(
+                    reverseLayout = true,
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .aidenTranscriptFollow(follow)
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(
+                        top = 16.dp,
+                        bottom = padding.calculateBottomPadding() + 16.dp
+                    )
+                ) {
+                    // Only a chat with nothing saved previews its transcript; a saved one renders
+                    // at once and refreshes underneath.
+                    if (chat == null && isLoadingTranscript) {
+                        item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (message.role == AidenChatRole.USER) {
-                        UserMessageRow(
-                            message = message,
-                            position = pos,
-                            showFooter = isLastInCluster,
-                            palette = palette,
-                            loadAttachmentImage = loadAttachmentImage,
-                            onCopy = onCopyMessage,
-                            onShare = onShareMessage,
-                            onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage,
-                            forkActions = forkActions
-                        )
-                    } else {
-                        val readAloudEligible = !isStreaming &&
-                            serverInfo?.features?.contains("tts-v1") == true &&
-                            chat?.messages?.lastOrNull()?.id == message.id &&
-                            message.isReadAloudEligible
-                        // Remembered per message so settled rows stay skippable.
-                        val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
-                            { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
-                        }
-                        AssistantMessageRow(
-                            message = message,
-                            position = pos,
-                            isLastInCluster = isLastInCluster,
-                            isBotChat = isBotChat,
-                            palette = palette,
-                            loadAttachmentImage = loadAttachmentImage,
-                            onCopy = onCopyMessage,
-                            onShare = onShareMessage,
-                            onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage,
-                            onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
-                            readAloudActive = readAloud.activeMessageId == message.id,
-                            appControlsAvailable = viewModel.canReadAppControls,
-                            appControlsCache = viewModel.appControlsCache,
-                            loadAppControls = viewModel::loadAppControls,
-                            applyAppControl = viewModel::applyAppControl,
-                            onOpenUrl = onOpenMessageUrl,
-                            forkActions = forkActions,
-                            isPinnedToStreamingEdge = isPinnedToStreamingEdge,
-                            imageArrivalRevealGenerationId = message.timeline?.generationId
-                                ?.takeIf { it in imageArrivalRevealIds },
-                            onImageArrivalRevealed = viewModel::finishImageArrivalReveal,
-                            onOpenVisual = onOpenVisual
-                        )
-                    }
-                    // The summary stands where the copied conversation ends.
-                    if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
-                        forkSummaryCard()
-                    }
-                    }
-                }
-
-                // The top of the reversed transcript: where this fork came from.
-                if (forkLineage != null) {
-                    item(key = "fork_lineage") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AidenForkLineageRow(
-                                source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                    // When streaming, active generation is the latest item (index 0 in reverse layout)
+                    if (showsLiveCard) {
+                        item(key = LIVE_STREAM_ITEM_KEY) {
+                            // Per-token state is read inside the item so each
+                            // update recomposes only this card, not the screen.
+                            val liveText by liveTextState
+                            val reasoning by liveReasoningState
+                            val tools by liveToolsState
+                            val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
+                            val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
+                            val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+                            ActiveStreamingCard(
+                                liveText = liveText,
+                                reasoning = reasoning,
+                                tools = tools,
+                                activityTimeline = activityTimeline,
+                                isBotChat = isBotChat,
                                 palette = palette,
-                                onOpenSource = onNavigateToChat
+                                onCopyMessage = onCopyMessage,
+                                onOpenMessageUrl = onOpenMessageUrl,
+                                liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
+                                isWaitingForNetwork = isWaitingForNetwork,
+                                pendingApprovalToolName = livePendingApproval?.toolName,
+                                isActive = isStreaming
                             )
-                            if (!forkSummaryAnchored) forkSummaryCard()
+                            AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
                         }
                     }
-                }
 
-                // Last in reverse layout, so it sits above the oldest message.
-                // Earlier pages join the end of the list, leaving the anchored
-                // rows and the reader's position where they were.
-                if (hasOlderMessages) {
-                    item(key = "load_earlier_messages") {
-                        AidenLoadEarlierMessages(
-                            isLoading = isLoadingEarlierMessages,
-                            onClick = {
-                                follow.detach()
-                                viewModel.loadEarlierMessages()
+                    itemsIndexed(
+                        items = reversedMessages,
+                        key = { _, msg -> msg.id }
+                    ) { index, message ->
+                        val pos = calculateClusterPosition(index, reversedMessages)
+                        val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
+                        val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
+                            if (!canForkMessages) return@remember null
+                            val actions = AidenMessageForkActions(
+                                onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
+                                    { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
+                                } else null,
+                                onForkWithSummary = if (canForkMessagesWithSummary &&
+                                    AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
+                                ) {
+                                    { forkWithSummaryMessageId = message.id }
+                                } else null,
+                                onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
+                                    { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
+                                } else null
+                            )
+                            actions.takeUnless { it.isEmpty }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (message.role == AidenChatRole.USER) {
+                            UserMessageRow(
+                                message = message,
+                                position = pos,
+                                showFooter = isLastInCluster,
+                                palette = palette,
+                                loadAttachmentImage = loadAttachmentImage,
+                                onCopy = onCopyMessage,
+                                onShare = onShareMessage,
+                                onSelectText = onSelectMessageText,
+                                onAskAbout = onAskAboutMessage,
+                                forkActions = forkActions
+                            )
+                        } else {
+                            val readAloudEligible = !isStreaming &&
+                                serverInfo?.features?.contains("tts-v1") == true &&
+                                chat?.messages?.lastOrNull()?.id == message.id &&
+                                message.isReadAloudEligible
+                            // Remembered per message so settled rows stay skippable.
+                            val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
+                                { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
                             }
-                        )
+                            AssistantMessageRow(
+                                message = message,
+                                position = pos,
+                                isLastInCluster = isLastInCluster,
+                                isBotChat = isBotChat,
+                                palette = palette,
+                                loadAttachmentImage = loadAttachmentImage,
+                                onCopy = onCopyMessage,
+                                onShare = onShareMessage,
+                                onSelectText = onSelectMessageText,
+                                onAskAbout = onAskAboutMessage,
+                                onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
+                                readAloudActive = readAloud.activeMessageId == message.id,
+                                appControlsAvailable = viewModel.canReadAppControls,
+                                appControlsCache = viewModel.appControlsCache,
+                                loadAppControls = viewModel::loadAppControls,
+                                applyAppControl = viewModel::applyAppControl,
+                                onOpenUrl = onOpenMessageUrl,
+                                forkActions = forkActions,
+                                isPinnedToStreamingEdge = isPinnedToStreamingEdge,
+                                imageArrivalRevealGenerationId = message.timeline?.generationId
+                                    ?.takeIf { it in imageArrivalRevealIds },
+                                onImageArrivalRevealed = viewModel::finishImageArrivalReveal,
+                                onOpenVisual = onOpenVisual
+                            )
+                        }
+                        // The summary stands where the copied conversation ends.
+                        if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
+                            forkSummaryCard()
+                        }
+                        }
+                    }
+
+                    // The top of the reversed transcript: where this fork came from.
+                    if (forkLineage != null) {
+                        item(key = "fork_lineage") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AidenForkLineageRow(
+                                    source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                                    palette = palette,
+                                    onOpenSource = onNavigateToChat
+                                )
+                                if (!forkSummaryAnchored) forkSummaryCard()
+                            }
+                        }
+                    }
+
+                    // Last in reverse layout, so it sits above the oldest message.
+                    // Earlier pages join the end of the list, leaving the anchored
+                    // rows and the reader's position where they were.
+                    if (hasOlderMessages) {
+                        item(key = "load_earlier_messages") {
+                            AidenLoadEarlierMessages(
+                                isLoading = isLoadingEarlierMessages,
+                                onClick = {
+                                    follow.detach()
+                                    viewModel.loadEarlierMessages()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1416,6 +1428,14 @@ private fun AssistantMessageRow(
                     }
                 }
             }
+            AidenAgentActivityPresentation.recordingSteps(timeline).forEach { step ->
+                step.recordingRecap?.let { recap ->
+                    key("recording-${step.id}") {
+                        AidenBrowserRecordingCard(recording = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
         }
 
         // Progress disclosure for bot chats
@@ -1704,6 +1724,7 @@ internal fun ActiveStreamingCard(
     val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
     val fallbackExtractions = AidenAgentActivityPresentation.extractionSteps(activityTimeline)
+    val fallbackRecordings = AidenAgentActivityPresentation.recordingSteps(activityTimeline)
     val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
     val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
     // Recaps that already sprang in during this reply. The card moves between the
@@ -1818,6 +1839,14 @@ internal fun ActiveStreamingCard(
                 step.extractionRecap?.let { recap ->
                     key("extraction-${step.id}") {
                         AidenWebExtractRecapCard(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            fallbackRecordings.forEach { step ->
+                step.recordingRecap?.let { recap ->
+                    key("recording-${step.id}") {
+                        AidenBrowserRecordingCard(recording = recap, palette = palette)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1960,6 +1989,9 @@ private fun AidenChronologicalTranscript(
                     }
                     AidenChronologicalRow.Kind.EXTRACTION -> {
                         row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
+                    }
+                    AidenChronologicalRow.Kind.RECORDING -> {
+                        row.recording?.let { recap -> AidenBrowserRecordingCard(recording = recap, palette = palette) }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
                 }

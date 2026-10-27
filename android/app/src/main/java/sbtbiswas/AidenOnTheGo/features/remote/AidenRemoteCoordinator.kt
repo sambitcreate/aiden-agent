@@ -234,7 +234,9 @@ class AidenRemoteCoordinator(
     /** Runs the Bot outbox's disk work in order; null uses its own thread. Tests hold it to order a read against a switch. */
     botOutboxIo: java.util.concurrent.Executor? = null,
     /** Saved visual viewer documents; the app passes a directory under `cacheDir`. */
-    visualDocumentDir: File = File(storageDir, "visual_documents")
+    visualDocumentDir: File = File(storageDir, "visual_documents"),
+    /** Where a browser recording waits while it plays (revision 42); the app passes a directory under `cacheDir`. */
+    val browserRecordingDir: File = File(storageDir, "browser_recordings")
 ) {
     /** Visual viewer documents (revision 35), purged whenever a pairing is removed or revoked. */
     val visualDocumentCache = AidenVisualDocumentCache(visualDocumentDir)
@@ -677,8 +679,17 @@ class AidenRemoteCoordinator(
         modelPreferenceStore.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
         visualDocumentCache.purgeAll()
+        purgeBrowserRecordings()
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()
+    }
+
+    /** Drops every recording saved for playback; none outlives the pairing that served it. */
+    fun purgeBrowserRecordings() {
+        try {
+            browserRecordingDir.listFiles()?.forEach { if (it.isFile) it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     private fun refreshIntentCatalog() {

@@ -690,6 +690,192 @@ struct AidenWebExtractRecap: Codable, Equatable, Sendable {
     }
 }
 
+/// The video the agent recorded of a browser tab, carried on its completed
+/// `browser_recording_stop` timeline step (contract revision 42).
+/// Display-only: the recording's id, type, length and size, never the video,
+/// its path or the page. Decoding throws for any recap the desktop parser
+/// (`parseBrowserRecordingRecap`) rejects, including one with other keys;
+/// `AidenAgentStep` then drops only the recap.
+struct AidenBrowserRecordingRecap: Codable, Equatable, Sendable {
+    static let toolName = "browser_recording_stop"
+    /// The recorder stops itself at this size; the Mac never serves more.
+    static let maxSizeBytes = 128 * 1_048_576
+    /// Five minutes, plus room for the stop itself.
+    static let maxDurationMs = 6 * 60_000
+
+    enum MimeType: String, Codable, Sendable {
+        /// H.264 MP4: what the recorder saves, and what the phone can play.
+        case mp4 = "video/mp4"
+        /// The recorder's fallback when H.264 encoding is unavailable.
+        case webm = "video/webm"
+
+        var fileExtension: String {
+            switch self {
+            case .mp4: return "mp4"
+            case .webm: return "webm"
+            }
+        }
+    }
+
+    let id: String
+    let mimeType: MimeType
+    let durationMs: Int
+    let sizeBytes: Int
+
+    init(id: String, mimeType: MimeType, durationMs: Int, sizeBytes: Int) {
+        self.id = id
+        self.mimeType = mimeType
+        self.durationMs = durationMs
+        self.sizeBytes = sizeBytes
+    }
+
+    init(from decoder: Decoder) throws {
+        let keys = try decoder.container(keyedBy: AidenChatForkAnyKey.self).allKeys
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard Set(keys.map(\.stringValue)) == ["id", "mimeType", "durationMs", "sizeBytes"] else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "A browser recording recap carries exactly its four keys."
+            )
+        }
+        id = try values.decode(String.self, forKey: .id)
+        mimeType = try values.decode(MimeType.self, forKey: .mimeType)
+        durationMs = try values.decode(Int.self, forKey: .durationMs)
+        sizeBytes = try values.decode(Int.self, forKey: .sizeBytes)
+        guard isValid else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "Invalid browser recording recap"
+            ))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, mimeType, durationMs, sizeBytes
+    }
+
+    var isValid: Bool {
+        Self.isRecordingID(id)
+            && (0...Self.maxDurationMs).contains(durationMs)
+            && (1...Self.maxSizeBytes).contains(sizeBytes)
+    }
+
+    /// `recording-` and a lowercase UUID, the only shape the recorder names.
+    static func isRecordingID(_ value: String) -> Bool {
+        let prefix = Array("recording-".unicodeScalars)
+        let scalars = Array(value.unicodeScalars)
+        guard scalars.count == prefix.count + 36, Array(scalars.prefix(prefix.count)) == prefix else {
+            return false
+        }
+        for (offset, scalar) in scalars.dropFirst(prefix.count).enumerated() {
+            if offset == 8 || offset == 13 || offset == 18 || offset == 23 {
+                guard scalar.value == 0x2D else { return false }
+            } else {
+                guard (0x30...0x39).contains(scalar.value) || (0x61...0x66).contains(scalar.value) else {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    /// Only MP4 plays on the phone; a WebM fallback is watched on the Mac.
+    var playsOnPhone: Bool { mimeType == .mp4 }
+
+    /// `0:07`, `1:30`: the same length the desktop card shows.
+    var durationLabel: String {
+        let seconds = (max(0, durationMs) + 500) / 1000
+        let remainder = seconds % 60
+        return "\(seconds / 60):\(remainder < 10 ? "0" : "")\(remainder)"
+    }
+
+    /// `1.2 MB` at or above 1 MiB, otherwise `640 KB` (at least `1 KB`),
+    /// rounded half up like the desktop card.
+    var sizeLabel: String {
+        let mebibyte = 1_048_576
+        if sizeBytes >= mebibyte {
+            let tenths = (sizeBytes * 10 + mebibyte / 2) / mebibyte
+            return "\(tenths / 10).\(tenths % 10) MB"
+        }
+        return "\(max(1, (sizeBytes + 512) / 1024)) KB"
+    }
+
+    /// What VoiceOver reads for the card, as on the desktop.
+    var accessibilityLabel: String { "Browser recording, \(durationLabel)" }
+}
+
+/// The bytes of a browser recording as the Mac served them.
+struct AidenBrowserRecordingContent: Equatable, Sendable {
+    let data: Data
+    let mimeType: AidenBrowserRecordingRecap.MimeType
+}
+
+/// The outcome of pressing Play on a browser recording.
+enum AidenBrowserRecordingLoad: Equatable, Sendable {
+    /// The video, saved for the player at this file URL.
+    case ready(URL)
+    /// The Mac no longer has it (404).
+    case missing
+    /// Anything else: offline, refused, or an answer the phone rejected.
+    case failed
+
+    static let watchOnMacMessage = "Watch this recording on your Mac."
+    static let missingMessage = "This recording is no longer on the Mac."
+    static let failedMessage = "This recording can\u{2019}t be played right now."
+
+    /// A 404 means the recording is gone; every other failure may pass.
+    static func failure(after error: Error) -> AidenBrowserRecordingLoad {
+        guard let clientError = error as? AidenRemoteClientError else { return .failed }
+        switch clientError {
+        case .server(let statusCode, _):
+            return statusCode == 404 ? .missing : .failed
+        case .unexpectedStatus(let statusCode):
+            return statusCode == 404 ? .missing : .failed
+        default:
+            return .failed
+        }
+    }
+}
+
+/// Where a downloaded recording waits for the player: a temporary file named
+/// by the recording's id and type. The player's dismissal removes it.
+enum AidenBrowserRecordingFile {
+    static func directory(in root: URL = FileManager.default.temporaryDirectory) -> URL {
+        root.appending(path: "AidenBrowserRecordings", directoryHint: .isDirectory)
+    }
+
+    static func url(
+        for recording: AidenBrowserRecordingRecap,
+        in root: URL = FileManager.default.temporaryDirectory
+    ) -> URL {
+        directory(in: root).appending(
+            path: "\(recording.id).\(recording.mimeType.fileExtension)",
+            directoryHint: .notDirectory
+        )
+    }
+
+    /// Saves the video and returns its file. Throws for an id the recorder
+    /// would never name, so nothing is written outside the folder.
+    static func write(
+        _ data: Data,
+        for recording: AidenBrowserRecordingRecap,
+        in root: URL = FileManager.default.temporaryDirectory
+    ) throws -> URL {
+        guard AidenBrowserRecordingRecap.isRecordingID(recording.id), !data.isEmpty else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        try FileManager.default.createDirectory(at: directory(in: root), withIntermediateDirectories: true)
+        let file = url(for: recording, in: root)
+        try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        return file
+    }
+
+    static func remove(_ file: URL) {
+        try? FileManager.default.removeItem(at: file)
+    }
+}
+
 struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case tool
@@ -718,6 +904,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let questionnaire: AidenQuestionnaireRecap?
     /// Present only on a completed `web_fetch` step that ran in extract mode.
     let extraction: AidenWebExtractRecap?
+    /// Present only on a completed `browser_recording_stop` step (revision 42).
+    let recording: AidenBrowserRecordingRecap?
 
     init(
         id: String,
@@ -739,7 +927,8 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         lineChanges: AidenAgentLineChanges?,
         producedFile: AidenProducedFile? = nil,
         questionnaire: AidenQuestionnaireRecap? = nil,
-        extraction: AidenWebExtractRecap? = nil
+        extraction: AidenWebExtractRecap? = nil,
+        recording: AidenBrowserRecordingRecap? = nil
     ) {
         self.id = id
         self.order = order
@@ -761,6 +950,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         self.producedFile = producedFile
         self.questionnaire = questionnaire
         self.extraction = extraction
+        self.recording = recording
     }
 
     init(from decoder: Decoder) throws {
@@ -815,12 +1005,21 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
         } else {
             extraction = nil
         }
+        if kind == .tool, toolName == AidenBrowserRecordingRecap.toolName, status == .completed {
+            recording = try? aidenDecodeOptionalNonNull(
+                AidenBrowserRecordingRecap.self,
+                from: values,
+                forKey: .recording
+            )
+        } else {
+            recording = nil
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, order, kind, toolCallId, toolName, label, status, startedAt, updatedAt
         case finishedAt, contentOffset, reasoningStartOffset, reasoningEndOffset
-        case durationMs, target, detail, lineChanges, producedFile, questionnaire, extraction
+        case durationMs, target, detail, lineChanges, producedFile, questionnaire, extraction, recording
     }
 
     var isActive: Bool {
@@ -835,7 +1034,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool, questionnaire, extraction, visual(AidenChatVisual) }
+    enum Kind: Equatable { case text, reasoning, tool, questionnaire, extraction, recording, visual(AidenChatVisual) }
     let id: String
     let kind: Kind
     let text: String
@@ -908,9 +1107,15 @@ enum AidenChronologicalProjection {
                     if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
-                // Values a page read in extract mode follow the line that read them.
-                for extracted in group where extracted.extraction != nil {
-                    result.append(.init(id: "extraction-\(extracted.id)", kind: .extraction, text: "", steps: [extracted]))
+                // Values a page read in extract mode, and a browser recording,
+                // follow the line that produced them, in timeline order.
+                for grouped in group {
+                    if grouped.extraction != nil {
+                        result.append(.init(id: "extraction-\(grouped.id)", kind: .extraction, text: "", steps: [grouped]))
+                    }
+                    if grouped.recording != nil {
+                        result.append(.init(id: "recording-\(grouped.id)", kind: .recording, text: "", steps: [grouped]))
+                    }
                 }
                 let groupCalls = Set(group.compactMap(\.toolCallId))
                 for (visualIndex, visual) in visuals.enumerated()
@@ -1247,6 +1452,12 @@ enum AidenAgentActivityPresentation {
     /// step also stays an activity line.
     static func extractionSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
         timeline?.steps.filter { $0.extraction != nil } ?? []
+    }
+
+    /// Browser recordings, in timeline order, for transcripts that show their
+    /// cards after the activity feed. The stop step also stays an activity line.
+    static func recordingSteps(_ timeline: AidenGenerationTimeline?) -> [AidenAgentStep] {
+        timeline?.steps.filter { $0.recording != nil } ?? []
     }
 
     /// Whether a fallback transcript lists the stream's live tool rows. Once

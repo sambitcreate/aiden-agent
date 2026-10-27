@@ -1236,6 +1236,50 @@ class AidenChatViewModel(
     }
 
     /**
+     * The Mac announced `chat-browser-recordings-v1` (revision 42), so a browser
+     * recording's Play reads the video from it. Without it the card says to watch
+     * the recording on the Mac.
+     */
+    val canPlayBrowserRecordings: Boolean
+        get() = instanceId.isNotEmpty() && AidenBrowserRecordingGate.isAvailable(
+            coordinator.serverInfo.value?.features,
+            coordinator.installationStore.activeInstallation
+                ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId }
+                ?.serverFeatures
+        )
+
+    /**
+     * Reads [recording] from the bound Mac into the cache for the player. Any
+     * recording saved for an earlier Play is dropped first, so at most one video
+     * waits on disk. A 404 means the Mac no longer has it.
+     */
+    suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
+        val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
+        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
+        return try {
+            val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
+            if (activeClient() === client) {
+                AidenBrowserRecordingLoad.Ready(saved)
+            } else {
+                // The pairing changed while the video downloaded: it is not this chat's to show.
+                withContext(ioDispatcher) { saved.file.delete() }
+                AidenBrowserRecordingLoad.Failed
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: AidenRemoteClientException.Server) {
+            if (error.statusCode == 404) AidenBrowserRecordingLoad.Missing else AidenBrowserRecordingLoad.Failed
+        } catch (_: Exception) {
+            AidenBrowserRecordingLoad.Failed
+        }
+    }
+
+    /** The player closed: its video leaves the cache. */
+    fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
+        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+    }
+
+    /**
      * Appends a follow-up a visual asked for, after the user confirmed it, to the
      * composer draft. It is never sent from here. Returns false when the chat is
      * read-only or the text is blank.

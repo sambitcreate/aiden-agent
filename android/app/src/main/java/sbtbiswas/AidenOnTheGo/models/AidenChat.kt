@@ -253,7 +253,10 @@ data class AidenAgentStep(
     val questionnaire: AidenQuestionnaireRecap? = null,
     /** Decoded leniently: a malformed recap is dropped, never the step. */
     @Serializable(with = AidenWebExtractRecapSerializer::class)
-    val extraction: AidenWebExtractRecap? = null
+    val extraction: AidenWebExtractRecap? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step (revision 42). */
+    @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
+    val recording: AidenBrowserRecordingRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -285,6 +288,17 @@ data class AidenAgentStep(
             kind == Kind.TOOL && toolName == AidenWebExtractRecap.TOOL_NAME &&
                 status == AidenAgentStepStatus.COMPLETED && it.isValid
         }
+
+    /**
+     * The video a completed `browser_recording_stop` saved, shown as a playable
+     * card under its activity line. A recap on any other step is ignored, and
+     * the step stays an activity line either way.
+     */
+    val recordingRecap: AidenBrowserRecordingRecap?
+        get() = recording?.takeIf {
+            kind == Kind.TOOL && toolName == AidenBrowserRecordingRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
 @Immutable
@@ -297,10 +311,12 @@ data class AidenChronologicalRow(
     val questionnaire: AidenQuestionnaireRecap? = null,
     /** Set on an [Kind.EXTRACTION] row: the values a page read, after the line that read them. */
     val extraction: AidenWebExtractRecap? = null,
+    /** Set on a [Kind.RECORDING] row: the video a browser recording saved, after the line that saved it. */
+    val recording: AidenBrowserRecordingRecap? = null,
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
     val visual: AidenChatVisual? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, RECORDING, VISUAL }
 }
 
 object AidenChronologicalProjection {
@@ -380,6 +396,13 @@ object AidenChronologicalProjection {
                         result += AidenChronologicalRow(
                             "extraction-${grouped.id}", AidenChronologicalRow.Kind.EXTRACTION,
                             steps = listOf(grouped), extraction = recap
+                        )
+                    }
+                    // So does the video a browser recording saved.
+                    grouped.recordingRecap?.let { recap ->
+                        result += AidenChronologicalRow(
+                            "recording-${grouped.id}", AidenChronologicalRow.Kind.RECORDING,
+                            steps = listOf(grouped), recording = recap
                         )
                     }
                 }
@@ -683,6 +706,13 @@ object AidenAgentActivityPresentation {
      */
     fun extractionSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
         timeline?.steps.orEmpty().filter { it.extractionRecap != null }
+
+    /**
+     * Browser recordings, in timeline order, for a fallback transcript that shows
+     * their cards after the activity list. The steps stay in it.
+     */
+    fun recordingSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.recordingRecap != null }
 
     /**
      * Whether a fallback live transcript lists the stream's own tool rows. Once

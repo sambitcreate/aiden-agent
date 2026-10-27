@@ -81,6 +81,9 @@ object AidenRemoteProtocol {
     /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
+    /** Contract revision 42: `GET /chats/{chatId}/recordings/{recordingId}`, the video a
+     * completed `browser_recording_stop` step names, read with `chat:read`. */
+    const val CHAT_BROWSER_RECORDINGS_FEATURE = "chat-browser-recordings-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
     const val MAX_QUESTION_OPTIONS = 5
