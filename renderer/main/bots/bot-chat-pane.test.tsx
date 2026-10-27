@@ -1514,6 +1514,29 @@ test("a message sent while the Bot works shows as Queued at once", async () => {
   assert.ok(screen.getByText("Queued"));
 });
 
+test("a Steer sent while the Bot works shows as sent at once, not Queued", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Plan Lisbon")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "thinking", startedAt: Date.now() },
+      }),
+    "bots:send": () => new Promise(() => undefined),
+  });
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "Keep it under 100 euros" } });
+  fireEvent.contextMenu(await screen.findByRole("button", { name: "Queue message" }));
+  fireEvent.click(await screen.findByRole("menuitemradio", { name: /Steer/u }));
+  const echo = await screen.findByText("Keep it under 100 euros");
+  await waitFor(() =>
+    assert.equal((calls.find((call) => call.channel === "bots:send")?.args[0] as { whenBusy?: string }).whenBusy, "steer"),
+  );
+  assert.ok(echo.closest("[data-bot-pending-send]"), "a steer joins the reply, so it looks sent");
+  assert.equal(echo.closest("[data-bot-queued]"), null);
+  assert.equal(screen.queryByText("Queued"), null);
+});
+
 test("a send that fails takes back Getting ready, and an interrupted card left with the send comes back", async () => {
   const errors = captureErrorToasts();
   try {

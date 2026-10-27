@@ -543,7 +543,7 @@ interface BotPendingSend {
   seen: ReadonlySet<string>;
   /** When it was sent, for "Sending…" and the "Getting ready" line. */
   at: number;
-  /** Sent while the Bot worked: it shows as Queued, and starts no turn of its own. */
+  /** A follow-up sent while the Bot worked: it shows as Queued, and starts no turn of its own. */
   queued: boolean;
   /** Main took it; only its entry is still on the way. */
   accepted: boolean;
@@ -991,9 +991,9 @@ export function BotChatPane({ botId }: { botId: string }) {
         : null;
 
   /** Shows the echo now; drops it once its entry shows, or shortly after main accepted a send that shows nothing. */
-  const echoSend = (requestId: string, text: string) => {
+  const echoSend = (requestId: string, text: string, queued = running) => {
     const seen = snapshot ? botVisibleSendIds(snapshot) : new Set<string>();
-    const echo: BotPendingSend = { requestId, text, seen, at: Date.now(), queued: running, accepted: false };
+    const echo: BotPendingSend = { requestId, text, seen, at: Date.now(), queued, accepted: false };
     setPendingSends((current) => [...current.filter((send) => send.requestId !== requestId), echo]);
   };
   const dropEcho = (requestId: string) =>
@@ -1039,7 +1039,8 @@ export function BotChatPane({ botId }: { botId: string }) {
       sendMorphs.current.set(requestId, origin);
       setMorphing((current) => new Set(current).add(requestId));
     }
-    echoSend(requestId, body);
+    // A steer joins the running reply, so it reads as sent; only a follow-up waits as Queued.
+    echoSend(requestId, body, running && whenBusy !== "steer");
     try {
       await botsApi.send({
         botId: current.id,
