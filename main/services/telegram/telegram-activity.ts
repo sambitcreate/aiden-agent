@@ -1,7 +1,8 @@
 // Ordered, bounded Telegram projection for Aiden generation activity.
 
 import type { NotificationChannel } from "../../../renderer/preload-channels.js";
-import type { TelegramBotApi, TelegramMessage } from "./telegram-bot-api.js";
+import type { TelegramMessage } from "./telegram-bot-api.js";
+import type { TelegramDeliveryApi } from "./telegram-delivery.js";
 import { escapeHtml } from "./telegram-controls.js";
 import { chunkForTelegram, markdownToTelegramHtml, safeRichDraftPrefix } from "./telegram-markdown.js";
 import { stripTelegramActionMarkupForPreview } from "./telegram-outbound.js";
@@ -9,7 +10,7 @@ import { stripTelegramActionMarkupForPreview } from "./telegram-outbound.js";
 export type TelegramActivityVerbosity = "quiet" | "thinking" | "tools" | "verbose";
 
 interface ActivityOptions {
-  api: TelegramBotApi;
+  api: Pick<TelegramDeliveryApi, "sendMessage" | "editMessageText" | "sendRichMessageDraft">;
   chatId: number;
   draftPreviews: boolean;
   verbosity: TelegramActivityVerbosity;
