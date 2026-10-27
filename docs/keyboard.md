@@ -4,9 +4,9 @@ Aiden's desktop app aims to be fully usable without a mouse. This page lists
 the keys that exist today. Keys are shown with Mac symbols; on Linux and
 Windows, `⌘` is `Ctrl`, `⌥` is `Alt` and `⇧` is `Shift`.
 
-Every key in the first three tables lives in the one command catalog
-(`renderer/shared/keybindings.ts`), so it can be changed or turned off in
-**Settings → Keyboard shortcuts**, and the native menus and button tooltips
+Every key in the tables below, except the approval keys and `/`, lives in the
+one command catalog (`renderer/shared/keybindings.ts`), so it can be changed
+or turned off in **Settings → Keyboard shortcuts**, and the native menus and button tooltips
 show the current choice. Keys added in a later release never take a shortcut
 someone already saved for another command; that command keeps it and the new
 one starts unassigned.
