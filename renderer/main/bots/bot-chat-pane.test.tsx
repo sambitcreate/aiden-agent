@@ -1479,6 +1479,71 @@ test("a send still moving into place keeps its echo when its entry arrives, and 
   );
 });
 
+/** Lets a send move from the composer, under motion the test finishes itself. */
+function installSendMotion(): { land: () => void; restore: () => void } {
+  const rect = HTMLTextAreaElement.prototype.getBoundingClientRect;
+  const animate = Element.prototype.animate;
+  const moving: Animation[] = [];
+  HTMLTextAreaElement.prototype.getBoundingClientRect = () => new DOMRect(16, 600, 480, 40);
+  Element.prototype.animate = function () {
+    const animation = {
+      onfinish: null,
+      oncancel: null,
+      cancel: () => animation.oncancel?.(new Event("cancel") as AnimationPlaybackEvent),
+    } as unknown as Animation;
+    moving.push(animation);
+    return animation;
+  };
+  return {
+    land: () => moving.splice(0).forEach((animation) => animation.onfinish?.(new Event("finish") as AnimationPlaybackEvent)),
+    restore: () => {
+      HTMLTextAreaElement.prototype.getBoundingClientRect = rect;
+      Element.prototype.animate = animate;
+    },
+  };
+}
+
+test("a send moving into place holds its entry until it lands, and a reply that comes first ends the motion above it", async (t) => {
+  const motion = installSendMotion();
+  t.after(motion.restore);
+  await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s1", deduped: false }),
+  });
+  const send = async (text: string) => {
+    fireEvent.change(await screen.findByPlaceholderText("Ask Planner"), { target: { value: text } });
+    fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+    await screen.findByText(text);
+    // The copy starts moving on the next frame.
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  };
+  // The moving copy floats outside the chat, hidden from assistive tech.
+  const inChat = (text: string) => screen.queryAllByText(text).filter((node) => !node.closest("[aria-hidden='true']"));
+  let seq = 0;
+  const arrive = (entry: BotTranscriptEntry) =>
+    act(() => emitBotTestNotification("bots:live:event", { botId: "bot-1", epoch: "epoch-1", seq: ++seq, type: "entry", entry }));
+
+  await send("Plan dinner");
+  arrive(userEntry("u1", "Plan dinner"));
+  assert.equal(inChat("Plan dinner").length, 1, "the entry waits unseen while the words move");
+  assert.ok(inChat("Plan dinner")[0]?.closest("[data-bot-pending-send]"));
+  act(() => motion.land());
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  assert.equal(screen.getAllByText("Plan dinner").length, 1, "once it lands the copy is gone and the entry takes its place");
+
+  await send("Plan lunch");
+  arrive(userEntry("u2", "Plan lunch"));
+  arrive(assistantEntry("a2", "Soup at noon."));
+  await waitFor(() => assert.equal(document.querySelector("[data-bot-pending-send]"), null));
+  assert.equal(screen.getAllByText("Plan lunch").length, 1, "the moving copy is gone");
+  const message = screen.getByText("Plan lunch");
+  const reply = screen.getByText("Soup at noon.");
+  assert.ok(
+    message.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the message stays above its reply, never below it",
+  );
+});
+
 test("a send main is slow to accept says Sending… after two seconds, and never once main took it", async () => {
   let answer: (result: unknown) => void = () => undefined;
   await mountChat({

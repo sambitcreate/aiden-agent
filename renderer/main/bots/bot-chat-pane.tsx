@@ -579,6 +579,14 @@ function matchBotPendingSends(pending: readonly BotPendingSend[], snapshot: BotL
   return matches;
 }
 
+/** Whether the chat draws nothing after this arrival, so the echo below the transcript stands in its place. */
+function botArrivalDrawnLast(snapshot: BotLiveSnapshot, arrivalId: string): boolean {
+  const queued = snapshot.queued ?? [];
+  const lastQueued = queued[queued.length - 1];
+  if (lastQueued) return arrivalId === `queued:${lastQueued.submissionId}`;
+  return snapshot.entries[snapshot.entries.length - 1]?.id === arrivalId && !snapshot.partial?.trim();
+}
+
 /**
  * Drops every pending send that the snapshot now shows, except those in
  * `holding` (still moving into place), whose arrival stays hidden meanwhile.
@@ -975,11 +983,19 @@ export function BotChatPane({ botId }: { botId: string }) {
   // Settled here as well as in the effect above, which prunes the state only
   // after paint: an echo leaves in the same frame its entry shows, and what
   // answers a send still moving into place stays unseen until it lands.
+  // Something drawn after the arrival (a reply, say) ends the motion early:
+  // the echo sits below the whole transcript, so holding on would put the
+  // message under its own reply until it landed.
   const sendArrivals = matchBotPendingSends(pendingSends, snapshot);
-  const shownSends = pendingSends.filter((send) => morphing.has(send.requestId) || !sendArrivals.has(send.requestId));
   const heldArrivals = new Set(
-    [...sendArrivals].filter(([requestId]) => morphing.has(requestId)).map(([, arrivalId]) => arrivalId),
+    [...sendArrivals]
+      .filter(([requestId, arrivalId]) => morphing.has(requestId) && botArrivalDrawnLast(snapshot, arrivalId))
+      .map(([, arrivalId]) => arrivalId),
   );
+  const shownSends = pendingSends.filter((send) => {
+    const arrivalId = sendArrivals.get(send.requestId);
+    return arrivalId === undefined || heldArrivals.has(arrivalId);
+  });
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
   const startingTurn = !running && !question && !handoff ? shownSends.find((send) => !send.queued) : undefined;
