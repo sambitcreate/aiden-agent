@@ -442,7 +442,7 @@ function botSendMorphOrigin(box: HTMLTextAreaElement | null): BotSendMorphOrigin
 }
 
 /** How long the words take to travel from the composer into their bubble. */
-const SEND_MORPH_MS = 360;
+const SEND_MORPH_MS = 90;
 
 /**
  * The sent words leave the composer and become their bubble: a copy of the
