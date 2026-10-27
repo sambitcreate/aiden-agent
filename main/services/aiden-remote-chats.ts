@@ -1,5 +1,5 @@
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
-import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
   createHmac,
@@ -608,9 +608,16 @@ function projectMessage(
 ): AidenRemoteMessageProjection {
   const attachments = projectMessageAttachments(message.attachments);
   const visuals = projectMessageVisuals(message, attachments);
-  const appPanels = parseAppControlPanels(message.appPanels);
+  const allPanels = parseAppControlPanels(message.appPanels);
+  // Phones understand only the v1 card topics; newer cards reach them as text.
+  const phonePanels = allPanels?.filter((panel) => REMOTE_APP_CONTROL_TOPICS.has(panel.topic));
+  const appPanels = phonePanels?.length ? phonePanels : undefined;
+  const textOnlyPanels = allPanels?.filter((panel) => !REMOTE_APP_CONTROL_TOPICS.has(panel.topic)) ?? [];
   const outcome = projectMessageOutcome(message);
-  const text = boundedUnicodeScalarPrefix(remoteMessageText(message), 200_000);
+  const text = boundedUnicodeScalarPrefix(
+    [remoteMessageText(message), ...textOnlyPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n"),
+    200_000,
+  );
   const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
     message.reasoning.length <= 100_000 ? message.reasoning : undefined;
   const storedTimeline = projectMessageTimeline(message);

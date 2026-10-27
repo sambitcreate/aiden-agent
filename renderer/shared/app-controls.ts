@@ -1,3 +1,5 @@
+import { THEME_PRESETS } from "./appearance.js";
+
 /** Portable, inert conversation descriptors. Values and authority are always read from the host. */
 export const APP_CONTROL_IDS = [
   "appearance.mode",
@@ -8,10 +10,28 @@ export const APP_CONTROL_IDS = [
   "memory.workspace",
   "webSearch.enabled",
   "skills.enabled",
+  "appearance.theme",
+  "models.newChat",
 ] as const;
 export type AppControlId = (typeof APP_CONTROL_IDS)[number];
-export const APP_CONTROL_TOPICS = ["appearance", "memory", "web-search", "skills"] as const;
+export const APP_CONTROL_TOPICS = ["appearance", "memory", "web-search", "skills", "models"] as const;
 export type AppControlTopic = (typeof APP_CONTROL_TOPICS)[number];
+/**
+ * The vocabulary paired phones understand (Remote `chat-ui-panels-v1`). They
+ * reject a whole card that carries an unknown row or topic, so newer desktop
+ * controls stay off the Remote surface until a protocol revision adds them.
+ */
+export const REMOTE_APP_CONTROL_IDS: ReadonlySet<AppControlId> = new Set(APP_CONTROL_IDS.slice(0, 8));
+export const REMOTE_APP_CONTROL_TOPICS: ReadonlySet<AppControlTopic> = new Set(["appearance", "memory", "web-search", "skills"]);
+/** A new-chat model value: `provider::model`. */
+export function newChatModelValue(providerId: string, model: string): string {
+  return `${providerId}::${model}`;
+}
+export function parseNewChatModelValue(value: string): { providerId: string; model: string } | undefined {
+  const split = value.indexOf("::");
+  if (split <= 0 || split + 2 >= value.length) return undefined;
+  return { providerId: value.slice(0, split), model: value.slice(split + 2) };
+}
 export type AppControlValue = boolean | string;
 export type AppControlPolicy = "disabled" | "ask" | "safe";
 /** Preserve explicit legacy denial and fail closed for unsupported policy values. */
@@ -84,7 +104,13 @@ export function parseAppControlOperation(value: unknown): AppControlOperation {
   ) {
     throw new Error("Invalid control operation.");
   }
-  if (p.control.startsWith("appearance.")) {
+  if (p.control === "models.newChat") {
+    if (typeof p.value !== "string" || p.value.length > 300 || /[\u0000-\u001f]/u.test(p.value) || !parseNewChatModelValue(p.value))
+      throw new Error("Unsupported model.");
+  } else if (p.control === "appearance.theme") {
+    if (typeof p.value !== "string" || !THEME_PRESETS.some((preset) => preset.id === p.value))
+      throw new Error("Unsupported color theme.");
+  } else if (p.control.startsWith("appearance.")) {
     if (p.control === "appearance.terminalTheme") {
       if (typeof p.value !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/u.test(p.value))
         throw new Error("Unsupported terminal theme.");

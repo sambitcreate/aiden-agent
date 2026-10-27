@@ -1,9 +1,11 @@
 import { boundedUnicodePrefix } from "../../renderer/shared/unicode-prefix.js";
 import { createHash } from "node:crypto";
-import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
+import { normalizeAppearanceConfig, THEME_PRESETS } from "../../renderer/shared/appearance.js";
 import {
   parseAppControlOperation,
   resolveAppControlPolicy,
+  newChatModelValue,
+  REMOTE_APP_CONTROL_IDS,
   type AppControlId,
   type AppControlOperation,
   type AppControlPolicy,
@@ -13,6 +15,7 @@ import {
   type AppControlValue,
 } from "../../renderer/shared/app-controls.js";
 import type { AppSettings } from "./types.js";
+import { isModelHidden } from "../../renderer/shared/model-visibility.js";
 
 export interface AppControlContext {
   actor: string;
@@ -30,6 +33,13 @@ export interface AppControlState {
   terminalThemes?: string[];
   settings: AppSettings;
   workspace?: { id: string; name: string; memoryEnabled?: boolean };
+  /**
+   * Models a new chat may use, as `provider::model` with a display label. Set
+   * only by hosts that own a new-chat model (the desktop); the row is hidden
+   * otherwise. `options` is what a card offers; `selectable` is every value
+   * the agent may choose.
+   */
+  newChatModels?: { options: { value: string; label: string }[]; selectable: ReadonlySet<string> };
 }
 export interface StoredAppOperation {
   createdAt: number;
@@ -47,6 +57,32 @@ export interface AppControlDependencies {
   loadOperations(): Promise<StoredAppOperation[]>;
   saveOperations(operations: StoredAppOperation[]): Promise<void>;
   onChanged(): void;
+}
+/**
+ * The models a new chat may use: every visible model of a provider that is
+ * ready to answer (has models and a key when it needs one). A card offers
+ * pinned and recent models first, then the rest, at most 20.
+ */
+export function newChatModelChoices(
+  providers: readonly { id: string; label: string; models: string[]; hasKey: boolean; needsKey: boolean }[],
+  settings: Pick<AppSettings, "hiddenModelsByProvider" | "pinnedModels" | "recentModels">,
+): NonNullable<AppControlState["newChatModels"]> {
+  const labels = new Map<string, string>();
+  for (const provider of providers) {
+    if (provider.models.length === 0 || (provider.needsKey && !provider.hasKey)) continue;
+    for (const model of provider.models) {
+      if (isModelHidden(settings.hiddenModelsByProvider, provider.id, model)) continue;
+      labels.set(newChatModelValue(provider.id, model), `${provider.label} · ${model}`);
+    }
+  }
+  const ordered = [...new Set([...(settings.pinnedModels ?? []), ...(settings.recentModels ?? []), ...labels.keys()])];
+  return {
+    options: ordered
+      .filter((value) => labels.has(value))
+      .slice(0, 20)
+      .map((value) => ({ value, label: labels.get(value)! })),
+    selectable: new Set(labels.keys()),
+  };
 }
 export function appControlPolicy(settings: AppSettings): AppControlPolicy {
   return resolveAppControlPolicy(settings);
@@ -70,7 +106,19 @@ export function appControlValue(state: AppControlState, control: AppControlId): 
       return state.settings.webSearch?.enabled === true;
     case "skills.enabled":
       return state.settings.skillsEnabled !== false;
+    case "appearance.theme":
+      return appearanceThemeValue(appearance);
+    case "models.newChat":
+      return state.settings.lastProviderId && state.settings.lastModel
+        ? newChatModelValue(state.settings.lastProviderId, state.settings.lastModel)
+        : "";
   }
+}
+/** The shared preset when light and dark use the same one; otherwise the theme is custom. */
+function appearanceThemeValue(appearance: ReturnType<typeof normalizeAppearanceConfig>): string {
+  return appearance.light.preset !== "custom" && appearance.light.preset === appearance.dark.preset
+    ? appearance.light.preset
+    : "custom";
 }
 export function appControlRevision(state: AppControlState, control: AppControlId): string {
   return createHash("sha256")
@@ -97,6 +145,11 @@ const GROUPS: Record<
         "Theme for this CLI session and its saved terminal defaults.",
       ],
       ["appearance.mode", "Theme", "Choose the serving app's color mode."],
+      [
+        "appearance.theme",
+        "Color theme",
+        "Theme colors for light and dark. Custom colors are edited in Settings → Appearance.",
+      ],
       ["appearance.chatWidth", "Chat width", "Width of conversations on the serving desktop."],
       ["appearance.reduceMotion", "Reduce motion", "Prefer less motion on the serving desktop."],
     ],
@@ -128,12 +181,36 @@ const GROUPS: Record<
       ["skills.enabled", "Skills", "Allow skill discovery and use, including built-in skills."],
     ],
   },
+  models: {
+    title: "Models",
+    controls: [
+      [
+        "models.newChat",
+        "Model for new chats",
+        "Used when you start a chat. Chats with messages keep their own model.",
+      ],
+    ],
+  },
 };
 const OPTIONS: Partial<Record<AppControlId, string[]>> = {
   "appearance.mode": ["system", "light", "dark"],
   "appearance.chatWidth": ["narrow", "default", "wide", "full"],
   "appearance.reduceMotion": ["system", "on", "off"],
 };
+function themeOptions(state: AppControlState) {
+  const options = THEME_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }));
+  // "Custom" is shown as the current value but cannot be chosen from a card.
+  return appControlValue(state, "appearance.theme") === "custom"
+    ? [...options, { value: "custom", label: "Custom" }]
+    : options;
+}
+function newChatModelOptions(state: AppControlState) {
+  const options = state.newChatModels?.options ?? [];
+  const current = appControlValue(state, "models.newChat");
+  return current && !options.some((option) => option.value === current)
+    ? [{ value: String(current), label: String(current).replace("::", " · ") }, ...options]
+    : options;
+}
 export class AppControlsService {
   private tail: Promise<unknown> = Promise.resolve();
   constructor(private readonly deps: AppControlDependencies) {}
@@ -153,7 +230,9 @@ export class AppControlsService {
         .filter(
           ([id]) =>
             (id !== "memory.workspace" || state.workspace) &&
-            (id !== "appearance.terminalTheme" || state.terminalTheme !== undefined),
+            (id !== "appearance.terminalTheme" || state.terminalTheme !== undefined) &&
+            (id !== "models.newChat" || state.newChatModels !== undefined) &&
+            (!context.remote || REMOTE_APP_CONTROL_IDS.has(id)),
         )
         .map(([id, label, description]) => ({
           id,
@@ -176,6 +255,8 @@ export class AppControlsService {
           ...(id === "appearance.terminalTheme"
             ? { options: state.terminalThemes?.map((value) => ({ value, label: value })) }
             : {}),
+          ...(id === "appearance.theme" ? { options: themeOptions(state) } : {}),
+          ...(id === "models.newChat" ? { options: newChatModelOptions(state) } : {}),
           ...(policy === "disabled" || (context.allowedControls && !context.allowedControls.has(id))
             ? {
                 disabledReason:
@@ -210,6 +291,15 @@ export class AppControlsService {
         throw new Error("Show this control for an explicit foreground confirmation.");
       if (operation.control === "memory.workspace" && !state.workspace)
         throw new Error("Select an existing workspace first.");
+      if (operation.control === "models.newChat" && !state.newChatModels?.selectable.has(String(operation.value)))
+        throw new Error("That model is not available for new chats. Check Settings → Providers.");
+      // Picking a preset replaces custom colors, which cannot be undone from chat.
+      if (
+        operation.control === "appearance.theme" &&
+        !context.humanGesture &&
+        appControlValue(state, "appearance.theme") === "custom"
+      )
+        throw new Error("Show this control for an explicit foreground confirmation: it replaces custom theme colors.");
       const key = `${context.actor}:${context.workspaceId ?? "host"}:${operation.operationId}`;
       const operations = (await this.deps.loadOperations()).filter(
         (item) =>
@@ -238,7 +328,10 @@ export class AppControlsService {
           operation.control === "memory.workspace"
             ? `Workspace — ${boundedUnicodePrefix(state.workspace!.name, 220)}`
             : context.target,
-        effective: operation.control.startsWith("appearance.") ? "now" : "next_turn",
+        effective:
+          operation.control.startsWith("appearance.") || operation.control === "models.newChat"
+            ? "now"
+            : "next_turn",
       };
       const stored = { key, operation, receipt, createdAt: Date.now() };
       operations.push(stored);

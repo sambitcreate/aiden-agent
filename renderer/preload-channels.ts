@@ -142,6 +142,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "remote:peer-pairing-progress",
   "schedule:updated",
   "settings:appearance-changed",
+  "settings:new-chat-model-changed",
   "shortcut:changed",
   "terminal:data",
   "terminal:exit",

@@ -7,7 +7,7 @@
 import * as React from "react";
 import { isUsable } from "./model-picker-data";
 import type { AppSettings, Provider } from "./types";
-import { telegramApi } from "./ipc";
+import { onNotification, settingsApi, telegramApi } from "./ipc";
 import { firstVisibleModelForProvider, isModelHidden } from "../shared/model-visibility";
 
 const PROVIDER_KEY = "aiden-agent.providerId";
@@ -174,10 +174,32 @@ export function useActiveChatModelTarget(): ActiveChatModelTarget | null {
 }
 
 export function persistModelSelection(providerId: string, model: string): void {
+  const previous = readModelSelection();
   localStorage.setItem(PROVIDER_KEY, providerId);
   localStorage.setItem(MODEL_KEY, model);
   modelSelectionRevision += 1;
   window.dispatchEvent(new Event(MODEL_SELECTION_CHANGED_EVENT));
+  // Keep the host's copy current so Aiden's "Model for new chats" control and
+  // paired phones see the pick at once, not after the next chat starts.
+  if (providerId && model && (previous.providerId !== providerId || previous.model !== model)) {
+    void Promise.resolve()
+      .then(() => settingsApi.set({ lastProviderId: providerId, lastModel: model }))
+      .catch(() => undefined);
+  }
+}
+
+/** Follow a new-chat model the host changed (Aiden's chat control). */
+export function subscribeHostNewChatModel(
+  subscribe: typeof onNotification,
+): () => void {
+  return subscribe("settings:new-chat-model-changed", (payload: unknown) => {
+    if (!payload || typeof payload !== "object") return;
+    const { providerId, model } = payload as Record<string, unknown>;
+    if (typeof providerId !== "string" || typeof model !== "string" || !providerId || !model) return;
+    const current = readModelSelection();
+    if (current.providerId === providerId && current.model === model) return;
+    persistModelSelection(providerId, model);
+  });
 }
 
 export function useModelSelection(
