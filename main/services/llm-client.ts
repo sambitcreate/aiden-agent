@@ -200,6 +200,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
+import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -4006,6 +4007,10 @@ export const llmClient = {
                 toolName: context.toolCall.name,
                 summary,
                 details: approvalDetails,
+                ...(() => {
+                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  return preview ? { preview } : {};
+                })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
               };
             })(),

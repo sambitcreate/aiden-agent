@@ -165,6 +165,7 @@ import type {
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
 import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
@@ -1789,6 +1790,8 @@ export interface ApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /** The exact command or file change, sent only to the desktop that owns the chat. */
+  preview?: ToolApprovalPreview;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];

@@ -414,6 +414,7 @@
         "main/services/schedule-execution-tool-policy.test.ts",
         "main/services/subagents/eligibility-harness.test.ts",
         "main/services/antigravity/definition.test.ts",
+        "main/services/aiden-remote-approval-schedule.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
         "main/services/aiden-remote-bot-files.test.ts",
         "main/services/aiden-remote-bots.test.ts",
@@ -1165,7 +1166,9 @@
         "renderer/shared/web-extract.test.ts",
         "renderer/shared/web-fetch-settings.test.ts",
         "renderer/components/settings/web-page-settings.test.tsx",
-        "renderer/components/web-extract-recap.test.tsx"
+        "renderer/components/web-extract-recap.test.tsx",
+        "renderer/components/chat-approval-card.test.tsx",
+        "renderer/shared/tool-approval-preview.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

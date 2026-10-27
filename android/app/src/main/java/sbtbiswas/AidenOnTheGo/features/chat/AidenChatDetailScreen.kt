@@ -585,8 +585,6 @@ fun AidenChatDetailScreen(
                     exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingApproval?.let { approval ->
-                        val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -595,59 +593,12 @@ fun AidenChatDetailScreen(
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
                             shape = MaterialTheme.shapes.extraLarge
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (isAutomation) Icons.Default.Schedule else Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = palette.warning,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = AidenApprovalPresentation.title(approval.toolName),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.warning
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = AidenApprovalPresentation.oneLineSummary(approval.summary),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.foreground
-                                )
-                                if (!approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_review_only),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (isAutomation && !approval.hasRequiredWriteCapability) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_schedule_write_required),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (requiresDesktopConfirmation) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                }
-                                if (approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    AidenApprovalActions(
-                                        approval = approval,
-                                        enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                        onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) }
-                                    )
-                                }
-                            }
+                            AidenApprovalCardContent(
+                                approval = approval,
+                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
+                                onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) },
+                                modifier = Modifier.padding(16.dp)
+                            )
                         }
                     }
                 }
