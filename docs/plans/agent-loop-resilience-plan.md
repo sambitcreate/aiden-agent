@@ -1,6 +1,6 @@
 # Agent loop resilience
 
-Status: Step 1 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
+Status: Steps 1 and 1b in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
 
 The agent loop sends the conversation to the model, runs the tools the model asks for, feeds the results back, and repeats until the task is done. A 2026-10-26 comparison against OpenCode, Pi's coding agent and pi-gui found five places where Aiden's loop gives up sooner than it needs to. Each step is its own pull request, in this order.
 
@@ -22,7 +22,18 @@ Code: `main/services/model-call-retry.ts` (policy), `PiCompactionCoordinator.che
 
 ## 1b. A failure card with a fitting button
 
-When a reply still fails, the red card gets one button that fits the cause: Try again (connection, timeout, server), Open Providers (sign-in, key, model, credit), Continue (output limit), Compact chat (context too long), plus a Switch model link.
+When a reply still fails, the red card on the latest reply gets one button that fits the cause, plus Switch model (which opens the model list in the command palette):
+
+| Cause (`ProviderFailureV1.category`) | Button | What it does |
+| --- | --- | --- |
+| network, timeout, service unavailable, rate limit, interrupted, unknown | Try again | Sends a visible "Try that again." turn |
+| authentication, quota, invalid request | Open Providers | Opens Settings → Providers |
+| output limit | Continue | Sends a visible "Continue from where you stopped." turn |
+| context window, context management | Compact and try again | Compacts the chat, then sends "Try that again." if it compacted or was already compact. If the person left the chat before it finished, nothing is sent and the card stays |
+
+Older failure cards keep their text but show no buttons, and the buttons wait while one action runs. Desktop only; the phones keep their current failure card.
+
+Code: `providerFailureAction` in `renderer/shared/provider-failure.ts`, `ProviderFailureCallout` in `renderer/components/message-list.tsx`, `runFailureAction` in `renderer/main/chat-pane.tsx`.
 
 ## 2. Continue a cut-off reply
 

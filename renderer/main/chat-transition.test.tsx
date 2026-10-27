@@ -722,3 +722,91 @@ test("ordinary sends retain their generation-intent guard while draft promotion 
   assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
   assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
 });
+
+function failedChatResponse(id: string, category: string) {
+  const response = chatReadResponse(id);
+  response.chat.messages.push({
+    id: `failure-${id}`,
+    role: "assistant",
+    content: "",
+    createdAt: 2,
+    providerFailure: { version: 1, category, attempts: 1, retryExhausted: false },
+  } as (typeof response.chat.messages)[number]);
+  return response;
+}
+
+for (const compacted of [false, true]) {
+  test(`a failure-card compaction that settles (${compacted ? "compacted" : "not compacted"}) after leaving the chat leaves the next chat alone`, async () => {
+    let settleCompaction!: (result: unknown) => void;
+    const appended: string[] = [];
+    const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+      "chats:get": (id) => failedChatResponse(String(id), id === "chat-a" ? "context_window" : "network"),
+      "chats:compact": () => new Promise((resolve) => { settleCompaction = resolve; }),
+      "chats:appendMessage": (chatId) => {
+        appended.push(String(chatId));
+        throw new Error("The follow-up could not be saved.");
+      },
+    });
+    try {
+      await act(async () => {
+        fireEvent.click(await screen.findByRole("button", { name: "Compact and try again" }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      await act(async () => {
+        await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      const tryAgain = await screen.findByRole("button", { name: "Try again" });
+      assert.equal((tryAgain as HTMLButtonElement).disabled, false, "Chat B must not inherit chat A's pending action");
+
+      await act(async () => {
+        settleCompaction(compacted ? { compacted: true } : { compacted: false, reason: "already_compact" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      assert.deepEqual(appended, [], "Chat A's follow-up must not be sent from chat B's pane");
+      assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+      const after = screen.getByRole("button", { name: "Try again" }) as HTMLButtonElement;
+      assert.equal(after.disabled, false);
+    } finally {
+      cleanup();
+      queryClient.clear();
+    }
+  });
+}
+
+test("a pending failure-card compaction keeps its chat busy while another chat starts one", async () => {
+  const compactions: string[] = [];
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => failedChatResponse(String(id), "context_window"),
+    "chats:compact": (chatId) => {
+      compactions.push(String(chatId));
+      return new Promise(() => undefined);
+    },
+  });
+  const visit = async (chatId: string) => {
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  };
+  const compactButton = async () =>
+    (await screen.findByRole("button", { name: "Compact and try again" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-b");
+    assert.equal((await compactButton()).disabled, false);
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-a");
+    assert.equal((await compactButton()).disabled, true, "Chat A's compaction is still running");
+    assert.deepEqual(compactions, ["chat-a", "chat-b"]);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});

@@ -103,7 +103,7 @@ import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
-import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
   approvalShouldTakeFocus,
@@ -170,6 +170,8 @@ import {
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
+import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
+import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
   resolveVisibleAgentActivity,
@@ -266,6 +268,7 @@ const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const commandSystem = useCommandSystem();
   const capabilities = useAppCapabilities();
   const newChatMachines = useNewChatMachines();
   const providers = useProviders();
@@ -2962,6 +2965,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      const compactChatId = chatId;
+      // Follow-ups typed during compaction queue behind it and
+      // wait until it settles, even if the user leaves the chat.
+      const compactQueue = chatMessageQueue(compactChatId);
+      let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
+      compactQueue.holdForCompaction();
+      setContextCompactPending(true);
+      try {
+        const result = await chatsApi.compact(compactChatId, engine);
+        compactOutcome = result;
+        // The pane may now show another chat; its meter
+        // chrome belongs to that chat, not this compaction.
+        if (result.compacted && chatIdRef.current === compactChatId) {
+          setContextCompactedFlash(true);
+          if (contextCompactedTimerRef.current !== null) {
+            window.clearTimeout(contextCompactedTimerRef.current);
+          }
+          contextCompactedTimerRef.current = window.setTimeout(() => {
+            contextCompactedTimerRef.current = null;
+            setContextCompactedFlash(false);
+          }, 6_000);
+        }
+        return result;
+      } finally {
+        if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+        if (compactQueue.releaseCompactionHold(compactOutcome)) {
+          const count = compactQueue.getSnapshot().messages.length;
+          toast.info(
+            `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
+          );
+        }
+      }
+    },
+    [chatId],
+  );
+
   // --- Read aloud wiring --------------------------------------------------
   // Local candidate mirrors main's policy: the last assistant message after
   // the latest user turn, while no live generation row is mounted. Main
@@ -2987,6 +3028,66 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     return undefined;
   }, [messages, transcriptIdle]);
+
+  // The latest reply failed: its card offers the next step that fits the cause.
+  const failedReplyId = React.useMemo(() => {
+    if (!transcriptIdle || draft) return undefined;
+    const last = messages[messages.length - 1];
+    return last?.role === "assistant" && last.providerFailure ? last.id : undefined;
+  }, [draft, messages, transcriptIdle]);
+  // A card action belongs to the chat it started in: each chat's card is busy
+  // only while its own action runs, and only that action clears it.
+  const failureActionTokenRef = React.useRef(0);
+  const [failureActionOwners, setFailureActionOwners] = React.useState<
+    Readonly<Record<string, number>>
+  >({});
+  const failureActionBusy = failureActionOwners[chatId] !== undefined;
+  const runFailureAction = React.useCallback(
+    async (action: ProviderFailureAction) => {
+      if (action === "open_providers") {
+        void navigate({ to: "/settings", search: { section: "providers" } });
+        return;
+      }
+      const token = ++failureActionTokenRef.current;
+      setFailureActionOwners((owners) => ({ ...owners, [chatId]: token }));
+      try {
+        if (action === "compact") {
+          const result = await compactChat();
+          // Already compact (an earlier press finished while the person was away) still sends.
+          if (!result.compacted && result.reason !== "already_compact") return;
+          // The pane may show another chat now: skip the follow-up, and this
+          // chat's card is still there when the person comes back.
+          if (chatIdRef.current !== chatId) return;
+        }
+        await handleSend(
+          action === "continue" ? PROVIDER_FAILURE_FOLLOW_UPS.continue : PROVIDER_FAILURE_FOLLOW_UPS.try_again,
+          [],
+        );
+      } catch (actionError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(userFacingErrorMessage(actionError, "Couldn’t continue this chat."));
+      } finally {
+        setFailureActionOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
+      }
+    },
+    [chatId, compactChat, handleSend, navigate],
+  );
+  const failureActions = React.useMemo(
+    () =>
+      failedReplyId
+        ? {
+            messageId: failedReplyId,
+            busy: failureActionBusy,
+            onAction: (action: ProviderFailureAction) => void runFailureAction(action),
+            onSwitchModel: () => commandSystem.execute("model.change"),
+          }
+        : undefined,
+    [commandSystem, failedReplyId, failureActionBusy, runFailureAction],
+  );
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -3386,44 +3487,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   setForkSummaryRequest({ messageId, position })
                 }
                 onExportChat={exportChat}
-                onCompactChat={
-                  draft
-                    ? undefined
-                    : async (engine) => {
-                        const compactChatId = chatId;
-                        // Follow-ups typed during compaction queue behind it and
-                        // wait until it settles, even if the user leaves the chat.
-                        const compactQueue = chatMessageQueue(compactChatId);
-                        let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
-                        compactQueue.holdForCompaction();
-                        setContextCompactPending(true);
-                        try {
-                          const result = await chatsApi.compact(compactChatId, engine);
-                          compactOutcome = result;
-                          // The pane may now show another chat; its meter
-                          // chrome belongs to that chat, not this compaction.
-                          if (result.compacted && chatIdRef.current === compactChatId) {
-                            setContextCompactedFlash(true);
-                            if (contextCompactedTimerRef.current !== null) {
-                              window.clearTimeout(contextCompactedTimerRef.current);
-                            }
-                            contextCompactedTimerRef.current = window.setTimeout(() => {
-                              contextCompactedTimerRef.current = null;
-                              setContextCompactedFlash(false);
-                            }, 6_000);
-                          }
-                          return result;
-                        } finally {
-                          if (chatIdRef.current === compactChatId) setContextCompactPending(false);
-                          if (compactQueue.releaseCompactionHold(compactOutcome)) {
-                            const count = compactQueue.getSnapshot().messages.length;
-                            toast.info(
-                              `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
-                            );
-                          }
-                        }
-                      }
-                }
+                onCompactChat={draft ? undefined : compactChat}
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
@@ -3599,6 +3663,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
+            failureActions={failureActions}
             readAloud={readAloudProps}
             onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}
