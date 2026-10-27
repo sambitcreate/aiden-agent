@@ -53,6 +53,7 @@ Pages and their saved data are stored on the device under Aiden's user data fold
 ## For developers
 
 - Shared contract and parsers: `renderer/shared/workspace-artifacts.ts`.
+- Confined reads: macOS uses the packaged descriptor-relative worktree file helper; Linux uses Node directory descriptors through `/proc/self/fd`, with pinned root/file identities, no-follow traversal and bounded reads. Linux requires procfs descriptor access and fails closed without it; it does not depend on the macOS helper.
 - Store, tool, runner and skill: `main/services/workspace-artifacts/`.
 - IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
 - Tab: `renderer/components/artifacts-panel.tsx`, wired into the Environment panel.

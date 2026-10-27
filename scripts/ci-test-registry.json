@@ -346,6 +346,7 @@
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
         "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/workspace-artifacts/file-policy.linux.test.ts",
         "main/services/web-fetch.test.ts",
         "main/services/web-extract-core.test.ts",
         "main/services/web-fetch-transport.test.ts",

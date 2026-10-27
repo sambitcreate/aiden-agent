@@ -1,3 +1,4 @@
+import { readLinuxArtifactFile, LinuxArtifactFileChangedError } from "./linux-file-read.js";
 /** Model-authored artifact files use the model reader's credential-path policy. */
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -36,8 +37,12 @@ export async function readWorkspaceArtifactFile(root: string, file: string, sign
   const admitted = await admittedFile(root, file);
   signal?.throwIfAborted();
   await hooks.beforeRead?.();
-  const bytes = await readConfinedWorkspaceFile({ root: admitted.identity, file: admitted.file }, admitted.relative, signal).catch((error: unknown) => {
-    if (error instanceof ManagedWorktreeFileIoError && ["unsafe_source", "source_changed"].includes(error.code)) throw new WorkspaceArtifactFileDeniedError();
+  const identity = { root: admitted.identity, file: admitted.file };
+  const reading = process.platform === "linux"
+    ? readLinuxArtifactFile(identity, admitted.relative, signal)
+    : readConfinedWorkspaceFile(identity, admitted.relative, signal);
+  const bytes = await reading.catch((error: unknown) => {
+    if (error instanceof LinuxArtifactFileChangedError || (error instanceof ManagedWorktreeFileIoError && ["unsafe_source", "source_changed"].includes(error.code))) throw new WorkspaceArtifactFileDeniedError();
     throw error;
   });
   signal?.throwIfAborted();
