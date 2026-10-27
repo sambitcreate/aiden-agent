@@ -888,7 +888,7 @@ export const shortcutApi = {
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const res = await window.aidenAPI.dialog.showOpenDialog({
-    properties: ["openDirectory"],
+    properties: ["openDirectory", "createDirectory"],
   });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];

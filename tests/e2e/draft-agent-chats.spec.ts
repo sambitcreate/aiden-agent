@@ -369,3 +369,32 @@ test("New chat in… opens a typed path as a workspace and offers Clone", async 
   await expect(composer).toBeFocused();
   await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in palette-folder?");
 });
+
+test("New chat in… Open folder… lets the picker make a new folder and starts the chat there", async ({ aiden }) => {
+  const { page, app } = aiden;
+  const newFolder = path.join(aiden.rootDir, "brand-new-project");
+  await finishLmStudioOnboarding(page);
+  // Stand in for Finder: record what Aiden asks the picker for, then return
+  // the folder a person made with its New Folder button.
+  await app.evaluate(({ dialog }, folder) => {
+    const asked: Electron.OpenDialogOptions[] = [];
+    (globalThis as unknown as { folderPickerOptions: typeof asked }).folderPickerOptions = asked;
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      asked.push(args[args.length - 1] as Electron.OpenDialogOptions);
+      return { canceled: false, filePaths: [folder] };
+    }) as typeof dialog.showOpenDialog;
+  }, newFolder);
+  await mkdir(newFolder);
+
+  await page.getByRole("button", { name: "New Agent", exact: true }).focus();
+  await page.keyboard.press("ControlOrMeta+Shift+N");
+  await page.getByRole("option", { name: /^Open folder…/u }).click();
+  await expect(page.locator("[data-command-palette-content]")).toHaveCount(0);
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in brand-new-project?");
+
+  const asked = await app.evaluate(() =>
+    (globalThis as unknown as { folderPickerOptions: Electron.OpenDialogOptions[] }).folderPickerOptions);
+  expect(asked).toHaveLength(1);
+  // createDirectory is what shows the New Folder button in the macOS picker.
+  expect(asked[0].properties).toEqual(expect.arrayContaining(["openDirectory", "createDirectory"]));
+});
