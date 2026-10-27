@@ -5,7 +5,8 @@ set -euo pipefail
 distribution_dir="${1:-release/distribution}"
 retry_attempts="${AIDEN_RELEASE_RETRY_ATTEMPTS:-4}"
 retry_base_seconds="${AIDEN_RELEASE_RETRY_BASE_SECONDS:-2}"
-installer_source="$(cd "$(dirname "$0")/.." && pwd)/install.sh"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+installer_source="$repo_root/install.sh"
 
 if [[ ! "$retry_attempts" =~ ^[1-9][0-9]*$ ]]; then
   echo "Release retry attempts must be a positive integer." >&2
@@ -219,13 +220,24 @@ expected_asset_names=(
 EXPECTED_ASSETS="$(printf '%s\n' "${expected_asset_names[@]}")"
 export EXPECTED_ASSETS RELEASE_TAG
 
+# A reviewed docs/release-notes/<tag>.md sits between the Beta line and the generated changelog.
+release_notes_dir="${AIDEN_RELEASE_NOTES_DIR:-$repo_root/docs/release-notes}"
+release_notes_file="$release_notes_dir/$RELEASE_TAG.md"
+release_notes="Aiden Agent beta release."
+if [[ -f "$release_notes_file" ]]; then
+  release_notes+=$'\n\n'"$(cat -- "$release_notes_file")"$'\n\n'
+else
+  release_notes+=" "
+fi
+release_notes+="Changes since the previous release:"
+
 draft_ready=false
 for ((attempt = 1; attempt <= retry_attempts; attempt += 1)); do
   if gh release create "$RELEASE_TAG" \
     --repo "$GITHUB_REPOSITORY" \
     --target "$GITHUB_SHA" \
     --title "Aiden Agent $RELEASE_VERSION" \
-    --notes "Aiden Agent beta release. Changes since the previous release:" \
+    --notes "$release_notes" \
     --generate-notes \
     --draft \
     -- "${release_assets[@]}"; then
