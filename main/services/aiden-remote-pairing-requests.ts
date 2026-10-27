@@ -105,6 +105,8 @@ export interface AidenPairingRequestServiceDependencies {
   devices: Pick<AidenRemoteStateRegistry, "issueDevice" | "revokeDevice">;
   /** The persisted "Accept connection requests" setting. */
   accepting(): boolean;
+  /** Identity of the current host-opened Add device window, absent when closed. */
+  admission(): { id: string; expiresAt: number } | undefined;
   resolveTransport(
     transport: AidenPairingRequestTransport,
   ): Promise<AidenPairingRequestTransportIdentity>;
@@ -122,6 +124,7 @@ export interface AidenPairingRequestServiceDependencies {
 
 interface PairingRequestRecord {
   requestId: string;
+  admissionId: string;
   secretDigest: Buffer;
   source: string;
   transport: AidenPairingRequestTransport;
@@ -312,9 +315,14 @@ export class AidenRemotePairingRequestService {
     );
   }
 
+  private currentAdmission(): { id: string; expiresAt: number } | undefined {
+    const window = this.dependencies.admission();
+    return window && this.now() < window.expiresAt ? window : undefined;
+  }
+
   /** Whether new requests are admitted right now. */
   accepting(): boolean {
-    return !this.closed && this.dependencies.accepting();
+    return !this.closed && this.dependencies.accepting() && this.currentAdmission() !== undefined;
   }
 
   async create(
@@ -322,6 +330,7 @@ export class AidenRemotePairingRequestService {
     context: { source: string; transport: AidenPairingRequestTransport },
   ): Promise<AidenPairingRequestCreated> {
     if (!this.accepting()) throw closed();
+    const admission = this.currentAdmission()!;
     this.admit(context.source);
     const input = parseCreateBody(body);
     let identity: AidenPairingRequestTransportIdentity;
@@ -337,16 +346,17 @@ export class AidenRemotePairingRequestService {
     // The transport lookup awaited; the setting or the service may have
     // changed meanwhile. Capacity is checked after the await so no other
     // create can interleave between the check and the insert.
-    if (!this.accepting()) throw closed();
+    if (!this.accepting() || this.currentAdmission()?.id !== admission.id) throw closed();
     this.assertCapacity(context.source);
 
     const now = this.now();
     const requestId = `pairreq_${this.random(24).toString("base64url")}`;
     const pollSecret = this.random(32).toString("base64url");
     const hostNonce = Buffer.from(this.random(PAIRING_NONCE_BYTES));
-    const expiresAt = now + PAIRING_REQUEST_TTL_MS;
+    const expiresAt = Math.min(now + PAIRING_REQUEST_TTL_MS, admission.expiresAt);
     const record: PairingRequestRecord = {
       requestId,
+      admissionId: admission.id,
       secretDigest: digestSecret(pollSecret),
       source: context.source,
       transport: context.transport,
@@ -362,7 +372,7 @@ export class AidenRemotePairingRequestService {
       state: "pending",
       delivered: false,
     };
-    record.cancelTimer = this.schedule(PAIRING_REQUEST_TTL_MS, () => this.expire(record));
+    record.cancelTimer = this.schedule(expiresAt - now, () => this.expire(record));
     this.records.set(requestId, record);
     return {
       requestId,
@@ -438,6 +448,7 @@ export class AidenRemotePairingRequestService {
         signal?.addEventListener("abort", finish, { once: true });
       });
     }
+    this.expireIfDue(record);
     return this.status(record, signal?.aborted !== true);
   }
 
@@ -483,6 +494,7 @@ export class AidenRemotePairingRequestService {
   /** Requests awaiting a decision, oldest first, for the host UI. */
   list(): AidenPairingRequestPrompt[] {
     const now = this.now();
+    for (const record of [...this.records.values()]) this.expireIfDue(record);
     return [...this.records.values()]
       .filter((record) => isOpen(record) && record.matchCode !== undefined && now < record.expiresAt)
       .sort((left, right) => left.createdAt - right.createdAt)
@@ -554,7 +566,8 @@ export class AidenRemotePairingRequestService {
 
   private async approve(record: PairingRequestRecord): Promise<AidenPairingRequestDecisionResult> {
     const stillApproving = () =>
-      !this.closed &&
+      this.accepting() &&
+      this.currentAdmission()?.id === record.admissionId &&
       this.records.get(record.requestId) === record &&
       record.state === "approving" &&
       this.now() < record.expiresAt;
@@ -654,7 +667,11 @@ export class AidenRemotePairingRequestService {
   }
 
   private expireIfDue(record: PairingRequestRecord): void {
-    if (record.state === "pending" && this.now() >= record.expiresAt) this.expire(record);
+    if (!isOpen(record)) return;
+    if (this.now() >= record.expiresAt) this.expire(record);
+    else if (!this.accepting() || this.currentAdmission()?.id !== record.admissionId) {
+      this.finish(record, "cancelled");
+    }
   }
 
   private expire(record: PairingRequestRecord): void {

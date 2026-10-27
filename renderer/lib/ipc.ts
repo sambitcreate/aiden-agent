@@ -732,6 +732,7 @@ export interface TelegramStatus {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
+  pairing: { expiresAt?: number };
   providerId?: string;
   model?: string;
   workspaceId?: string;
@@ -758,6 +759,8 @@ export interface TelegramStatus {
   }>;
 }
 export const telegramApi = {
+  beginPairing: (profile: string) => invoke<{ code: string; expiresAt: number }>("telegram:beginPairing", profile),
+  cancelPairing: (profile: string) => invoke<{ cancelled: boolean }>("telegram:cancelPairing", profile),
   get: () => invoke<TelegramStatus>("telegram:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
   setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
