@@ -526,6 +526,15 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .sharedImage(image):
+            // Revision 41: the image the Bot shared, read from the Mac when it is drawn.
+            AidenMessageImageAttachmentsView(
+                attachments: [image.attachment],
+                edge: .leading,
+                loadData: { attachment in await model.sharedImageData(entryId: attachment.id) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 48)
         }
     }
 

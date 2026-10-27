@@ -520,6 +520,37 @@ class AidenBotSessionControllerTest {
         assertTrue(transport.sends.isEmpty())
     }
 
+    /**
+     * Revision 41: an image the Bot shared is read from the Mac when it is drawn, once while the
+     * chat is open; a failed read is tried again, and an id the transcript doesn't hold is never asked for.
+     */
+    @Test
+    fun aSharedImageIsReadOnceAndAFailedReadIsTriedAgain() = runTest {
+        val image = AidenBotSessionEntry.SharedImage(id = "entry_7", name = "chart.png", mimeType = "image/png", size = 4)
+        val withImage = needsModelSession.copy(state = AidenBotSessionState.IDLE, entries = listOf(image))
+        val bytes = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47)
+        val transport = object : AidenBotSessionTransport by FakeTransport(withImage) {
+            val reads = mutableListOf<String>()
+            var held: ByteArray? = null
+            override suspend fun session(botId: String) = withImage
+            override suspend fun sharedImage(botId: String, entryId: String): ByteArray {
+                reads += entryId
+                return held ?: throw IOException("offline")
+            }
+        }
+        val controller = AidenBotSessionController(withImage.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertNull("the Mac couldn't send it yet", controller.sharedImageData(image.id))
+        transport.held = bytes
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertEquals("one failed read, then one read kept for the chat", listOf(image.id, image.id), transport.reads)
+
+        assertNull(controller.sharedImageData("entry_99"))
+        assertEquals("an id the transcript doesn't hold never reaches the Mac", 2, transport.reads.size)
+    }
+
     @Test
     fun aLostSendKeepsItsKeyAndGoesOutAgainWhileConnected() = runTest {
         val idle = needsModelSession.copy(state = AidenBotSessionState.IDLE)

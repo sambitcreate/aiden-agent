@@ -46,8 +46,8 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity`, `bot:handoffs` and `bot:handoff-notes`
-/// the pairing holds.
+/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`
+/// and `bot:images` the pairing holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -136,6 +136,8 @@ protocol AidenBotSessionTransport: Sendable {
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     /// Revision 37: `DELETE /bots/{botId}/pause`.
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
+    /// Revision 41 (`bot:images`): the bytes of an image the Bot shared.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data
 }
 
 extension AidenBotSessionTransport {
@@ -165,6 +167,11 @@ extension AidenBotSessionTransport {
     }
 
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        throw AidenRemoteClientError.invalidResponse
+    }
+
+    /// A transport without shared images has none to read, as a Mac without `bot:images`.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
         throw AidenRemoteClientError.invalidResponse
     }
 }
@@ -1095,6 +1102,8 @@ final class AidenBotSessionModel {
     private(set) var isAttaching = false
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
+    /// Revision 41: images the Bot shared, read once while this chat is open; never written to disk.
+    @ObservationIgnored private var sharedImages: [String: Data] = [:]
     /// The Bot's Chat activity wording, from its detail.
     var wording: AidenBotChatActivityWording = .follows
     /// What the running turn is doing (revision 30), or nil.
@@ -2475,6 +2484,24 @@ final class AidenBotSessionModel {
     }
 
     // MARK: Connect cards
+
+    /// Revision 41 (`bot:images`): the bytes of an image the Bot shared, or nil
+    /// when the Mac can't send it (it left the chat, or the phone is offline).
+    /// Each image is read once and kept while this chat is open; a failed read
+    /// is tried again the next time the image is drawn.
+    func sharedImageData(entryId: String) async -> Data? {
+        if let cached = sharedImages[entryId] { return cached }
+        let entryShown = entries.contains { entry in
+            if case let .sharedImage(image) = entry { return image.id == entryId }
+            return false
+        }
+        guard entryShown else { return nil }
+        guard let data = try? await aidenBotWithin(requestLimit, { [transport, botID] in
+            try await transport.botSessionImage(botId: botID, entryId: entryId)
+        }) else { return nil }
+        sharedImages[entryId] = data
+        return data
+    }
 
     func requestConnection(pluginId: String) async {
         guard !sentConnectionRequests.contains(pluginId),

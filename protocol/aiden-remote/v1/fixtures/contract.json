@@ -1,5 +1,5 @@
 {
-  "contractRevision": 40,
+  "contractRevision": 41,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1539,7 +1539,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 40,
+    "contractRevision": 41,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3061,5 +3061,22 @@
         }
       }
     ]
+  },
+  "botImages": {
+    "capability": "bot:images",
+    "entry": {
+      "type": "shared_image",
+      "id": "entry_fixture_shared_image_01",
+      "name": "weekly-sales.png",
+      "mimeType": "image/png",
+      "size": 48213
+    },
+    "legacyEntry": {
+      "type": "message",
+      "id": "entry_fixture_shared_image_01",
+      "role": "assistant",
+      "text": "I shared an image: weekly-sales.png. Open this chat on your Mac to see it."
+    },
+    "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
   }
 }

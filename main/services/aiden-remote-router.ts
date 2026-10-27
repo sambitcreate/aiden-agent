@@ -42,6 +42,7 @@ import {
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -323,6 +324,9 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
+        // Contract revision 41 (`bot:images`).
+        | "sharedImage"
+        | "supportsSharedImages"
       >
     >;
   /**
@@ -389,6 +393,7 @@ export type AidenRemoteRouteLabel =
   | "botSession"
   | "botAttachment"
   | "botSessionEvents"
+  | "botSessionImage"
   | "botQuestionAnswer"
   | "botHandoffAnswer"
   | "botHandoffOpenOnMac"
@@ -478,6 +483,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
+  botSessionImage: ["/bots/:botId/session/images/:entryId"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
@@ -1714,6 +1720,20 @@ function holdsBotHandoffNotes(
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
 }
 
+/** Revision 41: shared-image entries and their byte route ship together, or not at all. */
+function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
+}
+
+/** Whether this device is sent `shared_image` entries (revision 41). */
+function holdsBotImages(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:images") && botImagesWired(dependencies);
+}
+
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -1776,6 +1796,10 @@ function advertisedServerCapabilities(
     // Revision 37: offered only while the hand-off and pause routes are wired.
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
+      : []),
+    // Revision 41: offered only while shared images and their route are wired.
+    ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
@@ -2167,6 +2191,11 @@ export function createAidenRemoteRequestHandler(
             if (!botHandoffsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 41: an opt-in to shared-image entries, offered only while their route is wired.
+            if (!botImagesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
+            }
           } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
@@ -2457,6 +2486,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            images: holdsBotImages(device, dependencies),
           }),
         );
         return;
@@ -2479,8 +2509,25 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            images: holdsBotImages(device, dependencies),
           },
         );
+        return;
+      }
+      const botSessionImageMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/images\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      if (botSessionImageMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "botSessionImage";
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botImagesWired(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // The image is part of the Bot's transcript: reading it is a chat read.
+        requireDeviceCapabilities(device, ["chat:read", "bot:images"]);
+        const image = await dependencies.botSessions!.sharedImage!(botSessionImageMatch[1]!, botSessionImageMatch[2]!);
+        writeAttachmentContent(response, { bytes: image.bytes, mimeType: image.mimeType });
         return;
       }
       const botMessagesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/messages$/u.exec(path);

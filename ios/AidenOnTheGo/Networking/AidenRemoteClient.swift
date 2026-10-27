@@ -1056,7 +1056,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes,
+            .botHandoffNotes, .botImages,
             .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
@@ -2139,6 +2139,40 @@ final class AidenRemoteClient: @unchecked Sendable {
             try rejectContractResponse()
         }
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
+    }
+
+    /// Revision 41 (`bot:images`): the bytes of an image the Bot shared, read
+    /// while it is in the Bot's current conversation. Only PNG and JPEG, at
+    /// most the Mac's inline image limit, are accepted.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
+        try validateBotIdentifier(botId)
+        try validateRemoteIdentifier(entryId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["bots", botId, "session", "images", entryId],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("image/png, image/jpeg", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenBotSessionWire.maxSharedImageBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              AidenBotSessionWire.sharedImageMIMETypes.contains(contentType),
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              !data.isEmpty else {
+            try rejectContractResponse()
+        }
+        return data
     }
 
     func scheduledTasks() async throws -> [AidenScheduledTask] {

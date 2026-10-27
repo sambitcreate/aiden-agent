@@ -342,6 +342,21 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         guard let next else { throw URLError(.notConnectedToInternet) }
         return try next.get()
     }
+
+    private var _images: [String: Data] = [:]
+    private var _imageRequests: [String] = []
+    /// Revision 41: the bytes the Mac holds for each shared image; any other id fails as offline.
+    func holdImage(_ data: Data, entryId: String) { locked { _images[entryId] = data } }
+    var imageRequests: [String] { locked { _imageRequests } }
+
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
+        let data = locked { () -> Data? in
+            _imageRequests.append(entryId)
+            return _images[entryId]
+        }
+        guard let data else { throw URLError(.notConnectedToInternet) }
+        return data
+    }
 }
 
 @MainActor
@@ -538,6 +553,32 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
         XCTAssertEqual(model.seq, 21)
         XCTAssertEqual(transport.sessionRequests, 1, "A snapshot frame never needs a refetch.")
+    }
+
+    /// Revision 41: an image the Bot shared is read from the Mac when it is
+    /// drawn, once while the chat is open; a failed read is tried again, and an
+    /// id the transcript doesn't hold is never asked for.
+    func testSharedImageIsReadOnceAndAFailedReadIsTriedAgain() async throws {
+        let transport = FakeBotSessionTransport()
+        let image = AidenBotSharedImage(id: "entry_7", name: "chart.png", mimeType: "image/png", size: 4)
+        let model = await loadedModel(transport, try session(
+            seq: 1,
+            entries: [message("m1", .user, "Chart it"), .sharedImage(image)]
+        ))
+
+        let offline = await model.sharedImageData(entryId: image.id)
+        XCTAssertNil(offline, "the Mac couldn't send it yet")
+        let bytes = Data([0x89, 0x50, 0x4e, 0x47])
+        transport.holdImage(bytes, entryId: image.id)
+        let first = await model.sharedImageData(entryId: image.id)
+        let second = await model.sharedImageData(entryId: image.id)
+        XCTAssertEqual(first, bytes)
+        XCTAssertEqual(second, bytes)
+        XCTAssertEqual(transport.imageRequests, [image.id, image.id], "one failed read, then one read kept for the chat")
+
+        let unknown = await model.sharedImageData(entryId: "entry_99")
+        XCTAssertNil(unknown)
+        XCTAssertEqual(transport.imageRequests.count, 2, "an id the transcript doesn't hold never reaches the Mac")
     }
 
     func testEntryWithAKnownIDReplacesItInPlaceAndEmptyPartialClears() async throws {
