@@ -418,6 +418,18 @@ enum AidenChatModelAuthority {
                 thinkingLevel: selectedThinkingLevel
             )
         }
+        // A chat that already has messages keeps its own model. The remembered
+        // per-host choice (passed only until the user picks in this chat)
+        // seeds a new chat, or one whose model this phone can't use.
+        if remembered != nil, !chat.messages.isEmpty, let own = ownSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: selectedProviderId,
+            selectedModelId: selectedModelId,
+            selectedThinkingLevel: selectedThinkingLevel
+        ) {
+            return own
+        }
         if let remembered = rememberedSelection(remembered, in: catalog) {
             return remembered
         }
@@ -460,6 +472,26 @@ enum AidenChatModelAuthority {
             return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Replies from here use \(replyModelLabel).")
         }
         return String(localized: "This chat used \(agentLabel), which runs only on your Mac. Choose a model for replies from here.")
+    }
+
+    /// The chat's own provider/model pair, when the host still offers it.
+    /// Hidden models stay usable here, as they do for existing chats on the Mac.
+    static func ownSelection(
+        chat: AidenChat,
+        catalog: AidenModelCatalog,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ) -> AidenChatModelSelection? {
+        guard let providerId = chat.providerId,
+              let modelId = chat.modelId,
+              let provider = catalog.providers.first(where: { $0.id == providerId }),
+              let model = provider.models.first(where: { $0.id == modelId }) else { return nil }
+        let keepsLevel = selectedProviderId == providerId && selectedModelId == modelId
+        let thinkingLevel = (keepsLevel ? selectedThinkingLevel : nil).flatMap { level in
+            model.thinkingLevels?.contains(level) == true ? level : nil
+        } ?? model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId: providerId, modelId: modelId, thinkingLevel: thinkingLevel)
     }
 
     /// The per-host remembered choice applies only while the host's current
@@ -2858,21 +2890,26 @@ final class AidenChatViewModel {
         rememberExplicitModelSelection()
     }
 
-    /// An explicit composer choice becomes this paired Mac's remembered
-    /// default for later Workspace chats and launches.
+    /// An explicit composer choice stays with this chat. In a new chat (no
+    /// messages yet) it becomes this paired Mac's remembered default for later
+    /// Workspace chats and launches. In an existing chat it is kept for that
+    /// chat alone until its next send, so reopening the chat still shows it and
+    /// the model other chats start with never changes.
     private func rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         guard !isReadOnlyFixture, !isRemoved, !chat.isBotChat,
               let context = modelPreferenceContext,
               coordinator.isCurrent(context) else { return }
-        modelPreferenceStore.remember(
-            AidenChatModelSelection(
-                providerId: selectedProviderId,
-                modelId: selectedModelId,
-                thinkingLevel: selectedThinkingLevel
-            ),
-            for: context.instanceId
+        let selection = AidenChatModelSelection(
+            providerId: selectedProviderId,
+            modelId: selectedModelId,
+            thinkingLevel: selectedThinkingLevel
         )
+        if chat.messages.isEmpty {
+            modelPreferenceStore.remember(selection, for: context.instanceId)
+        } else {
+            modelPreferenceStore.rememberChat(selection, for: context.instanceId, chatID: chat.id)
+        }
     }
 
     func setBotVisionModelSelection(_ selection: AidenBotModelSelection?) {
@@ -2996,6 +3033,18 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
+            // The Mac now holds this pick as the chat's own model.
+            if !chat.isBotChat {
+                modelPreferenceStore.forgetChat(
+                    for: context.instanceId,
+                    chatID: chat.id,
+                    matching: AidenChatModelSelection(
+                        providerId: request.providerId,
+                        modelId: request.modelId,
+                        thinkingLevel: request.thinkingLevel
+                    )
+                )
+            }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(
@@ -4115,6 +4164,15 @@ final class AidenChatViewModel {
     }
 
     private func resolveModelSelection() {
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if !hasExplicitModelSelection, !isReadOnlyFixture, !chat.isBotChat, !chat.messages.isEmpty,
+           let pick = modelPreferenceStore.chatSelection(for: instanceId, chatID: chat.id) {
+            selectedProviderId = pick.providerId
+            selectedModelId = pick.modelId
+            selectedThinkingLevel = pick.thinkingLevel
+            hasExplicitModelSelection = true
+        }
         let selection = AidenChatModelAuthority.resolvedSelection(
             chat: chat,
             catalog: catalog,

@@ -331,6 +331,8 @@ export function registerChatHistoryHandlers(): void {
 
   ipcMain.handle("chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels);
 
+  ipcMain.handle("chats:setModel", rendererChats.setModel);
+
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
   );

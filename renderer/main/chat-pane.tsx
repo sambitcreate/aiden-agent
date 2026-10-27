@@ -147,8 +147,10 @@ import {
 } from "../lib/queries";
 import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
 import {
+  chatModelSelection,
   isModelSelectionReadyForNewWork,
   resolveVisibleModelSelection,
+  setActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
@@ -338,12 +340,54 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(
+  const appModel = useModelSelection(
     providers.data,
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
   const hasMessages = (chat.data?.messages.length ?? 0) > 0;
+  // A chat with messages owns its model: picking one here changes this chat
+  // only. An empty chat follows, and sets, the app's model for new chats.
+  const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
+  const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
+  const selectAppModel = appModel.select;
+  // The latest pick per chat, so an older pick's answer never replaces a newer one.
+  const chatModelPicksRef = React.useRef(new Map<string, number>());
+  const select = React.useCallback(
+    (nextProviderId: string, nextModel: string) => {
+      if (!chatOwnsModel) {
+        selectAppModel(nextProviderId, nextModel);
+        return;
+      }
+      const key = queryKeys.chat(chatId);
+      const pick = (chatModelPicksRef.current.get(chatId) ?? 0) + 1;
+      chatModelPicksRef.current.set(chatId, pick);
+      const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
+      const withModel = (pair: Pick<Chat, "providerId" | "model">) => (current: Chat | null | undefined) =>
+        current ? { ...current, providerId: pair.providerId, model: pair.model } : current;
+      const previous = qc.getQueryData<Chat | null>(key);
+      void (async () => {
+        // A read started before this pick must not land on top of it.
+        await qc.cancelQueries({ queryKey: key, exact: true });
+        if (!isLatestPick()) return;
+        qc.setQueryData<Chat | null>(key, withModel({ providerId: nextProviderId, model: nextModel }));
+        try {
+          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
+          // A read that overlapped the save may still carry the old model.
+          if (saved && isLatestPick()) qc.setQueryData<Chat | null>(key, withModel(saved));
+          void qc.invalidateQueries({ queryKey: queryKeys.chats });
+        } catch (error) {
+          if (isLatestPick() && previous) qc.setQueryData<Chat | null>(key, withModel(previous));
+          toast.error(error instanceof Error ? error.message : "This chat's model could not be changed.");
+        }
+      })();
+    },
+    [chatId, chatOwnsModel, qc, selectAppModel],
+  );
+  React.useEffect(() => {
+    if (!chatOwnsModel) return;
+    return setActiveChatModelTarget({ chatId, selection: { providerId, model }, select });
+  }, [chatId, chatOwnsModel, model, providerId, select]);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&

@@ -1630,6 +1630,36 @@ export function createChatStore(
       });
     },
 
+    /**
+     * Change the model an ordinary chat answers with. It is this chat's own
+     * choice: other chats and the app's model for new chats stay as they are,
+     * and neither the history nor the sidebar order changes.
+     */
+    async setChatModelSelection(
+      id: string,
+      providerId: string,
+      model: string,
+      assertCurrent: (chat: Chat) => void | Promise<void> = () => undefined,
+    ): Promise<Chat> {
+      return shared([id], true, async () => {
+        const chat = await readChat(id, "owner");
+        if (!chat) throw new Error(`Chat ${id} not found`);
+        await assertCurrent(chat);
+        if (chat.botId) {
+          throw new Error("A Bot chat's model changes in the Bot's settings.");
+        }
+        const resolvedProviderId = await resolveProviderId(providerId);
+        if (!resolvedProviderId || !model.trim()) {
+          throw new Error("A chat model selection requires a provider and model.");
+        }
+        if (chat.providerId === resolvedProviderId && chat.model === model) return chat;
+        chat.providerId = resolvedProviderId;
+        chat.model = model;
+        await writeChatAndMeta(chat);
+        return chat;
+      });
+    },
+
     /** Persist the user's per-chat Computer Use grant without reordering history. */
     async setComputerUseAllowed(id: string, allowed: boolean): Promise<Chat> {
       return updateComputerUseAccess(id, (chat) => {

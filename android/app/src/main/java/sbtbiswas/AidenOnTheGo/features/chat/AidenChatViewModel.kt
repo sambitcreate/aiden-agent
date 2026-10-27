@@ -1302,21 +1302,25 @@ class AidenChatViewModel(
     }
 
     /**
-     * An explicit composer choice becomes this paired Mac's remembered
-     * default for later Workspace chats and launches, and it stops this chat
-     * from being re-seeded by the remembered value on catalog refreshes.
+     * An explicit composer choice stays with this chat and stops it from being
+     * re-seeded by the remembered value on catalog refreshes. It always joins
+     * the picker's Recent list. In a new chat (no messages yet) it becomes this
+     * paired Mac's remembered default for later Workspace chats; in an existing
+     * chat it is kept for that chat alone until its next send, so reopening the
+     * chat still shows it and the model other chats start with never changes.
      */
     private fun rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         if (instanceId.isEmpty()) return
-        modelPreferenceStore.remember(
-            instanceId,
-            AidenChatModelSelection(
-                providerId = _selectedProviderId.value,
-                modelId = _selectedModelId.value,
-                thinkingLevel = _selectedThinkingLevel.value
-            )
+        val currentChat = _chat.value
+        val selection = AidenChatModelSelection(
+            providerId = _selectedProviderId.value,
+            modelId = _selectedModelId.value,
+            thinkingLevel = _selectedThinkingLevel.value
         )
+        val newChat = currentChat == null || currentChat.messages.isEmpty()
+        modelPreferenceStore.remember(instanceId, selection, asDefault = newChat)
+        if (!newChat) modelPreferenceStore.rememberChat(instanceId, chatId, selection)
     }
 
     fun loadChat() {
@@ -1358,6 +1362,18 @@ class AidenChatViewModel(
 
     private fun resolveModelSelection() {
         val currentChat = _chat.value ?: return
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if (!hasExplicitModelSelection && instanceId.isNotEmpty() && !currentChat.isBotChat &&
+            currentChat.messages.isNotEmpty()
+        ) {
+            modelPreferenceStore.chatSelection(instanceId, chatId)?.let { pick ->
+                _selectedProviderId.value = pick.providerId
+                _selectedModelId.value = pick.modelId
+                _selectedThinkingLevel.value = pick.thinkingLevel
+                hasExplicitModelSelection = true
+            }
+        }
         val selection = AidenChatModelAuthority.resolvedSelection(
             chat = currentChat,
             catalog = _catalog.value,
@@ -1400,7 +1416,6 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value
         )
-
         val request = retryAttempt?.request ?: AidenTurnRequestBuilder.make(
             text = text,
             providerId = turnModel.providerId,
@@ -1458,6 +1473,14 @@ class AidenChatViewModel(
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                // The Mac now holds this pick as the chat's own model.
+                if (!currentChat.isBotChat && instanceId.isNotEmpty()) {
+                    modelPreferenceStore.forgetChat(
+                        instanceId,
+                        chatId,
+                        matching = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+                    )
+                }
                 lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
