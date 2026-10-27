@@ -121,10 +121,11 @@ import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
-import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { systemTimezone } from "./schedule-store.js";
 import { botMemoryService } from "./bot-memory/bot-memory-main.js";
 import { botRoutineProposals } from "./bot-routine-proposals-main.js";
-import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
+import { createBotNotificationFeed } from "./bot-routine-notifications.js";
+import { botDeliveryLog } from "./bot-delivery/funnel-main.js";
 import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
@@ -927,8 +928,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 // Contract revision 27: the desktop's own memory and proposal services.
                 memory: botMemoryService,
                 proposals: botRoutineProposals,
-                routineNotifications: createBotRoutineNotificationFeed({
-                  store: scheduleStore,
+                routineNotifications: createBotNotificationFeed({
+                  log: botDeliveryLog,
                   botName: async (botId) => (await botStore.get(botId))?.name,
                 }),
               })

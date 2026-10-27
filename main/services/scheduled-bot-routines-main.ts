@@ -15,7 +15,8 @@ export const botRoutineNotes = createBotRoutineNotesStore({ profileDir: () => ap
 
 /**
  * The durable Bot session the scheduler submits routines to, plus the
- * routine's notes and the Telegram fan-out of its result.
+ * routine's notes. A routine's result leaves through the delivery funnel, not
+ * through these ports.
  */
 export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
   const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
@@ -27,10 +28,6 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
-    async deliverResult(delivery) {
-      const { telegramService } = await import("./telegram/telegram-service.js");
-      await telegramService.deliverBotRoutineResult(delivery);
-    },
   };
 }
 

@@ -9,6 +9,7 @@ import type {
 } from "./bot-routines-port.js";
 import { createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
+import type { BotDeliveryInput } from "./bot-delivery/funnel.js";
 import {
   BOT_ROUTINE_CATCH_UP_WINDOW_MS,
   createBotRoutineCatchUp,
@@ -19,7 +20,6 @@ import {
   parseBotRoutineCreate,
   parseBotRoutineRunNow,
   parseBotRoutineUpdate,
-  type BotRoutineResultDelivery,
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
 
@@ -92,16 +92,20 @@ class FakeBotSession implements BotRoutinePorts {
     this.silenced.push({ botId, submissionId });
   }
 
-  /** What the routine handed to the Bot's other surfaces (its Telegram chat). */
-  deliveries: BotRoutineResultDelivery[] = [];
+  /**
+   * What a visible routine result or failure handed to the delivery funnel;
+   * the harness stands in for the real log, Mac banner and Telegram.
+   */
+  deliveries: BotDeliveryInput[] = [];
   failNextDelivery = false;
 
-  async deliverResult(delivery: BotRoutineResultDelivery): Promise<void> {
+  async deliver(input: BotDeliveryInput): Promise<"sent"> {
     if (this.failNextDelivery) {
       this.failNextDelivery = false;
       throw new Error("The delivery queue is unavailable.");
     }
-    this.deliveries.push(delivery);
+    this.deliveries.push(input);
+    return "sent";
   }
 
   // The session's recovery actions exist on the real service; a routine must
@@ -122,12 +126,11 @@ function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } =
     new MemoryPersistence<unknown[]>([]),
   );
   const session = new FakeBotSession();
-  const notifications: Array<{ taskId: string; body: string }> = [];
   const controllers = new Map<string, AbortController>();
   const executor = createBotRoutineExecutor({
     store,
     ports: () => session,
-    notify: (task, body) => void notifications.push({ taskId: task.id, body }),
+    deliver: (input) => session.deliver(input),
     broadcast: () => undefined,
   });
   const run = (task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger) => {
@@ -164,7 +167,19 @@ function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } =
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, session, notifications, executor, run, scheduler, routines, bots };
+  return {
+    store,
+    session,
+    executor,
+    run,
+    scheduler,
+    routines,
+    bots,
+    /** What reached the person's Mac banner: the routine, and the delivered text. */
+    get notifications(): Array<{ taskId: string; body: string }> {
+      return session.deliveries.map((input) => ({ taskId: input.routineTask?.id ?? "", body: input.body }));
+    },
+  };
 }
 
 function jobFor(taskId: string) {
@@ -261,7 +276,7 @@ test("a paused recurring routine observes a fire Pi had already admitted", async
   const run = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(run.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a person-paused Bot holds an admitted fire until Resume without resubmitting it", async (t) => {
@@ -295,7 +310,7 @@ test("a person-paused Bot holds an admitted fire until Resume without resubmitti
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("restart completes delivery after a run was recorded without re-running Pi", async (t) => {
@@ -318,12 +333,12 @@ test("restart completes delivery after a run was recorded without re-running Pi"
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(h.session.sends.length, 0);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
   assert.equal((await h.store.get(routine.id))?.lastResult, "success");
   assert.equal((await h.store.get(routine.id))?.lastRunAt, (await h.store.runById(routine.id, requestId))?.finishedAt);
 });
 
-test("an unavailable runtime cannot overwrite a saved answer awaiting delivery", async (t) => {
+test("an unavailable runtime and delivery cannot overwrite a saved answer awaiting delivery", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
   const routine = await h.routines.create({
@@ -341,7 +356,7 @@ test("an unavailable runtime cannot overwrite a saved answer awaiting delivery",
   const unavailable = createBotRoutineExecutor({
     store: h.store,
     ports: async () => { throw new Error("Bot runtime unavailable."); },
-    notify: () => undefined,
+    deliver: async () => { throw new Error("The delivery queue is unavailable."); },
     broadcast: () => undefined,
   });
   const previous = await unavailable.run((await h.store.get(routine.id))!, {
@@ -353,7 +368,41 @@ test("an unavailable runtime cannot overwrite a saved answer awaiting delivery",
 
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
+});
+
+test("delivery never waits for the Bot runtime", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.store.recordRun({
+    id: requestId, taskId: routine.id, startedAt: due, finishedAt: Date.now(),
+    result: "success", output: "One urgent message.",
+  });
+  const bodies: string[] = [];
+  const executor = createBotRoutineExecutor({
+    store: h.store,
+    ports: async () => { throw new Error("Bot runtime unavailable."); },
+    deliver: async ({ body }) => {
+      bodies.push(body);
+      return "sent";
+    },
+    broadcast: () => undefined,
+  });
+
+  await executor.run((await h.store.get(routine.id))!, {
+    runId: requestId, trigger: { kind: "automatic", fireTime: due }, signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(bodies, ["One urgent message."], "the saved answer reaches the person");
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0, "the fire settled");
 });
 
 test("recovery waits for another run on the Bot routine and still submits its pending fire", async (t) => {
@@ -402,7 +451,7 @@ test("an ambiguous Pi admission stays pending and restart observes its original 
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a pending fire retries while Aiden stays open after an ambiguous admission", async (t) => {
@@ -425,7 +474,7 @@ test("a pending fire retries while Aiden stays open after an ambiguous admission
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("an automatic send failure before Pi admission is a visible terminal error", async () => {
@@ -478,7 +527,7 @@ test("cancelling an admitted automatic turn leaves the fire for idempotent recov
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a failed delivery handoff leaves the saved result for restart", async (t) => {
@@ -500,7 +549,7 @@ test("a failed delivery handoff leaves the saved result for restart", async (t) 
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 /**
@@ -1370,9 +1419,19 @@ test("a visible reply or a failure reaches the Bot's other surfaces once; silenc
   h.session.states.set("bot-scout", { kind: "interrupted", submissionId: "sub-paused" });
   await h.run(task, undefined, { kind: "automatic", fireTime: 4 });
 
-  assert.deepEqual(h.session.deliveries, [
-    { botId: "bot-scout", requestId: `routine:${routine.id}:1`, routineName: "Inbox sweep", text: "Rent is due Friday." },
-    // The failure's own text stays on the Mac.
-    { botId: "bot-scout", requestId: `routine:${routine.id}:3`, routineName: "Inbox sweep", text: "I couldn't finish this routine." },
-  ]);
+  assert.deepEqual(
+    h.session.deliveries.map(({ botId, requestId, title, body, status }) => ({ botId, requestId, title, body, status })),
+    [
+      {
+        botId: "bot-scout", requestId: `routine:${routine.id}:1`, title: "Inbox sweep",
+        body: "Rent is due Friday.", status: "succeeded",
+      },
+      // The Mac banner keeps the failure's own text; Telegram and phones show
+      // the fixed line for a failed row.
+      {
+        botId: "bot-scout", requestId: `routine:${routine.id}:3`, title: "Inbox sweep",
+        body: "The AI service at /Users/sam is unreachable.", status: "failed",
+      },
+    ],
+  );
 });

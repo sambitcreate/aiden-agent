@@ -375,6 +375,15 @@ async function deleteRoutines(botId: string): Promise<void> {
   await botRoutineService.deleteRoutinesForBot(botId);
 }
 
+/**
+ * The Bot's delivery rows go with it; the phone feed stops listing a Bot whose
+ * record is gone anyway, and a deleted id never comes back.
+ */
+async function forgetDeliveries(botId: string): Promise<void> {
+  const { botDeliveryLog } = await import("../bot-delivery/funnel-main.js");
+  await botDeliveryLog.forgetBot(botId);
+}
+
 /** Photo, managed home, access, chat rows, then the Bot record last. */
 async function eraseBotData(botId: string): Promise<void> {
   await botApplicationService.deleteBot({ botId });
@@ -516,6 +525,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
         resolvedModels.delete(botId);
       },
       deleteRoutines,
+      forgetDeliveries,
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
       (botId) => botRules.forgetBot(botId),

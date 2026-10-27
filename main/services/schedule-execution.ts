@@ -117,20 +117,6 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
   });
 }
 
-function notifyBotRoutine(task: ScheduledTask, body: string): void {
-  showScheduledNotification(task, body, task.botId, {
-    isSupported: () => Notification.isSupported(),
-    create: (options) => new Notification(options),
-    openChat: async (botId) => {
-      // The routine posted into the Bot's chat, not its Profile.
-      await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
-    },
-    onError: (stage) => {
-      logger.warn("schedule", `Routine notification ${stage} failed.`);
-    },
-  });
-}
-
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
   const activeControllers = new Map<string, AbortController>();
@@ -140,7 +126,9 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     (botRoutines ??= createBotRoutineExecutor({
       store,
       ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
-      notify: notifyBotRoutine,
+      // Everything a Bot says to the person leaves through one funnel: the
+      // delivery log, the Mac banner, Telegram and the phone feed.
+      deliver: async (input) => (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
       broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
     }));
 

@@ -9,6 +9,7 @@ import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilitie
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
 import { redactCredentialTokens } from "../shared/redaction.js";
 import { BOT_ROUTINE_NOTES_HEADER } from "./bot-routine-notes.js";
+import type { BotDeliveryFunnel } from "./bot-delivery/funnel.js";
 import type { BotRoutinePorts } from "./bot-routines-port.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
 import type {
@@ -82,15 +83,6 @@ export function isSilentBotRoutineReply(text: string): boolean {
 // Execution
 // ---------------------------------------------------------------------------
 
-/** A routine result handed to the person's other surfaces (their Telegram chat). */
-export interface BotRoutineResultDelivery {
-  botId: string;
-  /** The run's session request id: one delivery per routine firing. */
-  requestId: string;
-  routineName: string;
-  text: string;
-}
-
 /** What a routine failure says outside the Mac (the real error stays in the run record). */
 export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
 
@@ -101,8 +93,6 @@ export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
 export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   /** The notes this routine kept from earlier runs, rendered; "" when none. */
   routineNotes?(botId: string, taskId: string): Promise<string>;
-  /** Fan a visible result or failure out to the Bot's other surfaces. Must not throw for delivery problems. */
-  deliverResult?(delivery: BotRoutineResultDelivery): Promise<void>;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -114,7 +104,12 @@ export interface BotRoutineExecutorDependencies {
   };
   /** Late-bound so the Bot runtime can be swapped in after the scheduler is built. */
   ports(): BotRoutineExecutorPorts | Promise<BotRoutineExecutorPorts>;
-  notify(task: ScheduledTask, body: string): void;
+  /**
+   * The Bot delivery funnel: one durable row, one Mac banner, one Telegram
+   * message. Delivery never needs the Bot runtime, so an unavailable runtime
+   * still reaches the person.
+   */
+  deliver?: BotDeliveryFunnel["deliver"];
   broadcast(payload: Record<string, unknown>): void;
   now?: () => number;
 }
@@ -338,12 +333,18 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
                 current.lastError !== prior.error
               )) await dependencies.store.recordRun(prior);
               if (prior.result === "success" || prior.result === "error") {
-                const deliveryPorts = await dependencies.ports();
-                await deliveryPorts.deliverResult?.({
+                await dependencies.deliver?.({
                   botId: task.botId,
+                  class: "routine_result",
+                  dedupeKey: requestId,
+                  title: task.name?.trim() || "Routine",
+                  // The Mac banner keeps the (redacted) failure detail; Telegram
+                  // and phones swap in the fixed line for a failed row.
+                  body: prior.result === "error" ? prior.error ?? BOT_ROUTINE_FAILED_PREVIEW : prior.output,
+                  status: prior.result === "error" ? "failed" : "succeeded",
+                  routineTask: task,
                   requestId,
-                  routineName: task.name?.trim() || "Routine",
-                  text: prior.result === "error" ? BOT_ROUTINE_FAILED_PREVIEW : prior.output,
+                  ...(task.chatId !== undefined ? { chatId: task.chatId } : {}),
                 });
               }
               await dependencies.store.settleRoutineFire(task.id, requestId);
@@ -416,15 +417,20 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(outcome.failure !== undefined ? { failure: outcome.failure } : {}),
       });
       if (outcome.surface) {
-        dependencies.notify(task, outcome.error ?? outcome.output);
         try {
-          await ports
-            ?.deliverResult?.({
+          await dependencies.deliver?.({
             botId: task.botId,
+            class: "routine_result",
+            dedupeKey: requestId,
+            title: task.name?.trim() || "Routine",
+            // The Mac banner keeps the (redacted) failure detail; Telegram and
+            // phones swap in the fixed line for a failed row.
+            body: outcome.error ?? outcome.output,
+            status: outcome.result === "error" ? "failed" : "succeeded",
+            routineTask: task,
             requestId,
-            routineName: task.name?.trim() || "Routine",
-            text: outcome.error !== undefined ? BOT_ROUTINE_FAILED_PREVIEW : outcome.output,
-            });
+            ...(task.chatId !== undefined ? { chatId: task.chatId } : {}),
+          });
         } catch {
           // The run is durable. Keep its fire receipt so startup can retry the
           // idempotent delivery handoff without re-running the Bot.
