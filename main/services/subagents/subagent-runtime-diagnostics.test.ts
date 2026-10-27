@@ -204,3 +204,28 @@ test("persisted runtime evidence strips bare vendor credentials and omits provid
     assert.equal(record.diagnostics[0].code, "pre_ready_exit");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("journal redaction inspects control-split credentials before normalizing controls", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-control-"));
+  const target = path.join(root, "runtime.log");
+  const probes = [
+    "Loader failure r8_Replica\u0000teCredentialValue123456789",
+    "Loader failure gsk_Groq\u000bCredentialValue123456789",
+    "Loader failure r8_Replica%00teCredentialValue123456789",
+  ];
+  try {
+    initSubagentRuntimeDiagnostics(target);
+    for (const [index, detail] of probes.entries()) writeSubagentRuntimeFailure({
+      diagnosticId: `SA-control-${index}`, providerId: "test", modelId: "test-model", failure: "inference-startup", attempts: 1,
+      diagnostics: [{ stage: "bootstrap", code: "pre_ready_exit", detail }],
+    });
+    await flushSubagentRuntimeDiagnostics();
+    const raw = await readFile(target, "utf8");
+    assert.doesNotMatch(raw, /Replica|Groq|CredentialValue123456789/u);
+    const records = raw.trim().split("\n").map(line => JSON.parse(line));
+    assert.equal(records.length, probes.length);
+    for (const record of records) assert.equal(record.diagnostics[0].code, "pre_ready_exit");
+    assert.match(sanitizeSubagentDiagnosticText("Module\u0000loader failed"), /Module loader failed/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -398,7 +398,7 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 ## Execution record
 
-- W11 diagnostics candidate: reproduced a bare Replicate-token leak, shared the bounded self-identifying credential grammar and omitted arbitrary provider/provider-hook detail from the private journal. Existing assignment redaction remains covered; diagnostics/subagent suites and root types pass. See docs/security/diagnostic-redaction-2026-10-27.md. Fresh review and hosted CI pending.
+- W11 diagnostics candidate: reproduced a bare Replicate-token leak, shared the bounded self-identifying credential grammar and omitted arbitrary provider/provider-hook detail from the private journal. Existing assignment redaction remains covered; diagnostics/subagent suites and root types pass. See docs/security/diagnostic-redaction-2026-10-27.md. Fresh independent review found and closed early control normalization that concealed split credentials; hosted CI pending.
 
 - W10 implementation candidate: bounded fixed versions in both lockfiles; root and CLI audits report zero known advisories. Pi and electron-builder pins retained. See docs/security/dependency-maintenance-2026-10-27.md. Local verification: root/CLI types and builds, 146 CLI tests plus the built-CLI hostile-response/gzip probe, 352 MCP tests, 8 provider-failure tests, Markdown rendering and scoped lint pass. Stable Electron Node fix remains unavailable; fresh review, exact-head CI and proxy/custom-TLS production acceptance are tracked separately.
 
