@@ -133,3 +133,13 @@ export function formatScheduledTaskCadence(
   }
   return "Custom schedule";
 }
+
+/**
+ * Whether a task is enabled once its approval goes through. A pause or resume
+ * proposal carries the task's state while it waits, so the action decides.
+ */
+export function scheduledTaskEnabledAfterApproval(details: { action: string; enabled?: boolean | undefined }): boolean {
+  if (details.action === "resume") return true;
+  if (details.action === "pause") return false;
+  return details.enabled !== false;
+}

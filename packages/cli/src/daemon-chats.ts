@@ -30,6 +30,24 @@ import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
 
+/**
+ * The approval summary a paired phone shows. A call with only a command or path reads
+ * like the desktop host's ("Run command: npm test"); anything else stays the exact
+ * request, so nothing the call would do is hidden.
+ */
+export function daemonApprovalSummary(toolName: string, input: unknown): string {
+  const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+  const only = (key: string) => {
+    const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const readable = toolName === "bash" ? only("command") && `Run command: ${only("command")}`
+    : toolName === "read" ? only("path") && `Read file: ${only("path")}`
+      : toolName === "ls" ? only("path") && `List folder: ${only("path")}`
+        : undefined;
+  return readable || `${toolName}: ${JSON.stringify(input)}`;
+}
+
 /** One daemon owns this store. CLI imports always copy its journals into new sessions. */
 export function createDaemonChats(agentDir: string) {
   let bots: CliBotGenerationRuntime | undefined;
@@ -193,7 +211,7 @@ export function createDaemonChats(agentDir: string) {
                 approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
                 entry.abort.signal.addEventListener("abort", cancel, { once: true });
                 if (entry.abort.signal.aborted) cancel();
-                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: `${event.toolName}: ${original}` });
+                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
               });
               await assertAuthority();
               if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };

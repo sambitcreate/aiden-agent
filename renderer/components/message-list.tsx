@@ -25,10 +25,12 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  isExtractionStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
+import { WebExtractRecap } from "./web-extract-recap";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -275,6 +277,9 @@ function AssistantResponse({
         {null /* the chronological layout's leading subagent slot */}
         {[
           <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          ...(timeline?.steps.filter(isExtractionStep).map((step) => (
+            <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+          )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
           )) ?? []),
@@ -338,6 +343,9 @@ function AssistantResponse({
         }
         if (row.kind === "questionnaire") {
           return <AskUserQuestionRecap key={row.key} recap={row.step.questionnaire} />;
+        }
+        if (row.kind === "extraction") {
+          return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
         }
         if (row.kind === "activity") {
           return (

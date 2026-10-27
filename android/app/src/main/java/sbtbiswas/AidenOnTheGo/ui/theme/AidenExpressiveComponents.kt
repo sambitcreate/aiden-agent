@@ -309,6 +309,8 @@ fun AidenSplitButton(
     containerColor: Color = AidenTheme.palette.accentFill.fill,
     contentColor: Color = AidenTheme.palette.accentFill.content,
     height: Dp = 40.dp,
+    /** Stretch the primary segment across the width the [modifier] gives the button. */
+    fillWidth: Boolean = false,
     menuContent: @Composable ColumnScope.() -> Unit
 ) {
     val reduceMotion = aidenReduceMotion()
@@ -332,6 +334,7 @@ fun AidenSplitButton(
             contentColor = contentColor,
             interactionSource = primaryInteraction,
             modifier = Modifier
+                .then(if (fillWidth) Modifier.weight(1f) else Modifier)
                 .fillMaxHeight()
                 .tactilePress(primaryInteraction)
                 .semantics { role = Role.Button }
@@ -339,7 +342,7 @@ fun AidenSplitButton(
             Row(
                 modifier = Modifier.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)
             ) {
                 if (leadingIcon != null) {
                     Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(16.dp))

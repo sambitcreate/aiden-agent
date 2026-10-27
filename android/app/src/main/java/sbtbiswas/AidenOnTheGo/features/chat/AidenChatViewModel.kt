@@ -2720,7 +2720,8 @@ class AidenChatViewModel(
                 hasRequiredWriteCapability = hasWrite,
                 hostCanAllow = approval.canAllow,
                 canAllow = canControl && approval.canAllow && hasWrite,
-                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE)
+                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
+                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->

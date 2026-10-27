@@ -7,6 +7,7 @@ import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { McpLiveStatusRegistry } from "../services/mcp-status-events.js";
 import { createMcpStdioApprovalStore, type McpStdioApprovalStore } from "../services/mcp-stdio-approvals.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "../services/mcp-mac-apps.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,9 +23,22 @@ const noApprovals: McpStdioApprovalStore = {
   forget: async () => undefined,
 };
 
+/** A Mac with iMCP installed in /Applications and not running. */
+function macWithImcp(opened: string[]): McpMacAppProbe {
+  return {
+    platform: "darwin",
+    homedir: "/Users/me",
+    isExecutable: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    bundleInfo: async (bundle, key) => (bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier" ? "co.dododo.iMCP" : undefined),
+    isRunning: async () => false,
+    open: async (bundle) => { opened.push(bundle); },
+  };
+}
+
 function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegistry(), approvals = noApprovals) {
   const handlers = new Map<string, (event: string, ...args: unknown[]) => unknown>();
   const log: string[] = [];
+  const opened: string[] = [];
   const drafts: Array<{ server: McpServer; credentials: McpDraftCredentials }> = [];
   let destroyed = false;
   let waiting = new Set<string>();
@@ -76,12 +90,14 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
     },
     approveLaunch: (server, fingerprint) => approvals.approveShown(server, fingerprint),
     launchApproved: (server) => approvals.isApproved(server),
+    macAppStatus: (preset) => mcpMacAppStatus(preset, macWithImcp(opened)),
+    openMacApp: (preset) => openMcpMacApp(preset, macWithImcp(opened)),
   };
   registerMcpControlHandlers(deps);
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
   return {
-    invoke, log, drafts, admitted, authorizations,
+    invoke, log, drafts, admitted, authorizations, opened,
     setAuthorizeResult: (result: typeof authorizeResult) => { authorizeResult = result; },
     holdAuthorize: () => { let release!: () => void; authorizeGate = new Promise((resolve) => { release = resolve; }); return release; },
     invalidate: () => { destroyed = true; for (const listener of invalidated) listener(); },
@@ -277,4 +293,24 @@ test("local servers added outside Aiden are listed with what they run and approv
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", linear.id, pending!.fingerprint), /Only local/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", "files", "nope"), /Invalid launch fingerprint/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "foreign", "files", pending!.fingerprint), /Untrusted/u);
+});
+
+test("Mac app status and Open serve only a Mac app connector, from the live document", async () => {
+  const ipc = setup();
+  assert.deepEqual(await ipc.invoke("mcp:macAppStatus", "settings", "imcp"), {
+    supported: true,
+    installed: true,
+    command: "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    open: false,
+  });
+  assert.deepEqual(await ipc.invoke("mcp:openMacApp", "settings", "imcp"), { opened: true });
+  assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"]);
+  for (const presetId of ["notion", "figma-desktop", "unknown", "", 42]) {
+    await assert.rejects(ipc.invoke("mcp:macAppStatus", "settings", presetId), /Mac app|presetId/u, String(presetId));
+    await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", presetId), /Mac app|presetId/u, String(presetId));
+  }
+  await assert.rejects(ipc.invoke("mcp:openMacApp", "foreign", "imcp"), /Untrusted/u);
+  ipc.destroy();
+  await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", "imcp"), /active application document/u);
+  assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"], "nothing else was opened");
 });
