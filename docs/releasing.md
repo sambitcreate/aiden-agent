@@ -62,7 +62,9 @@ authority. Ordinary model reads and application startup remain offline.
   in one public GitHub release in this repository. The workflow also uploads a byte-identical
   `Aiden-Agent-Beta-arm64.dmg` alias so the website can use GitHub's stable
   `releases/latest/download` URL without a per-release source edit. Each release includes
-  GitHub-generated notes for changes since the previous release. The DMGs are website and
+  GitHub-generated notes for changes since the previous release. When the version-bump pull
+  request adds `docs/release-notes/v<version>.md`, the publisher places that reviewed text
+  between the Beta line and the generated notes (see [release notes](release-notes/README.md)). The DMGs are website and
   Homebrew downloads; the ZIP and YAML are the updater payload.
 - Release-related pull requests run the separate release-consumer contract workflow. It verifies
   the versioned DMG name against `sambitcreate/homebrew-tap`, verifies the deployed website points

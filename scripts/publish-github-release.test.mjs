@@ -42,6 +42,7 @@ if (args[0] === "release" && args[1] === "view") {
 
 if (args[0] === "release" && args[1] === "create") {
   state.createCalls += 1;
+  state.notes = args[args.indexOf("--notes") + 1];
   state.exists = true;
   state.target = state.createTarget || process.env.GITHUB_SHA;
   state.draft = state.createDraft ?? true;
@@ -77,7 +78,8 @@ async function fixture(initialState) {
   const bin = path.join(root, "bin");
   const distribution = path.join(root, "distribution");
   const runnerTemp = path.join(root, "runner");
-  await Promise.all([mkdir(bin), mkdir(distribution), mkdir(runnerTemp)]);
+  const releaseNotes = path.join(root, "release-notes");
+  await Promise.all([mkdir(bin), mkdir(distribution), mkdir(runnerTemp), mkdir(releaseNotes)]);
   await Promise.all([
     writeFile(path.join(distribution, "Aiden-Agent-Beta-0.30.1-arm64.dmg"), "dmg"),
     writeFile(path.join(distribution, "Aiden-Agent-0.30.1-arm64-mac.zip"), "zip"),
@@ -115,6 +117,7 @@ async function fixture(initialState) {
   );
   return {
     distribution,
+    releaseNotes,
     statePath,
     env: {
       ...process.env,
@@ -127,6 +130,7 @@ async function fixture(initialState) {
       RELEASE_VERSION: "0.30.1",
       RUNNER_TEMP: runnerTemp,
       AIDEN_RELEASE_RETRY_BASE_SECONDS: "0",
+      AIDEN_RELEASE_NOTES_DIR: releaseNotes,
     },
   };
 }
@@ -159,6 +163,24 @@ test("reconciles transient lookup, create, and publish failures without replacin
       "latest-linux.yml",
       "latest-linux-arm64.yml",
     ].sort(),
+  );
+});
+
+test("release notes name the Beta channel and lead the generated changelog", async () => {
+  const plain = await fixture({});
+  await execFileAsync("bash", [publisher.pathname, plain.distribution], { env: plain.env });
+  const plainState = JSON.parse(await readFile(plain.statePath, "utf8"));
+  assert.equal(plainState.notes, "Aiden Agent beta release. Changes since the previous release:");
+
+  const noted = await fixture({});
+  const warning = "**Bot databases migrate one way.** Older versions can't open them afterwards.";
+  await writeFile(path.join(noted.releaseNotes, "v0.30.1.md"), `${warning}\n`);
+  await writeFile(path.join(noted.releaseNotes, "v0.30.0.md"), "Notes for another release.\n");
+  await execFileAsync("bash", [publisher.pathname, noted.distribution], { env: noted.env });
+  const notedState = JSON.parse(await readFile(noted.statePath, "utf8"));
+  assert.equal(
+    notedState.notes,
+    `Aiden Agent beta release.\n\n${warning}\n\nChanges since the previous release:`,
   );
 });
 
