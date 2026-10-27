@@ -1380,7 +1380,8 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
   const token = `umbrelmcp_${"63d71902b67b06ef".repeat(8)}`;
   const prompt = [
     `Add my Umbrel to the global MCP config. The auth header is Authorization: Bearer ${token}.`,
-    ...Array.from({ length: 10 }, (_, index) => `Step ${index + 1}: check the server and report what you find.`),
+    // Taller than the window once expanded, so Find has to scroll to its match.
+    ...Array.from({ length: 60 }, (_, index) => `Step ${index + 1}: check the server and report what you find.`),
     "END-OF-PROMPT",
   ].join("\n");
   await page.locator("textarea").fill(prompt);
@@ -1422,6 +1423,19 @@ test("a long prompt wraps inside its column, folds behind a chevron, and copies 
     ),
   ).toBe(true);
   await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  // The match itself ends up inside the transcript's viewport, not just unclipped.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const selection = window.getSelection();
+        const scroller = document.querySelector("[data-follow]");
+        if (!selection || selection.rangeCount === 0 || !scroller) return false;
+        const match = selection.getRangeAt(0).getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        return selection.toString() === "END-OF-PROMPT" && match.top >= view.top && match.bottom <= view.bottom;
+      }),
+    )
+    .toBe(true);
   await page.evaluate(() => window.getSelection()?.removeAllRanges());
   await showLess.click();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");

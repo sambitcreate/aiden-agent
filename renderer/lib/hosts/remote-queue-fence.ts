@@ -12,15 +12,16 @@ import * as React from "react";
 export interface RemoteQueueFence {
   /** The accepted turn's run (its stream id). */
   runId: string;
-  /** The transcript revision when the turn was accepted. */
-  revision: string | null;
   /** When it was accepted, for the stall fallback. */
   since: number;
+  /** The host's chat list has shown this chat working since the turn was accepted. */
+  sawActive?: boolean;
 }
 
 export interface RemoteQueueFenceView {
   run: { runId: string | null; ended: boolean } | null;
-  transcript: { revision: string | null; lastRole: string | undefined };
+  /** The chat's activity as the host's live chat list reports it, when listed. */
+  hostActivity: "idle" | "active" | undefined;
   now: number;
 }
 
@@ -28,9 +29,11 @@ export interface RemoteQueueFenceView {
 export const REMOTE_QUEUE_FENCE_STALL_MS = 120_000;
 
 /**
- * Whether the fence still holds. It lifts only on evidence the turn finished:
- * its run was seen ending, or the host has since saved a reply (the
- * transcript moved on and now ends with the assistant) while no run is active.
+ * Whether the fence still holds. It lifts only on the host's own word that the
+ * turn settled: its run was seen ending, or the host's chat list showed the
+ * chat working and then idle again. The host saves the reply before it lets
+ * the turn go, so a transcript ending in that reply proves nothing; the list
+ * turns idle and the run ends only after the turn is released.
  */
 export function remoteQueueFenceHolds(fence: RemoteQueueFence | null, view: RemoteQueueFenceView): boolean {
   if (!fence) return false;
@@ -38,11 +41,7 @@ export function remoteQueueFenceHolds(fence: RemoteQueueFence | null, view: Remo
   const run = view.run;
   if (run?.runId === fence.runId) return !run.ended;
   const runActive = Boolean(run && run.runId !== null && !run.ended);
-  const replied =
-    view.transcript.revision !== null &&
-    view.transcript.revision !== fence.revision &&
-    view.transcript.lastRole === "assistant";
-  return runActive || !replied;
+  return runActive || !(fence.sawActive && view.hostActivity === "idle");
 }
 
 const fences = new Map<string, RemoteQueueFence>();

@@ -318,6 +318,8 @@ export interface RemoteChatPaneProps {
   onOpenChat?(chatId: string): void;
   /** Called as a summary action starts; the returned function takes the action's answer. */
   beginLineageChange?(): (lineage: HostChatLineage) => void;
+  /** The chat's activity in the host's live chat list (`idle` once a turn is released). */
+  hostActivity?: "idle" | "active";
   /** The host's models, for this chat's model and effort controls. */
   models?: HostModelCatalog;
   modelsLoading?: boolean;
@@ -346,6 +348,7 @@ export function RemoteChatPane({
   beginLineageChange,
   models,
   modelsLoading = false,
+  hostActivity,
 }: RemoteChatPaneProps) {
   const messages = snapshot?.transcript.messages ?? [];
   const run = snapshot?.run;
@@ -421,9 +424,15 @@ export function RemoteChatPane({
   const [fenceClock, setFenceClock] = React.useState(() => Date.now());
   const fenceHolds = remoteQueueFenceHolds(fence, {
     run: run ? { runId: run.runId, ended: run.ended } : null,
-    transcript: { revision: snapshot?.transcript.revision ?? null, lastRole: messages[messages.length - 1]?.role },
+    hostActivity,
     now: Math.max(fenceClock, fence?.since ?? 0),
   });
+  React.useEffect(() => {
+    // Remember the host showed this chat working, so its next idle means the turn is done.
+    if (fence && !fence.sawActive && hostActivity === "active" && turnKey && remoteQueueFence(turnKey) === fence) {
+      setRemoteQueueFence(turnKey, { ...fence, sawActive: true });
+    }
+  }, [fence, hostActivity, turnKey]);
   React.useEffect(() => {
     if (fence && !fenceHolds && turnKey && remoteQueueFence(turnKey) === fence) setRemoteQueueFence(turnKey, null);
   }, [fence, fenceHolds, turnKey]);
@@ -457,9 +466,8 @@ export function RemoteChatPane({
     send: async (message) => {
       // Bound now, so a receipt that lands after this pane closes still fences its chat.
       const key = turnKey;
-      const revision = snapshot?.transcript.revision ?? null;
       const receipt = await sendTurn(message.text, message.attachments, message.skillInvocation);
-      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, revision, since: Date.now() });
+      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now() });
     },
   });
   const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {
@@ -1376,6 +1384,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     onRemoved,
     // Bot chats are never listed, and the host refuses to fork them.
     forkable: summary !== undefined,
+    ...(summary?.activity === "idle" || summary?.activity === "active" ? { hostActivity: summary.activity } : {}),
     ...(onOpenChat ? { onOpenChat } : {}),
   };
 

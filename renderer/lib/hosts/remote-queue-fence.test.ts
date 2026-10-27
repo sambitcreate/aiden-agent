@@ -8,32 +8,33 @@ import {
   type RemoteQueueFenceView,
 } from "./remote-queue-fence";
 
-const fence = { runId: "run-a", revision: "r1", since: 1_000 };
+const fence = { runId: "run-a", since: 1_000 };
 const view = (patch: Partial<RemoteQueueFenceView> = {}): RemoteQueueFenceView => ({
   run: null,
-  transcript: { revision: "r2", lastRole: "user" },
+  hostActivity: undefined,
   now: 2_000,
   ...patch,
 });
 
 test("an accepted turn whose run this Mac hasn't seen yet still holds the queue", () => {
-  // A freshly opened pane: no run observed, the transcript only shows the sent prompt.
+  // A freshly opened pane: no run observed, nothing heard from the host's chat list.
   assert.equal(remoteQueueFenceHolds(fence, view()), true);
   // An idle run view from before the turn is not evidence either.
   assert.equal(remoteQueueFenceHolds(fence, view({ run: { runId: null, ended: false } })), true);
-  assert.equal(remoteQueueFenceHolds(fence, view({ transcript: { revision: "r1", lastRole: "assistant" } })), true, "the old reply");
+  // Nor is an idle row the host listed before the turn started working.
+  assert.equal(remoteQueueFenceHolds(fence, view({ hostActivity: "idle" })), true);
 });
 
-test("the fence lifts once that run ends or the host has saved its reply", () => {
+test("the fence lifts only on the host's word that the turn settled", () => {
   assert.equal(remoteQueueFenceHolds(fence, view({ run: { runId: "run-a", ended: false } })), true);
   assert.equal(remoteQueueFenceHolds(fence, view({ run: { runId: "run-a", ended: true } })), false);
-  // Reopened after the run ended: no run to watch, but the reply is in the transcript.
-  assert.equal(remoteQueueFenceHolds(fence, view({ transcript: { revision: "r3", lastRole: "assistant" } })), false);
+  // Reopened while the host still holds the turn after saving its reply.
+  const working = { ...fence, sawActive: true };
+  assert.equal(remoteQueueFenceHolds(working, view({ hostActivity: "active" })), true);
+  // The host's list turns idle only after it releases the turn.
+  assert.equal(remoteQueueFenceHolds(working, view({ hostActivity: "idle" })), false);
   // A different run still going (started elsewhere) keeps it closed.
-  assert.equal(
-    remoteQueueFenceHolds(fence, view({ run: { runId: "run-b", ended: false }, transcript: { revision: "r3", lastRole: "assistant" } })),
-    true,
-  );
+  assert.equal(remoteQueueFenceHolds(working, view({ hostActivity: "idle", run: { runId: "run-b", ended: false } })), true);
 });
 
 test("a run never heard from stops holding the queue after the stall window", () => {

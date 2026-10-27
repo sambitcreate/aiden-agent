@@ -159,6 +159,7 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
   const [foldable, setFoldable] = React.useState(() => userMessageMayFold(content));
   const [expanded, setExpanded] = React.useState(false);
   const restoreAfterCollapseRef = React.useRef(false);
+  const revealSelectionRef = React.useRef(false);
   const folded = foldable && !expanded;
 
   // Measure the wrapped height once the row lays out, and again whenever its
@@ -183,11 +184,43 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
     const reveal = () => {
       const selection = document.getSelection();
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-      if (body.contains(selection.anchorNode) || body.contains(selection.focusNode)) setExpanded(true);
+      if (body.contains(selection.anchorNode) || body.contains(selection.focusNode)) {
+        revealSelectionRef.current = true;
+        setExpanded(true);
+      }
     };
     document.addEventListener("selectionchange", reveal);
     return () => document.removeEventListener("selectionchange", reveal);
   }, [folded]);
+
+  // Find scrolled while the match was still clipped, so once the body has
+  // opened (after its height eases), bring the selected match itself into view.
+  React.useEffect(() => {
+    const body = bodyRef.current;
+    if (!expanded || !body || !revealSelectionRef.current) return;
+    revealSelectionRef.current = false;
+    let done = false;
+    const show = () => {
+      if (done) return;
+      done = true;
+      const selection = document.getSelection();
+      if (!selection || selection.rangeCount === 0 || !body.contains(selection.anchorNode)) return;
+      const scroller = body.closest<HTMLElement>("[data-scroll-top]");
+      const match = selection.getRangeAt(0).getBoundingClientRect();
+      if (!scroller) return;
+      const view = scroller.getBoundingClientRect();
+      if (match.top >= view.top && match.bottom <= view.bottom) return;
+      scroller.scrollTop += match.top - view.top - (view.height - match.height) / 2;
+    };
+    body.addEventListener("transitionend", show, { once: true });
+    // Reduce Motion (or no transition) ends without an event worth waiting for.
+    const timer = setTimeout(show, USER_MESSAGE_FOLD_REVEAL_MS);
+    return () => {
+      done = true;
+      body.removeEventListener("transitionend", show);
+      clearTimeout(timer);
+    };
+  }, [expanded]);
 
   // Collapsing a prompt read from below its top would leave the reader where
   // its hidden tail used to be, so bring its top back into view.
@@ -258,6 +291,9 @@ function UserMessageBody({ content, showCopy }: { content: string; showCopy: boo
     </div>
   );
 }
+
+// Just past the fold's height transition (`--motion-duration`, 200ms).
+const USER_MESSAGE_FOLD_REVEAL_MS = 260;
 
 function UserMessageContent({ content }: { content: string }) {
   const segments = tokenizeWebLinks(content);
