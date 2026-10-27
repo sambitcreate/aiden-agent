@@ -104,6 +104,7 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
+  workspaceMemoryFacts: (workspaceId: string) => ["workspace-memory-facts", workspaceId] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
     ["git-pull-request-status", workspaceId ?? "none"] as const,
