@@ -149,7 +149,7 @@ function McpLaunchApproval({
     <Callout color="warning" className="mt-2 flex-col items-start gap-2" role="group" aria-label={`${label} needs approval`}>
       <Text variant="small-strong">Added outside Aiden — Approve to run</Text>
       <Text variant="small" color="secondary" className="block">
-        This command was added or changed outside Aiden and won’t run until you approve it.
+        This command was added or changed outside Aiden. Review opens the exact launch and saved environment values before you approve it.
       </Text>
       <code className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
         {[approval.command, ...approval.args].join("\n")}
@@ -157,7 +157,7 @@ function McpLaunchApproval({
       {approval.env.length ? (
         <div className="flex max-w-full flex-col gap-1">
           <Text variant="small" color="secondary">Environment</Text>
-          {/* Values are shown in full: they change what the command does (for example NODE_OPTIONS). */}
+          {/* Generic cards keep saved values masked; explicit foreground review shows the effective launch. */}
           <code aria-label={`${label} environment`} className="block max-w-full whitespace-pre-wrap break-all rounded-control bg-well px-2 py-1 font-mono text-small text-primary">
             {approval.env
               .map(({ name, value, unavailable }) =>
@@ -166,8 +166,8 @@ function McpLaunchApproval({
           </code>
         </div>
       ) : null}
-      <Button variant="filled" size="small" disabled={busy} aria-label={`Approve ${label} to run`} onClick={() => void approve()}>
-        {busy ? "Approving…" : "Approve to run"}
+      <Button variant="filled" size="small" disabled={busy} aria-label={`Review and approve ${label} to run`} onClick={() => void approve()}>
+        {busy ? "Reviewing…" : "Review and approve"}
       </Button>
     </Callout>
   );

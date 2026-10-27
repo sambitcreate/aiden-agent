@@ -262,12 +262,14 @@ test("re-saving a stale plain-text copy of a stored value keeps its marker (no s
   assert.notEqual(rotated.server.headers!.Authorization, first.server.headers!.Authorization);
 });
 
-test("an unapproved local server's env stays reviewable in config.json", () => {
+test("an unapproved local server's env is sealed independently of launch consent", () => {
   const local: McpServer = { id: "files", name: "Files", transport: "stdio", command: "node", args: ["server.js"], env: { NODE_OPTIONS: "--require /tmp/p.js" }, enabled: true };
-  const plan = planMcpFieldSecrets(local, counter(), { sealEnv: false });
-  assert.deepEqual(plan.server.env, local.env);
-  assert.deepEqual(plan.added, {});
-  assert.equal(hasPlaintextMcpFields(plan.server), true);
+  const plan = planMcpFieldSecrets(local, counter());
+  assert.equal(JSON.stringify(plan.server).includes("--require /tmp/p.js"), false);
+  assert.equal(hasPlaintextMcpFields(plan.server), false);
+  assert.deepEqual(resolveMcpFieldSecrets(plan.server, stored(plan)).env, local.env);
+  assert.deepEqual(mcpEnvForApproval(plan.server, stored(plan)), [{ name: "NODE_OPTIONS" }]);
+  assert.deepEqual(mcpEnvForApproval(local, undefined), [{ name: "NODE_OPTIONS", unavailable: true }]);
 });
 
 test("oversized or unnamed fields are refused when saving", () => {

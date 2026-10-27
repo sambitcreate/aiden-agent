@@ -17,11 +17,11 @@ A page is written in Aiden UI Markup, the same component catalog that inline `re
 | Source | What it reads | Limits |
 | --- | --- | --- |
 | `shell` | A command run in the workspace folder that should only read, such as `gh pr list --json number,title,url`. Aiden asks for read-only commands but cannot enforce it, which is why Ask shows every command first | 30 seconds, 256 KiB of output |
-| `file` | A workspace-relative file; links that leave the folder are refused | 30 seconds, 256 KiB |
+| `file` | A workspace-relative text file; credential paths, hard links and links outside the folder are refused | 30 seconds, 256 KiB |
 
 Each source parses its output as `json`, `lines` or `text`, and the page reads it as `$name`. A source that has not loaded yet reads as `null`. A page has at most 8 sources, and a workspace has at most 20 pages.
 
-Pages refresh when they are shown (unless the page turns that off), when the person presses **Refresh**, and, if the page asks for it, on an interval of at least 60 seconds while the tab is visible. The last data read is saved with the page, so it paints immediately and keeps showing the last good data when a refresh fails. The page header says which sources didn't load, and the page lists each failed source with its error, for example `gh: not logged in`.
+Pages refresh when they are shown (unless the page turns that off), when the person presses **Refresh**, and, if the page asks for it, on an interval of at least 60 seconds while the tab is visible. The last data read is saved with the page, so it paints immediately and keeps showing the last good data when an ordinary refresh fails. A credential-policy denial erases that source’s cached data before it can be returned or displayed. After this security upgrade, older file-source caches are cleared once and need a refresh. The page header says which sources didn't load, and the page lists each failed source with its error, for example `gh: not logged in`.
 
 ## Buttons
 
@@ -39,7 +39,7 @@ Action values from the page never become shell syntax. Each `{{param}}` must be 
 Pages follow the workspace's access setting, the same way chats do:
 
 - **No access**: nothing runs. The page shows its last saved data and says why it is not live.
-- **Ask**: when Aiden creates or changes a page, the approval card lists every command it can run. Allowing it approves exactly that set of commands, and any later change to them needs approval again. The person can also review and allow a page from the tab, which reads its sources at once. Each button press shows the exact command and waits for **Run**. File sources run without approval, because chats under Ask read workspace files without asking.
+- **Ask**: when Aiden creates or changes a page, the approval card lists every command it can run. Allowing it approves exactly that set of commands, and any later change to them needs approval again. The person can also review and allow a page from the tab, which reads its sources at once. Each button press shows the exact command and waits for **Run**. File sources run without approval, subject to the model file policy. `.env` except `.env.example`, protected credential names and canonical aliases to them are denied at creation/update and again at read. Human Files-panel editing retains its own access contract.
 - **Full access**: sources and buttons run without asking.
 
 Changing a workspace's access cancels any refresh or button already running. Commands run with the same environment as `run_command`, and Aiden's own secrets are withheld.
@@ -53,6 +53,7 @@ Pages and their saved data are stored on the device under Aiden's user data fold
 ## For developers
 
 - Shared contract and parsers: `renderer/shared/workspace-artifacts.ts`.
+- Confined reads: macOS uses the packaged descriptor-relative worktree file helper; Linux uses Node directory descriptors through `/proc/self/fd`, with pinned root/file identities, no-follow traversal and bounded reads. Linux requires procfs descriptor access and fails closed without it; it does not depend on the macOS helper.
 - Store, tool, runner and skill: `main/services/workspace-artifacts/`.
 - IPC: `workspaces:artifacts:list`, `rename`, `delete`, `saveState`, `approve`, `refresh` and `run`, plus the `workspaces:artifacts-changed` notification (`main/handlers/workspace-artifacts.ts`).
 - Tab: `renderer/components/artifacts-panel.tsx`, wired into the Environment panel.

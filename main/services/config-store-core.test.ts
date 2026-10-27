@@ -1402,11 +1402,13 @@ test("corrupt portable roots cannot move or bind legacy provider secrets", async
       const secrets = fakeSecrets({ gemini: "custom-gemini-ciphertext" });
       const store = createConfigStore(h.stores, secrets.port);
 
-      assert.deepEqual(await store.listProviders(), []);
+      if (kind === "fifo" || kind === "directory") await assert.rejects(store.listProviders(), /storage must be a private/u);
+      else assert.deepEqual(await store.listProviders(), []);
       assert.equal(secrets.keys.gemini, "custom-gemini-ciphertext");
       assert.equal(secrets.keys.google, undefined);
       assert.equal(secrets.migrateCalls, 0);
-      assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
+      if (kind === "fifo" || kind === "directory") await assert.rejects(store.providerLegacyCredentialMigrationReady(), /storage must be a private/u);
+      else assert.equal(await store.providerLegacyCredentialMigrationReady(), false);
     });
   }
 });
