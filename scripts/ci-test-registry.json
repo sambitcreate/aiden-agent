@@ -390,6 +390,7 @@
         "main/services/mcp-dependents.test.ts",
         "main/services/mcp-exposure.test.ts",
         "main/services/mcp-field-secrets-core.test.ts",
+        "main/services/mcp-launch-review-core.test.ts",
         "main/services/mcp-mac-apps.test.ts",
         "main/services/mcp-stdio-approvals.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
