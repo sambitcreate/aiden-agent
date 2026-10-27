@@ -1225,6 +1225,64 @@
         }
       }
     },
+    "/chats/{chatId}/context": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatContextPressure",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-context-pressure-v1",
+        "description": "Contract revision 41. The next-request context pressure the host's own composer meter shows for one workspace chat, reduced to bounded counts: no breakdown, prompt cache, tool or server names, paths or text. Announced by `chat-context-pressure-v1` to paired desktops only. Without a query the chat's own model prices the request; `providerId` and `modelId` together price a model the host has configured instead (one it has not is invalid_request, and either alone is invalid_request). `pressure` is null when the host cannot project the chat now (no model, or its history is unavailable). The device's unsent draft is not included. Bot chats are not projected (not_found). Bot-chat reads otherwise follow the same bot:read rule as other chat reads.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "providerId",
+            "in": "query",
+            "required": false,
+            "description": "A configured host provider, sent together with modelId. Request URLs carry no percent-encoding, so only characters a query takes literally are allowed.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          },
+          {
+            "name": "modelId",
+            "in": "query",
+            "required": false,
+            "description": "A model of that provider, sent together with providerId.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next-request context pressure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatContextPressure"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/skills": {
       "parameters": [
         {
@@ -11589,6 +11647,115 @@
           "unavailableReason": {
             "type": "string",
             "maxLength": 160
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatContextPressure": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "pressure"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "pressure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextPressure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContextPressure": {
+        "type": "object",
+        "description": "Contract revision 41. Every field the host's projection sends; the host's breakdown and prompt cache never cross the wire.",
+        "required": [
+          "contextTokens",
+          "contextWindow",
+          "inputBudgetTokens",
+          "reservedTokens",
+          "percentOfWindow",
+          "percentOfUsableInput",
+          "shouldCompact",
+          "messageTokens",
+          "staticTokens",
+          "source",
+          "computedAt"
+        ],
+        "properties": {
+          "contextTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Projected total tokens for the next request."
+          },
+          "contextWindow": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "The pricing model's context window."
+          },
+          "inputBudgetTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Usable input budget after response and safety reserves."
+          },
+          "reservedTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Tokens reserved for output and safety margin."
+          },
+          "percentOfWindow": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / contextWindow, in percent."
+          },
+          "percentOfUsableInput": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / inputBudgetTokens, in percent."
+          },
+          "shouldCompact": {
+            "type": "boolean",
+            "description": "The host compacts before the next request."
+          },
+          "messageTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the conversation."
+          },
+          "staticTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the system prompt and tool schemas."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "provider-anchored",
+              "estimated"
+            ]
+          },
+          "computedAt": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Epoch milliseconds when the host computed this projection."
           }
         },
         "additionalProperties": false
