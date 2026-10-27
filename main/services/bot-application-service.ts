@@ -1176,7 +1176,7 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
     }
   };
 
-  return {
+  const service = {
     initialize: ensureOperational,
 
     async list() {
@@ -1685,7 +1685,59 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         return false;
       }
     },
+
+    /**
+     * Whether a Custom-access Bot lacks a connection (by its server id). Full
+     * access uses every enabled connection, so it never lacks one.
+     */
+    async botLacksConnection(botId: string, sourceId: string): Promise<boolean> {
+      await ensureOperational();
+      if ((await deps.capabilityStore.getBotPolicy(botId)).accessMode !== "custom") return false;
+      const binding = await deps.capabilityStore.getBotBinding(botId);
+      return !binding?.connections.some((connection) => connection.sourceId === sourceId);
+    },
+
+    /**
+     * "Add to this Bot" on a connect card: add one connection, already set up
+     * in Aiden, to a Custom-access Bot's own selection. Only the person's tap
+     * calls this; nothing grants a connection on its own. Everything else in
+     * the Bot's access stays as it was.
+     */
+    async grantBotConnection(input: {
+      audienceId: string;
+      botId: string;
+      sourceId: string;
+    }): Promise<"added" | "already_allowed"> {
+      await ensureOperational();
+      const policy = await deps.capabilityStore.getBotPolicy(input.botId);
+      if (policy.accessMode !== "custom") return "already_allowed";
+      const chat = await canonicalChatForBot(input.botId);
+      const snapshot = await snapshotForAudience(input.audienceId, input.botId, [
+        ...(chat ? retainedBotProviderForChat(chat) : []),
+        ...(await retainedVisionProvider(input.botId)),
+      ]);
+      const option = snapshot.resources.connections.find(
+        (connection) => connection.sourceId === input.sourceId,
+      )?.option;
+      if (!option?.available) {
+        throw new Error("Connect this app in Aiden first.");
+      }
+      if (policy.custom.connectionIds.includes(option.id)) return "already_allowed";
+      // The policy revision fences a change made on another surface meanwhile.
+      await service.updateBotAccess({
+        audienceId: input.audienceId,
+        botId: input.botId,
+        expectedRevision: policy.revision,
+        access: {
+          accessMode: "custom",
+          catalogRevision: snapshot.catalog.revision,
+          custom: { ...policy.custom, connectionIds: [...policy.custom.connectionIds, option.id] },
+        },
+      });
+      return "added";
+    },
   };
+  return service;
 }
 
 export type BotApplicationService = ReturnType<typeof createBotApplicationService>;

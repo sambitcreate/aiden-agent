@@ -7,8 +7,10 @@ import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import { getMcpPreset, serverFromPreset } from "../mcp-presets.js";
 import type { McpServer } from "../types.js";
 import {
+  connectionSourceIdFor,
   createSuggestConnectionTool,
   isBotConnectionReady,
+  resolveConnectCardStatus,
   type SuggestConnectionDeps,
 } from "./suggest-connection.js";
 
@@ -70,6 +72,41 @@ test("already connected plugins are refused without a card", async () => {
   assert.equal((result.details as { status: string }).status, "already_connected");
   assert.match(text(result), /already connected/iu);
   assert.deepEqual(asked, ["gmail"]);
+});
+
+test("an app connected in Aiden but left out of this Bot's access gets a card to add it", async () => {
+  const { tool, cards } = harness({
+    isConnected: (pluginId) => pluginId === "notion",
+    botLacksConnection: (botId, pluginId) => botId === "bot-a" && pluginId === "notion",
+  });
+  const result = await tool.execute("call-1", { pluginId: "notion", reason: "Keep your notes." });
+  assert.equal((result.details as { status: string }).status, "suggested");
+  assert.deepEqual(cards.map(({ card }) => [card.pluginId, card.status]), [["notion", "pending"]]);
+  assert.match(text(result), /doesn't include it/u);
+  assert.doesNotMatch(text(result), /already connected/iu);
+});
+
+test("a pending card reads connected, add to this Bot, not now, or still waiting", async () => {
+  const card: ConnectCardEntry = { type: "connect_card", pluginId: "notion", reason: "Inbox.", status: "pending" };
+  const connected = new Set<string>();
+  const lacking = new Set<string>();
+  const dismissed = new Set<string>();
+  const deps = {
+    isConnected: (pluginId: string) => connected.has(pluginId),
+    botLacksConnection: (botId: string, sourceId: string) => lacking.has(`${botId}:${sourceId}`),
+    isDismissed: (botId: string, pluginId: string) => dismissed.has(`${botId}:${pluginId}`),
+  };
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "pending");
+  dismissed.add("bot-a:notion");
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "dismissed");
+  connected.add("notion");
+  const notionServer = connectionSourceIdFor("notion")!;
+  lacking.add(`bot-a:${notionServer}`);
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "needs_access", "connected wins over Not now");
+  assert.equal(await resolveConnectCardStatus("bot-b", card, deps), "connected", "another Bot has it");
+  lacking.clear();
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "connected");
+  assert.equal(connectionSourceIdFor("gmail"), undefined, "apps reached through Composio have no connection of their own");
 });
 
 test("plugins dismissed for this Bot are refused, but other Bots are unaffected", async () => {

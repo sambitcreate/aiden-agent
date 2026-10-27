@@ -699,17 +699,23 @@ test("deleting a Bot while its stream is open ends the stream and the next read 
 test("a connect card finished on the Mac reads as connected on the next fetch, with nothing committed", async () => {
   const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
   const connected = new Set<string>();
+  let granted = false;
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
     runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
-    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+    connectCardStatus: async (_botId, entry) =>
+      connected.has(entry.pluginId) ? (granted ? "connected" : "needs_access") : entry.status,
   });
   const cardOf = (session: { entries: Array<{ type: string }> }) =>
     session.entries.find((entry) => entry.type === "connect_card") as unknown as { status: string; name: string };
   try {
     assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
     connected.add("gmail");
+    // Connected on the Mac but not part of this Bot's access: phones keep the
+    // card pending, so "Finish on your Mac" leads to "Add to this Bot" there.
+    assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
+    granted = true;
     const shown = cardOf(await service.session(BOT_ID));
     assert.equal(shown.status, "connected");
     assert.equal(shown.name, "Gmail");

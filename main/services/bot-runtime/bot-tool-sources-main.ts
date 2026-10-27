@@ -23,7 +23,7 @@ import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
+import { connectionSourceIdFor, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -413,6 +413,15 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         suggestConnectionCandidate(botId, {
           isConnected,
           isDismissed: (id, pluginId) => deps.dismissals.isDismissed(id, pluginId),
+          // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
+          botLacksConnection: (_id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return (
+              authority.accessMode === "custom" &&
+              sourceId !== undefined &&
+              !authority.connections.some((connection) => connection.sourceId === sourceId)
+            );
+          },
         }),
       );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).

@@ -457,7 +457,8 @@ export function projectBotSessionEntries(
           name: suggestion.name,
           iconId: suggestion.iconId,
           reason: wireText(entry.card.reason.trim(), 280) || `Connect ${suggestion.name}.`,
-          status: entry.card.status,
+          // `needs_access` is desktop-only; phones keep offering "Finish on your Mac".
+          status: entry.card.status === "needs_access" ? "pending" : entry.card.status,
         };
         const index = cards.get(suggestion.pluginId);
         if (index === undefined) {
@@ -1860,7 +1861,11 @@ export class AidenRemoteBotSessionService {
     );
   }
 
-  /** Pending connect cards show what is true now (connected, or Not now). */
+  /**
+   * Pending connect cards show what is true now (connected, or Not now). An
+   * app left out of the Bot's access stays pending here: the phone's "Finish
+   * on your Mac" opens the Bot's chat, where the Mac offers "Add to this Bot".
+   */
   private async resolveCards(
     botId: string,
     entries: AidenRemoteBotSessionEntry[],
@@ -1869,8 +1874,9 @@ export class AidenRemoteBotSessionService {
     if (!resolve) return entries;
     return Promise.all(entries.map(async (entry) => {
       if (entry.type !== "connect_card" || entry.status !== "pending") return entry;
-      const status = await resolve(botId, { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: "pending" })
+      const resolved = await resolve(botId, { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: "pending" })
         .catch(() => entry.status);
+      const status = resolved === "needs_access" ? "pending" : resolved;
       return status === entry.status ? entry : { ...entry, status };
     }));
   }
