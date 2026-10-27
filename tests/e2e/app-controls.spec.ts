@@ -60,7 +60,7 @@ test("owned help and inert settings cards work with no workspace file access; cl
   await expect(memorySwitch).toBeChecked();
   expect(lmStudio.requests.length).toBe(modelRequests);
   const appearance = page.getByRole("region", { name: "appearance controls" });
-  await appearance.getByRole("combobox", { name: "Theme — This desktop", exact: true }).click();
+  await appearance.getByRole("combobox", { name: "Color mode — This desktop", exact: true }).click();
   await page.getByRole("option", { name: "Dark", exact: true }).click();
   await expect(appearance.getByRole("status")).toContainText("Saved");
   expect(lmStudio.requests.length).toBe(modelRequests);

@@ -28,6 +28,14 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { aidenConfigDir } from "../aiden-config-dir.js";
+import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
+import {
+  LOCAL_CONFIG_FILENAME,
+  PORTABLE_CONFIG_FILENAME,
+  PROVIDER_MODEL_CACHE_FILENAME,
+  SETTINGS_FILENAME,
+} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
@@ -87,7 +95,16 @@ const MODEL_CACHE_MS = 30_000;
 const profileDir = () => app.getPath("userData");
 // Every Bot's session database and memory files live under `<profile>/bots/`;
 // only Aiden writes them, never a Bot's file tools (whatever location they use).
-setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
+// Aiden's settings files are fenced the same way, so a Bot cannot change app
+// settings or its own access by editing them.
+setBotFileToolProtectedRoots(() => [
+  path.join(profileDir(), "bots"),
+  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
+  path.join(profileDir(), SETTINGS_FILENAME),
+  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
+  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
+  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
+]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).

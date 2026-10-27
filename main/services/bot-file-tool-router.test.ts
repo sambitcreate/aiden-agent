@@ -124,6 +124,34 @@ test("a full-Mac write into a Bot's session or memory files is refused, however 
   }
 });
 
+test("a full-Mac Bot cannot edit Aiden's settings files but can write next to them", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-settings-"));
+  const profile = path.join(parent, "profile");
+  const settings = path.join(profile, "settings.json");
+  try {
+    await fs.mkdir(profile, { recursive: true });
+    await fs.writeFile(settings, '{"settings":{"appControlPolicy":"ask"}}', "utf8");
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "loc.mac.opaque", label: "This Mac", root: parent },
+      protectedRoots: () => [settings],
+    });
+    await assert.rejects(
+      byName(tools, "write_file").execute("w", { path: "profile/settings.json", content: "{}" }),
+      /settings files; file tools cannot change them/u,
+    );
+    await assert.rejects(
+      byName(tools, "edit_file").execute("e", { path: "profile/settings.json", old_string: "ask", new_string: "safe" }),
+      /cannot change them/u,
+    );
+    assert.equal(await fs.readFile(settings, "utf8"), '{"settings":{"appControlPolicy":"ask"}}');
+    // Only the named file is fenced: a sibling with a longer name is ordinary.
+    await byName(tools, "write_file").execute("ok", { path: "profile/settings.json.notes", content: "fine" });
+    assert.equal(await fs.readFile(path.join(profile, "settings.json.notes"), "utf8"), "fine");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("Bot file tools support an approved root as the only default when home is off", async () => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-no-home-"));
   const documents = path.join(parent, "documents");

@@ -48,9 +48,11 @@ const WRITING_TOOLS = new Set<string>(["write_file", "edit_file"]);
 let processProtectedRoots: () => readonly string[] = () => [];
 
 /**
- * Directories no Bot file tool may write under, resolved at each call. Main
- * registers `<profile>/bots/`, which holds every Bot's session database and
- * memory files: those are written only by Aiden itself (spec 2026-10-09 §13).
+ * Directories (or single files) no Bot file tool may write, resolved at each
+ * call. Main registers `<profile>/bots/`, which holds every Bot's session
+ * database and memory files (spec 2026-10-09 §13), and Aiden's own settings
+ * files, so a Bot cannot change app settings or its own access by editing
+ * them (owner decision 2026-10-27).
  */
 export function setBotFileToolProtectedRoots(roots: () => readonly string[]): void {
   processProtectedRoots = roots;
@@ -285,7 +287,9 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
           WRITING_TOOLS.has(name) &&
           (await writesIntoProtectedRoot(selected.root, underlyingParams, (options.protectedRoots ?? processProtectedRoots)()))
         ) {
-          throw new Error("Aiden manages this Bot's own session and memory files; file tools cannot change them.");
+          throw new Error(
+            "Aiden manages Bot session and memory files and its own settings files; file tools cannot change them. Settings change only in Aiden's Settings.",
+          );
         }
         try {
           return await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);
