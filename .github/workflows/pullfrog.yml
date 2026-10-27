@@ -42,6 +42,7 @@ jobs:
           timeout: 2h
         env:
           PULLFROG_FORCE_LOCAL_CLI: "1"
+          NODE_OPTIONS: --import=${{ github.workspace }}/scripts/pullfrog-locked-runtime.mjs
           # Optional provider bindings support remotely selected review models.
           # Inventory names only; never print values or infer use from presence.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
