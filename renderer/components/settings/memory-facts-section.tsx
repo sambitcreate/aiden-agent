@@ -43,6 +43,10 @@ export function MemoryFactsSection({ workspaces }: { workspaces: Workspace[] }) 
     queryKey: queryKeys.workspaceMemoryFacts(workspaceId ?? ""),
     queryFn: () => workspacesApi.memoryFacts(workspaceId!),
     enabled: Boolean(workspaceId),
+    // Chats, Bots and the CLI change these facts without touching this query, so every visit
+    // and every return to the window reads them again.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
   const [pendingDelete, setPendingDelete] = React.useState<WorkspaceMemoryFactView>();
   const [deleting, setDeleting] = React.useState(false);
@@ -99,7 +103,9 @@ export function MemoryFactsSection({ workspaces }: { workspaces: Workspace[] }) 
         ) : facts.data?.length ? (
           <ul aria-label={`Memories in ${workspaceName}`} className="contents">
             {facts.data.map((fact) => (
-              <li key={fact.id} className="contents">
+              // Each Field is the last child of its own item, which hides its separator; show it
+              // again on every item but the last.
+              <li key={fact.id} className="contents [&:not(:last-child)>*]:after:block">
                 <Field
                   label={<span className="whitespace-pre-wrap break-words font-normal">{fact.text}</span>}
                   description={factDetails(fact)}

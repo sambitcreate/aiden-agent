@@ -178,6 +178,7 @@
         "main/services/memory-shared.test.ts",
         "main/services/memory-store.test.ts",
         "main/services/memory-surface-matrix.test.ts",
+        "main/services/workspace-memory-facts.test.ts",
         "main/services/model-runtime-core.test.ts",
         "main/services/models.test.ts",
         "main/services/opencode-session-attribution.test.ts",

@@ -14,6 +14,22 @@ test("a fact Aiden saves in chat shows in Settings → Memory and can be deleted
       }
     ).aidenAPI.ipc.invoke("settings:set", { memoryEnabled: true });
   });
+  const openMemory = async () => {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: "Memory", exact: true })
+      .click();
+  };
+  const remembered = page.locator("section", {
+    has: page.getByRole("heading", { name: "What Aiden remembers", exact: true }),
+  });
+  // Read the list once before the fact exists, so the return visit has to read it again.
+  await openMemory();
+  await expect(remembered.getByText("Aiden hasn't saved anything in this workspace yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Back to app", exact: true }).click();
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+
   const fact = "The release branch in this project is called stable.";
   const prompt = "Memory list test: remember that our release branch is called stable.";
   const scenario = lmStudio.enqueueToolScenario!({
@@ -28,14 +44,7 @@ test("a fact Aiden saves in chat shows in Settings → Memory and can be deleted
   expect(scenario.error).toBeUndefined();
   expect(JSON.stringify(scenario.results)).toContain("Saved approved fact");
 
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page
-    .getByRole("navigation", { name: "Settings" })
-    .getByRole("button", { name: "Memory", exact: true })
-    .click();
-  const remembered = page.locator("section", {
-    has: page.getByRole("heading", { name: "What Aiden remembers", exact: true }),
-  });
+  await openMemory();
   await expect(remembered.getByText(fact, { exact: true })).toBeVisible();
   await expect(remembered.getByText(/Saved by Aiden/u)).toBeVisible();
 
