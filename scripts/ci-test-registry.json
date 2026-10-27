@@ -564,6 +564,8 @@
         "main/services/bot-delivery/funnel.test.ts",
         "renderer/shared/bot-routine-failure.test.ts",
         "main/services/bot-routine-recovery.test.ts",
+        "main/services/bot-health/checks.test.ts",
+        "main/services/bot-health/preflight.test.ts",
         "main/services/bot-system-prompt.test.ts",
         "main/services/bot-tool-authority.test.ts",
         "main/services/chat-application-service.test.ts",

@@ -113,6 +113,18 @@ async function admit(botId: string): Promise<BotRuntimeAuthorityAdmission> {
   return botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
 }
 
+/**
+ * The health check's admission probe: admit the Bot's current authority (which
+ * repairs a model setting that only went stale) and report the model it runs
+ * on. The lease is released at once; nothing runs under it.
+ */
+export async function probeBotAdmission(botId: string): Promise<{ providerId: string; modelId: string }> {
+  return withAdmission(botId, async (admission) => ({
+    providerId: admission.authority.provider.sourceProviderId,
+    modelId: admission.authority.provider.sourceModelId,
+  }));
+}
+
 /** Admit the Bot's current authority for one step and release it right away. */
 async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>): Promise<T> {
   const admission = await admit(botId);
@@ -570,6 +582,10 @@ export function initializeBotSessionRuntime(): Promise<void> {
       const { removedOrphans, interrupted } = await service.initialize();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
+      // Pre-fire checks arm only once Bots are open, never during onboarding.
+      void import("../bot-health/health-main.js")
+        .then(({ startBotHealth }) => startBotHealth())
+        .catch((error: unknown) => logger.warn("bots", "Bot health checks did not start.", error));
     })
     .catch((error) => {
       initialized = undefined;
@@ -585,6 +601,7 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   initialized = undefined;
   await liveProjection?.close();
   memoryReview.shutdown();
+  await import("../bot-health/health-main.js").then(({ stopBotHealth }) => stopBotHealth()).catch(() => undefined);
   await service?.shutdown();
   await toolSources.shutdown();
 }
