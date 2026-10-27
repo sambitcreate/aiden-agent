@@ -1328,6 +1328,16 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testDictationLaunchCannotRecordAfterPairingRemoval() async throws {
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, onCoordinator: { coordinator = $0 })
+        await coordinator.removeInstallation("instance-progress-lifecycle")
+        var recordings = 0
+        await model.startVoiceForLaunch(if: true) { recordings += 1 }
+        XCTAssertEqual(recordings, 0)
+    }
+
+    @MainActor
     func testDictationLaunchCannotReplayAfterQuestionComposerReturns() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-voice-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }

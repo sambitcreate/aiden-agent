@@ -161,6 +161,8 @@ Behavioral proof: unapproved env values are absent from durable config bytes; se
 
 ## W4: Separate external mobile navigation from voice actions
 
+Implementation update (2026-10-27): both native clients parse public voice URLs as navigation-only and require frozen-target, single-use in-app creation consent before switching installations or writing a host chat. iOS App Intents use a bounded in-process foreground handoff; notification/widget existing-chat navigation remains unchanged. Focused native checks and separate physical-device acceptance are recorded in `.memory/security-mobile-consent.md`.
+
 - Parse externally supplied URLs into a navigation-only request. Discard any instruction to record.
 - Require explicit in-app confirmation before an external link creates a chat on the paired host. Show the installation and workspace that will be affected. Cancel leaves remote state unchanged.
 - Preserve intentional internal notification/widget/App Intent actions through trusted native action routing or a private intent extra. A guessable URL flag cannot assert that the caller is internal.

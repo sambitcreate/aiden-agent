@@ -54,7 +54,8 @@ Apple Image Playground / Private Cloud Compute when used
   -> authenticated revision-checked upload
   -> main-owned Mac decode/normalize/canonical avatar store
 
-App Intent process -> App Group cached IDs only -> foreground app routing
+App Intent -> App Group cached IDs only -> single-use in-process foreground action
+External URL -> navigation only -> explicit target-bound consent before new-chat mutation
 Live Activity widget -> bounded last-known state only (no network)
 Electron renderer -> preload allowlist -> IPC owner (separate from remote owner)
 ```
@@ -115,7 +116,7 @@ Untrusted inputs begin at discovery packets, URLs/QR data, every HTTP header/bod
 | Scheduled script exfiltration | Only existing server-inventoried script IDs; no raw paths; pairing warns about scheduled authority; no App Intent schedule mutations. | Script-ID/path rejection and DTO tests. |
 | Attachment bomb/content abuse | MIME/size/count/dimensions/text limits; short-lived references; cleanup; no server paths. | Oversize, decompression dimension, expiry, aggregate tests. |
 | Avatar upload poisoning, leakage, or cross-bot replacement | Image Playground is system-owned and may use PCC, but iOS uploads only after **Use this image**. iOS normalizes a square image and strips metadata; the Mac independently authenticates, bounds, decodes, normalizes, strips metadata, stores atomically under an owned opaque filename, checks bot/device/revision/idempotency, and serves authenticated `no-store`/`nosniff` content. Semantic avatar remains fallback. | Cancel/rejected-candidate/temp-file cleanup, malformed/oversize/decompression/metadata fixtures, cross-device/bot/revision/replay, partial write/restart, content-header, fallback/rollback, and log tests. |
-| Lock Screen/App Intent leak | Live Activity under 4 KB, safe status only by default, no path/args/errors/credentials; intents cache ID-only and foreground. | Payload size/allowlist and stale/revoked entity tests. |
+| Lock Screen/App Intent leak | Live Activity under 4 KB, safe status only by default, no path/args/errors/credentials; intents cache ID-only and deliver one-shot foreground actions in process. Public links never authorize recording and require target-bound consent before chat creation or installation switching. | Payload size/allowlist and stale/revoked entity tests. |
 | Voice privacy leak | Native recognition remains device-local. Paired-Mac mode is explicit, uses the authenticated pinned-TLS Aiden channel, accepts only bounded 16 kHz mono PCM, performs local Parakeet transcription (sherpa-onnx, or transcribe.cpp on Metal on Apple silicon), and does not persist audio. Voice-note attachments remain absent. | Codec bounds, capability/auth, contract, lifecycle, and permission-fallback tests. |
 | Denial of service | Per-device/global rate limits; active stream/device caps; bounded journals/uploads/browse; timeouts; revoke/disable. | Limit and recovery tests. |
 

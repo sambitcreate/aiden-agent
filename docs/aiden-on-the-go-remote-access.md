@@ -137,3 +137,20 @@ setup-code verification and certificate validation still establish trust. Connec
 errors distinguish network reachability, secure-identity verification, and app-version
 problems. A secure-identity failure requires verification and pairing repair, rather
 than a trust-bypass retry.
+
+## External links and shortcuts
+
+On iOS and Android, an external new-chat link asks before creating a chat. The
+confirmation names its desktop installation and workspace before any installation
+switch or host write. The legacy `aiden-otg://new-chat-voice` link opens this same
+confirmation and cannot start the microphone, even when microphone permission is
+already granted. Use the in-app microphone button to dictate. No recognized text
+is sent automatically. Existing-chat notification and widget links still open
+their paired conversation.
+
+iOS App Intents deliver a short-lived, one-use action inside the foreground app
+process. The intentional **New Chat with Voice** shortcut retains dictation using
+the selected mode and ordinary OS permission checks. URL parameters and Android
+Intent extras cannot claim internal-action authority. A cancelled, expired,
+revoked or stale creation approval is discarded, and creation is never retried
+automatically after an uncertain result.

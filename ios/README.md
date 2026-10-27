@@ -2,6 +2,8 @@
 
 Aiden On The Go is the native SwiftUI companion for Aiden Agent on macOS and Linux. The paired desktop owns execution, persistence, providers, workspaces, and permissions; iPhone and iPad provide an authenticated remote control surface over a local network or Tailscale.
 
+Public new-chat links require confirmation of their installation and workspace and never start dictation. iOS App Intents use a one-shot foreground action inside the app process, so the intentional voice shortcut remains available. Existing-chat widget and notification links only navigate.
+
 The product and protocol sources of truth are:
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md)
