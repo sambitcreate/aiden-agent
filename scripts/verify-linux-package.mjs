@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { listPackage } from "@electron/asar";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
+import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
   verifyPackagedModelCatalogResources,
   verifyPackagedLocalSpeechWorker,
@@ -310,6 +311,7 @@ export async function verifyLinuxPackage(appDirectory) {
   const entries = new Set(
     listPackage(asar, { isPack: false }).map((entry) => entry.replaceAll("\\", "/")),
   );
+  verifyPackagedRendererCsp(asar);
   if (!entries.has("/build/main/index.js")) {
     throw new Error("Packaged app.asar is missing /build/main/index.js.");
   }

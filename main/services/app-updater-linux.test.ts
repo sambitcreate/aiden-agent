@@ -72,7 +72,8 @@ test("AppImage replacement verifies its digest and atomically preserves the curr
     writeFileSync(installer, next);
     const original = appImageIdentity(f.runtime.appImage);
     const sha512 = createHash("sha512").update(next).digest("base64");
-    assert.equal(replaceAppImageAtomically({ current: original, installer, sha512, eligible: () => canUpdateLinuxAppImage(f.runtime) }), original.path);
+    const verifiedSha256 = createHash("sha256").update(next).digest("hex");
+    assert.equal(replaceAppImageAtomically({ current: original, installer, sha512, verifiedSha256, eligible: () => canUpdateLinuxAppImage(f.runtime) }), original.path);
     assert.deepEqual(readFileSync(original.path), next);
     assert.equal(statSync(original.path).mode & 0o777, 0o755);
     assert.notEqual(statSync(original.path).ino, original.ino);
@@ -89,16 +90,35 @@ test("failed AppImage checksum and changed installation retain the original file
     writeFileSync(installer, next);
     const identity = appImageIdentity(f.runtime.appImage);
     const sha512 = createHash("sha512").update(next).digest("base64");
-    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512: createHash("sha512").update("wrong").digest("base64"), eligible: () => true }), /checksum/);
+    const verifiedSha256 = createHash("sha256").update(next).digest("hex");
+    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512: createHash("sha512").update("wrong").digest("base64"), verifiedSha256, eligible: () => true }), /checksum/);
     assert.deepEqual(readFileSync(identity.path), original);
     let checks = 0;
-    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512, eligible: () => ++checks === 1 }), /changed/);
+    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512, verifiedSha256, eligible: () => ++checks === 1 }), /changed/);
     assert.deepEqual(readFileSync(identity.path), original);
     const moved = path.join(f.root, "replacement.AppImage");
     writeFileSync(moved, original);
     renameSync(moved, identity.path);
-    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512, eligible: () => true }), /unavailable/);
+    assert.throws(() => replaceAppImageAtomically({ current: identity, installer, sha512, verifiedSha256, eligible: () => true }), /unavailable/);
     assert.deepEqual(readFileSync(identity.path), original);
+    assert.ok(readdirSync(f.root).every(name => !name.startsWith(".aiden-update-")));
+  } finally { f.cleanup(); }
+});
+
+test("an AppImage and SHA512 forged together cannot replace bytes authenticated by the publisher", () => {
+  const f = fixture();
+  try {
+    const original = readFileSync(f.runtime.appImage);
+    const installer = path.join(f.root, "forged.AppImage");
+    const authorized = Buffer.concat([original, Buffer.from("publisher release")]);
+    const forged = Buffer.concat([original, Buffer.from("feed-controlled executable")]);
+    writeFileSync(installer, forged);
+    assert.throws(() => replaceAppImageAtomically({
+      current: appImageIdentity(f.runtime.appImage), installer,
+      sha512: createHash("sha512").update(forged).digest("base64"),
+      verifiedSha256: createHash("sha256").update(authorized).digest("hex"), eligible: () => true,
+    }), /publisher provenance/u);
+    assert.deepEqual(readFileSync(f.runtime.appImage), original);
     assert.ok(readdirSync(f.root).every(name => !name.startsWith(".aiden-update-")));
   } finally { f.cleanup(); }
 });

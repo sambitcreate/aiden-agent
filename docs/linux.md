@@ -158,9 +158,19 @@ Settings may refresh that cache; startup and ordinary reads stay offline.
 
 Writable production AppImages mounted by their launcher use Settings → About
 for update checks, downloads, and restart. Downloads are verified against the
-SHA-512 digest in the architecture-specific GitHub release feed. Updates retain
-the current AppImage filename. Unlike macOS releases, this does not provide Apple
-code-signing verification.
+SHA-512 digest in the architecture-specific GitHub release feed and authenticated
+with a trusted local GitHub CLI 2.68 or newer before they become ready. The
+verifier requires this repository's main-branch release workflow and the exact
+source/signer commit from the selected GitHub release record. Replacement also
+compares the copied bytes with the verified subject's SHA-256 digest. Missing
+verification dependencies, network access or acceptable provenance leave the old
+image in place; there is no checksum-only fallback. A download cannot become
+ready without online verification; a completed ready proof survives the
+protected restart handoff.
+Updates retain the current AppImage filename. This is GitHub workflow
+authentication rather than Apple code-signing verification. The installer can
+add an independently reviewed `--expected-commit`; in-app updates use the release
+record. See [trust roots, rotation and acceptance limits](distribution-hardening.md).
 
 Native subagent file replacement preserves metadata or fails closed. On an
 SELinux host, Aiden preserves a non-default `security.selinux` label when the

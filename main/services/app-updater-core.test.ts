@@ -428,6 +428,7 @@ async function simulatedService() {
       randomUUID: () => "00000000-0000-4000-8000-000000000000",
     },
     "node:fs": { existsSync: () => true },
+    "node:child_process": await import("node:child_process"),
     // The shared path-containment helper imports `realpath` for its async
     // variant; the updater only uses the lexical check, so any filesystem
     // call through this empty module would fail the test instead of touching disk.

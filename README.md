@@ -157,7 +157,9 @@ Aiden Agent is a beta desktop release for macOS and Linux. Each release publishe
 signed macOS DMG/ZIP builds and verified Linux AppImage/DEB/RPM builds for x64 and
 arm64, with checksums. A separate manual workflow builds non-release Linux
 installers for testing. macOS and writable Linux AppImages update in-app; `.deb`
-and `.rpm` installs update through their package manager. See
+and `.rpm` installs update through their package manager. AppImage updates require
+a trusted GitHub CLI 2.68+ and online release-workflow verification before
+installation, in addition to the feed checksum. See
 [the macOS release guide](docs/releasing.md) and [Linux guide](docs/linux.md).
 
 The canonical website download is the stable

@@ -69,15 +69,16 @@ export function replaceAppImageAtomically(options: {
   current: AppImageIdentity;
   installer: string;
   sha512: string;
+  verifiedSha256: string;
   eligible: () => boolean;
 }): string {
-  const { current, installer, sha512 } = options;
+  const { current, installer, sha512, verifiedSha256 } = options;
   const stillCurrent = (): boolean => {
     const actual = appImageIdentity(current.path);
     return actual.dev === current.dev && actual.ino === current.ino;
   };
   if (!options.eligible() || !stillCurrent() || !isRegularAppImage(installer) ||
-      !/^[A-Za-z0-9+/]{86}==$/u.test(sha512)) throw new Error("AppImage update installation is unavailable.");
+      !/^[A-Za-z0-9+/]{86}==$/u.test(sha512) || !/^[0-9a-f]{64}$/u.test(verifiedSha256)) throw new Error("AppImage update installation is unavailable.");
   const temporary = path.join(path.dirname(current.path), `.aiden-update-${randomUUID()}.tmp`);
   let source: number | undefined;
   let target: number | undefined;
@@ -90,12 +91,14 @@ export function replaceAppImageAtomically(options: {
     target = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     temporaryExists = true;
     const hash = createHash("sha512");
+    const publisherHash = createHash("sha256");
     const buffer = Buffer.alloc(1024 * 1024);
     let copied = 0;
     while (copied < sourceInfo.size) {
       const count = readSync(source, buffer, 0, Math.min(buffer.length, sourceInfo.size - copied), copied);
       if (count === 0) throw new Error("The downloaded AppImage was truncated.");
       hash.update(buffer.subarray(0, count));
+      publisherHash.update(buffer.subarray(0, count));
       let written = 0;
       while (written < count) {
         const bytes = writeSync(target, buffer, written, count - written);
@@ -105,6 +108,7 @@ export function replaceAppImageAtomically(options: {
       copied += count;
     }
     if (fstatSync(source).size !== sourceInfo.size || hash.digest("base64") !== sha512) throw new Error("The downloaded AppImage checksum changed.");
+    if (publisherHash.digest("hex") !== verifiedSha256) throw new Error("The downloaded AppImage does not match its verified publisher provenance.");
     fchmodSync(target, 0o755);
     fsyncSync(target);
     closeSync(target);
