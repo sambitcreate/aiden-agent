@@ -144,7 +144,7 @@ const GROUPS: Record<
         "Terminal theme",
         "Theme for this CLI session and its saved terminal defaults.",
       ],
-      ["appearance.mode", "Theme", "Choose the serving app's color mode."],
+      ["appearance.mode", "Color mode", "Light, dark, or match the system."],
       [
         "appearance.theme",
         "Color theme",

@@ -1067,7 +1067,6 @@ async function prepareGeneration(
       botContext: undefined,
       botApprovedRoots: [] as string[],
       botMutatingToolNames: new Set<string>(),
-      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
     };
   }
   const botBound = botContext !== undefined;
@@ -2202,10 +2201,6 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
-    // The Aiden system prompt reads its approval posture from settings, which
-    // are already loaded here; re-reading them at the prompt site would be a
-    // second disk round trip inside the generation's hot path.
-    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -2571,7 +2566,6 @@ export const llmClient = {
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
-      assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
@@ -3171,7 +3165,6 @@ export const llmClient = {
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
               }),
-              settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
