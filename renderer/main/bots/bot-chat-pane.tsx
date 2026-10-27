@@ -972,17 +972,17 @@ export function BotChatPane({ botId }: { botId: string }) {
     (snapshot.partial?.trim().length ?? 0) > 0 &&
     (activityPhase === "writing" || activityPhase === "thinking") &&
     !snapshot.activity?.step;
-  // What already answers a send that is still moving into place stays unseen until it lands.
+  // Settled here as well as in the effect above, which prunes the state only
+  // after paint: an echo leaves in the same frame its entry shows, and what
+  // answers a send still moving into place stays unseen until it lands.
+  const sendArrivals = matchBotPendingSends(pendingSends, snapshot);
+  const shownSends = pendingSends.filter((send) => morphing.has(send.requestId) || !sendArrivals.has(send.requestId));
   const heldArrivals = new Set(
-    morphing.size
-      ? [...matchBotPendingSends(pendingSends, snapshot)]
-          .filter(([requestId]) => morphing.has(requestId))
-          .map(([, arrivalId]) => arrivalId)
-      : [],
+    [...sendArrivals].filter(([requestId]) => morphing.has(requestId)).map(([, arrivalId]) => arrivalId),
   );
   // A message just sent says "Getting ready" at once, before main's state
   // catches up (as on the phones); a failed send drops its echo and the line.
-  const startingTurn = !running && !question && !handoff ? pendingSends.find((send) => !send.queued) : undefined;
+  const startingTurn = !running && !question && !handoff ? shownSends.find((send) => !send.queued) : undefined;
   const statusActivity =
     snapshot.activity && !replyStreaming
       ? snapshot.activity
@@ -1373,7 +1373,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
         />
-        {pendingSends.map((send) => {
+        {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);
           return (
             <BotPendingSendBubble
