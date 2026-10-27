@@ -7,6 +7,7 @@ import {
 } from "../../renderer/shared/bot-routine-schedule.js";
 import { isPathSafeBotCapabilityId } from "../../renderer/shared/bot-capabilities.js";
 import { BOT_LIMITS } from "../../renderer/shared/bots.js";
+import { redactCredentialTokens } from "../shared/redaction.js";
 import { BOT_ROUTINE_NOTES_HEADER } from "./bot-routine-notes.js";
 import type { BotRoutinePorts } from "./bot-routines-port.js";
 import type { ScheduledRunTrigger } from "./schedule-service-core.js";
@@ -144,7 +145,23 @@ class RoutineFailure extends Error {
 }
 
 function message(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
+  // This text becomes the run's `error`, the Mac notification and the phone
+  // preview, so provider words are credential-redacted before they leave.
+  const text = error instanceof Error ? error.message : String(error);
+  return redactCredentialTokens(text, "[redacted]").slice(0, 4_096);
+}
+
+/**
+ * The Bot session refusal behind a thrown error, if it is one. Duck-typed so
+ * this module keeps only a type-level tie to the Bot runtime (the CLI bundles
+ * these sources without it), matching `telegram-service-core` and
+ * `bot-reply-outbox`.
+ */
+function botSessionFailure(error: unknown): BotRoutineFailure | undefined {
+  if (!(error instanceof Error) || error.name !== "BotSessionError") return undefined;
+  const reason = (error as { reason?: unknown }).reason;
+  if (typeof reason !== "string" || !reason) return undefined;
+  return classifyBotRoutineFailure({ sessionReason: reason, detail: error.message });
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -377,7 +394,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
             ? {
                 failure: error instanceof RoutineFailure
                   ? error.failure
-                  : { kind: "other", code: "run_failed" },
+                  : botSessionFailure(error) ?? { kind: "other", code: "run_failed" },
               }
             : {}),
         };

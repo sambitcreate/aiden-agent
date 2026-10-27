@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { scheduledJobs, type Cron } from "croner";
+import { BotSessionError } from "./bot-runtime/bot-session-service.js";
 import type {
   BotRoutinePorts,
   BotRoutineSubmissionOutcome,
@@ -652,6 +653,77 @@ test("records a classified failure on the run", async () => {
   const [stored] = await h.store.runs(routine.id);
   assert.equal(stored?.failure?.kind, "temporary");
   assert.match(stored?.failure?.detail ?? "", /429 rate limit/u);
+});
+
+test("a Bot session refusal from the send is classified, not recorded as a generic failure", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  // The real service refuses the send before Pi admission when the Bot has no model.
+  h.session.send = async () => {
+    throw new BotSessionError("needs_model");
+  };
+
+  const run = await h.run((await h.store.get(routine.id))!, undefined, {
+    kind: "automatic",
+    fireTime: 1,
+  });
+
+  assert.equal(run.result, "error");
+  // Task 5 raises an immediate "set a model" issue from this kind.
+  assert.equal(run.failure?.kind, "model_setup");
+  assert.equal(run.failure?.code, "needs_model");
+  // The person reads the refusal, not `run_failed`.
+  assert.match(run.error ?? "", /needs an AI model/u);
+
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.failure?.kind, "model_setup");
+
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.notifications[0]?.body, run.error);
+});
+
+test("a provider detail carrying a credential is redacted on the run and its notification", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const secret = "sk-live-2f4c9a1b8e7d6c5f4a3b2c1d";
+  h.session.replies.push({
+    kind: "failed",
+    error: "model_error",
+    reason: "model_error",
+    detail: `401 Unauthorized: api key ${secret} was rejected`,
+  });
+
+  const run = await h.run((await h.store.get(routine.id))!, undefined, {
+    kind: "automatic",
+    fireTime: 1,
+  });
+
+  assert.equal(run.result, "error");
+  // Classification still reads the provider's words: 401 means sign in again.
+  assert.equal(run.failure?.kind, "sign_in");
+  // The detail survives, minus the credential.
+  assert.match(run.error ?? "", /401 Unauthorized/u);
+  assert.match(run.error ?? "", /\[redacted\]/u);
+  assert.equal(run.error?.includes(secret), false);
+  assert.equal(run.failure?.detail?.includes(secret), false);
+
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.error?.includes(secret), false);
+  assert.equal(stored?.failure?.detail?.includes(secret), false);
+
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0]?.body ?? "", /401 Unauthorized/u);
+  assert.equal(h.notifications[0]?.body.includes(secret), false);
 });
 
 test("a routine that fires while its Bot is paused is skipped without touching the paused turn", async (t) => {
