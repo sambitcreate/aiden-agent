@@ -339,13 +339,30 @@ function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
   return value === "bot_paused" || value === "duplicate" || value === "paused_by_person";
 }
 
+/** The request id of a failed fire's delayed retry. */
+export function botRoutineRetryRequestId(failedRunId: string, attempt: 1 | 2): string {
+  return `${failedRunId.replace(/:retry-[12]$/u, "")}:retry-${attempt}`;
+}
+
+function storedRoutineRetry(value: unknown, requestId: unknown, taskId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const retry = value as Record<string, unknown>;
+  return Object.keys(retry).length === 2 &&
+    (retry.attempt === 1 || retry.attempt === 2) &&
+    typeof retry.failedRunId === "string" && retry.failedRunId.length <= 200 &&
+    retry.failedRunId.startsWith(`routine:${taskId}:`) &&
+    requestId === botRoutineRetryRequestId(retry.failedRunId, retry.attempt);
+}
+
 function storedRoutineFires(value: unknown, taskId: string): ScheduledTask["pendingRoutineFires"] {
   if (!Array.isArray(value)) return undefined;
   const fires = value.filter((item): item is NonNullable<ScheduledTask["pendingRoutineFires"]>[number] => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return false;
     const fire = item as Record<string, unknown>;
     return Number.isSafeInteger(fire.fireTime) && (fire.fireTime as number) >= 0 &&
-      fire.requestId === `routine:${taskId}:${fire.fireTime}` &&
+      (fire.retry === undefined
+        ? fire.requestId === `routine:${taskId}:${fire.fireTime}`
+        : storedRoutineRetry(fire.retry, fire.requestId, taskId)) &&
       typeof fire.prompt === "string" && fire.prompt.length <= 32 * 1024 &&
       typeof fire.name === "string" && fire.name.length <= 120;
   });
@@ -731,6 +748,53 @@ export function createScheduleStore(
         draft[index] = claimed;
         return structuredClone(claimed);
       }, isCurrent);
+    },
+
+    /**
+     * Queue a delayed retry of a failed Bot routine fire as a pending fire due
+     * at `at`. It survives restarts and is replayed like any claimed fire.
+     * Returns false when the routine is gone or the retry is already queued.
+     */
+    async addRoutineRetry(
+      id: string,
+      retry: { failedRunId: string; attempt: 1 | 2; at: number },
+    ): Promise<boolean> {
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.botId) return false;
+        const requestId = botRoutineRetryRequestId(retry.failedRunId, retry.attempt);
+        const pending = existing.pendingRoutineFires ?? [];
+        if (pending.some((fire) => fire.requestId === requestId)) return false;
+        if (pending.length >= RUNS_PER_TASK) return false;
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: [...pending, {
+            fireTime: retry.at,
+            requestId,
+            prompt: existing.prompt ?? "",
+            name: existing.name,
+            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt },
+          }],
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+        return true;
+      });
+    },
+
+    /** Drop every queued retry of a routine, for example when it is paused. */
+    async clearRoutineRetries(id: string): Promise<void> {
+      await tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.pendingRoutineFires?.some((fire) => fire.retry)) return;
+        const remaining = existing.pendingRoutineFires.filter((fire) => !fire.retry);
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: remaining.length ? remaining : undefined,
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+      });
     },
 
     async settleRoutineFire(id: string, requestId: string): Promise<void> {

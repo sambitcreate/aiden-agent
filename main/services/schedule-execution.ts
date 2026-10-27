@@ -130,6 +130,8 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       // delivery log, the Mac banner, Telegram and the phone feed.
       deliver: async (input) => (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
       broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+      afterRun: async (task, run, trigger) =>
+        (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().afterRun(task, run, trigger),
     }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {

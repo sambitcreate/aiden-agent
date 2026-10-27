@@ -528,6 +528,11 @@ export interface ScheduledTask {
     requestId: string;
     prompt: string;
     name: string;
+    /**
+     * Set when this entry is a delayed retry of a failed fire rather than a
+     * scheduled fire. `fireTime` is when the retry becomes due.
+     */
+    retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
   lastRunAt?: number;
   workspaceId?: string;
