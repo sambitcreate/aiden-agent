@@ -367,7 +367,7 @@ function mountWithComposer(
         onDecide={(decision, options) => decisions.push([decision, options])}
         keyboardShortcuts={keyboardShortcuts}
       />
-      <textarea aria-label="Message" />
+      <textarea aria-label="Message" data-message-draft="" />
     </TooltipProvider>,
   );
   const composer = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
@@ -400,6 +400,13 @@ test("approval keys leave the message box alone once something is typed", () => 
   const backspace = fireEvent.keyDown(composer, primaryKey("Backspace"));
   assert.deepEqual(decisions, []);
   assert.equal(enter && backspace, true, "the keys reach the message box untouched");
+
+  // The draft still counts once focus moves to the card's buttons.
+  const deny = screen.getByRole("button", { name: "Deny" });
+  deny.focus();
+  fireEvent.keyDown(deny, primaryKey("Enter"));
+  fireEvent.keyDown(deny, primaryKey("Backspace"));
+  assert.deepEqual(decisions, []);
 });
 
 test("approval keys stay off while a menu is open, without the modifier, or while deciding", () => {

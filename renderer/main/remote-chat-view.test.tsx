@@ -175,8 +175,15 @@ function render(props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, 
   const all = Array.from(document.getElementsByTagName("*"));
   const text = (document.documentElement?.textContent ?? "").replace(/\s+/g, " ");
   const buttons = all.filter((node) => node.tagName.toLowerCase() === "button");
+  // A button's name leaves out aria-hidden parts, such as an approval's key hint.
+  const buttonName = (node: Node): string =>
+    node.nodeType === 3
+      ? (node.nodeValue ?? "")
+      : (node as Element).getAttribute?.("aria-hidden") === "true"
+        ? ""
+        : Array.from(node.childNodes).map(buttonName).join("");
   const button = (label: RegExp) =>
-    buttons.find((node) => label.test(node.textContent ?? "") || label.test(node.getAttribute("aria-label") ?? ""));
+    buttons.find((node) => label.test(buttonName(node)) || label.test(node.getAttribute("aria-label") ?? ""));
   const typing = all.filter((node) => ["textarea", "input"].includes(node.tagName.toLowerCase()));
   // A question's options are the buttons in its labelled group.
   const inLabelledGroup = (node: Element) => {
@@ -188,7 +195,7 @@ function render(props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, 
   const choices = buttons
     .filter(inLabelledGroup)
     .map((node) => node.getElementsByTagName("span")[1]?.firstChild?.textContent ?? "");
-  return { markup, all, text, buttons, button, typing, choices };
+  return { markup, all, text, buttons, button, buttonName, typing, choices };
 }
 
 const waitingRun = () =>
@@ -363,7 +370,7 @@ test("several approvals are answered one at a time, the first with a count and t
   ]);
   const view = render({ host: online, snapshot: snapshot(online, { run: two }), chat: session(online).chat() });
 
-  assert.equal(view.buttons.filter((node) => /^Deny$/.test(node.textContent ?? "")).length, 1, "one decision at a time");
+  assert.equal(view.buttons.filter((node) => /^Deny$/.test(view.buttonName(node))).length, 1, "one decision at a time");
   assert.match(view.text, /1 of 2/);
   const waiting = view.all.find((node) => node.getAttribute("data-remote-approval") === "ap-2");
   assert.ok(waiting, "the second approval stays visible");

@@ -36,15 +36,18 @@ function editableText(target: Element): string | null {
   return null;
 }
 
+const hasText = (element: Element) => (editableText(element) ?? "").trim() !== "";
+
 /**
- * Whether the focused element leaves the keys free for the approval: nothing
- * typed where focus is, and no dialog, menu or picker open on top.
+ * Whether the keys are free for the approval: nothing typed where focus is or
+ * in the message box (even after focus moves to a button), and no dialog,
+ * menu or picker open on top.
  */
 export function approvalShortcutTargetIsFree(target: EventTarget | null, root: ParentNode): boolean {
   const focused = target instanceof Element ? target : null;
-  if (focused) {
-    const text = editableText(focused);
-    if (text !== null && text.trim() !== "") return false;
+  if (focused && hasText(focused)) return false;
+  for (const draft of root.querySelectorAll("[data-message-draft]")) {
+    if (hasText(draft)) return false;
   }
   return !typingRedirectBlockedByOverlay(root, focused);
 }

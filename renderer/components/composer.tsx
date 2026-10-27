@@ -2353,6 +2353,8 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
+              // Approval keys stay off while this holds a draft, wherever focus is.
+              data-message-draft=""
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
