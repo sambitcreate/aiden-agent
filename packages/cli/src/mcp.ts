@@ -312,7 +312,8 @@ async function deleteClientSecret(agentDir: string, server: McpServer | undefine
 export async function mcpCommand(agentDir: string, args: string[]) {
   const [action = "list", value] = args, store = storeFor(agentDir);
   await pruneRetiredMcpServers(agentDir);
-  if (action === "presets") return MCP_PRESETS;
+  // A Mac app connector (iMCP) is set up in the desktop app, which finds and checks the app.
+  if (action === "presets") return MCP_PRESETS.filter((preset) => preset.transport === "http");
   if (action === "list") return (await store.load()).map(({ headers: _headers, env: _env, oauthClientSecret, ...server }) => ({ ...server, ...(oauthClientSecret === undefined ? {} : { hasOAuthClientSecret: true }) }));
   if (action === "login") {
     const server = (await store.load()).find((item) => item.id === value);
@@ -338,6 +339,7 @@ export async function mcpCommand(agentDir: string, args: string[]) {
     if (!value) throw new Error("Provide a server JSON file or preset id.");
     const preset = action === "preset" ? getMcpPreset(value) : undefined;
     if (action === "preset" && !preset) throw new Error("MCP preset not found.");
+    if (preset?.transport === "stdio") throw new Error(`Set up ${preset.name} in Settings → Connectors in the Aiden desktop app on your Mac.`);
     const parsed = validateMcpServer(preset ? serverFromPreset(preset) : JSON.parse(readFileSync(value, "utf8")));
     const existing = (await store.load()).find((item) => item.id === parsed.id);
     const server = await storeClientSecret(agentDir, parsed, existing);

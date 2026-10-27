@@ -9,17 +9,17 @@
 
 import { isRecord } from "../shared/guards.js";
 import { WebSearchError, webSearchError } from "./web-search-core.js";
-import type { WebSearchProviderId } from "./web-search-provider-registry-core.js";
+import { isWebSearchProviderId, type WebSearchProviderId } from "./web-search-provider-registry-core.js";
 import {
   MAX_WEB_SEARCH_KEY_POOL_ENTRIES,
   WEB_SEARCH_KEY_POOL_PRIMARY_ENTRY_ID,
+  isWebKeyPoolId,
   isWebSearchKeyPoolEntryId,
-  isWebSearchKeyPoolProviderId,
   isWebSearchKeyPoolStrategy,
   normalizeWebSearchKeyPoolLabel,
   type WebSearchKeyPoolCooldownReason,
   type WebSearchKeyPoolEntryMetadata,
-  type WebSearchKeyPoolProviderId,
+  type WebKeyPoolId,
   type WebSearchKeyPoolRendererState,
   type WebSearchKeyPoolStrategy,
 } from "../../renderer/shared/web-search-key-pool.js";
@@ -101,10 +101,9 @@ export function webSearchKeyPoolIndexSecretId(baseSecretId: string): string {
   return `${baseSecretId}:pool-index`;
 }
 
-export function webSearchKeyPoolSupported(
-  providerId: unknown,
-): providerId is WebSearchKeyPoolProviderId & WebSearchProviderId {
-  return isWebSearchKeyPoolProviderId(providerId);
+/** Whether this credential keeps a pool: a pool-capable search provider or the extraction key. */
+export function webSearchKeyPoolSupported(providerId: unknown): providerId is WebKeyPoolId {
+  return isWebKeyPoolId(providerId);
 }
 
 // ── Cooldown tracker ───────────────────────────────────────────────────
@@ -239,7 +238,7 @@ function recordKey(providerId: string, entryId: string): string {
 
 /** Redacted renderer projection of one provider's pool. */
 export function webSearchKeyPoolRendererState(
-  providerId: WebSearchKeyPoolProviderId,
+  providerId: WebKeyPoolId,
   document: WebSearchKeyPoolDocument,
   tracker: WebSearchKeyPoolTracker,
 ): WebSearchKeyPoolRendererState {
@@ -293,7 +292,8 @@ function cooldownReasonFor(error: unknown): WebSearchKeyPoolCooldownReason | und
  * back and a later search can retry), otherwise with `auth`.
  */
 export async function runWithWebSearchKeyPool<T>(options: {
-  readonly providerId: WebSearchProviderId;
+  /** A search provider, or a pooled non-search credential (errors then carry no provider). */
+  readonly providerId: WebSearchProviderId | WebKeyPoolId;
   readonly pool: WebSearchKeyPool;
   readonly tracker: WebSearchKeyPoolTracker;
   readonly signal?: AbortSignal;
@@ -302,7 +302,8 @@ export async function runWithWebSearchKeyPool<T>(options: {
   readonly run: (key: string) => Promise<T>;
 }): Promise<T> {
   const { providerId, pool, tracker } = options;
-  if (pool.keys.length === 0) throw webSearchError("auth", providerId);
+  const errorProvider = isWebSearchProviderId(providerId) ? providerId : undefined;
+  if (pool.keys.length === 0) throw webSearchError("auth", errorProvider);
   const byId = new Map(pool.keys.map((entry) => [entry.id, entry]));
   const order = tracker.order(
     providerId,
@@ -320,7 +321,7 @@ export async function runWithWebSearchKeyPool<T>(options: {
       if (cooling.reason === "quota") sawQuota = true;
       continue;
     }
-    if (options.signal?.aborted) throw webSearchError("cancelled", providerId);
+    if (options.signal?.aborted) throw webSearchError("cancelled", errorProvider);
     if (options.beforeKeyAttempt) await options.beforeKeyAttempt(entryId);
     try {
       const result = await options.run(entry.key);
@@ -332,11 +333,11 @@ export async function runWithWebSearchKeyPool<T>(options: {
       tracker.recordFailure(providerId, entryId, reason);
       if (reason === "quota") sawQuota = true;
       lastError = error;
-      if (options.signal?.aborted) throw webSearchError("cancelled", providerId);
+      if (options.signal?.aborted) throw webSearchError("cancelled", errorProvider);
     }
   }
   if (lastError instanceof WebSearchError && (lastError.kind === "quota" || !sawQuota)) {
     throw lastError;
   }
-  throw webSearchError(sawQuota ? "quota" : "auth", providerId);
+  throw webSearchError(sawQuota ? "quota" : "auth", errorProvider);
 }

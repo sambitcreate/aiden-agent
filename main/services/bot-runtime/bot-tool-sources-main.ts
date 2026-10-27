@@ -123,7 +123,7 @@ export function isConnected(pluginId: string): Promise<boolean> {
         ),
       ),
     hasOAuthTokens: (server, preset) =>
-      hasOAuthTokens({ ...server, url: server.url ?? preset.url }),
+      hasOAuthTokens({ ...server, url: server.url ?? (preset.transport === "http" ? preset.url : undefined) }),
   });
 }
 

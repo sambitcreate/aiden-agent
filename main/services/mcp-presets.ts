@@ -2,15 +2,21 @@ import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-confi
 // Built-in connectors from Aiden's catalog (`renderer/shared/connector-catalog.ts`)
 // as first-class presets: the user connects with an API key (encrypted via
 // secrets.ts), a browser OAuth sign-in, or, for a server on this device, no
-// credential at all.
+// credential at all. A connector served by a Mac app (iMCP) runs the stdio
+// command inside the installed app's bundle, and nothing else.
 //
 // This module is intentionally free of Electron imports so it can be
 // unit-tested under plain tsx.
 
+import os from "node:os";
+import path from "node:path";
 import {
   CONNECTOR_CATALOG,
   isConnectorAvailable,
-  type ConnectorCatalogEntry,
+  type ConnectorMacApp,
+  type HttpConnectorCatalogEntry,
+  type MacAppMcpPreset,
+  type McpPreset as SharedMcpPreset,
   type McpPresetAuth as SharedMcpPresetAuth,
 } from "../../renderer/shared/connector-catalog.js";
 import { DEFAULT_MCP_OAUTH_CLIENT_NAME } from "./mcp-oauth-client-metadata.js";
@@ -18,21 +24,38 @@ import type { McpServer } from "./types.js";
 
 export type McpPresetAuth = SharedMcpPresetAuth;
 
-export interface McpPreset extends ConnectorCatalogEntry {
-  /** Every preset is Streamable HTTP. */
-  transport: "http";
+/** A Streamable HTTP preset, or (`transport: "stdio"`) one served by a Mac app. */
+export type McpPreset = SharedMcpPreset;
+export type { MacAppMcpPreset };
+
+export const MCP_PRESETS: readonly McpPreset[] = CONNECTOR_CATALOG.map((entry): McpPreset =>
+  entry.macApp ? { ...entry, transport: "stdio" } : { ...entry, transport: "http" },
+);
+
+/** The host a Mac app preset is checked against; tests pass their own. */
+export interface McpPresetHost {
+  platform: NodeJS.Platform;
+  homedir: string;
 }
 
-export const MCP_PRESETS: readonly McpPreset[] = CONNECTOR_CATALOG.map((entry) => ({
-  ...entry,
-  transport: "http" as const,
-}));
+const CURRENT_HOST = (): McpPresetHost => ({ platform: process.platform, homedir: os.homedir() });
+
+/**
+ * Every command a Mac app preset may run: its server inside the app in
+ * /Applications, then in ~/Applications. Nothing outside those bundles.
+ */
+export function macAppServerCommands(app: ConnectorMacApp, homedir: string): string[] {
+  return [
+    path.posix.join("/Applications", app.bundleName),
+    path.posix.join(homedir, "Applications", app.bundleName),
+  ].map((bundle) => path.posix.join(bundle, app.serverPath));
+}
 
 /**
  * The one origin a preset's connection (and credential) may reach: the
  * catalog's HTTPS origin, or for a local preset its exact loopback HTTP origin.
  */
-function presetOrigin(preset: Pick<ConnectorCatalogEntry, "url" | "local">): string {
+function presetOrigin(preset: Pick<HttpConnectorCatalogEntry, "url" | "local">): string {
   const parsed = new URL(preset.url);
   if (preset.local) {
     if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
@@ -47,7 +70,9 @@ function presetOrigin(preset: Pick<ConnectorCatalogEntry, "url" | "local">): str
 }
 
 const MCP_PRESET_ALLOWED_ORIGINS: Readonly<Record<string, string>> = Object.freeze(
-  Object.fromEntries(MCP_PRESETS.map((preset) => [preset.id, presetOrigin(preset)])),
+  Object.fromEntries(
+    MCP_PRESETS.flatMap((preset) => (preset.transport === "http" ? [[preset.id, presetOrigin(preset)]] : [])),
+  ),
 );
 
 /** Deterministic server id for a preset, so re-setup maps to the same record and secret. */
@@ -81,10 +106,14 @@ export function getMcpPresetForServerId(serverId: string): McpPreset | undefined
 /**
  * Validate the renderer-authored identity and endpoint before main resolves a
  * preset credential or connects. Paths may vary for provider-owned
- * session/read-only endpoints, but a preset never leaves its catalog origin.
+ * session/read-only endpoints, but a preset never leaves its catalog origin,
+ * and a Mac app preset never runs anything but its app's own server.
  * A preset marked unavailable is refused outright.
  */
-export function assertMcpPresetServer(server: McpServer): McpPreset | undefined {
+export function assertMcpPresetServer(
+  server: McpServer,
+  host: McpPresetHost = CURRENT_HOST(),
+): McpPreset | undefined {
   validateMcpServerMetadata(server);
   const idPreset = getMcpPresetForServerId(server.id);
   const declaredPreset = server.presetId ? getMcpPreset(server.presetId) : undefined;
@@ -96,6 +125,7 @@ export function assertMcpPresetServer(server: McpServer): McpPreset | undefined 
   if (!isConnectorAvailable(declaredPreset)) {
     throw new Error(declaredPreset.availability!.reason);
   }
+  if (declaredPreset.transport === "stdio") return assertMacAppPresetServer(server, declaredPreset, host);
   if (server.transport !== declaredPreset.transport || !server.url) {
     throw new Error(`${declaredPreset.name} must use its own HTTP connection.`);
   }
@@ -125,17 +155,44 @@ export function assertMcpPresetServer(server: McpServer): McpPreset | undefined 
   return declaredPreset;
 }
 
-/** Build the McpServer record for a preset connection. */
-export function serverFromPreset(preset: McpPreset, url?: string): McpServer {
-  const server: McpServer = {
-    id: presetServerId(preset.id),
-    name: preset.name,
-    transport: preset.transport,
-    url: url?.trim() || preset.url,
-    oauth: preset.auth.kind === "oauth" ? true : undefined,
-    presetId: preset.id,
-    enabled: true,
-  };
-  assertMcpPresetServer(server);
+/**
+ * A Mac app preset runs exactly its app's server, with no arguments,
+ * environment, address or credential, and only on a Mac.
+ */
+function assertMacAppPresetServer(server: McpServer, preset: MacAppMcpPreset, host: McpPresetHost): MacAppMcpPreset {
+  if (host.platform !== "darwin") throw new Error(`${preset.name} works only on a Mac.`);
+  if (
+    server.transport !== "stdio" ||
+    server.url !== undefined ||
+    server.oauth ||
+    (server.headers && Object.keys(server.headers).length > 0)
+  ) {
+    throw new Error(`${preset.name} must run its own app on this Mac.`);
+  }
+  if ((server.args?.length ?? 0) > 0 || (server.env && Object.keys(server.env).length > 0)) {
+    throw new Error(`${preset.name} takes no arguments or environment.`);
+  }
+  if (!server.command || !macAppServerCommands(preset.macApp, host.homedir).includes(server.command)) {
+    throw new Error(`${preset.name} only runs the server inside ${preset.macApp.bundleName} in your Applications folder.`);
+  }
+  return preset;
+}
+
+/**
+ * Build the McpServer record for a preset connection. `location` is an HTTP
+ * preset's address (blank: the catalog default) or, for a Mac app preset,
+ * the installed app's server command.
+ */
+export function serverFromPreset(preset: McpPreset, location?: string, host?: McpPresetHost): McpServer {
+  const base = { id: presetServerId(preset.id), name: preset.name, presetId: preset.id, enabled: true };
+  const server: McpServer = preset.transport === "stdio"
+    ? { ...base, transport: "stdio", command: location?.trim() ?? "", args: [] }
+    : {
+        ...base,
+        transport: preset.transport,
+        url: location?.trim() || preset.url,
+        oauth: preset.auth.kind === "oauth" ? true : undefined,
+      };
+  assertMcpPresetServer(server, host);
   return server;
 }

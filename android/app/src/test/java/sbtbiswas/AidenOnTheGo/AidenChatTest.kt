@@ -272,6 +272,24 @@ class AidenChatTest {
         )
     }
 
+    @Test
+    fun canonicalFixtureWebExtractRecapDecodesFromTheTimelineEvent() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        val timelineEvent = root.getValue("events").jsonArray.map { it.jsonObject }
+            .single { it.getValue("type").jsonPrimitive.content == "timeline" }
+        val timeline = json.decodeFromJsonElement(
+            AidenGenerationTimeline.serializer(),
+            timelineEvent.getValue("payload").jsonObject.getValue("timeline"),
+        )
+        val recap = timeline.steps.firstNotNullOf { it.extractionRecap }
+        assertEquals("acme.example", recap.host)
+        assertEquals(
+            listOf(AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.UNCERTAIN, AidenWebExtractRecap.Status.ABSENT),
+            recap.fields.map { it.status },
+        )
+        assertEquals("Pro is \$20 per month, billed monthly.", recap.fields.first().sourceLine)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun backgroundChatRefreshReportsReadOnlyAfterReturningToChat() {
@@ -1536,6 +1554,124 @@ class AidenChatTest {
             assertEquals(listOf("tool-1", "tool-2", "tool-3"),
                 rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
             assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        }
+    }
+
+    private val extractedPriceJson =
+        """{"name":"pro_monthly","status":"extracted","value":"20","confidence":0.97,"sourceLine":"Pro is ${'$'}20 per month."}"""
+
+    private fun extractRecapJson(vararg fields: String, extra: String = "") =
+        """{"version":1,"host":"acme.example","cut":false$extra,"fields":[${fields.joinToString(",")}]}"""
+
+    private fun extractTimelineJson(
+        extraction: String = extractRecapJson(extractedPriceJson),
+        toolName: String = "web_fetch",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-pages","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"web_search","label":"Search the web","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Fetch web page","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"detail":"acme.example","extraction":$extraction},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun extractedValuesFollowTheLineThatReadThemAndThePageStaysInTheTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extractRecapJson(
+            extractedPriceJson,
+            """{"name":"team_yearly","status":"uncertain","value":"1399","confidence":0.92,"notFound":true}""",
+            """{"name":"seats","status":"uncertain","value":"50","confidence":0.4,"sourceLine":"Up to 50 seats."}""",
+            """{"name":"enterprise","status":"null"}"""
+        )))
+        val recap = timeline.steps[1].extractionRecap
+        assertNotNull(recap)
+        assertEquals(
+            listOf(
+                AidenWebExtractRecap.Status.EXTRACTED, AidenWebExtractRecap.Status.UNCERTAIN,
+                AidenWebExtractRecap.Status.UNCERTAIN, AidenWebExtractRecap.Status.ABSENT
+            ),
+            recap!!.fields.map { it.status }
+        )
+        assertEquals(listOf("pro monthly", "team yearly", "seats", "enterprise"), recap.fields.map { it.label })
+        assertEquals("Pro is $20 per month.", recap.fields[0].sourceLine)
+        assertEquals(true, recap.fields[1].notFound)
+        assertNull(recap.fields[3].value)
+
+        val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1,tool-2,tool-3", "EXTRACTION:tool-2", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].extraction)
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        // The page read stays an activity line and counts in the tally.
+        assertEquals("Explored 1 file, 1 web search, 1 web page", AidenAgentActivityPresentation.summary(timeline))
+        assertEquals("Fetched web page acme.example", AidenAgentActivityPresentation.line(timeline.steps[1]))
+        assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        assertEquals(listOf("tool-2"), AidenAgentActivityPresentation.extractionSteps(timeline).map { it.id })
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].extractionRecap)
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("extraction"))
+
+        // A failed extraction carries its reason and no fields.
+        val failed = wireJson.decodeFromString<AidenGenerationTimeline>(
+            extractTimelineJson(extractRecapJson(extra = ""","error":"quota""""))
+        ).steps[1].extractionRecap
+        assertEquals(AidenWebExtractRecap.Failure.QUOTA, failed?.error)
+        assertTrue(failed!!.fields.isEmpty())
+    }
+
+    @Test
+    fun malformedOrMisplacedExtractRecapIsDroppedButThePageStaysAnActivityLine() {
+        val malformed = listOf(
+            "no fields and no error" to extractRecapJson(),
+            "an error with fields" to extractRecapJson(extractedPriceJson, extra = ""","error":"quota""""),
+            "unknown error" to extractRecapJson(extra = ""","error":"teapot""""),
+            "seventeen fields" to extractRecapJson(*Array(17) { """{"name":"f$it","status":"null"}""" }),
+            "duplicate names" to extractRecapJson(extractedPriceJson, extractedPriceJson),
+            "extracted without its page line" to extractRecapJson("""{"name":"pro","status":"extracted","value":"20","confidence":0.9}"""),
+            "extracted marked not found" to extractRecapJson("""{"name":"pro","status":"extracted","value":"20","confidence":0.9,"sourceLine":"Pro is 20.","notFound":true}"""),
+            "absent with a value" to extractRecapJson("""{"name":"pro","status":"null","value":"20"}"""),
+            "notFound false" to extractRecapJson("""{"name":"pro","status":"uncertain","notFound":false}"""),
+            "confidence above one" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":1.2}"""),
+            "string confidence" to extractRecapJson("""{"name":"pro","status":"uncertain","confidence":"0.9"}"""),
+            "field name with a space" to extractRecapJson("""{"name":"pro monthly","status":"null"}"""),
+            "field name starting with a digit" to extractRecapJson("""{"name":"1price","status":"null"}"""),
+            "newline in a source line" to extractRecapJson("""{"name":"pro","status":"uncertain","sourceLine":"Pro is\n20"}"""),
+            "double space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20  USD"}"""),
+            "no-break space in a value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"20 USD"}"""),
+            "value over 200 characters" to extractRecapJson("""{"name":"pro","status":"uncertain","value":"${"9".repeat(201)}"}"""),
+            "null value" to extractRecapJson("""{"name":"pro","status":"uncertain","value":null}"""),
+            "unknown status" to extractRecapJson("""{"name":"pro","status":"maybe"}"""),
+            "future version" to """{"version":2,"host":"acme.example","cut":false,"fields":[$extractedPriceJson]}""",
+            "string cut" to """{"version":1,"host":"acme.example","cut":"no","fields":[$extractedPriceJson]}""",
+            "not an object" to "\"acme.example\"",
+            "null" to "null"
+        )
+        for ((case, extraction) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(extraction))
+            val step = timeline.steps[1]
+            assertNull(case, step.extraction)
+            assertEquals(case, "web_fetch", step.toolName)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(case, rows.none { it.kind == AidenChronologicalRow.Kind.EXTRACTION })
+        }
+
+        // Boundary values the host accepts still decode.
+        val boundary = extractRecapJson(
+            """{"name":"pro","status":"uncertain","value":"${"😀".repeat(200)}"}""",
+            *Array(15) { """{"name":"f$it","status":"null"}""" }
+        )
+        assertEquals(16, wireJson.decodeFromString<AidenGenerationTimeline>(extractTimelineJson(boundary))
+            .steps[1].extractionRecap?.fields?.size)
+
+        // A recap on another tool or an unfinished page is ignored.
+        for ((toolName, status) in listOf("web_search" to "completed", "web_fetch" to "failed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                extractTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].extractionRecap)
+            assertTrue(AidenAgentActivityPresentation.extractionSteps(timeline).isEmpty())
         }
     }
 
@@ -3323,11 +3459,117 @@ class AidenChatTest {
         )
 
         assertTrue(AidenApprovalPresentation.isAutomation(approval.toolName))
-        assertEquals("Create this automation?", AidenApprovalPresentation.title(approval.toolName))
-        assertEquals("Create a daily report", AidenApprovalPresentation.oneLineSummary(approval.summary))
+        // Scheduled-task titles match the Mac's card.
+        assertEquals("Save this scheduled task?", AidenApprovalPresentation.headline(approval.toolName, approval.summary))
+        assertEquals("Change this automation?", AidenApprovalPresentation.headline("edit_automation", approval.summary))
         assertTrue(AidenApprovalPresentation.requiresDesktopConfirmation(approval))
         assertFalse(AidenApprovalPresentation.requiresDesktopConfirmation(approval.copy(hostCanAllow = true, canAllow = true)))
-        assertEquals("Approval Required", AidenApprovalPresentation.title("run_command"))
+        assertEquals("Approval needed", AidenApprovalPresentation.title("run_command"))
+    }
+
+    @Test
+    fun testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("run_command", "Run command: npm test"))
+        assertEquals(
+            "find ~/Downloads\n  -type f",
+            AidenApprovalPresentation.requestedAction("run_command", "Run command: find ~/Downloads\n  -type f")
+        )
+        assertEquals("Edit forecast.ts?", AidenApprovalPresentation.headline("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("src/forecast.ts", AidenApprovalPresentation.requestedAction("edit_file", "Edit file: src/forecast.ts"))
+        assertEquals("Write todo.md?", AidenApprovalPresentation.headline("write_file", "Create or replace file: notes/todo.md"))
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        assertEquals("edit: {\"path\":\"a.ts\"}", AidenApprovalPresentation.requestedAction("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Edit files?", AidenApprovalPresentation.headline("edit", "edit: {\"path\":\"a.ts\"}"))
+        assertEquals("Run this command?", AidenApprovalPresentation.headline("bash", "Run command: ls -la"))
+        assertEquals("ls -la", AidenApprovalPresentation.requestedAction("bash", "Run command: ls -la"))
+        // A prefix is only removed for the tool that writes it.
+        assertEquals("Run command: rm -rf /", AidenApprovalPresentation.requestedAction("notion__search", "Run command: rm -rf /"))
+        assertEquals("Approval needed", AidenApprovalPresentation.headline("notion__search", "Search Notion"))
+        assertEquals("Review requested action", AidenApprovalPresentation.requestedAction("run_command", " \n\t "))
+        assertEquals("Run command:", AidenApprovalPresentation.requestedAction("run_command", "Run command: "))
+    }
+
+    @Test
+    fun testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        assertEquals("This exact command, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "run_command"))
+        assertEquals("This exact command in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "run_command"))
+        assertEquals("Any edit to this file, until Aiden quits", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.CHAT, "edit_file"))
+        assertEquals("Any write to this file in this workspace", AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ALWAYS, "write_file"))
+        assertNull(AidenApprovalPresentation.scopeDetail(AidenApprovalScope.ONCE, "edit_file"))
+    }
+
+    @Test
+    fun testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        fun step(index: Int, toolName: String, status: AidenAgentStepStatus) = AidenAgentStep(
+            id = "tool-$index",
+            order = index,
+            kind = AidenAgentStep.Kind.TOOL,
+            toolCallId = "call-$index",
+            toolName = toolName,
+            label = "Tool",
+            status = status,
+            startedAt = 1000.0,
+            updatedAt = 2000.0,
+            finishedAt = 2000.0,
+            contentOffset = 0,
+            durationMs = 1000.0
+        )
+        fun timeline(status: AidenGenerationTimelineStatus, steps: List<AidenAgentStep>) = AidenGenerationTimeline(
+            version = 3,
+            generationId = "gen_skipped",
+            status = status,
+            startedAt = 1000.0,
+            finishedAt = if (status == AidenGenerationTimelineStatus.RUNNING) null else 2000.0,
+            steps = steps
+        )
+        // The same sentences as the desktop activity header.
+        assertEquals(
+            "Skipped 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.COMPLETED, listOf(step(0, "run_command", AidenAgentStepStatus.BLOCKED)))
+            )
+        )
+        assertEquals(
+            "Explored 1 file, skipped 2 file changes",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "read_file", AidenAgentStepStatus.COMPLETED),
+                        step(1, "edit_file", AidenAgentStepStatus.BLOCKED),
+                        step(2, "write_file", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        assertEquals(
+            "Ran 1 command, skipped 2 actions",
+            AidenAgentActivityPresentation.summary(
+                timeline(
+                    AidenGenerationTimelineStatus.COMPLETED,
+                    listOf(
+                        step(0, "run_command", AidenAgentStepStatus.COMPLETED),
+                        step(1, "run_command", AidenAgentStepStatus.BLOCKED),
+                        step(2, "web_fetch", AidenAgentStepStatus.BLOCKED)
+                    )
+                )
+            )
+        )
+        // A stopped call may have run partway, so it still counts.
+        assertEquals(
+            "Ran 1 command",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.CANCELLED, listOf(step(0, "run_command", AidenAgentStepStatus.CANCELLED)))
+            )
+        )
+        assertEquals(
+            "Waiting for approval",
+            AidenAgentActivityPresentation.summary(
+                timeline(AidenGenerationTimelineStatus.RUNNING, listOf(step(0, "run_command", AidenAgentStepStatus.AWAITING_APPROVAL)))
+            )
+        )
     }
 
     @Test

@@ -37,6 +37,7 @@ import {
   usageApi,
   voiceApi,
   webSearchApi,
+  webFetchApi,
   workspacesApi,
 } from "./ipc";
 import type { BotDefinition } from "../shared/bots";
@@ -91,9 +92,11 @@ export const queryKeys = {
   mcpLiveStatus: ["mcpLiveStatus"] as const,
   mcpDependents: (serverId: string) => ["mcpDependents", serverId] as const,
   mcpLaunchApprovals: ["mcpLaunchApprovals"] as const,
+  mcpMacAppStatus: (presetId: string) => ["mcpMacAppStatus", presetId] as const,
   mcpToolList: (serverId: string, toolsRevision: string | undefined) => ["mcpToolList", serverId, toolsRevision ?? null] as const,
   exa: ["exa"] as const,
   webSearch: ["webSearch"] as const,
+  webFetch: ["webFetch"] as const,
   telegram: ["telegram"] as const,
   aidenRemote: ["aidenRemote"] as const,
   aidenRemotePairingRequests: ["aidenRemotePairingRequests"] as const,
@@ -865,6 +868,21 @@ export function useMcpLaunchApprovals() {
   );
 }
 
+/**
+ * Whether a Mac app connector's app is installed and open. Read fresh each
+ * time setup opens and when the window regains focus, since the person
+ * installs or opens the app outside Aiden.
+ */
+export function useMcpMacAppStatus(presetId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.mcpMacAppStatus(presetId),
+    queryFn: () => mcpApi.macAppStatus(presetId),
+    enabled,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+}
+
 /** Schedules and Bots that depend on a server; fetched when a confirmation needs them. */
 export function useMcpDependents(serverId: string | undefined) {
   return useQuery({
@@ -886,6 +904,11 @@ export function useWebSearch() {
 
 /** Compatibility name for Settings callers that prefer an explicit suffix. */
 export const useWebSearchSettings = useWebSearch;
+
+/** Reading web pages and extract mode; never holds a key. */
+export function useWebFetch() {
+  return useQuery({ queryKey: queryKeys.webFetch, queryFn: webFetchApi.get });
+}
 
 export function useTelegramSettings() {
   return useQuery({ queryKey: queryKeys.telegram, queryFn: telegramApi.get });

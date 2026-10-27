@@ -79,6 +79,7 @@ import type {
   McpStatus,
   McpToolSummary,
   McpPendingLaunchApproval,
+  McpMacAppStatus,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -118,8 +119,9 @@ import type {
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
 import type {
-  WebSearchKeyPoolProviderId,
+  WebKeyPoolId,
   WebSearchKeyPoolRendererState,
   WebSearchKeyPoolStrategy,
 } from "../shared/web-search-key-pool";
@@ -163,6 +165,7 @@ import type {
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
 import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
@@ -639,6 +642,10 @@ export const mcpApi = {
   liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
   /** The server's tools from its last discovery (never connects); null when none yet. */
   toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  /** Whether a Mac app connector's app (iMCP) is installed and open. Read-only. */
+  macAppStatus: (presetId: string) => invoke<McpMacAppStatus>("mcp:macAppStatus", presetId),
+  /** Open a Mac app connector's installed app. Only when the person chooses Open. */
+  openMacApp: (presetId: string) => invoke<{ opened: true }>("mcp:openMacApp", presetId),
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
@@ -694,19 +701,30 @@ export const webSearchApi = {
   removeCredential: (providerId: WebSearchProviderId) =>
     invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
   keyPool: {
-    get: (providerId: WebSearchKeyPoolProviderId) =>
+    get: (providerId: WebKeyPoolId) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:get", providerId),
-    add: (providerId: WebSearchKeyPoolProviderId, key: string, label?: string) =>
+    add: (providerId: WebKeyPoolId, key: string, label?: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:add", providerId, key, label),
-    remove: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    remove: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:remove", providerId, entryId),
-    reorder: (providerId: WebSearchKeyPoolProviderId, entryIds: string[]) =>
+    reorder: (providerId: WebKeyPoolId, entryIds: string[]) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:reorder", providerId, entryIds),
-    setStrategy: (providerId: WebSearchKeyPoolProviderId, strategy: WebSearchKeyPoolStrategy) =>
+    setStrategy: (providerId: WebKeyPoolId, strategy: WebSearchKeyPoolStrategy) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:setStrategy", providerId, strategy),
-    resetCooldown: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    resetCooldown: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:resetCooldown", providerId, entryId),
   },
+};
+
+// ── Web pages (web_fetch) and extract mode ───────────────────────────
+export const webFetchApi = {
+  get: () => invoke<WebFetchRendererSnapshot>("webSearch:pages:get"),
+  setEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setEnabled", enabled),
+  setExtractEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractEnabled", enabled),
+  setExtractAccountId: (accountId: string | null) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────
@@ -1775,6 +1793,8 @@ export interface ApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /** The exact command or file change, sent only to the desktop that owns the chat. */
+  preview?: ToolApprovalPreview;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];

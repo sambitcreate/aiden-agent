@@ -6551,6 +6551,11 @@ struct AidenMessageView: View, Equatable {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(timeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
@@ -7961,6 +7966,11 @@ private struct AidenLiveResponseView: View {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.extractionSteps(model.activityTimeline)) { step in
+                    if let recap = step.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
+                }
             }
 
             if let chronologicalRows {
@@ -8001,11 +8011,13 @@ private struct AidenLiveResponseView: View {
             if let approval = model.pendingApproval {
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: approval.kind,
                     canRespond: approval.canRespond,
                     hasRequiredWriteCapability: approval.hasRequiredWriteCapability,
                     canAllow: approval.canAllow,
                     scopes: approval.scopes,
+                    schedule: approval.schedule,
                     onDeny: { Task { await model.respondToApproval(.deny, approvalID: approval.id) } },
                     onAllow: { scope in
                         Task { await model.respondToApproval(.allow, approvalID: approval.id, scope: scope) }
@@ -8045,167 +8057,407 @@ private struct AidenLiveResponseView: View {
     }
 }
 
-/// Shared with the Bot session chat (`AidenBotSessionChatView`).
+/// Shared with the Bot session chat (`AidenBotSessionChatView`). Matches the
+/// desktop card: an icon tile, the action as a question, the exact request in a
+/// code block, and two equal buttons with the remembered scopes behind Allow's
+/// chevron. A `schedule_task` approval with a valid revision 39 `schedule` card
+/// shows the structured schedule in place of the request.
 struct AidenApprovalCard: View {
     @Environment(\.aidenPalette) private var palette
-    @Environment(\.aidenReduceMotion) private var reduceMotion
-    @State private var isExpanded = false
+    @Environment(\.locale) private var locale
+    @Environment(\.calendar) private var calendar
+    @Environment(\.timeZone) private var timeZone
 
     let summary: String
+    var toolName: String = ""
     let kind: AidenApprovalKind
     let canRespond: Bool
     let hasRequiredWriteCapability: Bool
     let canAllow: Bool
     let scopes: [AidenApprovalScope]
+    /// Contract revision 39: display-only. Nil, or any tool but `schedule_task`,
+    /// keeps the summary card.
+    var schedule: AidenApprovalSchedule? = nil
     let onDeny: () -> Void
     let onAllow: (AidenApprovalScope) -> Void
 
     private var broaderScopes: [AidenApprovalScope] { scopes.filter { $0 != .once } }
 
-    private let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+
+    private var request: String {
+        kind == .scheduledTask ? summary : AidenApprovalPresentation.requestedAction(toolName: toolName, summary: summary)
+    }
+
+    /// The next run reads in the phone's own zone, locale and clock style.
+    private var scheduleCard: AidenScheduleCardPresentation? {
+        var calendar = calendar
+        calendar.timeZone = timeZone
+        return AidenApprovalSchedule.card(schedule, toolName: toolName).map {
+            AidenScheduleCardPresentation($0, now: Date(), calendar: calendar, locale: locale)
+        }
+    }
+
+    private var limit: AidenApprovalLimit? {
+        AidenApprovalPresentation.limit(
+            kind: kind,
+            canRespond: canRespond,
+            hasRequiredWriteCapability: hasRequiredWriteCapability,
+            canAllow: canAllow
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "shield")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(palette.warning)
-                    .frame(width: 32, height: 32)
-                    .background(palette.warning.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
+        let card = scheduleCard
+        VStack(spacing: 0) {
+            Image(systemName: card == nil ? AidenApprovalPresentation.symbol(toolName: toolName, kind: kind) : "calendar.badge.clock")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(palette.onFillAccent)
+                .frame(width: 44, height: 44)
+                .background(palette.fillAccent, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(AidenApprovalPresentation.title(for: kind))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(palette.foreground)
+            Text(card?.title ?? AidenApprovalPresentation.headline(toolName: toolName, kind: kind, summary: summary))
+                .font(.headline)
+                .foregroundStyle(palette.foreground)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
+                .accessibilityAddTraits(.isHeader)
 
-                    Text(AidenApprovalPresentation.detail(for: kind))
-                        .font(.caption)
-                        .foregroundStyle(palette.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            if kind == .scheduledTask {
-                Text(summary)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(palette.foreground)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .accessibilityLabel("Scheduled task proposal")
-                    .accessibilityValue(summary)
+            if let card {
+                AidenScheduleApprovalDetails(card: card)
+                    .padding(.top, 14)
             } else {
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                        isExpanded.toggle()
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(AidenApprovalPresentation.oneLineSummary(summary))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(palette.foreground)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(palette.secondary)
-                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(height: 36)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .accessibilityLabel("Requested action")
-                .accessibilityValue(AidenApprovalPresentation.oneLineSummary(summary))
-                .accessibilityHint(isExpanded ? "Collapses action details" : "Expands action details")
-
-                if isExpanded {
-                    Text(summary)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(palette.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(palette.canvas, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
+                AidenApprovalFoldingText(
+                    text: request,
+                    font: .subheadline.monospaced(),
+                    accessibilityLabel: kind == .scheduledTask ? "Scheduled task proposal" : "Requested action"
+                )
+                .padding(14)
+                .background(palette.canvas, in: wellShape)
+                .padding(.top, 14)
             }
 
-            if !canRespond {
-                Label("This paired device can review approvals but cannot respond.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !hasRequiredWriteCapability {
-                Label("Schedule write access is required to approve this task.", systemImage: "lock.fill")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
-            } else if kind == .scheduledTask && !canAllow {
-                Label("This task must be approved on your paired desktop.", systemImage: "desktopcomputer")
-                    .font(.caption)
-                    .foregroundStyle(palette.secondary)
+            Group {
+                if let limit {
+                    Label(limit.text, systemImage: limit.symbol)
+                } else if card != nil {
+                    Text(AidenScheduleCardPresentation.footnote)
+                } else {
+                    Text(AidenApprovalPresentation.detail(for: kind))
+                }
             }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 12)
 
             if canRespond {
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-
+                HStack(spacing: 10) {
                     Button(action: onDeny) {
                         Text(AidenApprovalPresentation.denyTitle(for: kind))
-                            .font(.caption.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .foregroundStyle(palette.foreground)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
+                            .frame(maxWidth: .infinity, minHeight: 50)
+                            .contentShape(Capsule())
                             .aidenApprovalActionGlass()
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 5)
-
-                    if canAllow && !broaderScopes.isEmpty {
-                        Menu {
-                            ForEach(broaderScopes, id: \.self) { scope in
-                                Button(AidenApprovalPresentation.scopeTitle(scope)) { onAllow(scope) }
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.foreground)
-                                .frame(width: 34, height: 34)
-                                .aidenApprovalActionGlass()
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
-                        .accessibilityLabel("More allow options")
-                        .accessibilityHint("Remember this exact action for this chat or always")
-                    }
 
                     if canAllow {
-                        Button { onAllow(.once) } label: {
-                            Text(AidenApprovalPresentation.allowTitle(for: kind))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(palette.onFillAccent)
-                                .padding(.horizontal, 13)
-                                .frame(height: 34)
-                                .aidenApprovalActionGlass(tint: palette.fillAccent)
+                        allowButton
+                    }
+                }
+                .padding(.top, 16)
+            }
+        }
+        .padding(16)
+        // Shadow only the surface: on the whole card it also blurs every glyph inside.
+        .background {
+            shape
+                .fill(palette.raised)
+                .shadow(color: palette.foreground.opacity(0.08), radius: 12, y: 4)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var allowLabel: some View {
+        Text(AidenApprovalPresentation.allowTitle(for: kind))
+            .font(.body.weight(.semibold))
+            .foregroundStyle(palette.onFillAccent)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+    }
+
+    @ViewBuilder
+    private var allowButton: some View {
+        if broaderScopes.isEmpty {
+            Button { onAllow(.once) } label: {
+                allowLabel
+                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .contentShape(Capsule())
+                    .aidenApprovalActionGlass(tint: palette.fillAccent)
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack(spacing: 0) {
+                Button { onAllow(.once) } label: {
+                    allowLabel
+                        .padding(.leading, 8)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Rectangle()
+                    .fill(palette.onFillAccent.opacity(0.25))
+                    .frame(width: 1, height: 22)
+                    .accessibilityHidden(true)
+
+                Menu {
+                    ForEach(broaderScopes, id: \.self) { scope in
+                        Button { onAllow(scope) } label: {
+                            Text(AidenApprovalPresentation.scopeTitle(scope))
+                            if let detail = AidenApprovalPresentation.scopeDetail(scope, toolName: toolName) {
+                                Text(detail)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 5)
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(palette.onFillAccent)
+                        .frame(width: 44, height: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("More ways to allow")
+                .accessibilityHint("Remember this approval for this chat or always")
+            }
+            .aidenApprovalActionGlass(tint: palette.fillAccent)
+        }
+    }
+}
+
+/// A request, instructions or script on an approval card. Past six lines it
+/// folds behind Show all; expanded, it scrolls in a bounded box (the Bot chat
+/// keeps the card in its footer) with a Scroll for more cue while text is hidden.
+private struct AidenApprovalFoldingText: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.aidenReduceMotion) private var reduceMotion
+    @State private var isExpanded = false
+    @State private var hasMoreBelow = false
+
+    let text: String
+    let font: Font
+    let accessibilityLabel: String
+
+    /// Lines the text shows before Show all.
+    private let collapsedLines = 6
+    /// About twelve lines: the most expanded text takes before it scrolls.
+    private let expandedMaxHeight: CGFloat = 240
+
+    private var isLong: Bool {
+        text.count > 320 || text.split(whereSeparator: \.isNewline).count > collapsedLines
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isExpanded {
+                ViewThatFits(in: .vertical) {
+                    textView
+                    ScrollView { textView }
+                        .scrollIndicators(.visible)
+                        .scrollIndicatorsFlash(onAppear: true)
+                        // Only overflowing text gets here, and it opens at the top.
+                        .onAppear { hasMoreBelow = true }
+                        .onDisappear { hasMoreBelow = false }
+                        .onScrollGeometryChange(for: Bool.self) { geometry in
+                            geometry.visibleRect.maxY < geometry.contentSize.height - 1
+                        } action: { _, more in
+                            hasMoreBelow = more
+                        }
+                }
+                .frame(maxHeight: expandedMaxHeight, alignment: .top)
+            } else {
+                textView
+            }
+
+            if isLong {
+                HStack(spacing: 8) {
+                    Button(isExpanded ? "Show less" : "Show all") {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            isExpanded.toggle()
+                        }
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 0)
+
+                    // The end of long text must never sit hidden without a cue.
+                    if isExpanded && hasMoreBelow {
+                        Label("Scroll for more", systemImage: "arrow.down")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
                     }
                 }
             }
         }
-        .padding(12)
-        .background(palette.raised, in: shape)
-        .overlay(shape.stroke(palette.foreground.opacity(0.08), lineWidth: 0.5))
-        .shadow(color: palette.foreground.opacity(0.08), radius: 8, y: 3)
-        .accessibilityElement(children: .contain)
+    }
+
+    private var textView: some View {
+        Text(text)
+            .font(font)
+            .foregroundStyle(palette.foreground)
+            .lineLimit(isExpanded || !isLong ? nil : collapsedLines)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityValue(text)
+    }
+}
+
+/// Contract revision 39: the body of a scheduled-task approval with a
+/// `schedule` card. What runs and when, then where, with what access and model,
+/// then the instructions or script and a note when it will not run on its own.
+private struct AidenScheduleApprovalDetails: View {
+    @Environment(\.aidenPalette) private var palette
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let card: AidenScheduleCardPresentation
+
+    private let wellShape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+    /// Row separators start under the label, past the icon column.
+    private let rowInset: CGFloat = 14 + 22 + 10
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 0) {
+                hero
+                    .padding(14)
+                Divider()
+                    .padding(.leading, 14)
+                ForEach(Array(card.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 {
+                        Divider()
+                            .padding(.leading, rowInset)
+                    }
+                    rowView(row)
+                }
+            }
+            .background(palette.canvas, in: wellShape)
+
+            if let content = card.content {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(card.contentTitle)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(palette.secondary)
+                        .accessibilityHidden(true)
+                    AidenApprovalFoldingText(
+                        text: content,
+                        font: card.contentIsScript ? .subheadline.monospaced() : .subheadline,
+                        accessibilityLabel: card.contentTitle
+                    )
+                    if card.isTruncated {
+                        Label(AidenScheduleCardPresentation.truncatedNote, systemImage: "scissors")
+                            .font(.footnote)
+                            .foregroundStyle(palette.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(palette.canvas, in: wellShape)
+            }
+
+            if let note = card.note {
+                Label {
+                    Text(note.text)
+                        .foregroundStyle(note.isWarning ? palette.foreground : palette.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: note.symbol)
+                        .foregroundStyle(note.isWarning ? palette.warning : palette.secondary)
+                }
+                .font(.footnote)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(note.isWarning ? palette.warning.opacity(0.14) : palette.canvas, in: wellShape)
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(card.name)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(palette.foreground)
+                .lineLimit(2)
+            Text(card.cadence)
+                .font(.body)
+                .foregroundStyle(palette.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+            if let nextRun = card.nextRun {
+                Label("Next run \(nextRun)", systemImage: "clock")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+                    .padding(.top, 3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func rowView(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        let stacked = dynamicTypeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: row.symbol)
+                .font(.subheadline)
+                .foregroundStyle(row.isWarning ? palette.warning : palette.secondary)
+                .frame(width: 22)
+            layout {
+                Text(row.label)
+                    .font(.subheadline)
+                    .foregroundStyle(palette.secondary)
+                if !stacked {
+                    Spacer(minLength: 0)
+                }
+                if row == card.access {
+                    accessChip(row)
+                } else {
+                    Text(row.value)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                        .multilineTextAlignment(stacked ? .leading : .trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.accessibilityLabel)
+    }
+
+    /// Read-only sits on a neutral soft fill; Full access on a warning one. The
+    /// text stays foreground: light-mode warning orange is too faint to read.
+    private func accessChip(_ row: AidenScheduleCardPresentation.Row) -> some View {
+        Text(row.value)
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(palette.foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background((row.isWarning ? palette.warning : palette.secondary).opacity(0.14), in: Capsule())
     }
 }
 
@@ -8505,6 +8757,10 @@ private struct AidenChronologicalTranscript: View {
                     if let recap = row.steps.first?.questionnaire {
                         AidenQuestionnaireRecapView(recap: recap)
                     }
+                case .extraction:
+                    if let recap = row.steps.first?.extraction {
+                        AidenWebExtractRecapView(recap: recap)
+                    }
                 case .visual(let visual):
                     visualContent?(visual)
                 }
@@ -8566,6 +8822,108 @@ struct AidenQuestionnaireRecapView: View {
             Text(verbatim: label)
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// The values a `web_fetch` extract call read, under its activity line: each
+/// name and value with the page line it came from, so the owner can check a
+/// number against its source without opening the page. Guesses and values
+/// the page does not have are labelled as such, never shown as read.
+struct AidenWebExtractRecapView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recap: AidenWebExtractRecap
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label {
+                Text(verbatim: recap.host)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } icon: {
+                Image(systemName: "globe")
+                    .imageScale(.small)
+            }
+            .font(.footnote)
+            .foregroundStyle(palette.secondary)
+
+            if let failure = recap.error {
+                Text(verbatim: "Couldn\u{2019}t read the values: \(failure.message). The page was read instead.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            } else {
+                ForEach(recap.fields) { field in
+                    fieldRow(field)
+                }
+            }
+
+            if recap.cut {
+                Text("Only the first part of the page was read.")
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: "Values read from \(recap.host)"))
+    }
+
+    private func fieldRow(_ field: AidenWebExtractRecap.Field) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(verbatim: field.label)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+            value(for: field)
+            source(for: field)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func value(for field: AidenWebExtractRecap.Field) -> some View {
+        switch field.status {
+        case .absent:
+            Text("Not on the page")
+                .font(.subheadline)
+                .foregroundStyle(.tertiary)
+        case .extracted:
+            Text(verbatim: field.value ?? "")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(palette.foreground)
+        case .uncertain:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let value = field.value {
+                    Text(verbatim: value)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                Text("Guess")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(palette.warning)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(palette.warning.opacity(0.12), in: Capsule())
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func source(for field: AidenWebExtractRecap.Field) -> some View {
+        if field.status != .absent {
+            if let line = field.sourceLine {
+                Text(verbatim: "\u{201C}\(line)\u{201D}")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else if field.notFound == true {
+                Text("Not found on the page")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 }
@@ -10068,7 +10426,9 @@ extension AidenChatViewModel {
             canAllow: canAllow,
             scopes: canAllow && kind == .action
                 ? AidenApprovalScope.offered(approval.scopes?.map(\.rawValue))
-                : [.once]
+                : [.once],
+            toolName: approval.toolName,
+            schedule: AidenApprovalSchedule.card(approval.schedule, toolName: approval.toolName)
         )
     }
 

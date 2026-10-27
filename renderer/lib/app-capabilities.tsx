@@ -15,6 +15,8 @@ export interface AppCapabilities {
   dictationHoldSetup: boolean;
   dictationHoldTrigger: string | null;
   nativeShare: boolean;
+  /** Connectors served by a separate Mac app, such as iMCP. */
+  macAppConnectors: boolean;
   appleFoundationModels: boolean;
   geminiLive: boolean;
   devices: boolean;
@@ -35,6 +37,7 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   dictationHoldSetup: false,
   dictationHoldTrigger: null,
   nativeShare: false,
+  macAppConnectors: false,
   appleFoundationModels: false,
   geminiLive: false,
   devices: false,
@@ -61,6 +64,7 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     dictationHoldSetup: record.dictationHoldSetup === true,
     dictationHoldTrigger: typeof record.dictationHoldTrigger === "string" ? record.dictationHoldTrigger.slice(0, 128) : null,
     nativeShare: record.nativeShare === true,
+    macAppConnectors: record.macAppConnectors === true,
     appleFoundationModels: record.appleFoundationModels === true,
     geminiLive: record.geminiLive === true,
     devices: record.devices === true,

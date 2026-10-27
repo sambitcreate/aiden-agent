@@ -222,6 +222,37 @@ test("an answered questionnaire becomes its own row and leaves the activity grou
   );
 });
 
+test("extracted values show as a card under their activity line, which stays in the group", () => {
+  const recap = {
+    version: 1 as const,
+    host: "acme.example",
+    cut: false,
+    fields: [{ name: "price", status: "extracted" as const, value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+  };
+  const fetched = step("fetch", 1, "web_fetch", "completed", { contentOffset: 7, extraction: recap });
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [positionedTool(0, 7), fetched, positionedTool(2, 7, "grep")]),
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : row.kind === "extraction"
+            ? [row.kind, row.step.extraction.fields[0]?.value]
+            : [row.kind],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1", "fetch", "tool-3"]],
+      ["extraction", "20"],
+      ["text", "After."],
+    ],
+  );
+});
+
 test("unreadable thinking remains a chronological status row", () => {
   const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
   const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
@@ -364,6 +395,10 @@ test("summarizes a finished turn as one deterministic sentence", () => {
     summarizeActivity(timeline("completed", tools({ web_search: 2, computer_use: 1 }))),
     "2 web searches, 1 Computer Use action",
   );
+  assert.equal(
+    summarizeActivity(timeline("completed", tools({ web_search: 1, web_fetch: 2 }))),
+    "1 web search, 2 web pages",
+  );
 });
 
 test("summary leads with the work when nothing was explored", () => {
@@ -397,6 +432,51 @@ test("uncounted tools fall back to a neutral tool-call tally", () => {
       timeline("completed", tools({ read_file: 1, schedule_task: 1, notion__search: 1 })),
     ),
     "Explored 1 file, 2 tool calls",
+  );
+});
+
+test("a denied call is skipped, not counted as work done", () => {
+  assert.equal(
+    summarizeActivity(timeline("completed", [step("deny", 0, "run_command", "blocked")])),
+    "Skipped 1 command",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("completed", [
+        step("read", 0, "read_file"),
+        step("deny-edit", 1, "edit_file", "blocked"),
+        step("deny-write", 2, "write_file", "blocked"),
+      ]),
+    ),
+    "Explored 1 file, skipped 2 file changes",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("completed", [
+        step("run", 0, "run_command"),
+        step("deny-run", 1, "run_command", "blocked"),
+        step("deny-fetch", 2, "web_fetch", "blocked"),
+      ]),
+    ),
+    "Ran 1 command, skipped 2 actions",
+  );
+  // A stopped call may have run partway, so it still counts.
+  assert.equal(
+    summarizeActivity(timeline("cancelled", [step("stop", 0, "run_command", "cancelled")])),
+    "Ran 1 command",
+  );
+});
+
+test("a call waiting for approval is not reported as running", () => {
+  assert.equal(
+    summarizeActivity(timeline("running", [step("ask", 0, "run_command", "awaiting_approval")])),
+    "Waiting for approval",
+  );
+  assert.equal(
+    summarizeActivity(
+      timeline("running", [step("read", 0, "read_file"), step("ask", 1, "edit_file", "awaiting_approval")]),
+    ),
+    "Exploring 1 file",
   );
 });
 

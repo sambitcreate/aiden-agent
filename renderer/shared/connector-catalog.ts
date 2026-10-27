@@ -1,4 +1,4 @@
-// Aiden's connector catalog: the hosted (and one local) MCP servers Aiden can
+// Aiden's connector catalog: the hosted (and a few local) MCP servers Aiden can
 // connect to with a stored API key, a browser sign-in, or no credential at all.
 // Every entry here can be set up, except one marked unavailable, which explains
 // why and points at an alternative. Maintained by hand; nothing is fetched.
@@ -25,7 +25,7 @@ export interface ConnectorUnavailable {
   alternativeId?: string;
 }
 
-export interface ConnectorCatalogEntry {
+interface ConnectorCatalogBase {
   id: string;
   name: string;
   tagline: string;
@@ -33,6 +33,15 @@ export interface ConnectorCatalogEntry {
   category: string;
   /** The vendor's documentation for this MCP server. */
   docsUrl: string;
+  availability?: ConnectorUnavailable;
+  /** Apps or products this connector reaches, matched by search. */
+  searchAliases?: readonly string[];
+  /** One line shown on the card when a search matched an alias. */
+  aliasHint?: string;
+}
+
+/** A Streamable HTTP server: a hosted service, or one on this device's loopback. */
+export interface HttpConnectorCatalogEntry extends ConnectorCatalogBase {
   /** Default Streamable HTTP endpoint. */
   url: string;
   auth: McpPresetAuth;
@@ -41,12 +50,59 @@ export interface ConnectorCatalogEntry {
    * origin is accepted for it.
    */
   local?: true;
-  availability?: ConnectorUnavailable;
-  /** Apps or products this connector reaches, matched by search. */
-  searchAliases?: readonly string[];
-  /** One line shown on the card when a search matched an alias. */
-  aliasHint?: string;
+  macApp?: never;
 }
+
+/**
+ * The one name the desktop's MCP connections give a server, whatever they are
+ * for (chat, Settings tests, Bots). A Mac app that asks the person to allow
+ * each client by name, as iMCP does, shows this name and asks once.
+ */
+export const AIDEN_MCP_CLIENT_NAME = "aiden-agent";
+
+/**
+ * A separate Mac app that serves MCP over stdio from a command inside its
+ * bundle. Aiden never bundles, downloads, opens or updates the app on its
+ * own: it finds the copy the person installed and runs that command.
+ */
+export interface ConnectorMacApp {
+  /** The app bundle, looked up in /Applications and then ~/Applications. */
+  bundleName: string;
+  /** CFBundleIdentifier an installed copy must declare. */
+  bundleId: string;
+  /** The running app's process name. Its server only answers while the app is open. */
+  processName: string;
+  /** The stdio server, relative to the bundle. */
+  serverPath: string;
+  /** Where people get the app. */
+  downloadUrl: string;
+  /** The vendor's Homebrew cask. */
+  homebrewCask?: string;
+  /** Oldest macOS the app runs on, as its vendor states it. */
+  minimumMacOS: string;
+  /** Setup step: where in the app the person chooses what Aiden may use. */
+  chooseAccess: string;
+  /** Shown after a failed connection: the app and macOS settings that usually block it. */
+  troubleshooting: string;
+}
+
+/** A connector served by a Mac app on this device. Offered only where Aiden runs on a Mac. */
+export interface MacAppConnectorCatalogEntry extends ConnectorCatalogBase {
+  macApp: ConnectorMacApp;
+  /** The app asks the person for each permission itself; Aiden sends no credential. */
+  auth: { kind: "none" };
+  url?: never;
+  local?: never;
+}
+
+export type ConnectorCatalogEntry = HttpConnectorCatalogEntry | MacAppConnectorCatalogEntry;
+
+/** A catalog entry as main connects to it. */
+export type McpPreset =
+  | (HttpConnectorCatalogEntry & { transport: "http" })
+  | (MacAppConnectorCatalogEntry & { transport: "stdio" });
+export type HttpMcpPreset = Extract<McpPreset, { transport: "http" }>;
+export type MacAppMcpPreset = Extract<McpPreset, { transport: "stdio" }>;
 
 /**
  * Apps people ask for by name that Aiden reaches through Composio. Bots use
@@ -157,6 +213,41 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     url: "http://127.0.0.1:3845/mcp",
     auth: { kind: "none" },
     local: true,
+  },
+  {
+    id: "imcp",
+    name: "iMCP",
+    tagline: "Calendar, Contacts, Messages, Reminders and more from this Mac, through the free iMCP app.",
+    vendor: "By Mattt",
+    category: "Productivity",
+    docsUrl: "https://github.com/mattt/iMCP#readme",
+    auth: { kind: "none" },
+    macApp: {
+      bundleName: "iMCP.app",
+      bundleId: "co.dododo.iMCP",
+      processName: "iMCP",
+      serverPath: "Contents/MacOS/imcp-server",
+      downloadUrl: "https://imcp.app/download",
+      homebrewCask: "mattt/tap/iMCP",
+      minimumMacOS: "15.3",
+      chooseAccess: `In iMCP’s menu bar menu, turn on only the services you want Aiden to use, such as Calendar or Reminders. The first time Aiden connects, iMCP asks whether to allow “${AIDEN_MCP_CLIENT_NAME}”: choose Allow.`,
+      troubleshooting: `In iMCP, check that Enable MCP Server is on and that you allowed “${AIDEN_MCP_CLIENT_NAME}”. In System Settings → Privacy & Security → Local Network, turn on imcp-server.`,
+    },
+    searchAliases: [
+      "Apple Calendar",
+      "Apple Contacts",
+      "Messages",
+      "iMessage",
+      "Reminders",
+      "Apple Notes",
+      "Apple Mail",
+      "Apple Maps",
+      "Apple Music",
+      "Shortcuts",
+      "Voice Memos",
+      "Weather",
+    ],
+    aliasHint: "Calendar, Messages and more from this Mac through iMCP",
   },
   {
     id: "stripe",
@@ -340,6 +431,17 @@ export function isConnectorAvailable(entry: Pick<ConnectorCatalogEntry, "availab
   return entry.availability?.kind !== "unavailable";
 }
 
+/**
+ * Whether this device offers the connector at all: one served by a Mac app
+ * appears only where main reports Mac app connectors (macOS).
+ */
+export function isConnectorOffered(
+  entry: Pick<ConnectorCatalogEntry, "macApp">,
+  host: { macAppConnectors: boolean },
+): boolean {
+  return !entry.macApp || host.macAppConnectors;
+}
+
 export interface ConnectorSearchResult {
   entry: ConnectorCatalogEntry;
   /** The search aliases entry the search matched, if any. */
@@ -362,7 +464,8 @@ export function filterConnectorCatalog(
     // An app reached through this connector gets its hint even when the card also names it.
     const alias = entry.searchAliases?.find((name) => name.toLowerCase().includes(needle));
     if (alias) return [{ entry, matchedAlias: alias }];
-    const card = [entry.name, entry.tagline, entry.vendor, entry.category, entry.url].join(" ").toLowerCase();
+    const where = entry.macApp ? entry.macApp.bundleName : entry.url;
+    const card = [entry.name, entry.tagline, entry.vendor, entry.category, where].join(" ").toLowerCase();
     return card.includes(needle) ? [{ entry }] : [];
   });
 }
