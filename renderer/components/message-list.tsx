@@ -138,6 +138,7 @@ interface MessageListProps {
 }
 
 interface AssistantResponseProps {
+  imageScope?: string;
   content: string;
   timeline: GenerationTimeline | null | undefined;
   reasoning?: string | null;
@@ -187,6 +188,7 @@ type RenderVisual = (
 ) => React.ReactNode;
 
 function AssistantResponse({
+  imageScope,
   content,
   timeline,
   reasoning,
@@ -306,6 +308,7 @@ function AssistantResponse({
           content ? (
             <SafeMessageBubble
               key="text-0"
+              imageScope={imageScope}
               role="assistant"
               content={content}
               streaming={streaming}
@@ -379,6 +382,7 @@ function AssistantResponse({
         return (
           <SafeMessageBubble
             key={row.key}
+            imageScope={imageScope}
             role="assistant"
             content={row.content}
             // Every text row of a running turn stays on the gated reveal path,
@@ -421,6 +425,7 @@ function settledTurnFooter(message: ChatMessage): React.ReactNode {
 }
 
 interface SettledMessageRowProps {
+  imageScope: string;
   chatId: string;
   deferOffscreenLayout?: boolean;
   /** Absent only for the in-flight reply, which passes `live` instead. */
@@ -456,6 +461,7 @@ interface SettledMessageRowProps {
  * only the live row, do not re-render or re-derive settled history.
  */
 const SettledMessageRow = React.memo(function SettledMessageRow({
+  imageScope,
   chatId,
   deferOffscreenLayout,
   message,
@@ -509,10 +515,11 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
       ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
       {live ? (
-        <AssistantResponse {...live} streaming />
+        <AssistantResponse {...live} imageScope={imageScope} streaming />
       ) : !message ? null : message.role === "assistant" ? (
         <>
           <AssistantResponse
+            imageScope={imageScope}
             content={message.content}
             timeline={message.timeline}
             reasoning={message.reasoning}
@@ -541,9 +548,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           ) : null}
         </>
       ) : message.notice ? (
-        <AgentNoticeCard notice={message.notice} content={message.content} />
+        <AgentNoticeCard notice={message.notice} content={message.content} imageScope={imageScope} />
       ) : (
         <SafeMessageBubble
+          imageScope={imageScope}
           role={message.role}
           content={message.content}
           attachments={message.attachments}
@@ -988,6 +996,7 @@ export function MessageList({
   const liveRow = streamingRowVisible ? (
     <SettledMessageRow
       key={liveKey}
+      imageScope={`${chatId}:${liveKey}`}
       live={{
         content: streamingText ?? "",
         timeline,
@@ -1023,6 +1032,7 @@ export function MessageList({
     transcriptRows.push(
       <SettledMessageRow
         key={settledRowKeys.get(message.id)}
+        imageScope={`${chatId}:${settledRowKeys.get(message.id)}`}
         chatId={chatId}
         deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}

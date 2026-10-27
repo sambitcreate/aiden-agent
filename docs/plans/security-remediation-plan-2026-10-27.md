@@ -406,6 +406,8 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 - W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 146 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh independent review found and closed Ask-mode read approval bypass, oversized existing-task confirmation and rejected-persistence cron restoration gaps. Desktop scheduling (238 tests), automation suites and root types passed. Exact-head hosted CI remains pending.
 
+- W8 implementation candidate: desktop Markdown images render an alt/site placeholder and a Load image action. Exact URL and transcript message identity scope in-memory permission, including streaming; reload resets it. A document-owned, concurrency-bounded main request uses the existing SSRF socket/DNS/redirect policy and returns validated PNG/JPEG/WebP bytes only, bounded to 8 MB, 20 seconds, five redirects and existing decoder limits. Relative sources, private addresses and active SVG are blocked. Generated attachments and authenticated asset grants retain their independent paths. Native consumers were inspected: iOS suppresses Markdown network images, Android formats text without image fetches; no Remote contract changed. Local validation is recorded in `.memory/security-transcript-image-consent-20261027.md`; fresh independent review and packaged acceptance remain pending.
+
 ## Completion checklist
 
 - [ ] Refresh source/configuration baselines and retain the original audit as history.
