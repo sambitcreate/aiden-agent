@@ -12,12 +12,14 @@
 //   never replay-safe; the caller declares replay for the rest.
 // - Policy: `beforeTool` re-checks the Bot's current policy at every call and
 //   blocks a disallowed tool without running it.
-// - Codemode: when the Bot has connection, file, shell or lookup tools, a
-//   `codemode` tool lets the model script them (batch calls, filter results).
-//   Each call a script makes passes the same ingress, policy and approval
-//   checks as a direct call; a call a rule hands to the person is refused, so
-//   the model makes it directly and the person gets the card. Scripts never
-//   reach cards, the Bot's own computer or browser, routines or subagents.
+// - Codemode: when the Bot has connection, file, shell or lookup tools, Pi
+//   Durable's `codemode` tool lets the model script them (batch calls, filter
+//   results). Each call a script makes is a durable nested tool call: it passes
+//   the same `beforeTool` ingress, policy and approval checks as a direct call,
+//   and its approval wait survives a restart like a direct one. A call a rule
+//   hands to the person is refused, so the model makes it directly and the
+//   person gets the card. Scripts never reach cards, the Bot's own computer or
+//   browser, routines or subagents (those tools are `callers: ["model"]`).
 // - Ingress: the installed tools are the attended set. Each request and each
 //   call reads which inputs its run serves (`pi.live.run`, durable, so a
 //   queued or restarted input keeps its own sender) and withholds what those
@@ -44,8 +46,10 @@
 import { randomUUID } from "node:crypto";
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { validateToolArguments, type JsonObject, type Message, type Tool } from "@earendil-works/pi-ai";
-import type { AgentTool, AgentToolCallOutcome, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { Message } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { CodemodeSandbox, type CodemodeSandboxBase } from "@earendil-works/pi-codemode";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import {
   CompactionTask,
   createRegistry,
@@ -82,7 +86,6 @@ import {
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
-import { createPiCodemodeTool } from "../pi-codemode.js";
 import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
@@ -96,7 +99,10 @@ const HANDOFF_ANSWER_MEMO = "aiden.handoff.answer";
 export const BOT_CODEMODE_TOOL_NAME = "codemode";
 /** Lookups a script may call besides workspace, connection and codemode-marked tools. */
 const BOT_SCRIPT_LOOKUPS: ReadonlySet<string> = new Set(["web_search", "bot_recall"]);
-const MAX_SCRIPT_ARGUMENT_BYTES = 32_768;
+/** VM heap per script; the worker shares the app's process. */
+const BOT_SCRIPT_MEMORY_BYTES = 64 * 1024 * 1024;
+/** Estimated tokens of tool declarations the `codemode` section lists; the tools are declared directly too. */
+const BOT_SCRIPT_INLINE_BUDGET = 1_000;
 
 /** Whether a Bot script may call this tool. Cards, computers, browsers, routines and subagents are direct only. */
 function scriptCallable(entry: BotToolEntry): boolean {
@@ -266,6 +272,12 @@ export interface BotExtensionDeps {
   readmit(botId: string): Promise<BotReadmission>;
   /** Whether the Bot's model takes images. Defaults to true. */
   imageInput?(botId: string): Promise<boolean>;
+  /**
+   * The sandbox Bot scripts run in, made once per Bot. Absent: a worker
+   * sandbox from the installed pi-codemode package (the desktop). A bundled
+   * host passes its own worker and wasm.
+   */
+  codemodeSandbox?(): CodemodeSandboxBase;
 }
 
 export class BotAccessChangedError extends Error {
@@ -497,6 +509,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           requestIds,
         });
         if (!decision.allowed) return { block: decision.reason };
+        // A hand-off card belongs to a call in the transcript, which a script's call is not.
+        if (decision.handoff !== undefined && call.parent !== undefined) return { block: scriptHandoffBlock(call.name) };
         if (decision.handoff !== undefined) {
           const handoff = decision.handoff;
           // Nobody can answer a card here: block with what is needed.
@@ -532,150 +546,49 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return applyHandoffAnswer(api, context, call.id, stored);
         }
         if (decision.approval === undefined) return undefined;
-        return approve(decision.approval, {
-          toolCallId: call.id,
+        const memo = await api.memo<ApprovalMemo>(
+          APPROVAL_MEMO,
+          {
+            waitId: randomUUID(),
+            toolCallId: call.id,
+            summary: decision.approval.summary,
+            kind: "approval",
+            rule: decision.approval.rule?.id ?? null,
+          },
+          context,
+        );
+        // A wait first opened as a hand-off (the rules changed since) asks with
+        // today's summary under the same wait id.
+        const summary = memo.kind === "handoff" ? decision.approval.summary : memo.summary;
+        const answer = await deps.requestApproval({
+          botId,
+          waitId: memo.waitId,
+          toolCallId: memo.toolCallId,
           toolName: call.name,
+          summary,
           signal: context.abortSignal,
-          memo: (candidate) => api.memo<ApprovalMemo>(APPROVAL_MEMO, candidate, context),
         });
+        if (answer !== "allow") return { block: "The person declined this action." };
+        try {
+          await decision.approval.onAllow?.();
+        } catch (error) {
+          return { block: error instanceof Error ? error.message : "This action can no longer run." };
+        }
+        return undefined;
       },
     }),
   ];
 
-  /**
-   * Ask the person to approve a call. The wait id is kept in `memo`, so a
-   * restart asks again under the same id. Resolves with a block when the call
-   * must not run.
-   */
-  async function approve(
-    approval: BotApprovalRequirement,
-    call: {
-      toolCallId: string;
-      toolName: string;
-      signal: AbortSignal | undefined;
-      memo(candidate: ApprovalMemo): Promise<ApprovalMemo>;
-    },
-  ): Promise<{ block: string } | undefined> {
-    const memo = await call.memo({
-      waitId: randomUUID(),
-      toolCallId: call.toolCallId,
-      summary: approval.summary,
-      kind: "approval",
-      rule: approval.rule?.id ?? null,
-    });
-    // A wait first opened as a hand-off (the rules changed since) asks with
-    // today's summary under the same wait id.
-    const summary = memo.kind === "handoff" ? approval.summary : memo.summary;
-    const answer = await deps.requestApproval({
-      botId,
-      waitId: memo.waitId,
-      toolCallId: memo.toolCallId,
-      toolName: call.toolName,
-      summary,
-      signal: call.signal,
-    });
-    if (answer !== "allow") return { block: "The person declined this action." };
-    try {
-      await approval.onAllow?.();
-    } catch (error) {
-      return { block: error instanceof Error ? error.message : "This action can no longer run." };
-    }
-    return undefined;
-  }
-
   /* Codemode: the tools installed by the latest refresh that scripts may call. */
   let scriptable: readonly BotToolEntry[] = [];
-  /** The running codemode calls, by call id, so their scripts' calls run in the calling conversation. */
-  const scriptCalls = new Map<string, { call: BotToolCall; made: number }>();
-  /** Script calls run one at a time, so approval cards never stack. */
-  let scriptQueue: Promise<unknown> = Promise.resolve();
+  let sandbox: CodemodeSandboxBase | undefined;
+  let codemode: Extension | undefined;
 
-  function scriptResult(toolCall: AgentToolCallOutcome["toolCall"], text: string): AgentToolCallOutcome {
-    return { toolCall, result: { content: [{ type: "text", text }], details: undefined }, isError: true };
-  }
-
-  /** One call a script makes: the same checks as a direct call, then the tool in the calling conversation. */
-  async function runScriptCall(parentId: string, name: string, args: unknown, signal: AbortSignal): Promise<AgentToolCallOutcome> {
-    const running = scriptCalls.get(parentId);
-    if (running === undefined) throw new Error("No running codemode call owns this tool call.");
-    const entry = scriptable.find((candidate) => candidate.tool.name === name);
-    if (entry === undefined) throw new Error("This tool is not available to codemode.");
-    if (args === null || typeof args !== "object" || Array.isArray(args)) throw new Error("Tool arguments must be an object.");
-    const serialized = JSON.stringify(args);
-    if (Buffer.byteLength(serialized) > MAX_SCRIPT_ARGUMENT_BYTES) throw new Error("Tool arguments exceed 32 KiB.");
-    running.made += 1;
-    const id = `${parentId}/${running.made}`;
-    // A JSON snapshot: the script can't change what was checked after the check.
-    const toolCall = { type: "toolCall" as const, id, name, arguments: JSON.parse(serialized) as JsonObject };
-    let validated: Record<string, unknown>;
-    try {
-      const prepared = entry.tool.prepareArguments ? entry.tool.prepareArguments(toolCall.arguments) : toolCall.arguments;
-      validated = validateToolArguments(entry.tool as unknown as Tool, { ...toolCall, arguments: prepared as JsonObject });
-    } catch (error) {
-      return scriptResult(toolCall, error instanceof Error ? error.message : "Invalid tool arguments.");
-    }
-    signal.throwIfAborted();
-    const requestIds = (await running.call.runRequestIds?.()) ?? [];
-    if (deps.turnAllows !== undefined && !deps.turnAllows(name, requestIds)) {
-      return scriptResult(toolCall, "This tool is not available on this turn.");
-    }
-    const decision = await deps.checkPolicy(botId, name, { callId: id, args: validated, signal, requestIds });
-    if (!decision.allowed) return scriptResult(toolCall, decision.reason);
-    if (decision.handoff !== undefined) return scriptResult(toolCall, scriptHandoffBlock(name));
-    if (decision.approval !== undefined) {
-      const blocked = await approve(decision.approval, {
-        toolCallId: id,
-        toolName: name,
-        signal,
-        memo: (candidate) => running.call.memo(`${APPROVAL_MEMO}:${id}`, candidate),
-      });
-      if (blocked !== undefined) return scriptResult(toolCall, blocked.block);
-    }
-    signal.throwIfAborted();
-    const nested: BotToolCall = {
-      ...running.call,
-      callId: id,
-      signal,
-      memo: (memoName, candidate) => running.call.memo(`${memoName}:${id}`, candidate),
-    };
-    const tool = entry.bind ? entry.bind(nested) : entry.tool;
-    let result: AgentToolResult<unknown>;
-    try {
-      result = await tool.execute(id, validated, signal);
-    } catch (error) {
-      signal.throwIfAborted();
-      return scriptResult(toolCall, error instanceof Error ? error.message : "The tool failed.");
-    }
-    return { toolCall, result, isError: (result as { isError?: boolean }).isError === true };
-  }
-
-  /** A fresh codemode tool (its store lasts until the next refresh) over `scriptable`. */
-  function codemodeEntry(): BotToolEntry {
-    const codemode = createPiCodemodeTool({
-      // Scripts see the installed tools as codemode-callable; `runScriptCall` decides what runs.
-      tools: () => scriptable.map((entry) => Object.assign({ ...entry.tool }, { codemode: true })),
-      executeTool: (parentId, name, args, signal) => {
-        const operation = scriptQueue.then(() => runScriptCall(parentId, name, args, signal));
-        scriptQueue = operation.catch(() => undefined);
-        return operation;
-      },
-    });
-    return {
-      tool: codemode,
-      // Scripts call unsafe tools, so an interrupted script is never rerun.
-      replay: "unsafe",
-      bind: (call) => ({
-        ...codemode,
-        async execute(callId, params, signal, onUpdate) {
-          scriptCalls.set(callId, { call, made: 0 });
-          try {
-            return await codemode.execute(callId, params, signal, onUpdate);
-          } finally {
-            scriptCalls.delete(callId);
-          }
-        },
-      }),
-    };
+  /** Pi Durable's codemode over the Bot's tools: replay-safe, each call a nested tool call. */
+  function codemodeExtension(): Extension {
+    sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES });
+    codemode ??= createCodemodeExtension({ sandbox, models: false, inlineBudget: BOT_SCRIPT_INLINE_BUDGET });
+    return codemode;
   }
 
   function build(tools: readonly DurableTool[]): Extension {
@@ -717,12 +630,19 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       // The memory section renders per request; the rest are fixed per refresh.
       sections = nextSections.slice(0, BOT_SECTION_KEYS.length - 1);
       scriptable = offered.some(({ tool }) => tool.name === BOT_CODEMODE_TOOL_NAME) ? [] : offered.filter(scriptCallable);
-      const entries = scriptable.length > 0 ? [...offered, codemodeEntry()] : offered;
-      installedToolNames = new Set(entries.map(({ tool }) => tool.name));
-      const tools = entries.map(({ tool, replay, mcp, bind }) =>
-        adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) }),
-      );
+      installedToolNames = new Set([
+        ...offered.map(({ tool }) => tool.name),
+        ...(scriptable.length > 0 ? [BOT_CODEMODE_TOOL_NAME] : []),
+      ]);
+      const tools = offered.map((entry): DurableTool => {
+        const { tool, replay, mcp, bind } = entry;
+        const adapted = adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) });
+        // Only the scriptable tools resolve for a script's calls.
+        return scriptable.includes(entry) ? adapted : { ...adapted, callers: ["model"] };
+      });
       registry.install(build(tools));
+      if (scriptable.length > 0) registry.install(codemodeExtension());
+      else if (codemode !== undefined) registry.uninstall(codemode);
     },
     admissionFailure() {
       return failure;

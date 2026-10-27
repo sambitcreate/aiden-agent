@@ -2135,16 +2135,23 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
-  let calls = 0, hold = false;
+  let calls = 0, hold = false, scriptResult, scriptTools;
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body);
     const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
+    const last = parsed.messages.at(-1);
+    const script = last.role === "user" && JSON.stringify(last.content).includes("Script durable file");
+    if (script) scriptTools = parsed.tools.map((tool) => tool.function.name);
+    if (last.role === "tool" && last.tool_call_id === "durable-script") scriptResult = JSON.stringify(last.content);
+    const call = write
+      ? { id: "durable-write", name: "write_file", arguments: { path: "durable.txt", content: "Written by the durable Bot" } }
+      : script ? { id: "durable-script", name: "codemode", arguments: { code: 'text(await tools.read_file({ path: "durable.txt" }))' } } : undefined;
     calls++;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: write ? { role: "assistant", tool_calls: [{ index: 0, id: "durable-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "durable.txt", content: "Written by the durable Bot" }) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
     if (hold) return;
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: write ? "tool_calls" : "stop" }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -2213,6 +2220,11 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
   assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
+  // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
+  const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, scriptTurn.submissionId, new AbortController().signal)).kind, "completed");
+  assert.ok(scriptTools.includes("codemode") && scriptTools.includes("read_file"), "codemode sits next to the Bot's declared tools");
+  assert.match(scriptResult, /Written by the durable Bot/u, "the script read the file through the bundled sandbox");
   assert.equal((await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" })).deduped, true);
   const afterFirst = calls;
   assert.ok(afterFirst > 0);

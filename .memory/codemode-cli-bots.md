@@ -14,9 +14,10 @@ Branch `claude/project-thread-97a8nm`. After a Pi feature audit the owner chose:
 - Trap: `session.dispose()` does not emit `session_shutdown`, so an SDK test that starts MCP stdio children must emit it in teardown or the process hangs.
 
 ## Bots (`main/services/bot-runtime/bot-extension.ts`, shared by desktop and CLI durable Bots)
-- `refresh()` adds a `codemode` tool when any offered tool is scriptable: MCP/connection tools, `isPiCodemodeCallable` file and shell tools, and `web_search`/`bot_recall`. Tools stay declared directly too, so approval-gated tools are never hidden.
-- Every script call goes through the same gates as a direct call: `turnAllows` (routine/request scope), `checkPolicy`, approval (call id `<parent>/<n>`, memo namespaced per call) and the bound per-call tool.
-- A rule hand-off inside a script is refused with `scriptHandoffBlock` so the Bot calls the tool directly and the person gets the card.
-- Script calls are serialized so approval cards never stack. Arguments are capped at 32 KiB and validated with Pi's `validateToolArguments`.
-- The `codemode` call itself skips `checkPolicy` (its nested calls are checked); `turnAllows` still applies.
+- `refresh()` installs Pi Durable's codemode extension (`@earendil-works/pi-durable/codemode`, `models: false`, inline budget 1,000 tokens) when any offered tool is scriptable: MCP/connection tools, `isPiCodemodeCallable` file and shell tools, and `web_search`/`bot_recall`. Other tools get `callers: ["model"]`, so scripts can't reach cards, the Bot's computer or browser, routines or subagents. Tools stay declared directly too.
+- Each script call is a durable nested tool task, so the Bot's own `beforeTool` runs for it: `turnAllows`, `checkPolicy`, approval (memo per nested task, id `<parent>/c<n>`). A pending approval survives SIGKILL/Resume under the same wait id and the script replays from its journal (test d2).
+- No wall-clock deadline unless the script sets `timeout_ms` (the first, hand-rolled version used `createPiCodemodeTool`'s 120 s deadline, which withdrew unanswered cards; review on #616 caught it, plus the lost approval on Resume).
+- A rule hand-off for a nested call (`call.parent` set) is blocked with `scriptHandoffBlock`: hand-off rows belong to transcript calls.
+- `codemode` itself skips `checkPolicy`; `turnAllows` still applies.
+- Sandbox: `deps.codemodeSandbox`. Desktop default is `new CodemodeSandbox`. The CLI passes the bundled `chunks/codemode-worker.js` as a data: URL plus the quickjs-wasi wasm, since pi-codemode's own worker isn't on disk in the bundle (covered by the parity "durable CLI Bot migration" test's script turn).
 - Activity: the step reads "Ran a script" (`renderer/shared/bot-activity.ts`), phase `working`; computed in main, so phones need no change.

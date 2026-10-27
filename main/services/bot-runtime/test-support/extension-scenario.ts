@@ -15,7 +15,8 @@ export interface ScenarioArgs {
   profileDir: string;
   botId: string;
   /** `handoff-answered`: the person answers Done at once, and the child dies while the answer is recorded. */
-  kind: "approval" | "tools" | "handoff" | "handoff-answered";
+  /** `script-approval`: a codemode script's call waits for approval. */
+  kind: "approval" | "script-approval" | "tools" | "handoff" | "handoff-answered";
 }
 
 /** The rule hand-off every `handoff` scenario call gets. */
@@ -25,6 +26,10 @@ export const SCENARIO_RULE_HANDOFF = {
   action: "Make a purchase or booking",
   why: "Your rule “Make a purchase or booking” hands this to you.",
 } as const;
+
+/** The connection tool the `script-approval` script calls, and the script. */
+export const SCENARIO_SCRIPT_TOOL = "docs__gated";
+export const SCENARIO_SCRIPT = `text(await tools.${SCENARIO_SCRIPT_TOOL}({ text: "x" }))`;
 
 export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
   const ctx = BACKGROUND_CONTEXT;
@@ -44,9 +49,13 @@ export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
             return blockingUntilAborted(request.signal);
           },
         })
-      : args.kind === "approval"
+      : args.kind === "approval" || args.kind === "script-approval"
       ? recordingDeps({
-          tools: [{ tool: countingTool("gated"), replay: "unsafe" }],
+          tools: [
+            args.kind === "approval"
+              ? { tool: countingTool("gated"), replay: "unsafe" }
+              : { tool: countingTool(SCENARIO_SCRIPT_TOOL), replay: "unsafe", mcp: true },
+          ],
           policy: () => ({ allowed: true, approval: { summary: "Run gated" } }),
           approve: async (request) => {
             emit("APPROVAL", request.waitId);
@@ -66,7 +75,9 @@ export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
     };
   }
   const firstResponse =
-    args.kind !== "tools"
+    args.kind === "script-approval"
+      ? fauxAssistantMessage([fauxToolCall("codemode", { code: SCENARIO_SCRIPT }, { id: "script-1" })], { stopReason: "toolUse" })
+      : args.kind !== "tools"
       ? fauxAssistantMessage([fauxToolCall("gated", { text: "x" })], { stopReason: "toolUse" })
       : fauxAssistantMessage(
           [fauxToolCall("unsafe_op", { text: "u" }), fauxToolCall("safe_op", { text: "s" })],

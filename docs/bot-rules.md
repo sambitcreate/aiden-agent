@@ -83,7 +83,9 @@ Grant connection tools only from servers you trust to describe them honestly.
 A Bot with connection, file, shell or lookup tools also gets `codemode`, which
 lets it script those tools. Every call a script makes is checked like a direct
 call: its ingress, its access, its approval and the rules. A rule that asks
-opens the same approval card. A rule that hands a step to the person doesn't
+opens the same approval card, which waits as long as a direct call's and is
+asked again under the same card after Resume; the script picks up where it
+was. A script has no time limit unless it sets one. A rule that hands a step to the person doesn't
 open a card from inside a script: the call is refused and the Bot is told to
 make it directly, so the person gets the hand-off card as usual. Scripts never
 reach cards, the Bot's own computer or browser, routines or subagents.

@@ -6,7 +6,7 @@
  * Any explicit tool selection wins over this default: a tool flag on the
  * command line, extensions switched off, or a saved `defaultTools` setting
  * that names codemode (`+codemode`, `-codemode`) or replaces the defaults
- * with plain names.
+ * (plain names, or an empty list).
  */
 
 import { readFileSync } from "node:fs";
@@ -17,7 +17,8 @@ const TOOL_SELECTION_FLAGS = new Set([
 
 function choosesCodemode(defaultTools: unknown): boolean {
 	if (!Array.isArray(defaultTools)) return false;
-	return defaultTools.some((entry) =>
+	// An empty list replaces the defaults with no tools, as a plain list does.
+	return defaultTools.length === 0 || defaultTools.some((entry) =>
 		typeof entry === "string" && (!/^[+-]/u.test(entry) || entry.slice(1) === "codemode"));
 }
 

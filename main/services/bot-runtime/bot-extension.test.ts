@@ -32,7 +32,7 @@ import { botIngressAllowsTool } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
-import { SCENARIO_RULE_HANDOFF } from "./test-support/extension-scenario.js";
+import { SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
 import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
@@ -222,7 +222,7 @@ async function scriptTurn(deps: BotExtensionDeps, code: string, requestId?: stri
 test("(cm1) a Bot with connection tools gets codemode, and each scripted call passes the Bot's policy", async () => {
   const read = countingTool("docs__read");
   const deps = recordingDeps({ tools: [{ tool: read, replay: "unsafe", mcp: true }] });
-  const turn = await scriptTurn(deps, "const r = await tools.docs__read({ text: 'notes' }); text(r.content[0].text)");
+  const turn = await scriptTurn(deps, "text(await tools.docs__read({ text: 'notes' }))");
   assert.deepEqual(turn.declared, [["docs__read", "codemode"]], "connection tools stay declared next to codemode");
   assert.deepEqual(read.executions, [{ text: "notes" }]);
   assert.match(turn.text, /ran notes/u);
@@ -236,12 +236,12 @@ test("(cm2) a scripted call that needs approval asks the person, and a denial ke
     policy: () => ({ allowed: true, approval: { summary: "Send the email" } }),
     approve: async () => "deny",
   });
-  const turn = await scriptTurn(deps, "const r = await tools.mail__send({ text: 'hi' }); text(r.isError ? 'blocked: ' + r.content[0].text : 'sent')");
+  const turn = await scriptTurn(deps, "try { await tools.mail__send({ text: 'hi' }); text('sent') } catch (error) { text('blocked: ' + error.message) }");
   assert.deepEqual(send.executions, []);
   assert.equal(deps.approvals.length, 1);
   assert.equal(deps.approvals[0]!.toolName, "mail__send");
   assert.equal(deps.approvals[0]!.summary, "Send the email");
-  assert.equal(deps.approvals[0]!.toolCallId, "script-1/1");
+  assert.equal(deps.approvals[0]!.toolCallId, "script-1/c1", "the script's first nested call");
   assert.match(turn.text, /blocked: The person declined this action\./u);
 });
 
@@ -252,7 +252,7 @@ test("(cm3) a scripted call a rule hands to the person is refused without a card
     policy: () => ({ allowed: true, handoff: { rule: { id: "purchases", label: "Make a purchase" }, summary: "buy", action: "Buy it", why: "Your rule" } }),
     handoff: async () => ({ outcome: "done" }),
   });
-  const turn = await scriptTurn(deps, "const r = await tools.shop__buy({ text: 'socks' }); text(r.content[0].text)");
+  const turn = await scriptTurn(deps, "try { await tools.shop__buy({ text: 'socks' }) } catch (error) { text(error.message) }");
   assert.deepEqual(buy.executions, []);
   assert.deepEqual(deps.handoffs, []);
   assert.match(turn.text, /Call shop__buy directly, not from codemode/u);
@@ -268,7 +268,7 @@ test("(cm4) scripts follow the turn's ingress and never reach direct-only tools"
   };
   const turn = await scriptTurn(
     deps,
-    "text(ALL_TOOLS.map((tool) => tool.name).join(','));\nconst r = await tools.docs__read({ text: 'x' }); text(r.content[0].text)",
+    "text(ALL_TOOLS.map((tool) => tool.name).join(','));\ntry { await tools.docs__read({ text: 'x' }) } catch (error) { text(error.message) }",
     "routine:task-1:1",
   );
   assert.match(turn.text, /^docs__read$/mu, "the question card is not a script tool");
@@ -320,6 +320,39 @@ test("(d) after SIGKILL while waiting for approval, Resume re-asks with the same
       "the approval is re-asked once, under the original waitId",
     );
     assert.equal(gated.executions.length, 1);
+    assert.equal(fauxModels.calls(), 1, "only the follow-up answer is requested");
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(d2) after SIGKILL while a script's call waits for approval, Resume re-asks with the same waitId and runs it once", async () => {
+  const profile = tempProfile();
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-script-approval", kind: "script-approval" }),
+  ]);
+  const childWaitId = await child.waitFor("APPROVAL");
+  await child.kill();
+
+  const gated = countingTool(SCENARIO_SCRIPT_TOOL);
+  const fauxModels = createFauxModels([fauxAssistantMessage("all done")]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, approval: { summary: "Run gated" } }),
+  });
+  const { host, harness } = await reopenAfterKill(profile, "bot-script-approval", deps, fauxModels);
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions;
+    harness.resume();
+    const settled = await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+    assert.equal(settled.status, "done");
+    assert.deepEqual(
+      deps.approvals.map((request) => request.waitId),
+      [childWaitId],
+      "the script's approval is re-asked once, under the original waitId",
+    );
+    assert.deepEqual(gated.executions, [{ text: "x" }], "the approved call runs once, after Resume");
     assert.equal(fauxModels.calls(), 1, "only the follow-up answer is requested");
   } finally {
     await host.shutdown();

@@ -215,6 +215,8 @@ test("codemode is on by default unless a tool flag or saved defaultTools chooses
 	assert.equal(codemodeDefault([], [settings]), false, "a saved -codemode turns it off");
 	writeFileSync(settings, JSON.stringify({ defaultTools: ["read", "bash"] }));
 	assert.equal(codemodeDefault([], [settings]), false, "a saved plain list replaces the defaults, codemode included");
+	writeFileSync(settings, JSON.stringify({ defaultTools: [] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved empty list means no default tools, codemode included");
 	writeFileSync(settings, JSON.stringify({ defaultTools: ["+grep"] }));
 	assert.equal(codemodeDefault([], [settings]), true, "adding other tools keeps the codemode default");
 	writeFileSync(settings, "{ not json");
