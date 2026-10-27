@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -309,6 +309,23 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
   assert.equal((await api.scheduleCommand(dir, ["preview", "0 9 * * *", "UTC"])).length, 5);
   await api.scheduleCommand(dir, ["remove", task.id]);
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
+});
+
+test("daemon lifecycle and control refuse unsafe existing directories before touching their contents", { skip: process.platform === "win32" }, async (t) => {
+  const base = temporary(t), unsafe = join(base, "shared"); mkdirSync(unsafe, { mode: 0o777 }); chmodSync(unsafe, 0o777);
+  const marker = join(unsafe, "serve.sock"); writeFileSync(marker, "preserve existing object");
+  assert.throws(() => api.daemonStatus(unsafe), /storage must be a private/u);
+  assert.throws(() => api.recoverStaleServeLease(unsafe), /storage must be a private/u);
+  await assert.rejects(api.remoteDaemonCommand(unsafe, "workspace", ["list"]), /storage must be a private/u);
+  await assert.rejects(api.serve(unsafe, new AbortController().signal), /storage must be a private/u);
+  await assert.rejects(api.startDaemon(unsafe), /storage must be a private/u);
+  await assert.rejects(api.stopDaemon(unsafe), /storage must be a private/u);
+  assert.equal(readFileSync(marker, "utf8"), "preserve existing object");
+  assert.equal(statSync(unsafe).mode & 0o777, 0o777, "unsafe configured roots require deliberate repair");
+  const alias = join(base, "alias"); symlinkSync(unsafe, alias);
+  await assert.rejects(api.serve(alias, new AbortController().signal), /storage must be a private/u);
+  const missing = join(base, "new-private"); assert.equal(api.daemonStatus(missing).running, false);
+  assert.equal(statSync(missing).mode & 0o777, 0o700);
 });
 
 async function scheduleToolFixture(t) {

@@ -3,6 +3,7 @@
 // credential-cleanup journal covers real credential changes, and local
 // (stdio) launch approval follows the save.
 
+import { confirmMcpLaunch } from "./mcp-launch-review.js";
 import { configStore } from "./config-store.js";
 import { logger } from "../platform.js";
 import { mcpManager } from "./mcp.js";
@@ -21,6 +22,7 @@ import {
   pruneStoredMcpFieldSecrets,
   stageStoredMcpFieldSecrets,
   storedMcpFieldSecretValues,
+  resolveStoredMcpFieldSecrets,
 } from "./mcp-field-secrets.js";
 import { publishWithLaunchApproval } from "./mcp-stdio-approvals.js";
 import type { McpServer } from "./types.js";
@@ -52,11 +54,6 @@ export async function saveConfiguredMcpServer(
   return saved!;
 }
 
-/** A local server's env stays readable in config.json until it was approved to run. */
-async function launchApproved(server: McpServer | undefined): Promise<boolean> {
-  return !server || server.transport !== "stdio" || mcpStdioApprovals.isApproved(server);
-}
-
 /**
  * `target` derives the record to save from the configured one read inside the
  * mutation (undefined: nothing to save), so a background rewrite never
@@ -73,14 +70,13 @@ async function saveWithFieldSecrets(
   // staging validates every kept marker again.
   const before = (await configStore.listMcpServers()).find(({ id }) => id === serverId);
   const storedValues = before ? await storedMcpFieldSecretValues(before) : {};
-  const sealEnv = options.approveLaunch === true || (await launchApproved(before));
   let plan: McpFieldSecretPlan | undefined;
   return mutateMcpWithCredentialCleanup(
     serverId,
     (current) => {
       const next = target(current);
       if (!next) return null;
-      plan = planMcpServerFieldSecrets(next, { reuse: { current, values: storedValues }, sealEnv });
+      plan = planMcpServerFieldSecrets(next, { reuse: { current, values: storedValues } });
       // Stored credentials are bound to the connection, not to how env/header
       // values are stored, so moving them into the keychain cleans nothing up.
       return pendingMcpCredentialCleanupForSave(current, plan.server);
@@ -98,6 +94,14 @@ async function saveWithFieldSecrets(
       const launchUnchanged = current?.transport === "stdio" && baseline !== undefined &&
         mcpStdioLaunchFingerprint(baseline) === mcpStdioLaunchFingerprint(staged) &&
         (await mcpStdioApprovals.isApproved(current));
+      if (options.approveLaunch && staged.transport === "stdio" && !launchUnchanged) {
+        const effective = await resolveStoredMcpFieldSecrets(staged);
+        if (!(await confirmMcpLaunch(effective))) throw new Error("Launch review cancelled.");
+        if (!isCurrent()) throw new Error("The renderer document is no longer active.");
+        if (mcpStdioLaunchFingerprint(await resolveStoredMcpFieldSecrets(staged)) !== mcpStdioLaunchFingerprint(effective)) {
+          throw new Error("This connector’s environment changed during launch review. Review it again.");
+        }
+      }
       const saved = await publishWithLaunchApproval(
         mcpStdioApprovals,
         staged,
@@ -119,18 +123,18 @@ async function saveWithFieldSecrets(
  * Move env and header values still written in config.json (hand edits, or
  * records saved before values moved to the keychain) into the secrets store
  * and rewrite config.json without them. Runs at startup and after config.json
- * changes on disk; a server that cannot be sealed keeps working and is retried
- * next time. A local server not yet approved keeps its env in config.json, so
- * Settings can show exactly what approving it would run.
+ * changes on disk; a server that cannot be sealed remains blocked and is retried
+ * next time. Local launch consent is independent: sealing never approves a
+ * pending command. Its exact values are reviewed only in a foreground action.
  */
-export async function sealPlaintextMcpServerFields(serverIds?: readonly string[]): Promise<void> {
+export async function sealPlaintextMcpServerFields(serverIds?: readonly string[], options: { throwOnError?: boolean } = {}): Promise<void> {
   const servers = (await configStore.listMcpServers())
     .filter((server) => !serverIds || serverIds.includes(server.id));
   for (const server of servers.filter(hasPlaintextMcpFields)) {
-    if (!(await launchApproved(server))) continue;
     try {
       await saveWithFieldSecrets(server.id, (current) => (current && hasPlaintextMcpFields(current) ? current : undefined), () => true, {});
     } catch (error) {
+      if (options.throwOnError) throw error;
       logger.warn("mcp", `Could not move the env and header values of MCP server ${server.id} into the keychain.`, error);
     }
   }

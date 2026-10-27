@@ -183,6 +183,7 @@ final class AidenRemoteCoordinator {
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
     private let chatCache: AidenChatCache
+    private let chatDraftStore: AidenChatDraftStore
     private let scheduledTaskCache: AidenScheduledTaskCache
     private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache
     private let installationDataGate = AidenInstallationDataGate()
@@ -197,6 +198,7 @@ final class AidenRemoteCoordinator {
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
         chatCache = .shared
+        chatDraftStore = .shared
         scheduledTaskCache = .shared
         workspaceEnvironmentCache = .shared
         clientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
@@ -207,6 +209,7 @@ final class AidenRemoteCoordinator {
         installationStore: AidenInstallationStore,
         workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
         chatCache: AidenChatCache = .shared,
+        chatDraftStore: AidenChatDraftStore = .shared,
         scheduledTaskCache: AidenScheduledTaskCache = .shared,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         haptics: (any AidenHapticEmitting)? = nil,
@@ -216,6 +219,7 @@ final class AidenRemoteCoordinator {
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
         self.chatCache = chatCache
+        self.chatDraftStore = chatDraftStore
         self.scheduledTaskCache = scheduledTaskCache
         self.workspaceEnvironmentCache = workspaceEnvironmentCache
         self.clientFactory = clientFactory
@@ -223,6 +227,7 @@ final class AidenRemoteCoordinator {
     }
 
     func start() async {
+        await chatDraftStore.migrateExistingStorage()
         guard installationStore.activeInstallation != nil else {
             connectionGeneration &+= 1
             connectionState = .needsPairing

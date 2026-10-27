@@ -5,13 +5,18 @@ import { app, ipcMain, logger } from "../../platform.js";
 import type { WorkspaceArtifactsChangedEvent } from "../../../renderer/shared/workspace-artifacts.js";
 import { agentShellCommandEnvironment } from "../agent-command-environment.js";
 import { runBoundedShellCommand } from "../bounded-shell-command.js";
-import { readWorkspaceFile } from "../workspace-files.js";
+import { configStore } from "../config-store.js";
+import { artifactFileAllowed, readWorkspaceArtifactFile } from "./file-policy.js";
 import { createWorkspaceArtifactRunner } from "./runner.js";
 import { WorkspaceArtifactStore } from "./store.js";
 
 /** Device-local and never portable: artifacts can run commands in a local folder. */
 export const workspaceArtifactStore = new WorkspaceArtifactStore({
   root: () => path.join(app.getPath("userData"), "workspace-artifacts"),
+  fileSourceAllowed: async (workspaceId, file) => {
+    const workspace = await configStore.getWorkspace(workspaceId);
+    return workspace?.folderPath ? artifactFileAllowed(workspace.folderPath, file) : false;
+  },
 });
 
 /**
@@ -30,7 +35,7 @@ export function notifyWorkspaceArtifactsChanged(event: WorkspaceArtifactsChanged
 
 export const workspaceArtifactRunner = createWorkspaceArtifactRunner({
   runShell: runBoundedShellCommand,
-  readFile: async (root, file, signal) => (await readWorkspaceFile(root, file, signal)).content,
+  readFile: readWorkspaceArtifactFile,
   env: agentShellCommandEnvironment,
   store: workspaceArtifactStore,
   notify: notifyWorkspaceArtifactsChanged,

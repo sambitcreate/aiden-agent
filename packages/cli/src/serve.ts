@@ -1,3 +1,4 @@
+import { ensurePrivateDirectory } from "../../../main/services/private-storage.ts";
 import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import { createCliRemote } from "./remote.ts";
 
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
+  ensurePrivateDirectory(agentDir, "reject");
   recoverStaleServeLease(agentDir);
   const release = acquireLease(join(agentDir, "serve"));
   try { await serveOwned(agentDir, signal, options); } finally { release(); }
@@ -55,6 +57,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   });
   try {
     if (options.remote) { remote = await createCliRemote(agentDir, chats, runtime, { bots }); await remote.start(); }
+    ensurePrivateDirectory(agentDir, "reject");
     rmSync(path, { force: true });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.removeListener("error", reject); resolve(); }); });
     chmodSync(path, 0o600);

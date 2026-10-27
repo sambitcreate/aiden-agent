@@ -108,7 +108,7 @@ export function newMcpFieldSecretMarker(random: () => string): string {
 }
 
 export interface McpFieldSecretPlan {
-  /** The record to store in config.json: every value is a marker (env stays as typed when `sealEnv` is false). */
+  /** The record to store in config.json: every value is a marker. */
   server: McpServer;
   /** New marker → value entries to add to the server's secret record. */
   added: Record<string, McpFieldSecretEntry>;
@@ -123,9 +123,6 @@ export interface McpFieldSecretPlanOptions {
    * stale renderer copy never looks like a new credential.
    */
   reuse?: { current: McpServer | undefined; values: Readonly<McpFieldSecretValues> };
-
-  /** False keeps env values as written (a local server not yet approved, whose env must stay reviewable). */
-  sealEnv?: boolean;
 }
 
 /**
@@ -153,10 +150,6 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
         continue;
       }
       if (value.length > MCP_FIELD_SECRET_LIMITS.valueChars) throw new Error(`The value of ${fieldLabel(kind, name)} is too long.`);
-      if (kind === "env" && options.sealEnv === false) {
-        sealed[name] = value;
-        continue;
-      }
       const existing = fieldsOf(options.reuse?.current, kind)?.[name];
       if (existing !== undefined && isMcpFieldSecretMarker(existing) && own(options.reuse!.values, fieldKey(kind, name)) === value) {
         kept.push({ marker: existing, field: fieldKey(kind, name), label: fieldLabel(kind, name) });
@@ -338,11 +331,11 @@ export function resolveMcpFieldSecrets(server: McpServer, record: Readonly<McpFi
   return resolved;
 }
 
-/** Each env variable as a launch approval shows it: its value as written, saved (masked), or unusable. */
+/** Generic approval projection: names and saved/missing state, never plaintext values. */
 export function mcpEnvForApproval(server: McpServer, record: Readonly<McpFieldSecretRecord> | undefined): { name: string; value?: string; unavailable?: true }[] {
   const values = mcpFieldSecretFieldValues(server, record);
   return Object.entries(server.env ?? {}).map(([name, value]) =>
-    !isMcpFieldSecretMarker(value) ? { name, value } : own(values, fieldKey("env", name)) !== undefined ? { name } : { name, unavailable: true as const });
+    isMcpFieldSecretMarker(value) && own(values, fieldKey("env", name)) !== undefined ? { name } : { name, unavailable: true as const });
 }
 
 /**
