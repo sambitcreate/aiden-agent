@@ -1,6 +1,6 @@
 # Web page reading and extract mode
 
-Status: merged in [PR #588](https://github.com/sambitcreate/aiden-agent/pull/588) (2026-10-26); unreleased. User guide: [web-fetch-extract.md](../web-fetch-extract.md).
+Status: merged in [PR #588](https://github.com/sambitcreate/aiden-agent/pull/588) (2026-10-26); shipped in 0.62.0. User guide: [web-fetch-extract.md](../web-fetch-extract.md).
 
 ## Goal
 

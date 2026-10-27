@@ -1,6 +1,6 @@
 import { validateMcpServerMetadata } from "../../../renderer/shared/mcp-oauth-config.js";
 import { isMcpFieldSecretMarker, MCP_FIELD_SECRET_PREFIX } from "../../../renderer/shared/mcp-field-secrets.js";
-import { mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
+import { mcpServerExposure, mcpServerOffersTools, mcpToolsOfferedToModel } from "../../../renderer/shared/mcp-exposure.js";
 import { mcpAuthorityConnectionSnapshot } from "../../../main/services/mcp-credential-cleanup-core.js";
 import { createBoundedSubagentMcpFetch, MAX_SUBAGENT_MCP_RAW_RESPONSE_BYTES } from "../../../main/services/subagents/subagent-mcp-bounded-fetch.js";
 import { connectMcpClient, createMcpClient } from "../../../main/services/mcp-client.js";
@@ -26,7 +26,9 @@ import { Type } from "@earendil-works/pi-ai";
 import { VERSION, type InlineExtension } from "@earendil-works/pi-coding-agent";
 import type { McpServer } from "../../../main/services/types.js";
 import { MCP_PRESETS, getMcpPreset, serverFromPreset, assertMcpPresetServer } from "../../../main/services/mcp-presets.js";
-import { markMcpAgentTool, mcpAgentToolNames } from "../../../main/services/mcp-tool-identity.js";
+import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix } from "../../../main/services/mcp-tool-identity.js";
+import { renderMcpServersSectionBody, snapshotMcpServerInstructions } from "../../../main/services/mcp-server-instructions.js";
+import type { PiDiscoverableTool, PiToolDiscoveryMetadata } from "../../../main/services/pi-tool-discovery.js";
 import { executeMcpAgentTool } from "../../../main/services/mcp-tool-result.js";
 import { normalizeMcpToolInputSchema } from "../../../main/services/mcp-tool-schema.js";
 import { tagMcpAgentTool } from "../../../main/services/mcp-agent-tool-descriptor.js";
@@ -504,11 +506,23 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
   async function agentTools(server: McpServer, signal?: AbortSignal) {
     // A server switched off for the model offers nothing; hidden tools are withheld.
     if (!mcpServerOffersTools(server)) return [];
-    const { tools } = await inventory(server, signal);
+    const { tools, client } = await inventory(server, signal);
     // Same names as the desktop: disambiguated against every configured server and the full inventory.
-    const names = mcpAgentToolNames(server, await listServers(), tools.map(({ name }) => name));
+    const configured = await listServers();
+    const names = mcpAgentToolNames(server, configured, tools.map(({ name }) => name));
+    const offered = mcpToolsOfferedToModel(server, tools);
+    // The server's namespace record, as on the desktop: the `mcp_servers`
+    // section and codemode's describeNamespace read it. The tool-name prefix is its handle.
+    const instructions = snapshotMcpServerInstructions(server, offered.map((tool) => ({ name: names.get(tool.name)! })), client.instructions);
+    const discovery: PiToolDiscoveryMetadata = Object.freeze({
+      ...(server.description ? { description: server.description.slice(0, 1024) } : {}),
+      namespace: `mcp:${createHash("sha256").update(server.id).digest("hex").slice(0, 24)}`,
+      label: server.name.slice(0, 64) || "MCP service",
+      alias: mcpServerToolPrefix(server, configured),
+      ...(instructions ? { instructions: instructions.instructions } : {}),
+    });
     // Identity for grant joins, plus the exact tools/list entry for live schema/effect checks.
-    return mcpToolsOfferedToModel(server, tools).map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
+    return offered.map((tool) => tagMcpAgentTool(markMcpAgentTool({ name: names.get(tool.name)!, label: `${server.name}: ${tool.name}`, discovery, description: [server.description, tool.description ?? tool.name].filter(Boolean).join("\n\n"),
       parameters: Type.Unsafe<Record<string, unknown>>(normalizeMcpToolInputSchema(tool.inputSchema)),
       execute: async (_id: string, input: unknown, signal?: AbortSignal) => {
         const current = await inventory(server, signal);
@@ -542,7 +556,18 @@ export function createCliMcpPool(agentDir: string, options: { child?: boolean } 
  * is the CLI's only MCP configuration. `connect: false` registers the command
  * alone (child sessions).
  */
-export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number; connect?: boolean } = {}): InlineExtension {
+/** Pi's prompt section that lists the servers whose tools are behind codemode. */
+const MCP_SERVERS_SECTION = "mcp_servers";
+
+/**
+ * `deferToCodemode` (the interactive CLI): tools of servers with the default
+ * "auto" exposure stay behind codemode instead of being declared to the model,
+ * as on the desktop. Scripts find them with searchTools(), and the
+ * `mcp_servers` section tells the model which services exist. "Always
+ * visible" servers stay declared. When codemode is off for the session (a
+ * tool flag or `defaultTools`), every tool is declared directly instead.
+ */
+export function createMcpExtension(agentDir: string, options: { startupBudgetMs?: number; connect?: boolean; deferToCodemode?: boolean } = {}): InlineExtension {
   return { name: "aiden-mcp", async factory(pi) {
     pi.registerCommand("mcp", { description: "Aiden MCP servers: list, presets, add <file>, preset <id>, logout <id>, remove <id> (sign in with aiden mcp login <id> in a terminal)", handler: async (args, ctx) => {
       const parsed = splitArgs(args); if (parsed[0] === "login") throw new Error("Run aiden mcp login <id> in a terminal.");
@@ -560,9 +585,31 @@ export function createMcpExtension(agentDir: string, options: { startupBudgetMs?
       try { return { server, tools: await untilSignal(pool.agentTools(server, budget), budget), error: undefined }; }
       catch (error) { return { server, tools: undefined, error }; }
     }));
+    const behindCodemode: PiDiscoverableTool[] = [];
     for (const result of results) {
-      if (result.tools) for (const tool of result.tools) pi.registerTool(tool);
-      else process.stderr.write(`aiden: MCP ${result.server.id} unavailable (${errorText(result.error)}). Check its configuration or sign in.\n`);
+      if (!result.tools) {
+        process.stderr.write(`aiden: MCP ${result.server.id} unavailable (${errorText(result.error)}). Check its configuration or sign in.\n`);
+        continue;
+      }
+      const defer = options.deferToCodemode === true && mcpServerExposure(result.server) === "auto";
+      for (const tool of result.tools) {
+        if (!defer) { pi.registerTool(tool); continue; }
+        const { discovery } = tool;
+        pi.registerTool({ ...tool, exposure: "codemode", namespace: { name: discovery.alias ?? discovery.namespace, ...(discovery.description ? { description: discovery.description } : {}), ...(discovery.instructions ? { instructions: discovery.instructions } : {}) } });
+        behindCodemode.push(tool);
+      }
     }
+    if (behindCodemode.length === 0) return;
+    const codemodeActive = () => pi.getActiveTools().includes("codemode");
+    pi.on("session_start", () => {
+      // Without codemode nothing could reach them, so they are declared like any other tool.
+      if (!codemodeActive()) for (const tool of behindCodemode) pi.registerTool(tool);
+    });
+    pi.on("before_agent_start", (event) => {
+      const { sections } = event.systemPromptOptions;
+      const section = codemodeActive() ? renderMcpServersSectionBody(behindCodemode, { declared: new Set(pi.getActiveTools()) }) : "";
+      if (section) sections[MCP_SERVERS_SECTION] = section;
+      else delete sections[MCP_SERVERS_SECTION];
+    });
   } };
 }
