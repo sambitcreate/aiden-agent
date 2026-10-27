@@ -145,6 +145,12 @@ export type LmStudioEndpoint = {
    * the test streams one delta at a time, available only on the deterministic model.
    */
   enqueueStreamedReply?: (prompt: string) => StreamedReplyController;
+  /**
+   * Fails the next `count` agent completions whose prompt contains `prompt`
+   * with `status` (a server error), as a provider having a bad moment does,
+   * available only on the deterministic model.
+   */
+  failCompletions?: (prompt: string, count: number, status: number) => void;
 };
 
 export type StreamedReplyController = {
@@ -341,6 +347,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
   };
   let holding = false;
   const held = new Set<() => void>();
+  const serverFailures: Array<{ prompt: string; remaining: number; status: number }> = [];
   const scenarios: Array<{ script: DeterministicToolScenario; state: DeterministicToolScenarioState; id: string }> = [];
   const enqueueToolScenario = (scenario: DeterministicToolScenario): DeterministicToolScenarioState => {
     if (!scenario.prompt.trim() || scenario.calls.length > 16 || scenarios.length >= 8) {
@@ -409,6 +416,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
         const userText = typeof latestUser?.content === "string"
           ? latestUser.content
           : JSON.stringify(latestUser?.content ?? "");
+        const serverFailure = completion?.tools?.length
+          ? serverFailures.find((failure) => failure.remaining > 0 && userText.includes(failure.prompt))
+          : undefined;
+        if (serverFailure) {
+          serverFailure.remaining -= 1;
+          response.writeHead(serverFailure.status, { "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: { message: "Bad gateway", type: "server_error" } }));
+          return;
+        }
         const streamed = streamedReplies.find((reply) => !reply.response && userText.includes(reply.prompt));
         if (streamed && completion?.tools?.length) {
           streamed.response = response;
@@ -485,6 +501,12 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
     },
     enqueueToolScenario,
     enqueueStreamedReply,
+    failCompletions: (prompt, count, status) => {
+      if (!prompt.trim() || !Number.isInteger(count) || count < 1 || status < 500) {
+        throw new Error("A server failure needs a prompt, a positive count and a 5xx status.");
+      }
+      serverFailures.push({ prompt, remaining: count, status });
+    },
     server,
   };
 }

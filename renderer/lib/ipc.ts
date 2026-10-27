@@ -204,6 +204,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import type {
   ImageGenerationActionResult,
   ImageGenerationAddCustomModelRequest,
@@ -1862,6 +1863,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** A failed model request waits before it is sent again. */
+  onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;

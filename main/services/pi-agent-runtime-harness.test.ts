@@ -92,6 +92,7 @@ async function managedTestHarness(
     initialMessages?: AgentMessage[];
     contextWindow?: number;
     retryDelayMs?: number;
+    maxRetries?: number;
     consumeHostFailure?: () => "inference" | "policy" | undefined;
     effects?: PiRuntimeSessionBinding["effects"];
     signal?: AbortSignal;
@@ -179,7 +180,11 @@ async function managedTestHarness(
         models: compactionModels,
         model,
         thinkingLevel: "off",
-        retryDelayMs: options.retryDelayMs,
+        providerRetry: {
+          enabled: true,
+          maxRetries: options.maxRetries ?? 1,
+          baseDelayMs: options.retryDelayMs ?? 500,
+        },
         consumeHostFailure: options.consumeHostFailure,
       },
       ...(options.signal ? { signal: options.signal } : {}),
@@ -1242,6 +1247,59 @@ test("managed cancellation owns retry hooks and prevents post-stop provider work
   const outcome = await running;
   assert.equal(outcome.kind, "app_cancelled");
   assert.equal(settled?.kind, "app_cancelled");
+  assert.equal(core.state.callCount, 1);
+});
+
+test("managed runs retry transient provider failures with growing waits until one answers", async () => {
+  const failure = () =>
+    fauxAssistantMessage("", { stopReason: "error", errorMessage: "502 Bad Gateway" });
+  const { core, harness } = await managedTestHarness(
+    [failure(), failure(), failure(), fauxAssistantMessage("Recovered answer")],
+    { retryDelayMs: 1, maxRetries: 5 },
+  );
+  const retries: Array<[number, number, number]> = [];
+  const outcome = await harness.runManaged(
+    {
+      kind: "append-and-run",
+      message: { role: "user", content: [{ type: "text", text: "flaky" }], timestamp: Date.now() },
+    },
+    { onRetry: ({ attempt, maxAttempts, delayMs }) => void retries.push([attempt, maxAttempts, delayMs]) },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.equal(outcome.attempts, 4);
+  assert.deepEqual(retries, [
+    [2, 6, 1],
+    [3, 6, 2],
+    [4, 6, 4],
+  ]);
+  assert.equal(core.state.callCount, 4);
+});
+
+test("stopping during a retry wait ends the run without another provider request", async () => {
+  let retryScheduled!: () => void;
+  const scheduled = new Promise<void>((resolve) => {
+    retryScheduled = resolve;
+  });
+  const { core, harness } = await managedTestHarness(
+    [
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "fetch failed" }),
+      fauxAssistantMessage("must not run"),
+    ],
+    { retryDelayMs: 60_000, maxRetries: 5 },
+  );
+  const running = harness.runManaged(
+    {
+      kind: "append-and-run",
+      message: { role: "user", content: [{ type: "text", text: "stop me" }], timestamp: Date.now() },
+    },
+    { onRetry: () => retryScheduled() },
+  );
+  await scheduled;
+  const started = Date.now();
+  await harness.cancelAndSettle();
+  const outcome = await running;
+  assert.equal(outcome.kind, "app_cancelled");
+  assert.ok(Date.now() - started < 5_000);
   assert.equal(core.state.callCount, 1);
 });
 
