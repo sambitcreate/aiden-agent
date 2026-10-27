@@ -318,11 +318,24 @@ test("model catalog workflow verifies read-only and publishes through a checked 
   assert.match(baseline.jobs.dispatch.steps[0].run, /gh workflow run ci\.yml --repo "\$GITHUB_REPOSITORY" --ref main/u);
 });
 
-test("Pullfrog allows aggregate release reviews to finish", async () => {
-  const workflow = await readFile(pullfrogWorkflowUrl, "utf8");
+test("Pullfrog uses immutable action source and frozen local runtime with OIDC", async () => {
+  const { jobs } = parse(await readFile(pullfrogWorkflowUrl, "utf8"));
+  const job = jobs.pullfrog;
+  assert.deepEqual(job.permissions, { "id-token": "write", contents: "read" });
+  assert.equal(job.steps[0].uses, "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803");
+  const node = job.steps.find((step) => step.name === "Use pinned Node with Corepack");
+  assert.equal(node.uses, "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38");
+  assert.equal(node.with["node-version"], "22.23.4");
+  const agent = job.steps.find((step) => step.name === "Run agent");
+  assert.equal(agent.uses, "pullfrog/pullfrog@0657d542f2e34565c6254d5c84581313e631cd90");
+  assert.equal(agent.env.PULLFROG_FORCE_LOCAL_CLI, "1");
+  assert.equal(agent.with.timeout, "2h");
+});
 
-  assert.match(workflow, /uses: pullfrog\/pullfrog@v0\.1\.57/u);
-  assert.match(workflow, /^ {10}timeout: 2h$/mu);
+test("every release build and publisher requires main even on manual dispatch", async () => {
+  const { jobs } = parse(await readFile(releaseWorkflowUrl, "utf8"));
+  const required = "${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}";
+  for (const name of ["release", "linux-release", "publish"]) assert.equal(jobs[name].if, required);
 });
 
 test("coverage collection is enabled before positional test paths", async () => {

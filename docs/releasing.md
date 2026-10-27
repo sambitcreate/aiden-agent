@@ -222,3 +222,9 @@ Never place an Apple private key, certificate password, or notarization credenti
 For every planned release, change the complete version in `package.json` and `package-lock.json`
 (for example, `0.35.0` to `0.35.1`, or `0.35.0` to `0.36.0`). The next eligible workflow run uses
 that exact version. Do not lower the version or reuse a published tag.
+
+## Review execution and branch gates
+
+Pullfrog's checkout, action and runtime are pinned to reviewed source. The action uses its supported `PULLFROG_FORCE_LOCAL_CLI=1` path, which installs the action's exact pnpm package-manager pin and frozen integrity-checked lockfile with lifecycle scripts disabled, then runs that commit's `cli.ts`. Node 22.23.4 supplies Corepack. A missing bootstrap or lock failure fails the review; it does not fall back to a newer npm package. OIDC remains necessary for the action's GitHub token exchange. Provider bindings remain available for configured review models; bindings are not evidence that a repository secret is populated or used. Repository-name inventory on 2026-10-27 found only Docker Hub secrets; organization/integration credentials were not read.
+
+The macOS build, Linux build and publishing jobs all explicitly require `refs/heads/main`, including manual dispatches. Keep the release environment's main-only rule as a separate control. Branch validation never signs or publishes a release. An authorized real Pullfrog run is required when changing its pinned source or bootstrap.

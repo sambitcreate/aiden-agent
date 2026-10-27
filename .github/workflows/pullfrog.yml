@@ -1,4 +1,4 @@
-# PULLFROG ACTION — DO NOT EDIT EXCEPT WHERE INDICATED
+# Pullfrog action and source runtime are reviewed and pinned together.
 name: Pullfrog
 run-name: ${{ inputs.name || github.workflow }}
 on:
@@ -22,20 +22,28 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           fetch-depth: 1
+      - name: Use pinned Node with Corepack
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22.23.4
+      - name: Verify locked-runtime bootstrap
+        run: corepack --version
       - name: Run agent
-        # Pin the action and its npm runtime together. The floating v0 tag can
-        # advance before the matching package is published and strand reviews.
-        uses: pullfrog/pullfrog@v0.1.57
+        # v0.1.57. The supported local mode runs this commit's cli.ts with its
+        # frozen pnpm lock; the default launcher resolves a caret npm range.
+        uses: pullfrog/pullfrog@0657d542f2e34565c6254d5c84581313e631cd90
         with:
           prompt: ${{ inputs.prompt }}
           # Aggregate release PRs can span many independently reviewed changes.
           # Keep enough time for the final cross-change review to complete.
           timeout: 2h
         env:
-          # add at least one provider API key
+          PULLFROG_FORCE_LOCAL_CLI: "1"
+          # Optional provider bindings support remotely selected review models.
+          # Inventory names only; never print values or infer use from presence.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
