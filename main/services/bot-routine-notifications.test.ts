@@ -220,3 +220,42 @@ test("a suppressed row is kept but never reaches the feed", async (t) => {
   assert.equal((await h.log.find("bot_fixture_01", "run_fixture_bot_01"))?.suppressed, true, "the row is kept");
   assert.deepEqual((await h.feed.list(undefined)).notifications, []);
 });
+
+test("a bot:issues reader also gets the Bot's issue cards, with no routine fields", async (t) => {
+  const h = await harness();
+  t.after(h.cleanup);
+  const { row } = await h.log.append(
+    delivery({
+      class: "issue",
+      dedupeKey: "issue:issue_card_1",
+      requestId: undefined,
+      routineId: undefined,
+      title: "Gmail needs reconnecting",
+      body: "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+      status: "info",
+      createdAt: Date.parse("2026-08-19T15:00:30.000Z"),
+      deliverAfter: Date.parse("2026-08-19T15:00:30.000Z"),
+    }),
+  );
+  await h.log.append(delivery());
+
+  // A device without `bot:issues` keeps the revision-27 feed.
+  assert.deepEqual(
+    (await h.feed.list(undefined)).notifications.map(({ id }) => id),
+    ["run_fixture_bot_01"],
+  );
+  const withIssues = await h.feed.list(undefined, { issues: true });
+  assert.deepEqual(withIssues.notifications.map(({ kind }) => kind ?? "routine"), ["issue", "routine"]);
+  const [card] = withIssues.notifications;
+  assert.deepEqual(card, {
+    id: row.id,
+    kind: "issue",
+    botId: "bot_fixture_01",
+    botName: "Scout",
+    routineName: "Gmail needs reconnecting",
+    finishedAt: "2026-08-19T15:00:30.000Z",
+    preview: "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+  });
+  assert.equal("routineId" in card!, false);
+  assert.equal("status" in card!, false);
+});

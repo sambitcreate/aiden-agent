@@ -123,6 +123,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _connectionError: Error?
     private var _proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] = []
     private var _proposalResults: [Result<AidenBotRoutineProposalRespondResult, Error>] = []
+    private var _issueRequests: [(botId: String, issueId: String, request: AidenBotIssueActRequest, key: UUID)] = []
+    private var _issueResults: [Result<AidenBotIssueActReceipt, Error>] = []
     let resumeGate = TestGate()
     let sendGate = TestGate()
     let stopGate = TestGate()
@@ -183,6 +185,13 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
     var proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] {
         locked { _proposalRequests }
+    }
+    /// Revision 41: the next card actions' receipts, in order; `done` once they run out.
+    func queueIssueResult(_ result: Result<AidenBotIssueActReceipt, Error>) {
+        locked { _issueResults.append(result) }
+    }
+    var issueRequests: [(botId: String, issueId: String, request: AidenBotIssueActRequest, key: UUID)] {
+        locked { _issueRequests }
     }
 
     var sessionRequests: Int { locked { _sessionRequests } }
@@ -340,6 +349,25 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         }
         await proposalGate.pass()
         guard let next else { throw URLError(.notConnectedToInternet) }
+        return try next.get()
+    }
+
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        let next = locked { () -> Result<AidenBotIssueActReceipt, Error>? in
+            _issueRequests.append((botId, issueId, request, idempotencyKey))
+            return _issueResults.isEmpty ? nil : _issueResults.removeFirst()
+        }
+        guard let next else {
+            return try AidenRemoteJSONDecoder.decode(
+                AidenBotIssueActReceipt.self,
+                from: Data(#"{"result":"done"}"#.utf8)
+            )
+        }
         return try next.get()
     }
 }
@@ -4858,5 +4886,193 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         XCTAssertFalse(model.isPaused)
         XCTAssertTrue(model.isInterrupted)
         XCTAssertTrue(model.canSend)
+    }
+}
+
+/// Contract revision 41 (`bot:issues`): the "Needs you" cards, their frame and
+/// the act route, driven by the shared fixture's `botIssues` section.
+@MainActor
+final class AidenBotIssueTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+
+    private func section() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(fixture["botIssues"] as? [String: Any])
+    }
+
+    private func contract() throws -> AidenRemoteContractFixture {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        return try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: Data(contentsOf: url))
+    }
+
+    private func session(_ edit: (inout [String: Any]) throws -> Void = { _ in }) throws -> AidenBotSession {
+        var object = try XCTUnwrap(try section()["session"] as? [String: Any])
+        try edit(&object)
+        return try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func object(_ json: String) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+
+    private func decodes<T: Decodable>(_ type: T.Type, _ object: Any) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
+        return (try? AidenRemoteJSONDecoder.decode(type, from: data)) != nil
+    }
+
+    /// The routine card the fixture's `resume_routine` action names.
+    private func routineCard() throws -> AidenRemoteBotIssue {
+        let session = try session()
+        return try XCTUnwrap(session.issues.first(where: { issue in
+            issue.actions.contains(where: { $0.kind == .resumeRoutine })
+        }))
+    }
+
+    func testTheSharedFixtureDecodesTheCardsTheirFrameAndTheActRoute() throws {
+        let fixture = try contract()
+        let issues = try XCTUnwrap(fixture.botIssues)
+        XCTAssertEqual(issues.capability, .botIssues)
+        XCTAssertEqual(issues.session.issues.map(\.id), [
+            "issue_fixture_preflight_01",
+            "issue_fixture_routine_01",
+            "issue_fixture_stall_01",
+            "issue_fixture_fixed_01",
+        ])
+        XCTAssertEqual(issues.session.issues.map(\.resolved), [false, false, false, true])
+        XCTAssertEqual(issues.session.issues.map(\.kind), [
+            .preflightFailed, .routinePaused, .runStalled, .routineFailed,
+        ])
+        // A card that only the Mac can answer keeps its title and body but no action.
+        let noAction = issues.session.issues[0]
+        XCTAssertEqual(noAction.actions, [])
+        XCTAssertEqual(noAction.title, "Gmail needs reconnecting")
+        let routine = issues.session.issues[1]
+        XCTAssertEqual(routine.routineId, "task_fixture_routine_01")
+        XCTAssertEqual(routine.actions.map(\.kind), [.openChat, .resumeRoutine])
+        XCTAssertEqual(routine.actions.last?.routineId, "task_fixture_routine_01")
+        let stall = issues.session.issues[2]
+        XCTAssertEqual(stall.actions.map(\.kind), [.stopRun, .keepWaiting])
+        XCTAssertEqual(issues.session.issues[3].actions, [], "a settled card offers nothing")
+
+        // The frame carries the same shapes, with one card settled.
+        let frame = try XCTUnwrap(issues.events.first)
+        guard case let .issues(shown) = frame.kind else {
+            return XCTFail("the fixture's frame must be an issues frame")
+        }
+        XCTAssertEqual(frame.wireType, "issues")
+        XCTAssertEqual(shown.map(\.resolved), [false, true, false])
+
+        XCTAssertEqual(issues.act.request.action.kind, .stopRun)
+        XCTAssertEqual(issues.act.response.result, .done)
+        XCTAssertEqual(issues.notOpen.result, .notOpen)
+
+        XCTAssertEqual(issues.summary.id, botID)
+        XCTAssertEqual(issues.summary.issueCount, 2)
+        let card = try XCTUnwrap(issues.notification.notifications.first)
+        XCTAssertEqual(issues.notification.notifications.count, 1)
+        XCTAssertEqual(card.kind, .issue)
+        XCTAssertEqual(card.routineName, "Gmail needs reconnecting")
+        XCTAssertNil(card.routineId)
+        XCTAssertNil(card.status)
+
+        // A Mac without `bot:issues` sends no key at all, and an older phone's
+        // session still reads.
+        var legacy = try XCTUnwrap(try section()["session"] as? [String: Any])
+        legacy.removeValue(forKey: "issues")
+        let older = try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(older.issues, [])
+
+        // A card this build cannot read fails closed rather than rendering wrongly.
+        var unknown = try XCTUnwrap(try section()["session"] as? [String: Any])
+        var rows = try XCTUnwrap(unknown["issues"] as? [[String: Any]])
+        rows[0]["kind"] = "surprise"
+        unknown["issues"] = rows
+        XCTAssertFalse(decodes(AidenBotSession.self, unknown))
+        var desktop = try XCTUnwrap(try section()["session"] as? [String: Any])
+        rows = try XCTUnwrap(desktop["issues"] as? [[String: Any]])
+        rows[0]["actions"] = [["kind": "open_settings", "section": "model"]]
+        desktop["issues"] = rows
+        XCTAssertFalse(decodes(AidenBotSession.self, desktop), "settings never reach a phone")
+    }
+
+    func testAResumeTapPostsTheCardsActionOnceAndDropsTheCard() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        XCTAssertEqual(model.openIssues.count, 3, "the settled card is not shown")
+        let card = try routineCard()
+        let resume = try XCTUnwrap(card.actions.last)
+        XCTAssertEqual(resume.kind, .resumeRoutine)
+
+        let sent = await model.actOnIssue(card, action: resume)
+        XCTAssertTrue(sent)
+        let request = try XCTUnwrap(transport.issueRequests.first)
+        XCTAssertEqual(request.botId, botID)
+        XCTAssertEqual(request.issueId, card.id)
+        XCTAssertEqual(request.request.action.kind, .resumeRoutine)
+        XCTAssertEqual(request.request.action.routineId, "task_fixture_routine_01")
+        XCTAssertEqual(transport.issueRequests.count, 1, "one tap is one request")
+        XCTAssertFalse(model.openIssues.contains(where: { $0.id == card.id }), "the card goes at once")
+
+        // Tapping the same card again cannot send a second request.
+        _ = await model.actOnIssue(card, action: resume)
+        XCTAssertEqual(transport.issueRequests.count, 1)
+
+        // The Mac settles it and sends the list without it.
+        let next = try session { object in
+            var rows = try XCTUnwrap(object["issues"] as? [[String: Any]])
+            rows.removeAll { ($0["id"] as? String) == "issue_fixture_routine_01" }
+            object["issues"] = rows
+        }
+        _ = await model.apply(AidenBotSessionEvent(botId: botID, epoch: next.epoch, seq: next.seq + 1, kind: .issues(next.issues)))
+        XCTAssertEqual(model.openIssues.map(\.id), ["issue_fixture_preflight_01", "issue_fixture_stall_01"])
+    }
+
+    func testAStaleCardComesBackWithTheMacsReasonAndNotOpenStaysGone() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        let stop = try session().issues[2]
+        let stopAction = try XCTUnwrap(stop.actions.first)
+        XCTAssertEqual(stopAction.kind, .stopRun)
+
+        transport.queueIssueResult(.failure(try XCTUnwrap(
+            AidenRemoteClientError.server(
+                statusCode: 409,
+                body: try AidenRemoteJSONDecoder.decode(
+                    AidenRemoteErrorEnvelope.Body.self,
+                    from: Data(#"{"code":"operation_stale","message":"This card changed.","requestId":"req_issue_1","retryable":true}"#.utf8)
+                )
+            )
+        )))
+        let refused = await model.actOnIssue(stop, action: stopAction)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(model.errorMessage, AidenBotSessionCopy.issueStale)
+        XCTAssertTrue(model.openIssues.contains(where: { $0.id == stop.id }), "the card comes back")
+
+        // `not_open` is a success: nothing is open any more, so the card stays gone.
+        transport.queueIssueResult(.success(
+            try AidenRemoteJSONDecoder.decode(AidenBotIssueActReceipt.self, from: Data(#"{"result":"not_open"}"#.utf8))
+        ))
+        let gone = await model.actOnIssue(stop, action: stopAction)
+        XCTAssertTrue(gone)
+        XCTAssertFalse(model.openIssues.contains(where: { $0.id == stop.id }))
+    }
+
+    func testOpenChatTellsTheMacWithoutDroppingTheCard() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        let card = try routineCard()
+        let openChat = try XCTUnwrap(card.actions.first)
+        XCTAssertEqual(openChat.kind, .openChat)
+        let sent = await model.actOnIssue(card, action: openChat)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.issueRequests.first?.request.action.kind, .openChat)
+        XCTAssertTrue(model.openIssues.contains(where: { $0.id == card.id }), "opening a surface fixes nothing")
     }
 }

@@ -73,7 +73,8 @@ const SETTINGS_SECTIONS: ReadonlySet<string> = new Set<SettingsSection>([
 ]);
 
 /** Issue, Bot and routine ids: the same path-safe shape the Bot stores accept. */
-const ISSUE_ID = /^[A-Za-z0-9._:-]{1,160}$/u;
+export const BOT_ISSUE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/u;
+const ISSUE_ID = BOT_ISSUE_ID_PATTERN;
 
 function record(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;

@@ -183,6 +183,21 @@ enum AidenBotWire {
         return paused
     }
 
+    /// Revision 41 (`bot:issues`): a Bot's open-issue count, absent from a Mac
+    /// or device without `bot:issues`. The host sends it only above zero.
+    static let maxIssueCount = AidenRemoteIssueWire.maxPerBot
+
+    static func issueCount<Key: CodingKey>(
+        _ values: KeyedDecodingContainer<Key>,
+        forKey key: Key
+    ) throws -> Int? {
+        guard let count = try optional(Int.self, from: values, forKey: key) else { return nil }
+        guard (1...maxIssueCount).contains(count) else {
+            throw AidenBotContractError.invalidField("issueCount")
+        }
+        return count
+    }
+
     static func requireOnlyKeys(
         _ decoder: Decoder,
         allowed: Set<String>
@@ -334,6 +349,9 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
     /// agrees with a `paused` session state; a Mac sends it only as `true`.
     let paused: Bool
+    /// Revision 41 (`bot:issues`): how many open "Needs you" cards the Bot
+    /// holds. Present only for a device holding `bot:issues`, and only above zero.
+    let issueCount: Int?
 
     init(detail: AidenBotDetail) {
         id = detail.id
@@ -346,6 +364,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
         revision = detail.revision
         sessionState = detail.sessionState
         paused = detail.paused
+        issueCount = detail.issueCount
     }
 
     init(from decoder: Decoder) throws {
@@ -370,6 +389,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
             forKey: .sessionState
         )
         paused = try AidenBotWire.pausedFlag(values, forKey: .paused, sessionState: sessionState)
+        issueCount = try AidenBotWire.issueCount(values, forKey: .issueCount)
         // Archive was replaced by Delete in revision 25 (as the host parser).
         guard try decoder.container(keyedBy: AidenBotDynamicCodingKey.self)
             .allKeys.contains(where: { $0.stringValue == "archivedAt" }) == false else {
@@ -461,6 +481,9 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
     /// agrees with a `paused` session state.
     let paused: Bool
+    /// Revision 41 (`bot:issues`): how many open "Needs you" cards the Bot
+    /// holds. Present only for a device holding `bot:issues`, and only above zero.
+    let issueCount: Int?
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -491,6 +514,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
             forKey: .sessionState
         )
         paused = try AidenBotWire.pausedFlag(values, forKey: .paused, sessionState: sessionState)
+        issueCount = try AidenBotWire.issueCount(values, forKey: .issueCount)
         access = try values.decode(AidenBotAccessView.self, forKey: .access)
         modelSelection = try AidenBotWire.optional(
             AidenBotModelSelection.self,

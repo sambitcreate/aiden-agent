@@ -188,6 +188,7 @@ export function projectAidenRemoteBotSummary(
   avatar: AidenRemoteBotAvatarView = defaultAvatar(bot),
   health: AidenRemoteBotHealth = "ready",
   sessionState?: AidenRemoteBotSessionStateKind,
+  issueCount?: number,
 ): AidenRemoteBotSummary {
   const base = {
     id: bot.id,
@@ -204,6 +205,8 @@ export function projectAidenRemoteBotSummary(
     ...(sessionState === undefined ? {} : { sessionState }),
     // Revision 37: the holder view; the router drops it for devices without `bot:handoffs`.
     ...(sessionState === "paused" ? { paused: true } : {}),
+    // Revision 41: the holder view; the router drops it for devices without `bot:issues`.
+    ...(issueCount === undefined || issueCount <= 0 ? {} : { issueCount }),
   });
 }
 
@@ -281,6 +284,12 @@ export interface AidenRemoteBotServiceOptions {
   healthBatch?: (
     botIds: readonly string[],
   ) => Promise<ReadonlyMap<string, AidenRemoteBotHealth>>;
+  /**
+   * Contract revision 41 (`bot:issues`): how many open "Needs you" cards the
+   * Bot holds, for the summary's `issueCount`. The router sends it only to a
+   * device that negotiated `bot:issues`.
+   */
+  issues?: { openCount(botId: string): Promise<number> };
   idempotency?: AidenIdempotencyLedger;
   persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
   notifyBotsChanged?: (botId?: string) => void;
@@ -458,7 +467,10 @@ export class AidenRemoteBotService {
     const health = projectedHealth ?? await this.options.health?.(bot.id) ?? "ready";
     const sessionState = projectedSession ??
       (await this.options.sessionStates?.([bot.id]))?.get(bot.id);
-    return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health, sessionState);
+    const issueCount = this.options.issues
+      ? await this.options.issues.openCount(bot.id).catch(() => 0)
+      : undefined;
+    return projectAidenRemoteBotSummary(bot, await this.avatar(bot), health, sessionState, issueCount);
   }
 
   /** The public summary of one live Bot (presets, list rows). */

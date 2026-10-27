@@ -603,38 +603,52 @@ enum AidenBotRoutineNotificationStatus: String, Codable, Sendable {
     case succeeded, failed
 }
 
-/// One finished Bot routine run the person asked to be told about.
+/// What a phone-feed item is: a routine result (revision 27; `kind` absent) or,
+/// since revision 41, one of the Bot's "Needs you" cards (`bot:issues`).
+enum AidenBotNotificationKind: String, Codable, Sendable {
+    case routine, issue
+}
+
+/// One finished Bot routine run the person asked to be told about, or a Bot
+/// issue card for a device holding `bot:issues`. An issue item's `routineName`
+/// is the card's title and it carries no `routineId` or `status`.
 struct AidenBotRoutineNotification: Codable, Equatable, Identifiable, Sendable {
     /// The routine run id; posted once as `aiden.bot-routine.<id>`.
     let id: String
+    let kind: AidenBotNotificationKind
     let botId: String
     let botName: String
-    let routineId: String
+    let routineId: String?
     let routineName: String
-    let status: AidenBotRoutineNotificationStatus
+    let status: AidenBotRoutineNotificationStatus?
     let finishedAt: AidenRemoteTimestamp
     /// The start of the reply (redacted on the Mac), or a fixed failure line.
     let preview: String
 
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(decoder, allowed: [
-            "id", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview",
+            "id", "kind", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview",
         ])
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try AidenBotWire.identifier(values, forKey: .id, maxLength: AidenBotProactiveWire.maxRunIDLength)
+        kind = try AidenBotWire.optional(AidenBotNotificationKind.self, from: values, forKey: .kind) ?? .routine
         botId = try AidenBotWire.identifier(values, forKey: .botId, maxLength: AidenRemoteProtocol.maxBotIdentifierLength)
         botName = try AidenBotWire.requiredString(values, forKey: .botName, maxLength: AidenBotWire.maxNameLength)
-        routineId = try AidenBotWire.identifier(
-            values,
-            forKey: .routineId,
-            maxLength: AidenBotProactiveWire.maxRoutineIDLength
-        )
+        routineId = try AidenBotWire.optional(String.self, from: values, forKey: .routineId)
+        if let routineId {
+            try AidenBotWire.validateString(
+                routineId,
+                field: "routineId",
+                maxLength: AidenBotProactiveWire.maxRoutineIDLength,
+                allowEmpty: false
+            )
+        }
         routineName = try AidenBotWire.requiredString(
             values,
             forKey: .routineName,
             maxLength: AidenBotRoutineWire.maxNameLength
         )
-        status = try values.decode(AidenBotRoutineNotificationStatus.self, forKey: .status)
+        status = try AidenBotWire.optional(AidenBotRoutineNotificationStatus.self, from: values, forKey: .status)
         finishedAt = try values.decode(AidenRemoteTimestamp.self, forKey: .finishedAt)
         preview = try AidenBotWire.requiredString(
             values,
@@ -642,10 +656,22 @@ struct AidenBotRoutineNotification: Codable, Equatable, Identifiable, Sendable {
             maxLength: AidenBotProactiveWire.maxNotificationPreviewLength,
             allowEmpty: true
         )
+        // A routine result says which routine ran and how it ended; an issue
+        // card carries neither, and a routine result never says `issue`.
+        switch kind {
+        case .routine:
+            guard routineId != nil, status != nil else {
+                throw AidenBotContractError.invalidField("notification")
+            }
+        case .issue:
+            guard routineId == nil, status == nil else {
+                throw AidenBotContractError.invalidField("notification")
+            }
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, botId, botName, routineId, routineName, status, finishedAt, preview
+        case id, kind, botId, botName, routineId, routineName, status, finishedAt, preview
     }
 }
 

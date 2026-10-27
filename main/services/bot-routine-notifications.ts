@@ -29,8 +29,14 @@ export interface BotNotificationFeedDependencies {
 export function createBotNotificationFeed(dependencies: BotNotificationFeedDependencies) {
   const now = dependencies.now ?? Date.now;
   return {
-    /** Delivered routine results due after `since` (epoch ms), newest first, at most 100. */
-    async list(since: number | undefined): Promise<AidenRemoteBotRoutineNotificationList> {
+    /**
+     * Delivered routine results (and, for a device holding `bot:issues`, issue
+     * cards) due after `since` (epoch ms), newest first, at most 100.
+     */
+    async list(
+      since: number | undefined,
+      options: { issues?: boolean } = {},
+    ): Promise<AidenRemoteBotRoutineNotificationList> {
       const at = now();
       const names = new Map<string, Promise<string | undefined>>();
       const nameOf = (botId: string) => {
@@ -43,11 +49,28 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
       };
       const notifications: AidenRemoteBotRoutineNotification[] = [];
       for (const row of await dependencies.log.due(since, at)) {
-        // The routine feed carries routine results only; other classes join it
-        // when phones learn their `kind`.
-        if (row.class !== "routine_result" || row.routineId === undefined) continue;
+        // Routine results are the revision-27 feed. Issue cards join it only
+        // for a device that negotiated `bot:issues` (revision 41), whose
+        // decoder accepts `kind: "issue"`; every other device still gets
+        // routine results alone.
+        const issue = row.class === "issue" && options.issues === true;
+        if (!issue && (row.class !== "routine_result" || row.routineId === undefined)) continue;
         const botName = await nameOf(row.botId);
         if (botName === undefined) continue;
+        if (issue) {
+          notifications.push({
+            // One local notification per issue card, never per repeat raise.
+            id: row.requestId ?? row.id,
+            kind: "issue",
+            botId: row.botId,
+            botName,
+            // The card's title: the phone shows "{title}: {body}".
+            routineName: [...row.title.trim()].slice(0, 120).join("") || "Needs you",
+            finishedAt: new Date(row.createdAt).toISOString(),
+            preview: redactRemoteText(row.body, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_PREVIEW_MAX_CHARS),
+          });
+          continue;
+        }
         const status = row.status === "failed" ? "failed" : "succeeded";
         const preview =
           status === "failed"
