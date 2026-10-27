@@ -396,7 +396,7 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 ## Execution record
 
-- W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 144 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh patch review and exact-head hosted CI remain pending.
+- W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 146 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh independent review found and closed Ask-mode read approval bypass, oversized existing-task confirmation and rejected-persistence cron restoration gaps. Desktop scheduling (238 tests), automation suites and root types passed. Exact-head hosted CI remains pending.
 
 ## Completion checklist
 

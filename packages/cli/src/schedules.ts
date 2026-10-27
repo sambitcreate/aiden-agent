@@ -34,7 +34,13 @@ export function createCliScheduler(agentDir: string) {
         if (isCurrent && !isCurrent()) return false;
         const current = approvedMutation.getStore();
         if (current?.active) {
-          assertScheduleApproval(agentDir, current.approval, current.firstWrite);
+          try {
+            assertScheduleApproval(agentDir, current.approval, current.firstWrite);
+          } catch (error) {
+            // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
+            current.active = false;
+            throw error;
+          }
           current.firstWrite = false;
         }
         return true;

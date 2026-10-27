@@ -14,9 +14,9 @@ import * as api from "../dist/parity-test-api.js";
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function temporary(t) { const dir = mkdtempSync(join(tmpdir(), "aiden-parity-")); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
-function extension(extension) {
+function extension(extension, extra = {}) {
   const events = new Map(), commands = new Map(), tools = new Map(); let name;
-  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; } });
+  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; }, ...extra });
   return { events, commands, tools, name: () => name };
 }
 
@@ -322,6 +322,37 @@ async function scheduleToolFixture(t) {
   const input = { action: "save", name: "Daily review", cron: "0 9 * * *", timezone: "UTC", prompt: "Review this workspace", permission: "full", enabled: true, workspaceId: workspace.id };
   return { dir, workspace, model, tool, input, context: { cwd: dir, model, hasUI: true, ui: { confirm: async () => true } } };
 }
+
+test("owned schedule reads retain Ask-mode consent, including headless calls", async (t) => {
+  const { dir, workspace, context } = await scheduleToolFixture(t);
+  await api.workspaceCommand(dir, ["access", workspace.id, "ask"]);
+  const harness = extension(api.createSessionParityExtension(dir), {
+    getAllTools: () => [{ name: "schedule_task", sourceInfo: { path: "<inline:aiden-schedule>" } }],
+  });
+  const hook = harness.events.get("tool_call");
+  for (const action of ["list", "preview", "runs"]) {
+    const result = await hook({ toolName: "schedule_task", input: { action, id: "task" } }, { ...context, hasUI: false });
+    assert.equal(result.block, true, action);
+  }
+  let prompts = 0;
+  assert.equal(await hook({ toolName: "schedule_task", input: { action: "list" } }, {
+    ...context, ui: { confirm: async () => { prompts++; return true; } },
+  }), undefined);
+  assert.equal(prompts, 1);
+});
+
+test("a long existing prompt does not prevent approving pause or removal", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Read this detailed instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  await tool.execute("pause-long", { action: "pause", id: task.id }, undefined, undefined, context);
+  await tool.execute("remove-long", { action: "remove", id: task.id }, undefined, undefined, context);
+  assert.equal(confirmations, 2);
+  assert.equal((await api.scheduleCommand(dir, ["list"])).length, 0);
+});
 
 test("model scheduling in a Full workspace requires consent and leaves no state on denial or missing UI", async (t) => {
   const { dir, tool, input, context } = await scheduleToolFixture(t);

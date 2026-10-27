@@ -8,8 +8,9 @@ import { atomicJson } from "../state.ts";
 import { accessFor } from "../workspaces.ts";
 import { isScheduleMutation, scheduleApprovalSnapshot, type ScheduleToolApproval } from "../schedule-tool-approval.ts";
 
-export const isOwnedScheduleTool = (pi: Pick<ExtensionAPI, "getAllTools">, name: string): boolean =>
-  name === "schedule_task" && typeof pi.getAllTools === "function" &&
+export const isOwnedScheduleTool = (pi: Pick<ExtensionAPI, "getAllTools">, name: string, input: unknown): boolean =>
+  name === "schedule_task" && input !== null && typeof input === "object" &&
+  isScheduleMutation((input as { action?: unknown }).action) && typeof pi.getAllTools === "function" &&
   pi.getAllTools().some((tool) => tool.name === name && tool.sourceInfo.path === "<inline:aiden-schedule>");
 
 export function createScheduleExtension(agentDir: string): InlineExtension {
@@ -37,7 +38,10 @@ export function createScheduleExtension(agentDir: string): InlineExtension {
           approval.snapshot = scheduleApprovalSnapshot(agentDir, approval);
           const snapshot = JSON.parse(approval.snapshot);
           const { id, name, folderPath, access } = snapshot.workspace;
-          const summary = JSON.stringify({ workspace: { id, name, folderPath, access }, request: proposed, model, currentTask: snapshot.task });
+          const task = snapshot.task;
+          const currentTask = task ? { id: task.id, name: task.name, cron: task.cron, timezone: task.timezone,
+            permission: task.permission, enabled: task.enabled, providerId: task.providerId, model: task.model } : null;
+          const summary = JSON.stringify({ workspace: { id, name, folderPath, access }, request: proposed, model, currentTask });
           if (Buffer.byteLength(summary) > 4_000) throw new Error("This schedule request exceeds the approval display budget. Shorten it before saving.");
           if (!ctx.hasUI || !await ctx.ui.confirm("Allow scheduled-task change?", summary)) throw new Error("Scheduled-task change was not approved.");
           signal?.throwIfAborted();

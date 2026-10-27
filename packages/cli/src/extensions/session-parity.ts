@@ -37,7 +37,7 @@ export function createSessionParityExtension(agentDir: string): InlineExtension 
         const allowed = process.env.AIDEN_CHILD_PERMISSION === "full" ? ["read", "bash", "edit", "write", "grep", "find", "ls"] : ["read", "grep", "find", "ls"];
         return allowed.includes(event.toolName) ? undefined : { block: true, reason: "Tool outside the delegated capability profile." };
       }
-      if (isOwnedAppTool(pi, event.toolName) || isOwnedScheduleTool(pi, event.toolName)) return;
+      if (isOwnedAppTool(pi, event.toolName) || isOwnedScheduleTool(pi, event.toolName, event.input)) return;
       try {
       const tier = accessFor(agentDir, ctx.cwd);
       if (tier === "full") return;
