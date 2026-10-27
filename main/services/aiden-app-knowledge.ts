@@ -70,7 +70,7 @@ export function aidenAppGuidance(tools?: ReadonlySet<string>): string {
     );
   } else {
     parts.push(
-      `You cannot read live values or change settings yourself in this chat${has("aiden_show_controls") ? "; show the controls so the user can" : ""}.`,
+      `You cannot ${has("aiden_get_state") ? "change settings yourself" : "read live values or change settings yourself"} in this chat${has("aiden_show_controls") ? "; show the controls so the user can" : ""}.`,
     );
   }
   parts.push(

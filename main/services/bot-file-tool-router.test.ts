@@ -9,6 +9,7 @@ import {
   BOT_FILE_TOOL_NAMES,
   buildBotFileTools,
 } from "./bot-file-tool-router.js";
+import { cliBotProtectedRoots } from "./bot-protected-settings.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 function byName(tools: readonly AgentTool[], name: string): AgentTool {
@@ -147,6 +148,32 @@ test("a full-Mac Bot cannot edit Aiden's settings files but can write next to th
     // Only the named file is fenced: a sibling with a longer name is ordinary.
     await byName(tools, "write_file").execute("ok", { path: "profile/settings.json.notes", content: "fine" });
     assert.equal(await fs.readFile(path.join(profile, "settings.json.notes"), "utf8"), "fine");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a CLI Bot cannot edit the CLI's settings, credentials or the portable config", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-cli-settings-"));
+  const agentDir = path.join(parent, "agent");
+  const configDir = path.join(parent, ".aiden");
+  try {
+    await fs.mkdir(path.join(agentDir, "credentials"), { recursive: true });
+    await fs.mkdir(configDir, { recursive: true });
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "loc.mac.opaque", label: "This Mac", root: parent },
+      protectedRoots: () => cliBotProtectedRoots(agentDir, configDir),
+    });
+    for (const target of ["agent/aiden.json", "agent/auth.json", "agent/workspaces.json", "agent/credentials/insights.json", ".aiden/config.json"]) {
+      await assert.rejects(
+        byName(tools, "write_file").execute("w", { path: target, content: "{}" }),
+        /cannot change them/u,
+        target,
+      );
+    }
+    // The Bot's own work next to them is ordinary.
+    await byName(tools, "write_file").execute("ok", { path: "agent/notes.md", content: "fine" });
+    assert.equal(await fs.readFile(path.join(agentDir, "notes.md"), "utf8"), "fine");
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }
