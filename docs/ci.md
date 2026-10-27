@@ -20,7 +20,7 @@ and detection failures select every area. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason
-`catalog-only`). Those catalog bot commits run detection, policy and the
+`catalog-only`). Those commits run detection, policy and the
 `catalog` job; the other jobs skip. Real code changes on main are never routed
 this way. Linux packaging jobs run only when the `linux` area is selected, which
 includes every full main run.
