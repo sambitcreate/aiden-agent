@@ -1,7 +1,9 @@
+import { ensurePrivateDirectory } from "../../../main/services/private-storage.ts";
 import { join } from "node:path";
 import { createConnection } from "node:net";
 export const daemonSocket = (agentDir: string) => join(agentDir, "serve.sock");
 export async function remoteDaemonCommand(agentDir: string, command: string, args: string[]): Promise<unknown> {
+  ensurePrivateDirectory(agentDir, "reject");
   return new Promise((resolve, reject) => {
     const socket = createConnection(daemonSocket(agentDir));
     // Decode across chunk boundaries so a multi-byte character split by the kernel is not mangled.
