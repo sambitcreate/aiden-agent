@@ -405,7 +405,7 @@ test("Linux provenance policy rejects bypasses, incomplete subjects, and custom 
   const workflow = await readFile(releaseWorkflowUrl, "utf8");
   for (const [name, mutate] of [
     ["moving action ref", source => source.replace("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", "actions/attest@v4")],
-    ["branch dispatch bypass", source => source.replace("vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main'", "vars.RELEASES_ENABLED == 'true'")],
+    ["branch dispatch bypass", source => source.replace(/(  linux-release:\n[\s\S]*?    if: \$\{\{ )vars\.RELEASES_ENABLED == 'true' && github\.ref == 'refs\/heads\/main'/u, "$1vars.RELEASES_ENABLED == 'true'")],
     ["missing publish gate", source => source.replace("github.ref == 'refs/heads/main' && steps.version.outputs.publish == 'true'", "github.ref == 'refs/heads/main'")],
     ["unnecessary content writes", source => source.replace("      contents: read", "      contents: write")],
     ["extra metadata permission", source => source.replace("      attestations: write", "      attestations: write\n      artifact-metadata: write")],
