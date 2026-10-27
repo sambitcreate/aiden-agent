@@ -1311,6 +1311,68 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   }
 });
 
+test("interactive MCP keeps auto servers behind codemode, lists them for the model, and declares them when codemode is off", async (t) => {
+  const dir = temporary(t), auto = { ...fixtureServer(dir, "docs"), description: "Team documentation" }, visible = { ...fixtureServer(dir, "pinned"), exposure: "direct" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [auto, visible]);
+  const load = async (active) => {
+    const events = new Map(), tools = new Map();
+    await api.createMcpExtension(dir, { deferToCodemode: true }).factory({
+      on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.name, tool), getActiveTools: () => active });
+    t.after(() => events.get("session_shutdown")());
+    return { events, tools };
+  };
+  const scripted = await load(["read", "bash", "codemode"]);
+  scripted.events.get("session_start")();
+  assert.equal(scripted.tools.get("docs__first").exposure, "codemode", "an auto server's tools are reached from codemode scripts");
+  assert.deepEqual(scripted.tools.get("docs__first").namespace, { name: "docs", description: "Team documentation" });
+  assert.equal(scripted.tools.get("pinned__first").exposure, undefined, "an Always visible server stays declared");
+  const sections = { mcp_servers: "stale" };
+  await scripted.events.get("before_agent_start")({ systemPromptOptions: { sections } });
+  assert.match(sections.mcp_servers, /- docs: docs \(via codemode\) — "Team documentation"/);
+  assert.doesNotMatch(sections.mcp_servers, /pinned|<mcp_servers>/, "Pi wraps the section; declared servers need no listing");
+
+  const direct = await load(["read", "bash"]);
+  direct.events.get("session_start")();
+  assert.equal(direct.tools.get("docs__first").exposure, undefined, "without codemode the tools are declared directly");
+  const none = { mcp_servers: "stale" };
+  await direct.events.get("before_agent_start")({ systemPromptOptions: { sections: none } });
+  assert.equal(none.mcp_servers, undefined);
+});
+
+test("a codemode script reaches an MCP tool that was never declared to the model, and without codemode it is declared", async (t) => {
+  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...fixtureServer(dir, "docs"), description: "Team documentation" }]);
+  const run = async (defaultTools) => {
+    const faux = fauxProvider({ provider: "faux-codemode", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
+    const requests = [];
+    faux.setResponses([
+      (context) => { requests.push(context); return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.docs__first({ value: 'hi' }))" }), { stopReason: "toolUse" }); },
+      (context) => { requests.push(context); return fauxAssistantMessage("Done"); },
+    ]);
+    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createMcpExtension(dir, { deferToCodemode: true }), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+    // dispose() alone leaves extensions running; shutting down closes the MCP server process.
+    t.after(async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); });
+    await session.bindExtensions({});
+    await session.prompt("Look it up");
+    const declared = requests[0].messages.filter((message) => message.role === "system").flatMap((message) => (message.toolsAdded ?? []).map((tool) => tool.name));
+    const sections = requests[0].messages.filter((message) => message.role === "system").map((message) => message.sections?.mcp_servers ?? "").join("");
+    const result = session.messages.find((message) => message.role === "toolResult");
+    return { declared, sections, result: result.content.map((part) => part.text ?? "").join("\n") };
+  };
+  const scripted = await run(["read", "codemode"]);
+  assert.deepEqual(scripted.declared, ["read", "codemode"], "the MCP tool stays out of the model's declarations");
+  assert.match(scripted.sections, /- docs: docs \(via codemode\)/, "the model learns the service exists");
+  assert.match(scripted.result, /Echo hi/, "the script called the MCP tool");
+  const direct = await run(["read"]);
+  assert.ok(direct.declared.includes("docs__first"), "without codemode the MCP tool is declared directly");
+  assert.equal(direct.sections, "");
+});
+
 test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };

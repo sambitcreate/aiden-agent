@@ -71,6 +71,11 @@ test("a search step shows its query; a connection step names the app and shows n
     { kind: "waiting", label: "Asked you to sign in" },
     "a sign-in reads as what it asked, and its card already names the site",
   );
+  assert.deepEqual(
+    botStepDescriptor("codemode", { code: "return await tools.notion__search({ query: \"private plans\" });" }),
+    { kind: "working", label: "Ran a script" },
+    "a codemode script reads as one step and never shows its code",
+  );
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
 });
 

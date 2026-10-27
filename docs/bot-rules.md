@@ -78,6 +78,16 @@ Aiden reads a server's annotations as the server states them:
 
 Grant connection tools only from servers you trust to describe them honestly.
 
+## Rules in codemode scripts
+
+A Bot with connection, file, shell or lookup tools also gets `codemode`, which
+lets it script those tools. Every call a script makes is checked like a direct
+call: its ingress, its access, its approval and the rules. A rule that asks
+opens the same approval card. A rule that hands a step to the person doesn't
+open a card from inside a script: the call is refused and the Bot is told to
+make it directly, so the person gets the hand-off card as usual. Scripts never
+reach cards, the Bot's own computer or browser, routines or subagents.
+
 ## Hand-off cards from rules
 
 - A card the password-or-code rule opened takes no note: the composer is off

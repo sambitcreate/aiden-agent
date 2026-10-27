@@ -195,6 +195,104 @@ test("(c2) a denied approval blocks the tool", async () => {
   }
 });
 
+/* ------------------------------------------------------------------------- */
+/* Codemode: scripts over the Bot's tools                                    */
+/* ------------------------------------------------------------------------- */
+
+/** A turn whose model runs one codemode script, then answers. Returns the tools each request declared and the script's result. */
+async function scriptTurn(deps: BotExtensionDeps, code: string, requestId?: string) {
+  const declared: string[][] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage([fauxToolCall("codemode", { code }, { id: "script-1" })], { stopReason: "toolUse" });
+    },
+    fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go", ...(requestId === undefined ? {} : { requestId }) }, ctx)).wait(ctx);
+    const [result] = await toolResults(root);
+    return { declared, result: result!, text: result!.content.map((part) => part.text ?? "").join("\n") };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("(cm1) a Bot with connection tools gets codemode, and each scripted call passes the Bot's policy", async () => {
+  const read = countingTool("docs__read");
+  const deps = recordingDeps({ tools: [{ tool: read, replay: "unsafe", mcp: true }] });
+  const turn = await scriptTurn(deps, "const r = await tools.docs__read({ text: 'notes' }); text(r.content[0].text)");
+  assert.deepEqual(turn.declared, [["docs__read", "codemode"]], "connection tools stay declared next to codemode");
+  assert.deepEqual(read.executions, [{ text: "notes" }]);
+  assert.match(turn.text, /ran notes/u);
+  assert.deepEqual(deps.policyChecks, ["docs__read"], "the script's call is checked; codemode itself is not a capability");
+});
+
+test("(cm2) a scripted call that needs approval asks the person, and a denial keeps it from running", async () => {
+  const send = countingTool("mail__send");
+  const deps = recordingDeps({
+    tools: [{ tool: send, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, approval: { summary: "Send the email" } }),
+    approve: async () => "deny",
+  });
+  const turn = await scriptTurn(deps, "const r = await tools.mail__send({ text: 'hi' }); text(r.isError ? 'blocked: ' + r.content[0].text : 'sent')");
+  assert.deepEqual(send.executions, []);
+  assert.equal(deps.approvals.length, 1);
+  assert.equal(deps.approvals[0]!.toolName, "mail__send");
+  assert.equal(deps.approvals[0]!.summary, "Send the email");
+  assert.equal(deps.approvals[0]!.toolCallId, "script-1/1");
+  assert.match(turn.text, /blocked: The person declined this action\./u);
+});
+
+test("(cm3) a scripted call a rule hands to the person is refused without a card; the model is told to call it directly", async () => {
+  const buy = countingTool("shop__buy");
+  const deps = recordingDeps({
+    tools: [{ tool: buy, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, handoff: { rule: { id: "purchases", label: "Make a purchase" }, summary: "buy", action: "Buy it", why: "Your rule" } }),
+    handoff: async () => ({ outcome: "done" }),
+  });
+  const turn = await scriptTurn(deps, "const r = await tools.shop__buy({ text: 'socks' }); text(r.content[0].text)");
+  assert.deepEqual(buy.executions, []);
+  assert.deepEqual(deps.handoffs, []);
+  assert.match(turn.text, /Call shop__buy directly, not from codemode/u);
+});
+
+test("(cm4) scripts follow the turn's ingress and never reach direct-only tools", async () => {
+  const read = countingTool("docs__read");
+  const question = countingTool("ask_user_question");
+  const deps: BotExtensionDeps = {
+    ...recordingDeps({ tools: [{ tool: read, replay: "unsafe", mcp: true }, { tool: question, replay: "unsafe" }] }),
+    // A routine run may not read docs (a stand-in ingress rule).
+    turnAllows: (name, requestIds) => !(name === "docs__read" && requestIds.some((id) => id?.startsWith("routine:"))),
+  };
+  const turn = await scriptTurn(
+    deps,
+    "text(ALL_TOOLS.map((tool) => tool.name).join(','));\nconst r = await tools.docs__read({ text: 'x' }); text(r.content[0].text)",
+    "routine:task-1:1",
+  );
+  assert.match(turn.text, /^docs__read$/mu, "the question card is not a script tool");
+  assert.match(turn.text, /This tool is not available on this turn\./u);
+  assert.deepEqual(read.executions, []);
+});
+
+test("(cm5) a Bot without scriptable tools gets no codemode", async () => {
+  const declared: string[][] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage("hi");
+    },
+  ]);
+  const { harness, root } = await memoryHarness(recordingDeps({ tools: [{ tool: countingTool("ask_user_question"), replay: "unsafe" }] }), fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.deepEqual(declared, [["ask_user_question"]]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(d) after SIGKILL while waiting for approval, Resume re-asks with the same waitId", async () => {
   const profile = tempProfile();
   const child = spawnHarnessChild("scenario", [
