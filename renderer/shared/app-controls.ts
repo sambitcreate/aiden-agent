@@ -105,7 +105,7 @@ export function parseAppControlOperation(value: unknown): AppControlOperation {
     throw new Error("Invalid control operation.");
   }
   if (p.control === "models.newChat") {
-    if (typeof p.value !== "string" || p.value.length > 300 || /[\u0000-\u001f]/u.test(p.value) || !parseNewChatModelValue(p.value))
+    if (typeof p.value !== "string" || p.value.length > 300 || [...p.value].some((c) => c.charCodeAt(0) < 0x20) || !parseNewChatModelValue(p.value))
       throw new Error("Unsupported model.");
   } else if (p.control === "appearance.theme") {
     if (typeof p.value !== "string" || !THEME_PRESETS.some((preset) => preset.id === p.value))

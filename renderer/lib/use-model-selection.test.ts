@@ -145,3 +145,43 @@ test("leaving a chat cannot clear the model target of the chat opened after it",
   leaveB();
   assert.equal(readActiveChatModelTarget(), null, "with no chat open, a model change sets the new-chat model");
 });
+
+test("a new-chat model Aiden sets on the host reaches the window, and a pick here reaches the host once", async () => {
+  const values = new Map<string, string>();
+  const events = new EventTarget();
+  const invoked: unknown[][] = [];
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+      dispatchEvent: events.dispatchEvent.bind(events),
+      aidenAPI: { ipc: { invoke: async (...args: unknown[]) => { invoked.push(args); return {}; } } },
+    },
+  });
+  const { persistModelSelection, readModelSelection, subscribeHostNewChatModel } =
+    await import("./use-model-selection");
+  persistModelSelection("lmstudio", "qwen3-8b");
+  persistModelSelection("lmstudio", "qwen3-8b");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(invoked, [["settings:set", { lastProviderId: "lmstudio", lastModel: "qwen3-8b" }]]);
+
+  let deliver: ((payload: unknown) => void) | undefined;
+  const unsubscribe = subscribeHostNewChatModel(((_channel: string, handler: (payload: unknown) => void) => {
+    deliver = handler;
+    return () => { deliver = undefined; };
+  }) as never);
+  deliver?.({ providerId: "openai", model: "gpt-5.5" });
+  assert.deepEqual(readModelSelection(), { providerId: "openai", model: "gpt-5.5" });
+  deliver?.({ providerId: 7, model: "x" });
+  assert.deepEqual(readModelSelection(), { providerId: "openai", model: "gpt-5.5" });
+  unsubscribe();
+  assert.equal(deliver, undefined);
+});
