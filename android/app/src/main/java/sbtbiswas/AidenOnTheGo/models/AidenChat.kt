@@ -2090,6 +2090,12 @@ object AidenChatModelAuthority {
             )
         }
 
+        // A chat that already has messages keeps its own model. The remembered
+        // per-host choice (passed only until the user picks in this chat)
+        // seeds a new chat, or one whose model this phone can't use.
+        if (remembered != null && chat.messages.isNotEmpty()) {
+            ownSelection(chat, catalog, selectedProviderId, selectedModelId, selectedThinkingLevel)?.let { return it }
+        }
         rememberedSelection(catalog, remembered)?.let { return it }
 
         val selectedProvider = catalog.providers.firstOrNull { it.id == selectedProviderId }
@@ -2113,6 +2119,27 @@ object AidenChatModelAuthority {
             modelId = modelId,
             thinkingLevel = selectedThinkingLevel ?: model?.effectiveThinkingLevel
         )
+    }
+
+    /**
+     * The chat's own provider/model pair, when the host still offers it.
+     * Hidden models stay usable here, as they do for existing chats on the Mac.
+     */
+    fun ownSelection(
+        chat: AidenChat,
+        catalog: AidenModelCatalog,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ): AidenChatModelSelection? {
+        val providerId = chat.providerId ?: return null
+        val modelId = chat.modelId ?: return null
+        val provider = catalog.providers.firstOrNull { it.id == providerId } ?: return null
+        val model = provider.models.firstOrNull { it.id == modelId } ?: return null
+        val keepsLevel = selectedProviderId == providerId && selectedModelId == modelId
+        val levels = model.thinkingLevels.orEmpty()
+        val thinkingLevel = selectedThinkingLevel?.takeIf { keepsLevel && it in levels } ?: model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId, modelId, thinkingLevel)
     }
 
     /**

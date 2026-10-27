@@ -272,12 +272,30 @@ test("after a crash, what an ended shell left in its group is stopped only when 
     await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).trim().length > 0, "the leftover pid");
     return { group: shell.pid!, leftover: Number((await fs.readFile(pidFile, "utf8")).trim()) };
   };
-  // This job's leftover starts another process as it is asked to end.
+  // macOS hides Apple platform binaries' environments from ps, including sh
+  // and sleep. Use Node descendants so the real ownership marker is observable;
+  // never put the marker in argv, where ps would find it without reading env.
+  const quote = (value: string) => "'" + value.replace(/'/gu, () => "'\\''") + "'";
   const lateFile = path.join(dir, "late.pid");
-  const ending = path.join(dir, "ending.sh");
-  await fs.writeFile(ending, `trap 'sleep 60 & echo $! > ${JSON.stringify(lateFile)}; exit 0' TERM\nwhile :; do sleep 0.1; done\n`);
-  const ours = await leaveBehind("job_0000aaaa", `/bin/sh ${JSON.stringify(ending)}`);
-  const another = await leaveBehind("job_0000bbbb", "sleep 60");
+  const readyFile = path.join(dir, "ready");
+  const waiter = path.join(dir, "waiter.cjs");
+  await fs.writeFile(waiter, "setInterval(() => {}, 1_000);\n");
+  // This job's leftover starts another process as it is asked to end.
+  const ending = path.join(dir, "ending.cjs");
+  await fs.writeFile(ending, `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+process.on("SIGTERM", () => {
+  const child = spawn(process.execPath, [${JSON.stringify(waiter)}], { stdio: "ignore" });
+  child.unref();
+  writeFileSync(${JSON.stringify(lateFile)}, String(child.pid));
+  process.exit(0);
+});
+writeFileSync(${JSON.stringify(readyFile)}, "ready");
+setInterval(() => {}, 1_000);
+`);
+  const ours = await leaveBehind("job_0000aaaa", `${quote(process.execPath)} ${quote(ending)}`);
+  const another = await leaveBehind("job_0000bbbb", `${quote(process.execPath)} ${quote(waiter)}`);
   const latePid = async () => Number((await fs.readFile(lateFile, "utf8").catch(() => "")).trim()) || undefined;
   t.after(async () => {
     for (const pid of [ours.leftover, another.leftover, (await latePid()) ?? 0]) {
@@ -289,6 +307,7 @@ test("after a crash, what an ended shell left in its group is stopped only when 
     }
     await fs.rm(dir, { recursive: true, force: true });
   });
+  await eventually(async () => (await fs.readFile(readyFile, "utf8").catch(() => "")) === "ready", "the TERM handler to be ready");
   await fs.writeFile(
     path.join(logDir, "running.json"),
     JSON.stringify({

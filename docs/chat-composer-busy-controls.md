@@ -39,3 +39,7 @@ Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Teleg
 If Stop lands while an input is being admitted, the receipt says the input was committed but not admitted. Desktop and both phones show the same copy for that receipt: "Saved to the chat — the run was cancelled before it could use it" (Stop), "Saved to the chat — the run ended before it could use it" (the run finished), or "Saved to the chat — the run queue was full" (capacity). The harness test "Stop after a queued follow-up is admitted keeps it as history and never runs it" covers this behavior.
 
 On The Go also answers `ask_user_question` prompts through question cards (`chat-question-prompts-v1`), and its composer opens `/` skill and `@` mention palettes ranked like desktop.
+
+## Desktop question countdown
+
+While a question with a deadline is open, the desktop composer shows one countdown above the question card. Chat updates preserve the current answer and update that countdown in place. Answering or dismissing the question removes the countdown; a later question starts with its own card and countdown.

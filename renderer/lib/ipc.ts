@@ -204,6 +204,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import type {
   ImageGenerationActionResult,
   ImageGenerationAddCustomModelRequest,
@@ -888,7 +889,7 @@ export const shortcutApi = {
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const res = await window.aidenAPI.dialog.showOpenDialog({
-    properties: ["openDirectory"],
+    properties: ["openDirectory", "createDirectory"],
   });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];
@@ -1479,6 +1480,9 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
+  /** Change the model this chat answers with; other chats and new chats keep theirs. */
+  setModel: (id: string, providerId: string, model: string) =>
+    invoke<Chat | null>("chats:setModel", id, providerId, model),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -1511,6 +1515,8 @@ export const chatsApi = {
     invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
+  /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
+  replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -1862,6 +1868,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** A failed model request waits before it is sent again. */
+  onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;

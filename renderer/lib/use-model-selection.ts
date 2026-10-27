@@ -1,6 +1,8 @@
-// App-wide provider+model selection, persisted in localStorage (UI preference,
-// not routed state). Defaults once when no selection exists, but never silently
-// reroutes an existing selection to another provider.
+// The app's model for new chats, persisted in localStorage (UI preference, not
+// routed state). Defaults once when no selection exists, but never silently
+// reroutes an existing selection to another provider. A chat that already has
+// messages keeps its own model (stored on the chat); picking a model there
+// changes only that chat, never this selection.
 
 import * as React from "react";
 import { isUsable } from "./model-picker-data";
@@ -112,6 +114,63 @@ export function subscribeModelSelection(listener: (selection: ModelSelection) =>
     window.removeEventListener("storage", syncStorage);
     window.removeEventListener("focus", sync);
   };
+}
+
+/**
+ * The model an open chat answers with. A chat that owns its model (it already
+ * has messages) uses the pair stored on it; an empty chat, or one that never
+ * recorded a model, follows the app's model for new chats.
+ */
+export function chatModelSelection(
+  chat: { providerId?: string; model?: string } | null | undefined,
+  chatOwnsModel: boolean,
+  appSelection: ModelSelection,
+): ModelSelection {
+  if (chatOwnsModel && chat?.providerId && chat.model) {
+    return { providerId: chat.providerId, model: chat.model };
+  }
+  return appSelection;
+}
+
+/**
+ * The open chat whose own model a model change elsewhere (the command palette)
+ * should change instead of the app's model for new chats.
+ */
+export interface ActiveChatModelTarget {
+  chatId: string;
+  selection: ModelSelection;
+  select(providerId: string, model: string): void;
+}
+
+let activeChatModelTarget: ActiveChatModelTarget | null = null;
+const activeChatModelTargetListeners = new Set<() => void>();
+
+/** Register the open chat as the model target; returns its unregister. */
+export function setActiveChatModelTarget(target: ActiveChatModelTarget): () => void {
+  activeChatModelTarget = target;
+  activeChatModelTargetListeners.forEach((listener) => listener());
+  return () => {
+    if (activeChatModelTarget !== target) return;
+    activeChatModelTarget = null;
+    activeChatModelTargetListeners.forEach((listener) => listener());
+  };
+}
+
+export function readActiveChatModelTarget(): ActiveChatModelTarget | null {
+  return activeChatModelTarget;
+}
+
+function subscribeActiveChatModelTarget(listener: () => void): () => void {
+  activeChatModelTargetListeners.add(listener);
+  return () => activeChatModelTargetListeners.delete(listener);
+}
+
+export function useActiveChatModelTarget(): ActiveChatModelTarget | null {
+  return React.useSyncExternalStore(
+    subscribeActiveChatModelTarget,
+    readActiveChatModelTarget,
+    () => null,
+  );
 }
 
 export function persistModelSelection(providerId: string, model: string): void {

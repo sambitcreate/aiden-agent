@@ -579,8 +579,14 @@ struct AidenBotSessionChatView: View {
     private func outgoingBubble(_ message: AidenBotOutgoingMessage, model: AidenBotSessionModel) -> some View {
         switch model.look(of: message) {
         case .sending:
-            pendingBubble(message.text, faded: true, attachments: message.attachments) {
-                Text(AidenBotSessionCopy.sending)
+            // It looks sent at once; "Sending…" shows only once it has waited a
+            // moment for the Mac (offline, or a slow Mac).
+            AidenBotSendWait(since: message.createdAt) { slow in
+                pendingBubble(message.text, faded: false, attachments: message.attachments) {
+                    if slow {
+                        Text(AidenBotSessionCopy.sending)
+                    }
+                }
             }
             .accessibilityElement(children: .combine)
         case .sent:
@@ -1610,5 +1616,23 @@ struct AidenBotAttachmentChips: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Draws a message still on its way to the Mac: `slow` turns true once it has
+/// waited `AidenBotOutgoingMessage.sendingCaptionDelay` since it was sent, so a
+/// quick send never says "Sending…".
+private struct AidenBotSendWait<Content: View>: View {
+    let since: Date
+    @ViewBuilder let content: (Bool) -> Content
+    @State private var waited = false
+
+    var body: some View {
+        content(waited || AidenBotOutgoingMessage.showsSendingCaption(sentAt: since, now: Date()))
+            .task(id: since) {
+                let remaining = since.addingTimeInterval(AidenBotOutgoingMessage.sendingCaptionDelay).timeIntervalSinceNow
+                if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+                if !Task.isCancelled { waited = true }
+            }
     }
 }

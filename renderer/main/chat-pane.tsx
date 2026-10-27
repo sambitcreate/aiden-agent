@@ -75,7 +75,7 @@ import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -103,7 +103,7 @@ import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
 import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import { ChatTitleMenu, WorkspaceChip, WorkspaceToolButtons } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
-import { useCommandHandler, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
+import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
   approvalShouldTakeFocus,
@@ -147,8 +147,10 @@ import {
 } from "../lib/queries";
 import { forkedFromLabel, withForkLineage } from "../lib/chat-copy-view";
 import {
+  chatModelSelection,
   isModelSelectionReadyForNewWork,
   resolveVisibleModelSelection,
+  setActiveChatModelTarget,
   useModelSelection,
 } from "../lib/use-model-selection";
 import { useActiveWorkspace } from "../lib/workspace-context";
@@ -170,6 +172,9 @@ import {
 } from "../lib/types";
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
+import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
+import { INTERRUPTED_REPLY_FOLLOW_UP } from "../shared/interrupted-reply";
+import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
   resolveVisibleAgentActivity,
@@ -238,6 +243,7 @@ import {
 } from "../shared/ask-user-question";
 import { TodoSnapshotReadFence, type TodoSnapshotViewV1 } from "../shared/todo";
 import type { BtwEventV1 } from "../shared/btw";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import {
   acpHarnessChatReason,
   acpHarnessReadinessMessage,
@@ -265,6 +271,7 @@ const agentsInstructionNotices = createAgentsInstructionNoticeLog();
 export function ChatPane({ chatId }: { chatId: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const commandSystem = useCommandSystem();
   const capabilities = useAppCapabilities();
   const newChatMachines = useNewChatMachines();
   const providers = useProviders();
@@ -333,12 +340,54 @@ export function ChatPane({ chatId }: { chatId: string }) {
       : environmentPanel.editorState.dirty
         ? "Save or discard the open file's edits first"
         : undefined;
-  const { providerId, model, select } = useModelSelection(
+  const appModel = useModelSelection(
     providers.data,
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
   const hasMessages = (chat.data?.messages.length ?? 0) > 0;
+  // A chat with messages owns its model: picking one here changes this chat
+  // only. An empty chat follows, and sets, the app's model for new chats.
+  const chatOwnsModel = !draft && hasMessages && !chat.data?.botId;
+  const { providerId, model } = chatModelSelection(chat.data, chatOwnsModel, appModel);
+  const selectAppModel = appModel.select;
+  // The latest pick per chat, so an older pick's answer never replaces a newer one.
+  const chatModelPicksRef = React.useRef(new Map<string, number>());
+  const select = React.useCallback(
+    (nextProviderId: string, nextModel: string) => {
+      if (!chatOwnsModel) {
+        selectAppModel(nextProviderId, nextModel);
+        return;
+      }
+      const key = queryKeys.chat(chatId);
+      const pick = (chatModelPicksRef.current.get(chatId) ?? 0) + 1;
+      chatModelPicksRef.current.set(chatId, pick);
+      const isLatestPick = () => chatModelPicksRef.current.get(chatId) === pick;
+      const withModel = (pair: Pick<Chat, "providerId" | "model">) => (current: Chat | null | undefined) =>
+        current ? { ...current, providerId: pair.providerId, model: pair.model } : current;
+      const previous = qc.getQueryData<Chat | null>(key);
+      void (async () => {
+        // A read started before this pick must not land on top of it.
+        await qc.cancelQueries({ queryKey: key, exact: true });
+        if (!isLatestPick()) return;
+        qc.setQueryData<Chat | null>(key, withModel({ providerId: nextProviderId, model: nextModel }));
+        try {
+          const saved = await chatsApi.setModel(chatId, nextProviderId, nextModel);
+          // A read that overlapped the save may still carry the old model.
+          if (saved && isLatestPick()) qc.setQueryData<Chat | null>(key, withModel(saved));
+          void qc.invalidateQueries({ queryKey: queryKeys.chats });
+        } catch (error) {
+          if (isLatestPick() && previous) qc.setQueryData<Chat | null>(key, withModel(previous));
+          toast.error(error instanceof Error ? error.message : "This chat's model could not be changed.");
+        }
+      })();
+    },
+    [chatId, chatOwnsModel, qc, selectAppModel],
+  );
+  React.useEffect(() => {
+    if (!chatOwnsModel) return;
+    return setActiveChatModelTarget({ chatId, selection: { providerId, model }, select });
+  }, [chatId, chatOwnsModel, model, providerId, select]);
   const selectedProvider = providers.data?.find((provider) => provider.id === providerId);
   const modelReady = Boolean(
     selectedProvider &&
@@ -607,6 +656,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
     stopRequestedRef.current = isStoppingGeneration;
   }, [isStoppingGeneration]);
   const [isModelLoading, setIsModelLoading] = React.useState(false);
+  const [modelCallRetry, setModelCallRetry] = React.useState<ModelCallRetryView | null>(null);
+  const [modelCallRetryNow, setModelCallRetryNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!modelCallRetry) return;
+    const timer = window.setInterval(() => setModelCallRetryNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [modelCallRetry]);
   // Read aloud: one controller per chat surface; main owns eligibility.
   const { state: readAloudState, controller: readAloudController } = useReadAloud(chatId);
   const readAloudRef = React.useRef(readAloudController);
@@ -810,6 +866,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
+    setModelCallRetry(null);
     setCanStopGeneration(false);
     setHasUnpersistedResponse(false);
     setGenerationTimeline(null);
@@ -1293,6 +1350,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStoppingGeneration(false);
       setCanStopGeneration(true);
       setIsModelLoading(false);
+      setModelCallRetry(null);
       setHasUnpersistedResponse(false);
       setStreamingText("");
       setStreamingReasoning(null);
@@ -1362,6 +1420,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
+              setModelCallRetry(null);
               pendingDeltaRef.current += delta;
               scheduleStreamFlush();
             }
@@ -1398,6 +1457,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             }
             const { artifact } = event;
             setIsModelLoading(false);
+            setModelCallRetry(null);
             // Seed main's ready preview before the frame mounts so the final
             // visual replaces its draft without a loading placeholder.
             if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
@@ -1448,6 +1508,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
           onReasoningDelta: (delta) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setIsModelLoading(false);
+              setModelCallRetry(null);
               pendingReasoningDeltaRef.current += delta;
               scheduleStreamFlush();
             }
@@ -1456,6 +1517,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             if (phase === "model_loading") setIsModelLoading(true);
             else if (phase === "model_ready") setIsModelLoading(false);
+          },
+          onRetrying: (retry) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            setModelCallRetryNow(Date.now());
+            setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
@@ -1494,6 +1560,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               generationTimelineRef.current = timeline;
               setGenerationTimeline(timeline);
+              // A tool starting means the retried request answered.
+              if (latestActiveAgentStep(timeline)) setModelCallRetry(null);
             }
           },
           onApproval: (prompt) => {
@@ -1563,6 +1631,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
               setPersistedHandoffMessageId(null);
               setIsStoppingGeneration(false);
               setIsModelLoading(false);
+              setModelCallRetry(null);
               setGenerationTimeline(null);
               generationTimelineRef.current = null;
               setApprovals([]);
@@ -1644,6 +1713,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 }
                 setIsStoppingGeneration(false);
                 setIsModelLoading(false);
+                setModelCallRetry(null);
                 if (!partial || updatedChat) {
                   setGenerationTimeline(null);
                   generationTimelineRef.current = null;
@@ -2210,6 +2280,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     setIsStartingGeneration(false);
     setIsStoppingGeneration(false);
     setIsModelLoading(false);
+    setModelCallRetry(null);
     setCanStopGeneration(false);
     setGenerationTimeline(null);
     generationTimelineRef.current = null;
@@ -2884,6 +2955,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     textStreaming,
     pendingApproval: Boolean(pending),
     toolActivity,
+    modelCallRetry,
+    now: modelCallRetryNow,
   });
   const visualizingLive =
     (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
@@ -2937,6 +3010,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
   }, [pending]);
 
+  const compactChat = React.useCallback(
+    async (engine?: CompactionEngine) => {
+      const compactChatId = chatId;
+      // Follow-ups typed during compaction queue behind it and
+      // wait until it settles, even if the user leaves the chat.
+      const compactQueue = chatMessageQueue(compactChatId);
+      let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
+      compactQueue.holdForCompaction();
+      setContextCompactPending(true);
+      try {
+        const result = await chatsApi.compact(compactChatId, engine);
+        compactOutcome = result;
+        // The pane may now show another chat; its meter
+        // chrome belongs to that chat, not this compaction.
+        if (result.compacted && chatIdRef.current === compactChatId) {
+          setContextCompactedFlash(true);
+          if (contextCompactedTimerRef.current !== null) {
+            window.clearTimeout(contextCompactedTimerRef.current);
+          }
+          contextCompactedTimerRef.current = window.setTimeout(() => {
+            contextCompactedTimerRef.current = null;
+            setContextCompactedFlash(false);
+          }, 6_000);
+        }
+        return result;
+      } finally {
+        if (chatIdRef.current === compactChatId) setContextCompactPending(false);
+        if (compactQueue.releaseCompactionHold(compactOutcome)) {
+          const count = compactQueue.getSnapshot().messages.length;
+          toast.info(
+            `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
+          );
+        }
+      }
+    },
+    [chatId],
+  );
+
   // --- Read aloud wiring --------------------------------------------------
   // Local candidate mirrors main's policy: the last assistant message after
   // the latest user turn, while no live generation row is mounted. Main
@@ -2962,6 +3073,103 @@ export function ChatPane({ chatId }: { chatId: string }) {
     }
     return undefined;
   }, [messages, transcriptIdle]);
+
+  // The latest reply failed: its card offers the next step that fits the cause.
+  const failedReplyId = React.useMemo(() => {
+    if (!transcriptIdle || draft) return undefined;
+    const last = messages[messages.length - 1];
+    return last?.role === "assistant" && last.providerFailure ? last.id : undefined;
+  }, [draft, messages, transcriptIdle]);
+  // A card action belongs to the chat it started in: each chat's card is busy
+  // only while its own action runs, and only that action clears it.
+  const failureActionTokenRef = React.useRef(0);
+  const [failureActionOwners, setFailureActionOwners] = React.useState<
+    Readonly<Record<string, number>>
+  >({});
+  const failureActionBusy = failureActionOwners[chatId] !== undefined;
+  const runFailureAction = React.useCallback(
+    async (action: ProviderFailureAction) => {
+      if (action === "open_providers") {
+        void navigate({ to: "/settings", search: { section: "providers" } });
+        return;
+      }
+      const token = ++failureActionTokenRef.current;
+      setFailureActionOwners((owners) => ({ ...owners, [chatId]: token }));
+      try {
+        if (action === "compact") {
+          const result = await compactChat();
+          // Already compact (an earlier press finished while the person was away) still sends.
+          if (!result.compacted && result.reason !== "already_compact") return;
+          // The pane may show another chat now: skip the follow-up, and this
+          // chat's card is still there when the person comes back.
+          if (chatIdRef.current !== chatId) return;
+        }
+        await handleSend(
+          action === "continue" ? PROVIDER_FAILURE_FOLLOW_UPS.continue : PROVIDER_FAILURE_FOLLOW_UPS.try_again,
+          [],
+        );
+      } catch (actionError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(userFacingErrorMessage(actionError, "Couldn’t continue this chat."));
+      } finally {
+        setFailureActionOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
+      }
+    },
+    [chatId, compactChat, handleSend, navigate],
+  );
+  const failureActions = React.useMemo(
+    () =>
+      failedReplyId
+        ? {
+            messageId: failedReplyId,
+            busy: failureActionBusy,
+            onAction: (action: ProviderFailureAction) => void runFailureAction(action),
+            onSwitchModel: () => commandSystem.execute("model.change"),
+          }
+        : undefined,
+    [commandSystem, failedReplyId, failureActionBusy, runFailureAction],
+  );
+
+  // A reply cut short by a quit or crash offers Resume; it never resumes itself.
+  const replyInterruptedQuery = useQuery({
+    queryKey: ["chat-reply-interrupted", chatId, messages.length],
+    queryFn: () => chatsApi.replyInterrupted(chatId),
+    enabled: transcriptIdle && !draft && messages.length > 0,
+    staleTime: Infinity,
+    // An unreadable run history only hides the offer; don't keep asking.
+    retry: false,
+  });
+  // Like the failure card, a Resume press is busy only in its own chat.
+  const resumeTokenRef = React.useRef(0);
+  const [resumeOwners, setResumeOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const resumeBusy = resumeOwners[chatId] !== undefined;
+  const resumeInterruptedReply = React.useCallback(async () => {
+    const token = ++resumeTokenRef.current;
+    setResumeOwners((owners) => ({ ...owners, [chatId]: token }));
+    try {
+      await handleSend(INTERRUPTED_REPLY_FOLLOW_UP, []);
+    } catch (resumeError) {
+      if (chatIdRef.current !== chatId) return;
+      toast.error(userFacingErrorMessage(resumeError, "Couldn’t resume this chat."));
+    } finally {
+      setResumeOwners((owners) => {
+        if (owners[chatId] !== token) return owners;
+        const { [chatId]: _settled, ...rest } = owners;
+        return rest;
+      });
+    }
+  }, [chatId, handleSend]);
+  const interruptedReply = React.useMemo(
+    () =>
+      transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true
+        ? { busy: resumeBusy, onResume: () => void resumeInterruptedReply() }
+        : undefined,
+    [draft, failedReplyId, replyInterruptedQuery.data, resumeBusy, resumeInterruptedReply, transcriptIdle],
+  );
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -3199,7 +3407,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             {questionnaireExpired ? <AskUserQuestionExpiryNotice state="expired" /> : null}
             {questionnaire?.expiresAt && !questionnaireExpired ? (
               <AskUserQuestionCountdown
-                key={questionnaire.promptId}
+                key={`countdown:${questionnaire.promptId}`}
                 expiresAt={questionnaire.expiresAt}
               />
             ) : null}
@@ -3361,44 +3569,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   setForkSummaryRequest({ messageId, position })
                 }
                 onExportChat={exportChat}
-                onCompactChat={
-                  draft
-                    ? undefined
-                    : async (engine) => {
-                        const compactChatId = chatId;
-                        // Follow-ups typed during compaction queue behind it and
-                        // wait until it settles, even if the user leaves the chat.
-                        const compactQueue = chatMessageQueue(compactChatId);
-                        let compactOutcome: Awaited<ReturnType<typeof chatsApi.compact>> | undefined;
-                        compactQueue.holdForCompaction();
-                        setContextCompactPending(true);
-                        try {
-                          const result = await chatsApi.compact(compactChatId, engine);
-                          compactOutcome = result;
-                          // The pane may now show another chat; its meter
-                          // chrome belongs to that chat, not this compaction.
-                          if (result.compacted && chatIdRef.current === compactChatId) {
-                            setContextCompactedFlash(true);
-                            if (contextCompactedTimerRef.current !== null) {
-                              window.clearTimeout(contextCompactedTimerRef.current);
-                            }
-                            contextCompactedTimerRef.current = window.setTimeout(() => {
-                              contextCompactedTimerRef.current = null;
-                              setContextCompactedFlash(false);
-                            }, 6_000);
-                          }
-                          return result;
-                        } finally {
-                          if (chatIdRef.current === compactChatId) setContextCompactPending(false);
-                          if (compactQueue.releaseCompactionHold(compactOutcome)) {
-                            const count = compactQueue.getSnapshot().messages.length;
-                            toast.info(
-                              `Compaction didn't finish, so ${count === 1 ? "your queued message is" : `${count} queued messages are`} paused. Resume the queue to send ${count === 1 ? "it" : "them"}.`,
-                            );
-                          }
-                        }
-                      }
-                }
+                onCompactChat={draft ? undefined : compactChat}
                 onCancelCompact={draft ? undefined : () => chatsApi.cancelCompact(chatId)}
                 onLogoutProvider={logoutProvider}
                 thinkingControl={
@@ -3574,6 +3745,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
             readAloudMessageId={readAloudCandidateId}
+            failureActions={failureActions}
+            interruptedReply={interruptedReply}
             readAloud={readAloudProps}
             onFork={forkFromTranscript}
             forkDisabledReason={forkDisabledReason}

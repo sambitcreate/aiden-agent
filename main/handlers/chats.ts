@@ -67,6 +67,8 @@ import {
 import { botApplicationService } from "../services/bot-application-service-main.js";
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
+import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
+import { chatReplyInterrupted } from "../services/interrupted-reply.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -187,6 +189,18 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:get", async (_event, id: unknown) =>
     chatApplicationService.get(asString(id, "id")),
   );
+
+  // True when the chat's last reply was cut short by a quit or crash.
+  ipcMain.handle("chats:replyInterrupted", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    try {
+      await piRuntimeEffectStore.initialize();
+      return await chatReplyInterrupted(piRuntimeEffectStore, chatId);
+    } catch {
+      // Unreadable run history only hides the Resume offer.
+      return false;
+    }
+  });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {
     const owner = rendererDocumentOwner(
@@ -316,6 +330,8 @@ export function registerChatHistoryHandlers(): void {
   ipcMain.handle("chats:rename", rendererChats.rename);
 
   ipcMain.handle("chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels);
+
+  ipcMain.handle("chats:setModel", rendererChats.setModel);
 
   ipcMain.handle("chats:retryForkSummary", async (_event, input: unknown) =>
     chatForRenderer(await forkSummaryService.retry(parseChatOnlyRequest(input).chatId)),
