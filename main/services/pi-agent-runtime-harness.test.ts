@@ -26,6 +26,7 @@ import {
   type PiVisibleTurnLease,
 } from "./pi-compaction-session-store.js";
 import { PiCompactionCoordinator } from "./pi-compaction-core.js";
+import { CUT_OFF_CONTINUATION_TEXT, MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
 import { buildAgentRuntimeOptions } from "./generation-runtime.js";
 import {
   isPiManagedCancellationError,
@@ -1301,6 +1302,173 @@ test("stopping during a retry wait ends the run without another provider request
   assert.equal(outcome.kind, "app_cancelled");
   assert.ok(Date.now() - started < 5_000);
   assert.equal(core.state.callCount, 1);
+});
+
+function messageText(message: unknown): string {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is { type: "text"; text: string } => block?.type === "text")
+    .map((block) => block.text)
+    .join("");
+}
+
+const cutOffPrompt = (text: string): AgentMessage => ({
+  role: "user",
+  content: [{ type: "text", text }],
+  timestamp: Date.now(),
+});
+
+test("a reply cut off by the output limit continues from its text, at most twice", async () => {
+  const requests: Array<{ role: string; text: string; stopReason?: string }[]> = [];
+  const record = (reply: ReturnType<typeof fauxAssistantMessage>) =>
+    (context: { messages: { role: string; content?: unknown; stopReason?: string }[] }) => {
+      requests.push(context.messages.map((message) => ({
+        role: message.role,
+        text: messageText(message),
+        ...(message.stopReason ? { stopReason: message.stopReason } : {}),
+      })));
+      return reply;
+    };
+  const { core, harness, session } = await managedTestHarness([
+    record(fauxAssistantMessage("The first half", { stopReason: "length" })),
+    record(fauxAssistantMessage(" and the second", { stopReason: "length" })),
+    record(fauxAssistantMessage(" and the end.")),
+  ]);
+  const continued: Array<[number, number, string]> = [];
+  const outcome = await harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Write it all") },
+    {
+      maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS,
+      onContinue: ({ continuation, maxContinuations, reason }) =>
+        void continued.push([continuation, maxContinuations, reason]),
+    },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.equal(messageText(outcome.finalMessage), " and the end.");
+  assert.equal(core.state.callCount, 3);
+  assert.deepEqual(continued, [[1, 2, "output-limit"], [2, 2, "output-limit"]]);
+  // The last request carries both kept halves, each followed by the ask to continue.
+  assert.deepEqual(requests[2]!.slice(-4), [
+    { role: "assistant", text: "The first half", stopReason: "length" },
+    { role: "user", text: CUT_OFF_CONTINUATION_TEXT },
+    { role: "assistant", text: " and the second", stopReason: "length" },
+    { role: "user", text: CUT_OFF_CONTINUATION_TEXT },
+  ]);
+  // Later turns replay the same history from the journal.
+  const journaled = (await session.buildContext()).messages.slice(-5).map((message) => messageText(message));
+  assert.deepEqual(journaled, [
+    "The first half",
+    CUT_OFF_CONTINUATION_TEXT,
+    " and the second",
+    CUT_OFF_CONTINUATION_TEXT,
+    " and the end.",
+  ]);
+});
+
+test("a third cut-off ends the reply at the output limit, and replies without text never continue", async () => {
+  const cut = (text: string) => fauxAssistantMessage(text, { stopReason: "length" });
+  const limited = await managedTestHarness([cut("One"), cut(" two"), cut(" three"), fauxAssistantMessage("must not run")]);
+  const outcome = await limited.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Long") },
+    { maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS },
+  );
+  assert.equal(outcome.kind, "provider_failed");
+  assert.equal(outcome.kind === "provider_failed" ? outcome.reason : undefined, "output-limit");
+  assert.equal(limited.core.state.callCount, 3);
+
+  const silent = await managedTestHarness([
+    fauxAssistantMessage([{ type: "thinking", thinking: "all budget spent thinking" }], { stopReason: "length" }),
+    fauxAssistantMessage("must not run"),
+  ]);
+  const silentOutcome = await silent.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Think") },
+    { maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS },
+  );
+  assert.equal(silentOutcome.kind === "provider_failed" ? silentOutcome.reason : undefined, "output-limit");
+  assert.equal(silent.core.state.callCount, 1);
+});
+
+test("a stream that drops mid-answer keeps its text and continues; its cut-off tool call never runs", async () => {
+  let toolRuns = 0;
+  const tool: AgentTool = {
+    name: "cut_off_effect",
+    label: "cut_off_effect",
+    description: "cut_off_effect",
+    parameters: Type.Object({}),
+    execute: async () => {
+      toolRuns += 1;
+      return { content: [{ type: "text", text: "ran" }], details: null };
+    },
+  };
+  let continuationRequest: { role: string; text: string; stopReason?: string }[] = [];
+  const { core, harness, session } = await managedTestHarness(
+    [
+      // Fails before any text: retried from the start, nothing to keep.
+      fauxAssistantMessage("", { stopReason: "error", errorMessage: "fetch failed" }),
+      fauxAssistantMessage(
+        [{ type: "text", text: "Here is half" }, fauxToolCall(tool.name, {})],
+        { stopReason: "error", errorMessage: "terminated" },
+      ),
+      (context) => {
+        continuationRequest = context.messages.map((message) => ({
+          role: message.role,
+          text: messageText(message),
+          ...("stopReason" in message && message.stopReason ? { stopReason: message.stopReason } : {}),
+        }));
+        return fauxAssistantMessage(" of the answer.");
+      },
+    ],
+    { tools: [tool], retryDelayMs: 1, maxRetries: 5 },
+  );
+  const retries: Array<[number, boolean]> = [];
+  const continued: string[] = [];
+  const outcome = await harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Answer") },
+    {
+      maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS,
+      onRetry: ({ attempt, keepsPartial }) => void retries.push([attempt, keepsPartial === true]),
+      onContinue: ({ reason }) => void continued.push(reason),
+    },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.equal(core.state.callCount, 3);
+  assert.equal(toolRuns, 0);
+  assert.deepEqual(retries, [[2, false], [3, true]]);
+  assert.deepEqual(continued, ["dropped"]);
+  assert.deepEqual(continuationRequest.slice(-3), [
+    { role: "user", text: "Answer" },
+    { role: "assistant", text: "Here is half", stopReason: "length" },
+    { role: "user", text: CUT_OFF_CONTINUATION_TEXT },
+  ]);
+  const replayed = (await session.buildContext()).messages
+    .filter((message) => message.role !== "assistant" || (message.stopReason !== "error" && message.stopReason !== "aborted"))
+    .slice(-3)
+    .map((message) => messageText(message));
+  assert.deepEqual(replayed, ["Here is half", CUT_OFF_CONTINUATION_TEXT, " of the answer."]);
+});
+
+test("without continuation a dropped stream still retries its reply from the start", async () => {
+  let retriedRequest: { role: string; text: string }[] = [];
+  const { harness } = await managedTestHarness(
+    [
+      fauxAssistantMessage("Here is half", { stopReason: "error", errorMessage: "terminated" }),
+      (context) => {
+        retriedRequest = context.messages.map((message) => ({ role: message.role, text: messageText(message) }));
+        return fauxAssistantMessage("The whole answer.");
+      },
+    ],
+    { retryDelayMs: 1, maxRetries: 5 },
+  );
+  const keeps: boolean[] = [];
+  const outcome = await harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Answer") },
+    { onRetry: ({ keepsPartial }) => void keeps.push(keepsPartial === true) },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.deepEqual(keeps, [false]);
+  assert.deepEqual(retriedRequest[retriedRequest.length - 1], { role: "user", text: "Answer" });
 });
 
 test("managed startup infrastructure failures stay out of the journal and use host taxonomy", async () => {

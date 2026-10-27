@@ -1,4 +1,5 @@
 import { MODEL_CALL_RETRY_POLICY } from "./model-call-retry.js";
+import { cutOffContinuationMessage, keptCutOffReply, type CutOffReason } from "./cut-off-reply.js";
 import { verificationIdentity } from "./pi-verification-store.js";
 import { hostCommandObservation } from "./pi-host-command-observation.js";
 import { toolOutputScope } from "./tool-output-store.js";
@@ -301,12 +302,30 @@ export interface PiRuntimeRetryEvent {
   maxAttempts: number;
   reason: "provider" | "overflow";
   delayMs: number;
+  /** The failed reply's text stays, and the next try continues it. */
+  keepsPartial?: boolean;
+}
+
+export interface PiRuntimeContinueEvent {
+  /** 1 for the first continuation of this run. */
+  continuation: number;
+  maxContinuations: number;
+  reason: CutOffReason;
 }
 
 export interface PiRuntimeRunOptions {
   /** Opens the host's visible-turn transaction after prior-tail repair. */
   beforeDurableTurn?: (signal: AbortSignal) => Promise<void> | void;
   onRetry?: (event: PiRuntimeRetryEvent) => Promise<void> | void;
+  /**
+   * Continue a reply cut off by the output limit or by a stream that dropped
+   * after it started, keeping what it wrote, up to this many times per run.
+   * Unset or 0 keeps the earlier behavior: the output limit ends the run and
+   * a dropped stream retries from the start of that reply.
+   */
+  maxCutOffContinuations?: number;
+  /** Called before the continuation is sent; a dropped stream also reports its retry. */
+  onContinue?: (event: PiRuntimeContinueEvent) => Promise<void> | void;
 }
 
 export interface PiRuntimeQueueOptions {
@@ -1882,6 +1901,8 @@ export class PiAgentRuntimeHarness {
       });
 
     let attempts = 0;
+    let continuations = 0;
+    const maxContinuations = Math.max(0, options.maxCutOffContinuations ?? 0);
     const cancelled = () => this.appCancelRequested || abortController.signal.aborted;
     const finish = async (outcome: PiRuntimeTerminalOutcome): Promise<PiRuntimeTerminalOutcome> => {
       let finalized = outcome;
@@ -1952,6 +1973,45 @@ export class PiAgentRuntimeHarness {
             : {}),
       });
       return projectedClosed;
+    };
+    // Cut-off replies: the kept text and the request to continue it join the
+    // live context and the journal, so later turns replay what was shown.
+    const appendCutOffMessages = async (
+      messages: AgentMessage[],
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | undefined> => {
+      this.agent.state.messages = [...this.agent.state.messages, ...messages];
+      this.pendingDurableMessages.push(...messages);
+      this.capturedTurnMessages.push(...messages.map((message) => structuredClone(message)));
+      try {
+        await this.flushDurableMessages();
+      } catch {
+        return await finish(
+          cancelled()
+            ? { kind: "app_cancelled", finalMessage, attempts }
+            : { kind: "host_failed", faultKind: this.managedHostFault ?? "session", finalMessage, attempts },
+        );
+      }
+      return undefined;
+    };
+    const continueCutOffReply = async (
+      reason: CutOffReason,
+      finalMessage: AssistantMessage,
+    ): Promise<PiRuntimeTerminalOutcome | undefined> => {
+      continuations += 1;
+      const event: PiRuntimeContinueEvent = { continuation: continuations, maxContinuations, reason };
+      const hook = await waitForManagedHook(
+        Promise.resolve().then(() => options.onContinue?.(event)),
+        abortController.signal,
+      );
+      if (hook.error) {
+        this.reportFault({ source: "lifecycle_subscriber", error: toError(hook.error) });
+        return await finish({ kind: "host_failed", faultKind: "lifecycle", finalMessage, attempts });
+      }
+      if (hook.cancelled || cancelled()) {
+        return await finish({ kind: "app_cancelled", finalMessage, attempts });
+      }
+      return await appendCutOffMessages([cutOffContinuationMessage()], finalMessage);
     };
     this.runtimeEvents?.setAttempt(0);
     this.runtimeEvents?.emit({ type: "run_start", input: input.kind });
@@ -2286,11 +2346,17 @@ export class PiAgentRuntimeHarness {
           ) {
             this.capturedTurnMessages.pop();
           }
+          // A stream that dropped after the reply started keeps its text.
+          const kept =
+            compactionResult.compacted !== true && continuations < maxContinuations
+              ? keptCutOffReply(assistant, "dropped")
+              : undefined;
           const retry: PiRuntimeRetryEvent = {
             attempt: compactionResult.retryAttempt ?? attempts + 1,
             maxAttempts: compactionResult.maxAttempts ?? Math.max(2, attempts + 1),
             reason: compactionResult.compacted === true ? "overflow" : "provider",
             delayMs: compactionResult.retryDelayMs ?? 0,
+            ...(kept ? { keepsPartial: true } : {}),
           };
           // The coordinator bounds each kind of retry; this also bounds them together.
           if (retry.attempt > PI_RUNTIME_MAX_ATTEMPTS) {
@@ -2315,8 +2381,19 @@ export class PiAgentRuntimeHarness {
               attempts,
             });
           }
+          if (kept) {
+            // Kept before the wait, so a Stop during it still leaves the text in the journal.
+            const stopped = await appendCutOffMessages([kept], assistant);
+            if (stopped) return stopped;
+          }
           const delayMs = retry.delayMs;
-          this.runtimeEvents?.emit({ type: "retry", ...retry });
+          this.runtimeEvents?.emit({
+            type: "retry",
+            attempt: retry.attempt,
+            maxAttempts: retry.maxAttempts,
+            reason: retry.reason,
+            delayMs,
+          });
           const retryHook = await waitForManagedHook(
             Promise.resolve().then(() =>
               options.onRetry?.(retry),
@@ -2352,6 +2429,10 @@ export class PiAgentRuntimeHarness {
               ...(compactionResult.assistantAbandoned ? { finalMessageWasAbandoned: true } : {}),
               attempts,
             });
+          }
+          if (kept) {
+            const stopped = await continueCutOffReply("dropped", assistant);
+            if (stopped) return stopped;
           }
           // The loop counts this try as `retry.attempt`.
           attempts = retry.attempt - 1;
@@ -2417,6 +2498,11 @@ export class PiAgentRuntimeHarness {
           });
         }
         if (assistant.stopReason === "length") {
+          if (continuations < maxContinuations && keptCutOffReply(assistant, "output-limit")) {
+            const stopped = await continueCutOffReply("output-limit", assistant);
+            if (stopped) return stopped;
+            continue;
+          }
           return await finish({
             kind: "provider_failed",
             reason: "output-limit",
