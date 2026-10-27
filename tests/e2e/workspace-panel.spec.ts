@@ -1,4 +1,6 @@
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   E2E_WORKSPACE_ID,
@@ -64,6 +66,36 @@ test("workspace launcher opens tools on demand and returns after closing the las
   await panel.getByRole("button", { name: "Close Context tab" }).click();
   await expect(panel.getByRole("tab")).toHaveCount(1);
   await expect(panel.getByRole("tabpanel", { name: "New tab" })).toBeVisible();
+});
+
+test("the Files panel shows the agent's edits and new files while it is open", async ({ aiden }) => {
+  const { page, lmStudio, workspaceDir } = aiden;
+  await writeFile(path.join(workspaceDir, "notes.md"), "first draft\n");
+  await finishLmStudioOnboarding(page);
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 900));
+  const panel = page.getByRole("complementary", { name: "Environment work surface" });
+  await page.locator("[data-environment-toggle]").click();
+  await panel.getByRole("button", { name: "Files", exact: true }).click();
+  const tree = panel.getByRole("region", { name: "Workspace files" });
+  await tree.getByRole("button", { name: /notes\.md/u }).first().click();
+  const editor = panel.getByRole("textbox", { name: "Edit notes.md" });
+  await expect(editor).toHaveValue("first draft\n");
+  const prompt = "Files panel test: update my notes and add a list.";
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [
+      { name: "edit_file", arguments: { path: "notes.md", old_string: "first draft", new_string: "second draft" } },
+      { name: "write_file", arguments: { path: "added.md", content: "- one\n" } },
+    ],
+    finalText: "Updated notes.md and added added.md.",
+  });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => scenario.completed).toBe(true);
+  expect(scenario.error).toBeUndefined();
+  // No refresh, reopen or tab switch: the open editor and the tree follow the agent.
+  await expect(editor).toHaveValue("second draft\n");
+  await expect(tree.getByRole("button", { name: /added\.md/u }).first()).toBeVisible();
 });
 
 test("Environment keeps its tabs, width and open state across a relaunch and answers its toggle command", async ({

@@ -14,7 +14,7 @@ import {
 } from "../../renderer/shared/app-controls.js";
 import { readAidenHelp } from "./aiden-app-knowledge.js";
 
-function fixture() {
+function fixture(options: { admit?: (control: string) => void } = {}) {
   const state: AppControlState = {
     settings: { memoryEnabled: true },
     workspace: { id: "work", name: "Project", memoryEnabled: true },
@@ -30,6 +30,7 @@ function fixture() {
       durable = structuredClone(items);
     },
     onChanged() {},
+    admit: (op) => options.admit?.(op.control),
     commit: async (op, context) => {
       if (!context.isCurrent()) throw new Error("revoked");
       commits++;
@@ -108,6 +109,22 @@ test("unknown effects retain intent and cannot run again after interrupted publi
   f.crash();
   await assert.rejects(f.service.apply(operation, f.context), /interrupted/u);
   assert.equal((await f.service.apply(operation, f.context)).status, "outcome_unknown");
+  assert.equal(f.commits(), 1);
+});
+test("a change the host can't take right now is refused before any intent is stored", async () => {
+  let busy = true;
+  const f = fixture({
+    admit: () => {
+      if (busy) throw new Error("Appearance is still saving");
+    },
+  });
+  const operation = f.operation();
+  await assert.rejects(f.service.apply(operation, f.context), /still saving/u);
+  assert.equal(f.commits(), 0);
+  assert.equal(f.state.settings.memoryEnabled, true);
+  busy = false;
+  // The same operation applies once the host is ready; nothing was left half-done.
+  assert.equal((await f.service.apply(operation, f.context)).status, "applied");
   assert.equal(f.commits(), 1);
 });
 test("stale revisions, revoked owners and read-only device grants deny effects", async () => {

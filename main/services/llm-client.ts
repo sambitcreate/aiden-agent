@@ -1,3 +1,4 @@
+import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched.js";
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
@@ -747,6 +748,10 @@ async function prepareBotSkillAuthority(
     toolNames: allowedToolNames,
   };
 }
+
+const notifyWorkspaceFilesTouched = createWorkspaceFilesTouchedNotifier({
+  broadcast: (workspaceId) => ipcMain.broadcast("workspace:files-touched", { workspaceId }),
+});
 
 function broadcastChatSettled(
   streamId: string,
@@ -4348,6 +4353,8 @@ export const llmClient = {
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
             });
+            // A failed command may still have written files, so only a denied call is skipped.
+            if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             break;
           }
           default:

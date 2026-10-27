@@ -149,6 +149,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "tts:event",
   "voice:stream-text",
   "workspaces:changed",
+  /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */
+  "workspace:files-touched",
   /** A workspace artifact was created, changed, refreshed or deleted: `WorkspaceArtifactsChangedEvent`. */
   "workspaces:artifacts-changed",
   /** Progress for a clone, sent only to the document that started it: `WorkspaceCloneProgress`. */

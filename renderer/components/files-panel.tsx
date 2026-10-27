@@ -17,7 +17,7 @@ import {
   WrapText,
 } from "lucide-react";
 import { AlertDialog, Button, EmptyState, Input, Text, toast } from "./ui";
-import { browserApi, workspacesApi } from "../lib/ipc";
+import { browserApi, onNotification, workspacesApi } from "../lib/ipc";
 import { queryKeys } from "../lib/queries";
 import { cn } from "../lib/ui-utils";
 import {
@@ -288,9 +288,30 @@ export function FilesPanel({
     loadedPathRef.current = restoredDirty ? restored?.selectedPath ?? null : null;
   }, [workspace?.id]);
 
+  // Re-read the open file after the agent may have changed it. A file with
+  // unsaved edits is left alone; its save reports the change on disk.
+  const refreshOpenFile = React.useCallback(async () => {
+    const shown = documentState.data;
+    if (!workspace?.id || !selectedPath || !active || interactionBlocked || saving) return;
+    if (!shown || dirty || loadedPathRef.current !== selectedPath) return;
+    const request = ++loadRequestRef.current;
+    try {
+      const data = await workspacesApi.readFile(workspace.id, selectedPath);
+      if (request !== loadRequestRef.current || draftRef.current !== shown.content) return;
+      setDocumentState({ data, error: null, loading: false });
+      draftRef.current = data.content;
+      setDraft(data.content);
+    } catch {
+      // Keep showing what was loaded; opening the file again reports the error.
+    }
+  }, [active, dirty, documentState.data, interactionBlocked, saving, selectedPath, workspace?.id]);
+
   const chooseFile = React.useCallback(
     (path: string) => {
-      if (path === selectedPath) return;
+      if (path === selectedPath) {
+        void refreshOpenFile();
+        return;
+      }
       if (interactionBlockedReason) {
         toast.info(interactionBlockedReason);
         return;
@@ -310,7 +331,7 @@ export function FilesPanel({
       setSelectedPath(path);
       setExpanded((current) => expandAncestors(path, current));
     },
-    [compact, dirty, interactionBlockedReason, saving, selectedPath],
+    [compact, dirty, interactionBlockedReason, refreshOpenFile, saving, selectedPath],
   );
 
   React.useLayoutEffect(() => {
@@ -342,6 +363,16 @@ export function FilesPanel({
     },
     [compact, dirty, selectedPath],
   );
+
+  React.useEffect(() => {
+    const workspaceId = workspace?.id;
+    if (!active || !available || interactionBlocked || !workspaceId) return;
+    return onNotification<{ workspaceId?: unknown }>("workspace:files-touched", (payload) => {
+      if (payload?.workspaceId !== workspaceId) return;
+      void refreshIndex();
+      void refreshOpenFile();
+    });
+  }, [active, available, interactionBlocked, refreshIndex, refreshOpenFile, workspace?.id]);
 
   React.useEffect(() => {
     if (!requestedPath || consumedRequestKeyRef.current === requestedPathKey) return;

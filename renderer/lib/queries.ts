@@ -65,6 +65,8 @@ export const queryKeys = {
   /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
   botLiveSummaries: ["bot-live-summary"] as const,
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
+  /** One Bot's routines (the Routines panel); `["bot-routines"]` matches every Bot's. */
+  botRoutines: (id: string) => ["bot-routines", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,

@@ -1214,6 +1214,13 @@ class BotLiveProjector {
     };
   }
 
+  /** Re-reads the transcript's connect cards, so one finished on the Mac shows Connected. */
+  refreshCards(): Promise<void> {
+    return this.serial(async () => {
+      if (!this.closed && this.view) await this.publish(this.view);
+    });
+  }
+
   private armIdle(): void {
     clearTimeout(this.idleTimer);
     if (this.closed || this.subscribers.size > 0) return;
@@ -2021,6 +2028,14 @@ export class AidenRemoteBotSessionService {
     if (!owned) return;
     this.subscriptions.delete(deviceId);
     for (const handle of [...owned]) handle.close();
+  }
+
+  /** An app was connected or set up on the Mac: open Bot streams re-read their pending connect cards. */
+  async refreshConnectCards(): Promise<void> {
+    const projectors = await Promise.allSettled([...this.projectors.values()]);
+    await Promise.all(
+      projectors.map((result) => (result.status === "fulfilled" ? result.value.refreshCards().catch(() => undefined) : undefined)),
+    );
   }
 
   async close(): Promise<void> {

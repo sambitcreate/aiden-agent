@@ -718,6 +718,31 @@ test("a connect card finished on the Mac reads as connected on the next fetch, w
   }
 });
 
+test("a phone watching the chat sees a connect card turn connected once the app is set up on the Mac", async () => {
+  const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    connected.add("gmail");
+    // What main does when an app's connection status changes on the Mac.
+    await service.refreshConnectCards();
+    await stream.until(
+      () => stream.frames.some((frame) => frame.type === "entry" && frame.payload.entry.type === "connect_card" && frame.payload.entry.status === "connected"),
+      "the connected card",
+    );
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
 test("a connection request for an app Aiden can't connect is refused without bothering the Mac", async () => {
   const requested: string[] = [];
   const service = new AidenRemoteBotSessionService({
