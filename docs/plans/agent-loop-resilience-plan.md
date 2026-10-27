@@ -1,6 +1,6 @@
 # Agent loop resilience
 
-Status: Steps 1, 1b and 2 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
+Status: Steps 1, 1b, 2 and 3 in review (2026-10-26). The owner chose the order, the split and each behavior below on 2026-10-26.
 
 The agent loop sends the conversation to the model, runs the tools the model asks for, feeds the results back, and repeats until the task is done. A 2026-10-26 comparison against OpenCode, Pi's coding agent and pi-gui found five places where Aiden's loop gives up sooner than it needs to. Each step is its own pull request, in this order.
 
@@ -54,7 +54,19 @@ Code: `main/services/cut-off-reply.ts` (what is kept and the continue request), 
 
 ## 3. Run safe tools side by side
 
-Reads, grep, find, web fetch and MCP reads in one batch run in parallel; anything else keeps the batch sequential. Approvals are still asked one at a time before anything runs.
+Before: every tool call ran one after another, even when the model asked for five file reads in one step.
+
+Now (desktop chats and subagents, which share the chat runtime):
+
+- When every call in one step is a read, the calls run at the same time, at most 4 at once; the rest wait for a free slot. Reads are `read_file`, `list_dir`, `glob` (find), `grep`, `web_search`, `web_fetch`, and MCP tools whose server marks them read-only (`readOnlyHint: true`, classified the same strict way subagent MCP reads are). A remote MCP tool cannot borrow a built-in read's name.
+- Anything else in the step (a write, a command, the browser, codemode, a tool marked sequential) keeps the whole step one call at a time, as before.
+- Approvals are still asked one at a time, and all of them before any call in the step starts. Results reach the model in the order it asked for them.
+
+How: the runtime switches Pi to `toolExecution: "parallel"` and, before every model request, marks each tool that is not a read `executionMode: "sequential"` (Pi then runs that step one call at a time). Reads share a per-run slot pool. Bots and the CLI keep their own settings.
+
+Code: `main/services/side-by-side-tools.ts`, the `prepareRequest` hook in `PiAgentRuntimeHarness`. Tests: `side-by-side-tools.test.ts` and the harness suite.
+
+The filesystem read guard allows 4 open reads across the whole app, so two chats reading side by side at the same moment can still get "Filesystem operations are busy; try again shortly." for a call; the model sees that as a tool error and can ask again.
 
 ## 4. Resume after a relaunch (desktop)
 

@@ -1,4 +1,5 @@
 import { MODEL_CALL_RETRY_POLICY } from "./model-call-retry.js";
+import { createSideBySideToolPolicy } from "./side-by-side-tools.js";
 import { cutOffContinuationMessage, keptCutOffReply, type CutOffReason } from "./cut-off-reply.js";
 import { verificationIdentity } from "./pi-verification-store.js";
 import { hostCommandObservation } from "./pi-host-command-observation.js";
@@ -1169,6 +1170,7 @@ export class PiAgentRuntimeHarness {
         }
       : agentOptions.streamFn;
 
+    const sideBySideTools = createSideBySideToolPolicy();
     const finishTurnExtensions = extensions.filter((extension) => extension.finishTurn !== undefined);
     const hostFinishTurn = agentOptions.finishTurn;
     const finishTurn: AgentOptions["finishTurn"] =
@@ -1203,9 +1205,18 @@ export class PiAgentRuntimeHarness {
       ...agentOptions,
       ...(providerStreamFn ? { streamFn: providerStreamFn } : {}),
       initialState,
-      // Aiden tools share workspace, scheduler, and external-service state.
-      // Pi defaults to parallel execution, so the host must state this policy.
-      toolExecution: "sequential",
+      // Aiden tools share workspace, scheduler, and external-service state,
+      // so only reads run side by side; every other tool is marked sequential
+      // on each request, which keeps its whole batch one call at a time.
+      toolExecution: "parallel",
+      prepareRequest: async (request, signal) => {
+        const hostUpdate = await agentOptions.prepareRequest?.(request, signal);
+        const context = hostUpdate?.context ?? request.context;
+        return {
+          ...hostUpdate,
+          context: { ...context, tools: sideBySideTools(context.tools ?? []) },
+        };
+      },
       identity: AIDEN_PI_CLIENT_IDENTITY,
       finishTurn,
       transformContext:

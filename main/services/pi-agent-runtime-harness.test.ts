@@ -251,6 +251,122 @@ test("Pi runtime harness preserves sequential execution for effectful tool batch
   ]);
 });
 
+test("reads in one batch run side by side after their approvals are asked one at a time", async () => {
+  const trace: string[] = [];
+  const gates = new Map<string, () => void>();
+  const makeRead = (name: string): AgentTool => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    execute: async () => {
+      trace.push(`${name}:start`);
+      await new Promise<void>((resolve) => gates.set(name, resolve));
+      trace.push(`${name}:end`);
+      return { content: [{ type: "text", text: "ok" }], details: null };
+    },
+  });
+  const read = makeRead("read_file");
+  const grep = makeRead("grep");
+  let approving = 0;
+  const { harness } = testHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(read.name, {}), fauxToolCall(grep.name, {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("done"),
+    ],
+    {
+      initialState: { tools: [read, grep] },
+      beforeToolCall: async ({ toolCall }) => {
+        approving += 1;
+        assert.equal(approving, 1, "one approval at a time");
+        trace.push(`${toolCall.name}:approved`);
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        approving -= 1;
+        return undefined;
+      },
+    },
+  );
+
+  const run = harness.prompt("read both");
+  for (let tick = 0; gates.size < 2; tick += 1) {
+    assert.ok(tick < 1_000, "both reads start before either finishes");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(trace, ["read_file:approved", "grep:approved", "read_file:start", "grep:start"]);
+  gates.get("grep")!();
+  gates.get("read_file")!();
+  await run;
+  const toolResults = harness.state.messages.filter((message) => message.role === "toolResult");
+  assert.deepEqual(toolResults.map((message) => message.toolName), ["read_file", "grep"]);
+});
+
+test("a run with many read steps keeps going and still caps reads at four at once", async () => {
+  let running = 0;
+  let peak = 0;
+  const read: AgentTool = {
+    name: "read_file",
+    label: "read_file",
+    description: "read_file",
+    parameters: Type.Object({}),
+    execute: async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      running -= 1;
+      return { content: [{ type: "text", text: "ok" }], details: null };
+    },
+  };
+  const steps = [
+    ...Array.from({ length: 6 }, () =>
+      fauxAssistantMessage([fauxToolCall(read.name, {})], { stopReason: "toolUse" }),
+    ),
+    fauxAssistantMessage(Array.from({ length: 6 }, () => fauxToolCall(read.name, {})), {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("done"),
+  ];
+  const { harness } = testHarness(steps, { initialState: { tools: [read] } });
+  const outcome = await Promise.race([
+    harness.prompt("read a lot").then(() => "finished"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("stalled"), 5_000)),
+  ]);
+  if (outcome === "stalled") harness.abort();
+  assert.equal(outcome, "finished");
+  assert.equal(messageText(harness.state.messages[harness.state.messages.length - 1]), "done");
+  assert.equal(peak, 4);
+});
+
+test("a read batched with a write runs one call at a time", async () => {
+  const trace: string[] = [];
+  const makeTool = (name: string): AgentTool => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    execute: async () => {
+      trace.push(`${name}:start`);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      trace.push(`${name}:end`);
+      return { content: [{ type: "text", text: "ok" }], details: null };
+    },
+  });
+  const read = makeTool("read_file");
+  const write = makeTool("write_file");
+  const { harness } = testHarness(
+    [
+      fauxAssistantMessage([fauxToolCall(read.name, {}), fauxToolCall(write.name, {})], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("done"),
+    ],
+    { initialState: { tools: [read, write] } },
+  );
+  await harness.prompt("read then write");
+  assert.deepEqual(trace, ["read_file:start", "read_file:end", "write_file:start", "write_file:end"]);
+});
+
 test("Pi 1.0 records requested thinking level through the legacy journal boundary", async () => {
   const checkpoint = createCompactionSummaryMessage("Keep migration decision", 10_000, 1);
   const { harness } = testHarness([fauxAssistantMessage("Continued on the current agent")], {
