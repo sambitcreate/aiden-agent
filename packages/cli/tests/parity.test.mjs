@@ -379,6 +379,118 @@ test("approved model scheduling persists one exact task and replay does not dupl
   assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
 });
 
+test("schedule save consent shows effective defaults before publishing them", async (t) => {
+  const { dir, workspace, model, tool, context } = await scheduleToolFixture(t);
+  let consent;
+  context.ui.confirm = async (_title, text) => {
+    consent = JSON.parse(text);
+    assert.equal(existsSync(join(dir, "schedules.json")), false, "confirmation must precede publication");
+    return true;
+  };
+  await tool.execute("defaulted-save", { action: "save", name: "Default review", cron: "0 9 * * *", prompt: "Review the workspace", workspaceId: workspace.id }, undefined, undefined, context);
+  for (const values of [consent.request, (await api.scheduleCommand(dir, ["list"]))[0]]) {
+    assert.equal(values.enabled, true);
+    assert.equal(values.permission, "read-only");
+    assert.equal(values.notify, true);
+    assert.equal(values.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    assert.equal(values.mode, "llm");
+    assert.equal(values.providerId, model.provider);
+    assert.equal(values.model, model.id);
+    assert.equal(values.workspaceId, workspace.id);
+    assert.deepEqual(values.mcpServerIds, []);
+    assert.deepEqual(values.mcpServerBindings, []);
+    assert.equal(values.webSearchEnabled, false);
+  }
+});
+
+test("a long existing prompt can be shortened while consent shows effective edit values", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, timezone: "Asia/Tokyo", mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  let consent;
+  context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
+  await tool.execute("shorten", { action: "save", id: task.id, name: "Short review", cron: "0 9 * * *", prompt: "Read the project status", workspaceId: task.workspaceId }, undefined, undefined, context);
+  assert.equal(consent.currentTask.enabled, false);
+  assert.equal(consent.request.enabled, true);
+  assert.equal(consent.request.permission, "read-only");
+  assert.equal(consent.request.timezone, "Asia/Tokyo");
+  assert.equal(consent.request.prompt, "Read the project status");
+  const [saved] = await api.scheduleCommand(dir, ["list"]);
+  assert.equal(saved.id, task.id);
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.permission, "read-only");
+  assert.equal(saved.timezone, "Asia/Tokyo");
+  assert.equal(saved.prompt, "Read the project status");
+});
+
+test("resume consent includes persisted instructions, execution mode and effective scope", async (t) => {
+  for (const mode of ["llm", "script"]) {
+    await t.test(mode, async (t) => {
+      const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+      const file = join(dir, "manual-task.json");
+      api.atomicJson(file, { ...input, mode, enabled: false, providerId: mode === "llm" ? model.provider : undefined,
+        model: mode === "llm" ? model.id : undefined, prompt: mode === "llm" ? "Summarize the project status" : undefined,
+        script: mode === "script" ? "audit.sh" : undefined, webSearchEnabled: mode === "llm" });
+      const task = await api.scheduleCommand(dir, ["save", file]);
+      let consent;
+      context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
+      await tool.execute("resume", { action: "resume", id: task.id }, undefined, undefined, context);
+      assert.equal(consent.currentTask.enabled, false);
+      const shown = consent.resumedTask;
+      assert.equal(shown.enabled, true);
+      assert.equal(shown.mode, mode);
+      assert.equal(shown.permission, "full");
+      assert.equal(shown.workspaceId, task.workspaceId);
+      assert.equal(shown.cron, "0 9 * * *");
+      assert.equal(shown.timezone, "UTC");
+      assert.equal(shown.notify, true);
+      assert.deepEqual(shown.mcpServerIds, []);
+      assert.deepEqual(shown.mcpServerBindings, []);
+      assert.equal(shown.webSearchEnabled, mode === "llm");
+      if (mode === "llm") {
+        assert.equal(shown.prompt, "Summarize the project status");
+        assert.equal(shown.providerId, model.provider);
+        assert.equal(shown.model, model.id);
+      } else {
+        assert.equal(shown.script, "audit.sh");
+      }
+      assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
+    });
+  }
+});
+
+test("an undisplayable resume leaves the disabled task unchanged without asking", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  const before = readFileSync(join(dir, "schedules.json"), "utf8");
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  await assert.rejects(tool.execute("resume-long", { action: "resume", id: task.id }, undefined, undefined, context), /display budget/);
+  assert.equal(confirmations, 0);
+  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
+  assert.equal(existsSync(join(dir, "schedule-proposals")), false);
+});
+
+test("invalid schedule arguments and specialized edits are refused before confirmation", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  const invalid = [{ ...input, prompt: " " }, { ...input, cron: "invalid" }, { ...input, timezone: "Unknown/Zone" }];
+  for (const [index, proposal] of invalid.entries()) {
+    await assert.rejects(tool.execute(`invalid-${index}`, proposal, undefined, undefined, context));
+  }
+  const file = join(dir, "owned-task.json");
+  api.atomicJson(file, { ...input, mode: "llm", enabled: false, providerId: model.provider, model: model.id, executionProfile: "assistant" });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  const before = readFileSync(join(dir, "schedules.json"), "utf8");
+  await assert.rejects(tool.execute("specialized-edit", { ...input, id: task.id }, undefined, undefined, context), /specialized owner/);
+  assert.equal(confirmations, 0);
+  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
+});
+
 test("schedule consent cannot survive changed arguments, provider configuration, workspace authority or cancellation", async (t) => {
   for (const change of ["arguments", "provider", "workspace", "cancel"]) {
     await t.test(change, async (t) => {
