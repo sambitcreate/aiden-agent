@@ -14,8 +14,27 @@ export interface RemoteQueueFence {
   runId: string;
   /** When it was accepted, for the stall fallback. */
   since: number;
-  /** The host's chat list has shown this chat working since the turn was accepted. */
+  /**
+   * The chat's activity in the host's list as last seen under this fence,
+   * starting with what the list said when the turn was accepted.
+   */
+  lastActivity?: "idle" | "active";
+  /**
+   * The list turned to working after the turn was accepted. A row that was
+   * already `active` then may still describe the previous run, so only a
+   * change to `active` counts.
+   */
   sawActive?: boolean;
+}
+
+/** The fence after the host's list reports `activity`; the same fence when nothing changed. */
+export function observeRemoteQueueFenceActivity(
+  fence: RemoteQueueFence,
+  activity: "idle" | "active" | undefined,
+): RemoteQueueFence {
+  if (activity === undefined || activity === fence.lastActivity) return fence;
+  const turnedActive = activity === "active" && fence.lastActivity !== "active" && fence.lastActivity !== undefined;
+  return { ...fence, lastActivity: activity, ...(turnedActive ? { sawActive: true } : {}) };
 }
 
 export interface RemoteQueueFenceView {
@@ -30,8 +49,8 @@ export const REMOTE_QUEUE_FENCE_STALL_MS = 120_000;
 
 /**
  * Whether the fence still holds. It lifts only on the host's own word that the
- * turn settled: its run was seen ending, or the host's chat list showed the
- * chat working and then idle again. The host saves the reply before it lets
+ * turn settled: its run was seen ending, or the host's chat list turned to
+ * working after the turn was accepted and then back to idle. The host saves the reply before it lets
  * the turn go, so a transcript ending in that reply proves nothing; the list
  * turns idle and the run ends only after the turn is released.
  */

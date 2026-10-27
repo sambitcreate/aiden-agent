@@ -46,6 +46,7 @@ import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import {
   REMOTE_QUEUE_FENCE_STALL_MS,
+  observeRemoteQueueFenceActivity,
   remoteQueueFence,
   remoteQueueFenceHolds,
   setRemoteQueueFence,
@@ -428,11 +429,13 @@ export function RemoteChatPane({
     now: Math.max(fenceClock, fence?.since ?? 0),
   });
   React.useEffect(() => {
-    // Remember the host showed this chat working, so its next idle means the turn is done.
-    if (fence && !fence.sawActive && hostActivity === "active" && turnKey && remoteQueueFence(turnKey) === fence) {
-      setRemoteQueueFence(turnKey, { ...fence, sawActive: true });
-    }
+    // Follow the host's list under this fence: a change to working, then idle, means the turn is done.
+    if (!fence || !turnKey || remoteQueueFence(turnKey) !== fence) return;
+    const next = observeRemoteQueueFenceActivity(fence, hostActivity);
+    if (next !== fence) setRemoteQueueFence(turnKey, next);
   }, [fence, hostActivity, turnKey]);
+  const hostActivityRef = React.useRef(hostActivity);
+  hostActivityRef.current = hostActivity;
   React.useEffect(() => {
     if (fence && !fenceHolds && turnKey && remoteQueueFence(turnKey) === fence) setRemoteQueueFence(turnKey, null);
   }, [fence, fenceHolds, turnKey]);
@@ -467,7 +470,10 @@ export function RemoteChatPane({
       // Bound now, so a receipt that lands after this pane closes still fences its chat.
       const key = turnKey;
       const receipt = await sendTurn(message.text, message.attachments, message.skillInvocation);
-      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now() });
+      if (receipt && key) {
+        const lastActivity = hostActivityRef.current;
+        setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now(), ...(lastActivity ? { lastActivity } : {}) });
+      }
     },
   });
   const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {
