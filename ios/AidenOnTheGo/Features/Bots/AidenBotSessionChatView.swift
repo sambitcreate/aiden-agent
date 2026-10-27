@@ -669,6 +669,7 @@ struct AidenBotSessionChatView: View {
                 // Mac says this tool can only be denied from a phone.
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: .action,
                     canRespond: canRespondToApprovals,
                     hasRequiredWriteCapability: canRespondToApprovals,
@@ -876,7 +877,7 @@ struct AidenBotSessionChatView: View {
 
     /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
     /// finished on the Mac or skipped, so the composer waits for either.
-    /// Revision 38: so does a password-or-code card, which takes no note.
+    /// Revision 40: so does a password-or-code card, which takes no note.
     private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
         model.isPaused || model.handoff?.kind == .signIn || model.composerHeldForNoNote
     }

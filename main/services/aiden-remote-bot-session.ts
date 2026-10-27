@@ -660,7 +660,7 @@ interface Audience {
   activity: boolean;
   /** `bot:handoffs`: the `handoff` frame and snapshot key, and the `paused` state (revision 37). */
   handoffs: boolean;
-  /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 38). */
+  /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
 }
 

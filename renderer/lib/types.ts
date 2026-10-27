@@ -1,5 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
-import type { ConnectorCatalogEntry } from "../shared/connector-catalog";
+import type { McpPreset } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -20,6 +20,7 @@ import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -646,6 +647,7 @@ export interface ChatMessage {
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
+  notice?: import("../shared/agent-notices").AgentNoticeV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;
@@ -813,12 +815,8 @@ export interface McpServer {
   hiddenTools?: string[];
 }
 
-export type { McpPresetAuth } from "../shared/connector-catalog";
-
 /** A built-in connector definition from the main-process catalog. */
-export interface McpPreset extends ConnectorCatalogEntry {
-  transport: "http";
-}
+export type { McpPreset, McpPresetAuth } from "../shared/connector-catalog";
 
 /** Catalog entry plus the user's connection state for it. */
 export interface McpPresetState {
@@ -936,6 +934,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
   tts?: TtsSettingsV1;
   voiceProvider?: VoiceProvider;
@@ -1160,6 +1160,7 @@ export type {
   McpDependent,
   McpLiveState,
   McpLiveStatus,
+  McpMacAppStatus,
   McpServerDependents,
   McpStatus,
   McpToolSummary,

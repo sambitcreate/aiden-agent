@@ -7,6 +7,7 @@ import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
 import { SafeMessageBubble } from "./message-bubble";
+import { AgentNoticeCard } from "./agent-notice-card";
 import type { ReadAloudActionProps } from "./read-aloud-button";
 import { MessageForkContextMenu, type MessageForkAction } from "./fork-message-button";
 import { MessageActions } from "./message-actions";
@@ -24,10 +25,12 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  isExtractionStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
+import { WebExtractRecap } from "./web-extract-recap";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -274,6 +277,9 @@ function AssistantResponse({
         {null /* the chronological layout's leading subagent slot */}
         {[
           <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          ...(timeline?.steps.filter(isExtractionStep).map((step) => (
+            <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+          )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
           )) ?? []),
@@ -337,6 +343,9 @@ function AssistantResponse({
         }
         if (row.kind === "questionnaire") {
           return <AskUserQuestionRecap key={row.key} recap={row.step.questionnaire} />;
+        }
+        if (row.kind === "extraction") {
+          return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
         }
         if (row.kind === "activity") {
           return (
@@ -464,7 +473,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [message, renderSettledUiVisual],
   );
   const fork = React.useMemo<MessageForkAction | undefined>(() => {
-    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant")) {
+    if (!message || !onFork || (message.role !== "user" && message.role !== "assistant") || message.notice) {
       return undefined;
     }
     const position: ChatForkPosition = message.role === "user" ? "before" : "after";
@@ -518,6 +527,8 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
             <ProviderFailureCallout failure={message.providerFailure} />
           ) : null}
         </>
+      ) : message.notice ? (
+        <AgentNoticeCard notice={message.notice} content={message.content} />
       ) : (
         <SafeMessageBubble
           role={message.role}

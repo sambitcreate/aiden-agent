@@ -54,7 +54,7 @@ function cardPage(url: string): string | undefined {
  * A waiting hand-off card as a `bot:handoffs` device sees it. A link that is
  * not a safe https page is left out, and so is a rule card's page: it is the
  * Bot's own tab on the Mac, and in the device's browser the step would act on
- * the person's own session. A card that takes no note says so (revision 38),
+ * the person's own session. A card that takes no note says so (revision 40),
  * so the device hides its note box.
  */
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {

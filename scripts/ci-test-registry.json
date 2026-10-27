@@ -78,6 +78,13 @@
         "main/handlers/create-images/parse.test.ts",
         "main/services/create-images/port-wiring-core.test.ts",
         "main/services/dictation-voice-check.test.ts",
+        "main/services/follow-through/background-job-tool.test.ts",
+        "main/services/follow-through/background-jobs.test.ts",
+        "main/services/follow-through/done-when.test.ts",
+        "main/services/follow-through/notice-delivery.test.ts",
+        "main/services/follow-through/pull-request-follow-github.test.ts",
+        "main/services/follow-through/pull-request-follow.test.ts",
+        "main/services/follow-through/pull-request-follows.test.ts",
         "main/services/local-voice-preload.test.ts",
         "main/services/settings-application-effects-core.test.ts",
         "main/services/local-speech-model-state.test.ts",
@@ -336,7 +343,12 @@
         "main/services/workspace-artifacts/store.test.ts",
         "main/services/workspace-artifacts/tool.test.ts",
         "main/handlers/workspace-artifacts.test.ts",
-        "main/services/workspace-artifacts/runner.test.ts"
+        "main/services/workspace-artifacts/runner.test.ts",
+        "main/services/web-fetch.test.ts",
+        "main/services/web-extract-core.test.ts",
+        "main/services/web-fetch-transport.test.ts",
+        "main/services/web-page-text.test.ts",
+        "main/handlers/web-fetch.test.ts"
       ],
       "preserved": [
         "browser",
@@ -376,6 +388,7 @@
         "main/services/mcp-dependents.test.ts",
         "main/services/mcp-exposure.test.ts",
         "main/services/mcp-field-secrets-core.test.ts",
+        "main/services/mcp-mac-apps.test.ts",
         "main/services/mcp-stdio-approvals.test.ts",
         "main/services/mcp-oauth-loopback.test.ts",
         "main/services/mcp-oauth-flow.test.ts",
@@ -401,6 +414,7 @@
         "main/services/schedule-execution-tool-policy.test.ts",
         "main/services/subagents/eligibility-harness.test.ts",
         "main/services/antigravity/definition.test.ts",
+        "main/services/aiden-remote-approval-schedule.test.ts",
         "main/services/aiden-remote-approved-roots.test.ts",
         "main/services/aiden-remote-bot-files.test.ts",
         "main/services/aiden-remote-bots.test.ts",
@@ -711,6 +725,7 @@
         "lease-flock-build"
       ],
       "files": [
+        "renderer/components/follow-through-chips.test.tsx",
         "renderer/components/settings/harness-runtime-section.test.tsx",
         "renderer/components/agent-approval-card.test.tsx",
         "renderer/components/settings/local-voice-settings.test.tsx",
@@ -1048,6 +1063,7 @@
         "renderer/shared/devices.test.ts",
         "renderer/shared/dictation-dictionary.test.ts",
         "renderer/shared/dictation-preferences.test.ts",
+        "renderer/shared/follow-through.test.ts",
         "renderer/shared/gemini-usage-scope.test.ts",
         "renderer/shared/onboarding.test.ts",
         "renderer/shared/provider-deployment.test.ts",
@@ -1146,7 +1162,13 @@
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
         "renderer/components/artifacts-panel.test.tsx",
-        "renderer/lib/chat-prompt-bridge.test.ts"
+        "renderer/lib/chat-prompt-bridge.test.ts",
+        "renderer/shared/web-extract.test.ts",
+        "renderer/shared/web-fetch-settings.test.ts",
+        "renderer/components/settings/web-page-settings.test.tsx",
+        "renderer/components/web-extract-recap.test.tsx",
+        "renderer/components/chat-approval-card.test.tsx",
+        "renderer/shared/tool-approval-preview.test.ts"
       ],
       "preserved": [
         "generative-ui-chromium",

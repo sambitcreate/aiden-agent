@@ -102,8 +102,10 @@ uncertain connection.
 ## Platform behavior
 
 The workspace agent, providers, local models, MCP, skills, Web Search,
+web page reading with extract mode,
 schedules, terminal, Git, file editor, generative UI artifacts, workspace
-artifacts, diagnostics,
+artifacts, coding follow-through (background jobs, followed pull requests and
+`/until` checks), diagnostics,
 Gemini voice transcription, remote access, notifications, profile, themes, and
 native subagents use the same contracts as macOS. Linux-specific integrations include:
 
@@ -133,7 +135,9 @@ build. Their settings, navigation, onboarding promises, helper bundles, and
 chat controls are omitted. Bot computers (a macOS VM per Bot) need a Mac with
 Apple silicon, so on Linux the Settings → Bot computers page, the Bot
 profile's Computer section, the Bot panel's Computer tab and the onboarding
-tour's Bot computers tile do not appear, and no Lume code runs. Global dictation remains available when the desktop can register its
+tour's Bot computers tile do not appear, and no Lume code runs. Connectors
+served by a Mac app (iMCP) are not offered: Settings → Connectors leaves out
+their cards, and a saved one carried over from a Mac never runs. Global dictation remains available when the desktop can register its
 shortcut, but the transcript is copied to the clipboard instead of using the
 macOS Accessibility auto-paste transaction. To use hold-to-dictate, choose Hold
 in Settings → Voice and assign a shortcut in your desktop’s Global Shortcuts

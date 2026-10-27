@@ -16,10 +16,12 @@ import {
   type WebSearchKeyPoolRendererState,
   type WebSearchKeyPoolTracker,
 } from "../services/web-search-key-pool-core.js";
-import type {
-  BoundedNonSecretProviderConfig,
-  WebSearchProviderId,
+import {
+  isWebSearchProviderId,
+  type BoundedNonSecretProviderConfig,
+  type WebSearchProviderId,
 } from "../services/web-search-provider-registry-core.js";
+import type { WebKeyPoolId } from "../../renderer/shared/web-search-key-pool.js";
 
 export const WEB_SEARCH_KEY_POOL_CHANNELS = Object.freeze([
   "webSearch:keyPool:get",
@@ -42,8 +44,8 @@ export interface WebSearchKeyPoolHandlerDependencies<Event> {
   ) => Promise<BoundedNonSecretProviderConfig | undefined>;
   /** Returns a liveness check for the sender document; throws for a foreign sender. */
   readonly owner: (event: Event) => { isDestroyed(): boolean };
-  /** Throws while a rollout fence forbids credential changes for this provider. */
-  readonly assertMutationAllowed: (providerId: WebSearchProviderId) => void;
+  /** Throws while a rollout fence forbids credential changes for this pool. */
+  readonly assertMutationAllowed: (providerId: WebKeyPoolId) => void;
 }
 
 const INACTIVE = "The renderer document is no longer active.";
@@ -59,9 +61,11 @@ export function registerWebSearchKeyPoolHandlers<Event>(
     if (!webSearchKeyPoolSupported(providerId)) {
       throw new Error("This Web Search provider does not support multiple API keys.");
     }
+    // Only a search provider has endpoint configuration; the extraction
+    // credential is bound to its fixed API origin.
     const reference = credentials.reference(
       providerId,
-      await dependencies.providerConfig(providerId),
+      isWebSearchProviderId(providerId) ? await dependencies.providerConfig(providerId) : undefined,
     );
     return { owner, providerId, reference, isCurrent: () => !owner.isDestroyed() };
   };

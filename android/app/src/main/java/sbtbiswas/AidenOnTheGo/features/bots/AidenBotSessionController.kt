@@ -315,7 +315,7 @@ enum class AidenBotComposerMode {
     /** A sign-in hand-off waits: it is finished on the Mac, or skipped on its card. */
     HELD_FOR_SIGN_IN,
     /**
-     * Revision 38: a card a password-or-code rule opened waits. It takes no note, so the composer
+     * Revision 40: a card a password-or-code rule opened waits. It takes no note, so the composer
      * holds: a code typed here would reach the Bot. Done and Skip on the card answer it.
      */
     HELD_FOR_NO_NOTE,
@@ -386,7 +386,7 @@ data class AidenBotSessionUiState(
     val handoff: AidenBotHandoff? get() = session?.handoff
     /** The composer's text goes to an action hand-off as Done's note, unless the card takes none. */
     val composerAnswersHandoff: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote != false
-    /** Revision 38: the waiting card takes no note, so the composer waits for Done or Skip. */
+    /** Revision 40: the waiting card takes no note, so the composer waits for Done or Skip. */
     val composerHeldForNoNote: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote == false
     /** A sign-in hand-off is finished on the Mac: the composer waits for it (Skip still answers). */
     val composerHeldForSignIn: Boolean get() = handoff?.kind == AidenBotHandoffKind.SIGN_IN
@@ -1521,7 +1521,7 @@ class AidenBotSessionController(
         val handoff = _state.value.session?.handoff ?: return false
         if (outcome == AidenBotHandoffOutcome.DONE && handoff.kind == AidenBotHandoffKind.SIGN_IN) return false
         val trimmed = note?.trim()?.takeIf { it.isNotEmpty() }
-        // A card that takes no note (revision 38) is answered bare: a code typed as a note never leaves the phone.
+        // A card that takes no note (revision 40) is answered bare: a code typed as a note never leaves the phone.
         if (trimmed != null && !handoff.takesNote) return false
         if (trimmed != null && trimmed.codePointCount(0, trimmed.length) > AidenBotHandoffWire.MAX_NOTE_LENGTH) {
             _state.update { it.copy(actionError = HANDOFF_NOTE_TOO_LONG) }

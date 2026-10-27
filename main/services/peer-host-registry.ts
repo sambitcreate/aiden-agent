@@ -115,7 +115,7 @@ export interface PeerClient {
  * It has no feature token of its own, so it is asked for only when the host
  * lists it in `serverCapabilities`, and in a call of its own after the rest
  * (`"own_call"`): a host that does not know a name refuses the whole request.
- * `bot:handoff-notes` (revision 38), asked for the same way, also tells this
+ * `bot:handoff-notes` (revision 40), asked for the same way, also tells this
  * Mac when a hand-off card takes no note.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [

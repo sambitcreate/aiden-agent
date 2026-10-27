@@ -11,29 +11,31 @@ import { webSearchApi } from "../../lib/ipc";
 import {
   formatWebSearchKeyPoolCooldown,
   moveWebSearchKeyPoolEntry,
-  type WebSearchKeyPoolProviderId,
+  type WebKeyPoolId,
   type WebSearchKeyPoolRendererEntry,
   type WebSearchKeyPoolRendererState,
   type WebSearchKeyPoolStrategy,
 } from "../../shared/web-search-key-pool";
 
-const STRATEGY_OPTIONS: ReadonlyArray<{
+function strategyOptions(use: "search" | "extraction"): ReadonlyArray<{
   value: WebSearchKeyPoolStrategy;
   title: string;
   description: string;
-}> = [
-  {
-    value: "ordered",
-    title: "In order",
-    description:
-      "Always start with the first key. Later keys are used only when earlier ones fail.",
-  },
-  {
-    value: "round-robin",
-    title: "Round robin",
-    description: "Start each search on the next key to spread usage evenly across the pool.",
-  },
-];
+}> {
+  return [
+    {
+      value: "ordered",
+      title: "In order",
+      description:
+        "Always start with the first key. Later keys are used only when earlier ones fail.",
+    },
+    {
+      value: "round-robin",
+      title: "Round robin",
+      description: `Start each ${use} on the next key to spread usage evenly across the pool.`,
+    },
+  ];
+}
 
 /** Status label for one pooled key; exported for rendering tests. */
 export function webSearchKeyPoolEntryStatus(
@@ -186,10 +188,13 @@ function hasActiveCooldown(state: WebSearchKeyPoolRendererState | null, now: num
 export function WebSearchKeyPoolEditor({
   providerId,
   providerLabel,
+  use = "search",
   onChanged,
 }: {
-  providerId: WebSearchKeyPoolProviderId;
+  providerId: WebKeyPoolId;
   providerLabel: string;
+  /** What one request with a key is called in the copy. */
+  use?: "search" | "extraction";
   /** Called after a successful change so the provider snapshot can refresh. */
   onChanged?: () => void;
 }) {
@@ -255,7 +260,9 @@ export function WebSearchKeyPoolEditor({
     if (!value) return;
     const added = await run(
       () => webSearchApi.keyPool.add(providerId, value, labelDraft.trim() || undefined),
-      "Key added to the pool. Saving does not select the provider or send a test request.",
+      use === "search"
+        ? "Key added to the pool. Saving does not select the provider or send a test request."
+        : "Key added to the pool. Saving does not send a test request.",
       "Couldn’t add the API key.",
     );
     if (added) {
@@ -297,7 +304,7 @@ export function WebSearchKeyPoolEditor({
             onResetCooldown={(entry) =>
               void run(
                 () => webSearchApi.keyPool.resetCooldown(providerId, entry.id),
-                `${entry.label} will be tried on the next search.`,
+                `${entry.label} will be tried on the next ${use}.`,
                 "Couldn’t clear the cooldown.",
               )
             }
@@ -374,7 +381,7 @@ export function WebSearchKeyPoolEditor({
             className="grid gap-2"
             disabled={busy}
           >
-            {STRATEGY_OPTIONS.map((option) => (
+            {strategyOptions(use).map((option) => (
               <label
                 key={option.value}
                 htmlFor={`web-search-${providerId}-rotation-${option.value}`}

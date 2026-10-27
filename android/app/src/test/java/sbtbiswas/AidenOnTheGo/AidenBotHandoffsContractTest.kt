@@ -206,7 +206,7 @@ class AidenBotHandoffsContractTest {
         refuses(handoff.with("takesNote" to JsonPrimitive(true)))
         refuses(handoff.with("takesNote" to JsonPrimitive("false")))
         refuses(handoff.with("takesNote" to JsonNull))
-        // Revision 38: a password-or-code card says it takes no note, only ever as false.
+        // Revision 40: a password-or-code card says it takes no note, only ever as false.
         val noNote = handoffs.getValue("noNoteHandoff").jsonObject
         val decodedNoNote = AidenBotHandoff.parse(noNote)
         assertEquals(false, decodedNoNote.takesNote)

@@ -10,6 +10,16 @@
 export const WEB_SEARCH_KEY_POOL_PROVIDER_IDS = Object.freeze(["tavily"] as const);
 export type WebSearchKeyPoolProviderId = (typeof WEB_SEARCH_KEY_POOL_PROVIDER_IDS)[number];
 
+/**
+ * Non-search credentials kept in the same pool: the Cloudflare Workers AI key
+ * that `web_fetch` extract mode uses for its extraction model.
+ */
+export const WEB_EXTRACT_KEY_POOL_IDS = Object.freeze(["cloudflare-workers-ai"] as const);
+export type WebExtractKeyPoolId = (typeof WEB_EXTRACT_KEY_POOL_IDS)[number];
+
+/** Every credential that can hold a key pool. */
+export type WebKeyPoolId = WebSearchKeyPoolProviderId | WebExtractKeyPoolId;
+
 export const MAX_WEB_SEARCH_KEY_POOL_ENTRIES = 8;
 export const MAX_WEB_SEARCH_KEY_POOL_LABEL_CHARS = 48;
 /** The pre-pool single credential slot is always addressed by this entry ID. */
@@ -40,7 +50,7 @@ export interface WebSearchKeyPoolRendererEntry extends WebSearchKeyPoolEntryMeta
 }
 
 export interface WebSearchKeyPoolRendererState {
-  readonly providerId: WebSearchKeyPoolProviderId;
+  readonly providerId: WebKeyPoolId;
   readonly strategy: WebSearchKeyPoolStrategy;
   readonly maxEntries: number;
   readonly entries: readonly WebSearchKeyPoolRendererEntry[];
@@ -55,6 +65,14 @@ export function isWebSearchKeyPoolProviderId(value: unknown): value is WebSearch
     typeof value === "string" &&
     (WEB_SEARCH_KEY_POOL_PROVIDER_IDS as readonly string[]).includes(value)
   );
+}
+
+export function isWebExtractKeyPoolId(value: unknown): value is WebExtractKeyPoolId {
+  return typeof value === "string" && (WEB_EXTRACT_KEY_POOL_IDS as readonly string[]).includes(value);
+}
+
+export function isWebKeyPoolId(value: unknown): value is WebKeyPoolId {
+  return isWebSearchKeyPoolProviderId(value) || isWebExtractKeyPoolId(value);
 }
 
 export function isWebSearchKeyPoolStrategy(value: unknown): value is WebSearchKeyPoolStrategy {

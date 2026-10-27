@@ -222,7 +222,7 @@ enum AidenBotSessionCopy {
     static let handoffOpen = "Open"
     static let handoffNotePlaceholder = "Add a note and send to mark it done"
     static let signInPlaceholder = "Finish signing in on your Mac, or skip it."
-    /// Revision 38: a password-or-code card takes no note, so the composer waits.
+    /// Revision 40: a password-or-code card takes no note, so the composer waits.
     static let handoffNoNotePlaceholder = "Enter it yourself, then tap Done."
     static let handoffExpired = "That card was already answered or closed."
     static let handoffNotSent = "That answer wasn’t sent. Please try again."
@@ -2014,10 +2014,10 @@ final class AidenBotSessionModel {
 
     /// While a step (not a sign-in) waits, the composer's text is its note:
     /// Send marks the step done (desktop parity). A card that takes no note
-    /// (revision 38) holds the composer instead (`composerHeldForNoNote`).
+    /// (revision 40) holds the composer instead (`composerHeldForNoNote`).
     var composerAnswersHandoff: Bool { handoff?.kind == .action && handoff?.takesNote != false }
 
-    /// Revision 38: a password-or-code card waits. A code typed in the
+    /// Revision 40: a password-or-code card waits. A code typed in the
     /// composer would reach the Bot, so the composer waits for Done or Skip.
     var composerHeldForNoNote: Bool { handoff?.kind == .action && handoff?.takesNote == false }
 

@@ -545,7 +545,7 @@ enum class AidenBotHandoffKind(val wireValue: String) {
  * ("Your turn: …"), on the session's `handoff` and on `handoff` frames. It is answered once by
  * [waitId] through `POST /bots/{botId}/handoffs/{waitId}/answer` with Done or Skip. A sign-in
  * is finished in the Bot's own browser on the Mac, so a phone offers Finish on your Mac and Skip.
- * Revision 38: a card a password-or-code rule opened carries `takesNote: false` ([takesNote]).
+ * Revision 40: a card a password-or-code rule opened carries `takesNote: false` ([takesNote]).
  */
 data class AidenBotHandoff(
     val waitId: String,
@@ -556,7 +556,7 @@ data class AidenBotHandoff(
     /** The https page the step happens on, opened in the phone's browser. */
     val openUrl: String? = null,
     /**
-     * Revision 38: false on a card whose answer may carry no note (a password-or-code rule opened
+     * Revision 40: false on a card whose answer may carry no note (a password-or-code rule opened
      * it), so the composer holds instead of sending a code to the Bot as Done's note.
      */
     val takesNote: Boolean = true

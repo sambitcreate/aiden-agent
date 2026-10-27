@@ -74,7 +74,7 @@ const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
  * note can never reach the Bot; it is answered on the card itself. (A sign-in
  * may still carry a note with Skip; no composer sends one with it.) A paired
  * Mac's card names no rule and says `takesNote: false` instead (Remote
- * contract revision 38).
+ * contract revision 40).
  */
 export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule"> & { takesNote?: boolean }): boolean {
   if (handoff.takesNote === false) return false;

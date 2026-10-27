@@ -2192,7 +2192,7 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card))
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.filter { $0.key != "why" && $0.key != "open" }), "why and open are optional")
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["kind": "sign_in"]) { $1 }))
-        // Revision 38: a password-or-code card says it takes no note, and only ever as false.
+        // Revision 40: a password-or-code card says it takes no note, and only ever as false.
         let noNote = try XCTUnwrap(raw["noNoteHandoff"] as? [String: Any])
         let decodedNoNote = try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: noNote))
         XCTAssertFalse(decodedNoNote.takesNote)

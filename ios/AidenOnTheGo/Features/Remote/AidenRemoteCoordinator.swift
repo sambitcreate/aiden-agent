@@ -822,12 +822,24 @@ final class AidenRemoteCoordinator {
             installationId: installation.id,
             generation: generation
         )
-        await negotiateBotHandoffsIfNeeded(
-            client: client,
-            installationId: installation.id,
-            generation: generation
-        )
+        for capabilities in Self.capabilitiesAskedForAlone {
+            await negotiateCapabilityAloneIfNeeded(
+                capabilities,
+                client: client,
+                installationId: installation.id,
+                generation: generation
+            )
+        }
     }
+
+    /// Opt-ins a Mac older than their revision refuses by name, in the order
+    /// they are asked for after the progress batch: `bot:handoffs` (revision
+    /// 37), with `bot:handoff-notes` (revision 40) in the same call when the
+    /// Mac offers it, then `schedule:cards` (revision 39).
+    static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
+        [.botHandoffs, .botHandoffNotes],
+        [.scheduleCards],
+    ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
     /// after the authenticated server advertises the matching feature. A
@@ -884,24 +896,31 @@ final class AidenRemoteCoordinator {
         }
     }
 
-    /// Contract revision 37: `bot:handoffs` is asked for in a call of its own,
-    /// after the progress batch. A Mac that does not know a name refuses the
-    /// whole request with a 400, so naming it in the batch could cost the
-    /// device every other opt-in. A refusal leaves the earlier grants as they are.
-    /// Revision 38: `bot:handoff-notes` joins that call only when the Mac
-    /// offers it, so a Mac on revision 37 still grants `bot:handoffs`.
-    private func negotiateBotHandoffsIfNeeded(
+    /// Contract revisions 37 and 39: `bot:handoffs` and `schedule:cards` are
+    /// each asked for in a call of their own, after the progress batch, and
+    /// only while the Mac lists them in `serverCapabilities`. A Mac that does
+    /// not know a name refuses the whole request with a 400, so naming it in
+    /// the batch could cost the device every other opt-in. A refusal leaves the
+    /// earlier grants as they are. Revision 40: the rest of a group, such as
+    /// `bot:handoff-notes`, joins its first opt-in's call only while the Mac
+    /// offers that first one and lists the member too, so a Mac on an earlier
+    /// revision still grants `bot:handoffs`, and a device that holds it asks
+    /// for the notes alone once its Mac updates.
+    private func negotiateCapabilityAloneIfNeeded(
+        _ capabilities: [AidenRemoteCapability],
         client: AidenRemoteClient,
         installationId: String,
         generation: Int
     ) async {
         guard isCurrentContext(installationId: installationId, generation: generation),
-              let server = self.server, server.instanceId == installationId, server.offersBotHandoffs,
+              let server = self.server, server.instanceId == installationId,
+              let first = capabilities.first, server.serverCapabilities?.contains(first) == true,
               let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return
         }
-        let offered: [AidenRemoteCapability] = server.offersBotHandoffNotes ? [.botHandoffs, .botHandoffNotes] : [.botHandoffs]
-        let missing = offered.filter { !installation.hasNegotiatedAccess(to: $0) }
+        let missing = capabilities.filter {
+            server.serverCapabilities?.contains($0) == true && !installation.hasNegotiatedAccess(to: $0)
+        }
         guard !missing.isEmpty else { return }
         do {
             let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
@@ -923,7 +942,8 @@ final class AidenRemoteCoordinator {
                 return
             }
             // A Mac without the route, or a refusal (400 or 404), keeps the
-            // grants the device already has; hand-offs stay on the Mac.
+            // grants the device already has: hand-offs stay on the Mac, and
+            // scheduled-task approvals keep the summary card.
         }
     }
 

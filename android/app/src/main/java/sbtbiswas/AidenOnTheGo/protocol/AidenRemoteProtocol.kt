@@ -550,11 +550,18 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
         /**
-         * Contract revision 38: a hand-off card that takes no note says so (`takesNote`). It
-         * grants no authority. A Mac on revision 37 refuses the name, so this phone asks for it
-         * only from a Mac that offers it, in the hand-offs call.
+         * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
+         * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
+         * for it only from a Mac that offers it, in the hand-offs call.
          */
         val BOT_HANDOFF_NOTES = AidenRemoteCapability("bot:handoff-notes")
+        /**
+         * Contract revision 39: this phone renders the structured `schedule` card
+         * on scheduled-task approvals. It grants no authority: the Mac attaches the card only
+         * when the device also holds `schedule:read`. There is no `/server` feature token: the
+         * Mac offers it only in `serverCapabilities`, and it is asked for in a call of its own.
+         */
+        val SCHEDULE_CARDS = AidenRemoteCapability("schedule:cards")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -582,13 +589,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
         val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS, BOT_HANDOFF_NOTES)
 
+        /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS
     }
 }
 

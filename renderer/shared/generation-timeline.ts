@@ -4,6 +4,7 @@ import {
   parseAskUserQuestionRecap,
   type AskUserQuestionRecapV1,
 } from "./ask-user-question.js";
+import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap, type WebExtractRecapV1 } from "./web-extract.js";
 export const GENERATION_TIMELINE_VERSION = 3 as const;
 
 /** Versions this build can still replay from local chat storage. */
@@ -51,6 +52,11 @@ export interface AgentToolStep {
    * and answers in place of the generic activity line.
    */
   questionnaire?: AskUserQuestionRecapV1;
+  /**
+   * The values a completed `web_fetch` extract call read, each with the page
+   * line it came from. Display-only; never the page or the request.
+   */
+  extraction?: WebExtractRecapV1;
 }
 
 /** One uninterrupted stretch of model reasoning between tool calls. */
@@ -177,6 +183,8 @@ function parseToolStep(
   const producedFile = parseProducedFile(step.producedFile, String(step.toolName));
   const questionnaire =
     step.questionnaire === undefined ? undefined : parseAskUserQuestionRecap(step.questionnaire);
+  const extraction =
+    step.extraction === undefined ? undefined : parseWebExtractRecap(step.extraction);
   const rawLineChanges = step.lineChanges;
   const lineChanges =
     rawLineChanges && typeof rawLineChanges === "object"
@@ -202,6 +210,11 @@ function parseToolStep(
       (!allowLineChanges ||
         !questionnaire ||
         step.toolName !== ASK_USER_QUESTION_TOOL_NAME ||
+        step.status !== "completed")) ||
+    (step.extraction !== undefined &&
+      (!allowLineChanges ||
+        !extraction ||
+        step.toolName !== WEB_FETCH_TOOL_NAME ||
         step.status !== "completed")) ||
     (rawLineChanges !== undefined &&
       (!allowLineChanges ||
@@ -233,6 +246,7 @@ function parseToolStep(
     ...(producedFile ? { producedFile } : {}),
     ...(step.detail === undefined ? {} : { detail: step.detail as string }),
     ...(questionnaire ? { questionnaire } : {}),
+    ...(extraction ? { extraction } : {}),
     ...(lineChanges === undefined
       ? {}
       : {

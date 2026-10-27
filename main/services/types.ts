@@ -23,6 +23,7 @@ import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
+import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
@@ -348,6 +349,8 @@ export interface ChatMessage {
   visualSnapshots?: VisualSnapshotRefV1[];
   /** Safe display-only provenance for an explicitly invoked skill. */
   skill?: SkillProvenanceV1;
+  /** A user-role follow-up notice (job ended, pull request news, check result), drawn as a card. */
+  notice?: import("../../renderer/shared/agent-notices.js").AgentNoticeV1;
   /** Renderer-safe tool milestones associated with this assistant response. */
   timeline?: GenerationTimeline;
   /** Content-free turn duration and provider-reported token totals for the footer. */
@@ -773,6 +776,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */

@@ -605,7 +605,7 @@ enum AidenBotHandoffKind: String, Codable, Sendable {
 /// The hand-off a Bot waits on (`handoff` on the session and `handoff` frames).
 /// Answered once, by `waitId`: Done or Skip, with an optional note. A sign-in
 /// is finished on the Mac, so the phone offers Finish on your Mac and Skip.
-/// Revision 38: a card a password-or-code rule opened carries
+/// Revision 40: a card a password-or-code rule opened carries
 /// `takesNote: false` (`takesNote`), so it is answered without a note.
 struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     struct Open: Codable, Equatable, Sendable {
@@ -631,7 +631,7 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     let action: String
     let why: String?
     let open: Open?
-    /// Revision 38: false on a card whose answer may carry no note, so the
+    /// Revision 40: false on a card whose answer may carry no note, so the
     /// composer holds instead of sending a code to the Bot as Done's note.
     let takesNote: Bool
 
@@ -660,7 +660,7 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "kind", "action", "why", "open", "takesNote"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        // Only ever `false` when present (revision 38).
+        // Only ever `false` when present (revision 40).
         let takesNote = try AidenBotWire.optional(Bool.self, from: values, forKey: .takesNote)
         if takesNote == true { throw AidenBotContractError.invalidField("takesNote") }
         try self.init(

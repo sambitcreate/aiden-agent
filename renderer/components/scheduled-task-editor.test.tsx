@@ -30,7 +30,7 @@ function renderApproval(details: unknown) {
 
 test("task approval discloses instructions, runtime, exact connectors and paused scheduling", () => {
   const markup = renderApproval(approval);
-  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email (mail-1)", "America/New_York", "will not run automatically"]) {
+  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email", "mail-1", "America/New_York", "will not run automatically"]) {
     assert.ok(markup.includes(text), `Missing approval disclosure: ${text}`);
   }
   assert.ok(markup.includes("Allow once"));

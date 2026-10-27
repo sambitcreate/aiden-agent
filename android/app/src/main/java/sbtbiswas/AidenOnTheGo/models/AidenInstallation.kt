@@ -163,13 +163,27 @@ data class AidenServer(
     val offersBotHandoffs: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFFS) == true
 
-    /** The Mac offers `bot:handoff-notes` (revision 38). Only a Mac serving hand-offs offers it. */
+    /** The Mac offers `bot:handoff-notes` (revision 40). Only a Mac serving hand-offs offers it. */
     val offersBotHandoffNotes: Boolean
         get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_NOTES) == true
 
     /** Offered and held: show hand-off cards, the paused state, and Pause and Resume. */
     val supportsBotHandoffs: Boolean
         get() = offersBotHandoffs && capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS)
+
+    /**
+     * The Mac offers `schedule:cards` (revision 39). Like `bot:handoffs`, the offer
+     * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
+     */
+    val offersScheduleCards: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.SCHEDULE_CARDS) == true
+
+    /**
+     * Offered and held: scheduled-task approvals may carry a `schedule` card. Informational
+     * only; the card renders whenever an approval carries a valid one.
+     */
+    val supportsScheduleCards: Boolean
+        get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:

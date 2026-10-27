@@ -1,3 +1,4 @@
+import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
@@ -530,7 +531,7 @@ function chatRevision(chat: Chat): string {
       .map((message) => ({
         id: message.id,
         role: message.role,
-        content: message.content,
+        content: remoteMessageText(message),
         reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
           ? message.reasoning : null,
         createdAt: message.createdAt,
@@ -592,6 +593,15 @@ function safeSummaryMetadata(meta: Readonly<ChatMeta>): SafeSummaryRow | null {
   };
 }
 
+/**
+ * Phones draw a follow-up notice as one readable line; its full text (with
+ * fenced command output) stays model-facing on the Mac.
+ */
+function remoteMessageText(message: ChatMessage): string {
+  const notice = message.role === "user" ? parseAgentNoticeV1(message.notice) : undefined;
+  return notice ? agentNoticeDisplayText(notice) : message.content;
+}
+
 function projectMessage(
   chat: Chat,
   message: ChatMessage & { role: "user" | "assistant" },
@@ -600,7 +610,7 @@ function projectMessage(
   const visuals = projectMessageVisuals(message, attachments);
   const appPanels = parseAppControlPanels(message.appPanels);
   const outcome = projectMessageOutcome(message);
-  const text = boundedUnicodeScalarPrefix(message.content, 200_000);
+  const text = boundedUnicodeScalarPrefix(remoteMessageText(message), 200_000);
   const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
     message.reasoning.length <= 100_000 ? message.reasoning : undefined;
   const storedTimeline = projectMessageTimeline(message);

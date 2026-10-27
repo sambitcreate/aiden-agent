@@ -324,12 +324,6 @@ struct AidenServer: Codable, Equatable, Sendable {
         serverCapabilities?.contains(.botHandoffs) == true
     }
 
-    /// The Mac offers `bot:handoff-notes` (revision 38), so this device may ask
-    /// for it. Only a Mac that also serves `bot:handoffs` offers it.
-    var offersBotHandoffNotes: Bool {
-        offersBotHandoffs && serverCapabilities?.contains(.botHandoffNotes) == true
-    }
-
     /// This device holds `bot:handoffs`: show hand-off cards and the paused
     /// state, and offer Pause and Resume.
     var supportsBotHandoffs: Bool {
@@ -1063,7 +1057,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes,
-            .appControlsRead, .appControlsRespond,
+            .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,

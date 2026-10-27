@@ -10,7 +10,7 @@ import { boundedString, isRecord, parseRawPullRequest } from "./github-pull-requ
 /** Head-branch lookups read this many PRs; a full page means the answer may be truncated. */
 export const BRANCH_LOOKUP_LIMIT = 30;
 
-const PULL_REQUEST_FRAGMENT = `fragment AidenPullRequest on PullRequest {
+export const PULL_REQUEST_FRAGMENT = `fragment AidenPullRequest on PullRequest {
   number title url state isDraft headRefName baseRefName headRefOid
   author { login } reviewDecision mergeable updatedAt
   headRepositoryOwner { login }

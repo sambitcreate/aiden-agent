@@ -36,6 +36,7 @@ import { parseGenerationTimeline } from "../../renderer/shared/generation-timeli
 import { parseSubagentMessageReferenceV1 } from "../../renderer/shared/subagent-runs.js";
 import { migrateLegacyPiProviderId } from "../../renderer/shared/google-provider.js";
 import { parseSkillProvenanceV1 } from "../../renderer/shared/slash-commands.js";
+import { parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { safeStoredAttachments } from "./attachment-contract.js";
 import { parseChatHtmlArtifacts, parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
 import { parseChatUiVisualV1, parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
@@ -889,6 +890,10 @@ export function createChatStore(
           message.role === "user"
             ? parseSkillProvenanceV1(message.skill)
             : undefined,
+        notice:
+          message.role === "user"
+            ? parseAgentNoticeV1(message.notice)
+            : undefined,
       };
     });
     if (policy !== "pure") {
@@ -1473,6 +1478,10 @@ export function createChatStore(
               message.role === "user"
                 ? parseSkillProvenanceV1(message.skill)
                 : undefined,
+            notice:
+              message.role === "user"
+                ? parseAgentNoticeV1(message.notice)
+                : undefined,
             providerFailure:
               message.role === "assistant"
                 ? parseProviderFailureV1(message.providerFailure)
@@ -1842,6 +1851,10 @@ export function createChatStore(
           skill:
             message.role === "user"
               ? parseSkillProvenanceV1(message.skill)
+              : undefined,
+          notice:
+            message.role === "user"
+              ? parseAgentNoticeV1(message.notice)
               : undefined,
           timeline:
             message.role === "assistant"

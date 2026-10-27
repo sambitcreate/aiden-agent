@@ -1,4 +1,8 @@
 import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import {
+  parseAidenRemoteApprovalSchedule,
+  type AidenRemoteApprovalSchedule,
+} from "./aiden-remote-approval-schedule.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import type {
   ChatRunInputMode,
@@ -87,7 +91,23 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * without it see a paused Bot as unavailable, a pending hand-off as an
  * assistant notice, and `operation_stale` for writes to a paused Bot.
  *
- * Contract revision 38 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 38: completed `web_fetch` tool steps on a version 3 generation timeline may carry
+ * a display-only `extraction` recap of the values an extract call read, each
+ * with the page line it came from; older clients ignore it.
+ */
+export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
+export const AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION = 38 as const;
+/**
+ * Contract revision 39: rich scheduled-task approval cards (`schedule:cards`).
+ * A device holding `schedule:cards` and `schedule:read` receives an optional,
+ * bounded `schedule` object on scheduled-task approvals, both the stream approval
+ * snapshot and the phone run `approval_required` event. It is display-only:
+ * it never changes `canAllow`, never appears in `details`, and devices
+ * without it keep the summary-only card.
+ */
+export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
+/**
+ * Contract revision 40 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION`):
  * a device that also negotiates `bot:handoff-notes` is told when a hand-off
  * card takes no note (one a password-or-code rule opened): the card carries
@@ -95,8 +115,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * from a `400` that the note was refused. Revision 37 shipped in v0.61.0,
  * whose closed hand-off decoder rejects the key, so only holders get it.
  */
-export const AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION = 37 as const;
-export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 38 as const;
+export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -272,7 +291,7 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
  * `handoff` field and frames, the `paused` session state and Bot `paused`
  * flags, and the `bot_paused` error code; it may call the hand-off answer,
  * open-on-Mac and pause routes. It is an opt-in like `bot:cards`: the routes
- * still need `bot:read` and `bot:write`. Revision 38: `bot:handoff-notes`,
+ * still need `bot:read` and `bot:write`. Revision 40: `bot:handoff-notes`,
  * offered beside it, adds `takesNote: false` to a card that takes no note; it
  * changes nothing without `bot:handoffs`.
  */
@@ -287,6 +306,20 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
 ] as const;
 
+/**
+ * Contract revision 39: a device holding `schedule:cards` (with
+ * `schedule:read`) receives the `schedule` object on scheduled-task approvals.
+ * It grants no authority and never changes `canAllow`; any device type may
+ * hold it.
+ */
+export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as const;
+
+/** Every opt-in a paired device may persist: display changes, never authority. */
+export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
+  ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
+  ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+] as const;
+
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
 export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_PROGRESS_CAPABILITIES,
@@ -296,6 +329,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -311,6 +345,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
@@ -1386,7 +1421,7 @@ export interface AidenRemoteBotHandoff {
   /** An https page that helps. */
   open?: { url: string };
   /**
-   * Contract revision 38: present, as `false`, only on a card whose answer
+   * Contract revision 40: present, as `false`, only on a card whose answer
    * may carry no note (a password-or-code rule opened it). Absent means a
    * note is welcome.
    */
@@ -1720,6 +1755,8 @@ export interface AidenRemoteContractFixture {
   botAttachments?: AidenRemoteBotAttachmentsFixture;
   /** Revision 37 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
   botHandoffs?: AidenRemoteBotHandoffsFixture;
+  /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
+  scheduleCards?: AidenRemoteScheduleCardsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -6032,7 +6069,7 @@ export interface AidenRemoteBotActivityFixture {
  */
 export interface AidenRemoteBotHandoffsFixture {
   capability: AidenRemoteBotHandoffCapability;
-  /** Revision 38: a card a password-or-code rule opened, which takes no note. */
+  /** Revision 40: a card a password-or-code rule opened, which takes no note. */
   noNoteHandoff: AidenRemoteBotHandoff;
   /** A running session waiting on a hand-off, as a holder sees it. */
   session: AidenRemoteBotSession;
@@ -6056,6 +6093,71 @@ export interface AidenRemoteBotHandoffsFixture {
     pausedSession: AidenRemoteBotSession;
     pausedSummary: AidenRemoteBotSummary;
     pausedError: AidenRemoteErrorEnvelope;
+  };
+}
+
+export interface AidenRemoteScheduleCardsFixture {
+  capability: (typeof AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES)[number];
+  /** `GET /streams/{id}/approval` as a `schedule:cards` holder sees it. */
+  streamApproval: { approval: Record<string, unknown> & { schedule: AidenRemoteApprovalSchedule } };
+  /** A phone run stream whose scheduled-task approval carries the card. */
+  phoneRunEvents: unknown[];
+  /** Named cards covering the layouts every client draws. */
+  cards: Array<{ label: string; schedule: AidenRemoteApprovalSchedule }>;
+  /** Cards every reader drops, falling back to the summary card. */
+  rejected: Array<{ label: string; schedule: unknown }>;
+}
+
+function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixture {
+  if (!isRecord(value)) throw new Error("Schedule cards fixture must be an object.");
+  assertExactKeys(value, ["capability", "streamApproval", "phoneRunEvents", "cards", "rejected"], "Schedule cards fixture");
+  const capability = enumMember(value.capability, AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES, "Schedule cards fixture capability");
+  if (!isRecord(value.streamApproval) || !isRecord(value.streamApproval.approval)) {
+    throw new Error("Schedule cards streamApproval must carry an approval.");
+  }
+  const approval = value.streamApproval.approval;
+  assertExactKeys(
+    approval,
+    ["approvalId", "streamId", "chatId", "summary", "toolCallId", "toolName", "expiresAt", "canAllow", "scopes", "schedule"],
+    "Schedule cards stream approval",
+  );
+  if (typeof approval.canAllow !== "boolean") throw new Error("Schedule cards stream approval canAllow must be boolean.");
+  const schedule = parseAidenRemoteApprovalSchedule(approval.schedule);
+  parseRunEventSequence(value.phoneRunEvents, "Schedule cards phone run events", "phone");
+  const runApprovals = (value.phoneRunEvents as Array<Record<string, any>>)
+    .filter((event) => event.type === "approval_required");
+  if (!runApprovals.some((event) => isRecord(event.payload) && event.payload.schedule !== undefined)) {
+    throw new Error("Schedule cards phone run events must carry a schedule card.");
+  }
+  const labelled = (entry: unknown, label: string): { label: string; schedule: unknown } => {
+    if (!isRecord(entry)) throw new Error(`${label} must be an object.`);
+    assertExactKeys(entry, ["label", "schedule"], label);
+    return { label: assertBoundedString(entry, "label", 80), schedule: entry.schedule };
+  };
+  if (!Array.isArray(value.cards) || value.cards.length === 0) throw new Error("Schedule cards fixture needs cards.");
+  const cards = value.cards.map((entry, index) => {
+    const card = labelled(entry, `Schedule card ${index}`);
+    return { label: card.label, schedule: parseAidenRemoteApprovalSchedule(card.schedule) };
+  });
+  if (!Array.isArray(value.rejected) || value.rejected.length === 0) throw new Error("Schedule cards fixture needs rejected cards.");
+  const rejected = value.rejected.map((entry, index) => {
+    const card = labelled(entry, `Rejected schedule card ${index}`);
+    let accepted = false;
+    try {
+      parseAidenRemoteApprovalSchedule(card.schedule);
+      accepted = true;
+    } catch {
+      // Expected: every reader drops these.
+    }
+    if (accepted) throw new Error(`Rejected schedule card ${card.label} must fail validation.`);
+    return card;
+  });
+  return {
+    capability,
+    streamApproval: { approval: { ...approval, schedule } },
+    phoneRunEvents: value.phoneRunEvents as unknown[],
+    cards,
+    rejected,
   };
 }
 
@@ -6996,6 +7098,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     botHandoffs = parseBotHandoffsFixture(value.botHandoffs);
   }
+  let scheduleCards: AidenRemoteScheduleCardsFixture | undefined;
+  if (value.scheduleCards !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION) {
+      throw new Error(`Schedule card fixtures require contract revision ${AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION}.`);
+    }
+    scheduleCards = parseScheduleCardsFixture(value.scheduleCards);
+  }
   if (value.peerRouteAdvertisement !== undefined) {
     if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
     const advertisement = value.peerRouteAdvertisement;
@@ -7090,6 +7199,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botActivity ? { botActivity } : {}),
     ...(botAttachments ? { botAttachments } : {}),
     ...(botHandoffs ? { botHandoffs } : {}),
+    ...(scheduleCards ? { scheduleCards } : {}),
   };
 }
 
@@ -7601,7 +7711,9 @@ function parseRunEventSequence(value: unknown, label: string, projection: "host"
       boundedText(event.payload.promptId, "Question resolved promptId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
     } else if (projection === "phone" && event.type === "approval_required") {
       const payload = event.payload;
-      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes"], "Phone run approval");
+      assertExactKeys(payload, ["approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"], "Phone run approval");
+      // Revision 39: a display-only card for `schedule:cards` holders; it never changes canAllow.
+      if (payload.schedule !== undefined) parseAidenRemoteApprovalSchedule(payload.schedule);
       assertBoundedString(payload, "approvalId", AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH);
       assertBoundedString(payload, "summary", 2_000);
       assertBoundedString(payload, "toolCallId", 128, true);
