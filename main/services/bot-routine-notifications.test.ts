@@ -211,3 +211,12 @@ test("other delivery classes stay out of the routine feed", async (t) => {
     ["run_fixture_bot_01"],
   );
 });
+
+test("a suppressed row is kept but never reaches the feed", async (t) => {
+  const h = await harness();
+  t.after(h.cleanup);
+  await h.log.append(delivery({ suppressed: true }));
+
+  assert.equal((await h.log.find("bot_fixture_01", "run_fixture_bot_01"))?.suppressed, true, "the row is kept");
+  assert.deepEqual((await h.feed.list(undefined)).notifications, []);
+});

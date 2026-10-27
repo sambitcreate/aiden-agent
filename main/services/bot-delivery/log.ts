@@ -5,7 +5,9 @@
 //
 // Rows live beside the Bot's session in `<profile>/bots/<dir>/deliveries.json`,
 // newest first, at most 200 per Bot. Writes are atomic and serialized per Bot,
-// the same way the routine notes are kept.
+// the same way the routine notes are kept. Each channel is stamped as it
+// succeeds, so a retry sends only what the row still owes; a suppressed row
+// stays for the record but never reaches a person.
 
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -37,16 +39,29 @@ export interface BotDeliveryRow {
   createdAt: number;
   /** The row may reach the person (and their phones) from this time on. */
   deliverAfter: number;
-  /** When the Mac and Telegram notifications went out; unset while held. */
+  /** Kept for the record only: a suppressed row never reaches a person. */
+  suppressed?: boolean;
+  /** When the Mac banner went out; unset while it is still owed. */
+  macSentAt?: number;
+  /** When Telegram accepted the message; unset while it is still owed. */
+  telegramSentAt?: number;
+  /** When every channel had gone out; unset until the row is fully delivered. */
   sentAt?: number;
 }
+
+/** The two live channels a row has to clear; phones read the log itself. */
+export type BotDeliveryChannel = "mac" | "telegram";
 
 export interface BotDeliveryLog {
   /** Dedupes by `(botId, dedupeKey)`; a repeat returns the stored row. */
   append(row: Omit<BotDeliveryRow, "id">): Promise<{ row: BotDeliveryRow; created: boolean }>;
+  /** The row already stored under this key, if any. */
+  find(botId: string, dedupeKey: string): Promise<BotDeliveryRow | undefined>;
   /** Rows due at `now`, newest first, at most 100. `since` is exclusive. */
   due(since: number | undefined, now: number): Promise<BotDeliveryRow[]>;
-  /** Records that the row reached the Mac and Telegram; keeps the first time. */
+  /** Records one channel's success; the first time sticks. */
+  markChannel(botId: string, id: string, channel: BotDeliveryChannel, at: number): Promise<void>;
+  /** Records that every channel went out; keeps the first time. */
   markSent(botId: string, id: string, at: number): Promise<void>;
   forgetBot(botId: string): Promise<void>;
 }
@@ -75,6 +90,12 @@ function optionalText(value: unknown, limit: number): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;
 }
 
+/** An absent optional timestamp, or null when one is present but unusable. */
+function optionalTimestamp(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  return timestamp(value) ?? null;
+}
+
 /** One stored row, or undefined when it is not the current shape. */
 function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   if (!isRecord(value)) return undefined;
@@ -89,8 +110,11 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   if (typeof value.body !== "string" || createdAt === undefined || deliverAfter === undefined) return undefined;
   const routineId = optionalText(value.routineId, 160);
   const requestId = optionalText(value.requestId, 160);
-  const sentAt = value.sentAt === undefined ? undefined : timestamp(value.sentAt);
-  if (value.sentAt !== undefined && sentAt === undefined) return undefined;
+  const suppressed = value.suppressed === true;
+  const macSentAt = optionalTimestamp(value.macSentAt);
+  const telegramSentAt = optionalTimestamp(value.telegramSentAt);
+  const sentAt = optionalTimestamp(value.sentAt);
+  if (macSentAt === null || telegramSentAt === null || sentAt === null) return undefined;
   return {
     id,
     botId,
@@ -103,6 +127,9 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     status: value.status as BotDeliveryRow["status"],
     createdAt,
     deliverAfter,
+    ...(suppressed ? { suppressed: true } : {}),
+    ...(macSentAt !== undefined ? { macSentAt } : {}),
+    ...(telegramSentAt !== undefined ? { telegramSentAt } : {}),
     ...(sentAt !== undefined ? { sentAt } : {}),
   };
 }
@@ -158,6 +185,10 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
       });
     },
 
+    async find(botId, dedupeKey) {
+      return (await load(botId)).find((row) => row.dedupeKey === dedupeKey);
+    },
+
     async due(since, at) {
       const root = path.join(options.profileDir(), "bots");
       let names: string[];
@@ -176,6 +207,8 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
         const botId = botIdFromDirectoryName(name);
         if (botId === null) continue;
         for (const row of await load(botId)) {
+          // A suppressed row is kept for the record, never for a person.
+          if (row.suppressed === true) continue;
           if (row.deliverAfter > at) continue;
           if (since !== undefined && row.deliverAfter <= since) continue;
           due.push(row);
@@ -185,13 +218,29 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
       return due.slice(0, BOT_DELIVERIES_DUE_MAX);
     },
 
+    markChannel(botId, id, channel, at) {
+      return serial(botId, async () => {
+        const rows = await load(botId);
+        const index = rows.findIndex((row) => row.id === id);
+        if (index < 0) return;
+        const row = rows[index]!;
+        if ((channel === "mac" ? row.macSentAt : row.telegramSentAt) !== undefined) return;
+        const next = [...rows];
+        next[index] = channel === "mac" ? { ...row, macSentAt: at } : { ...row, telegramSentAt: at };
+        await save(botId, next);
+      });
+    },
+
     markSent(botId, id, at) {
       return serial(botId, async () => {
         const rows = await load(botId);
         const index = rows.findIndex((row) => row.id === id);
-        if (index < 0 || rows[index]!.sentAt !== undefined) return;
+        if (index < 0) return;
+        const row = rows[index]!;
+        // "Sent" means every channel went out; one channel alone leaves it owed.
+        if (row.sentAt !== undefined || row.macSentAt === undefined || row.telegramSentAt === undefined) return;
         const next = [...rows];
-        next[index] = { ...next[index]!, sentAt: at };
+        next[index] = { ...row, sentAt: at };
         await save(botId, next);
       });
     },

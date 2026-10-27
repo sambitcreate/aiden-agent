@@ -47,15 +47,24 @@ function routineResult(overrides: Partial<BotDeliveryInput> = {}): BotDeliveryIn
   };
 }
 
-async function harness(gate: BotDeliveryGate = ALWAYS_NOW_GATE) {
+async function harness(
+  gate: BotDeliveryGate = ALWAYS_NOW_GATE,
+  ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void> } = {},
+) {
   const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-delivery-"));
   const log = createBotDeliveryLog({ profileDir: () => profile });
   const calls = { mac: [] as BotDeliveryInput[], telegram: [] as BotDeliveryInput[] };
   const funnel = createBotDeliveryFunnel({
     log,
     gate,
-    mac: async (input) => void calls.mac.push(input),
-    telegram: async (input) => void calls.telegram.push(input),
+    mac: async (input) => {
+      calls.mac.push(input);
+      await ports.mac?.(input);
+    },
+    telegram: async (input) => {
+      calls.telegram.push(input);
+      await ports.telegram?.(input);
+    },
     now: () => NOW,
   });
   return { profile, log, funnel, calls, cleanup: () => rm(profile, { recursive: true, force: true }) };
@@ -90,6 +99,8 @@ test("sends a routine result to mac, telegram and the phone feed once", async (t
       status: "succeeded",
       createdAt: NOW,
       deliverAfter: NOW,
+      macSentAt: NOW,
+      telegramSentAt: NOW,
       sentAt: NOW,
     },
   );
@@ -101,6 +112,7 @@ test("a deferred row is invisible to phones until it is due", async (t) => {
   t.after(h.cleanup);
 
   assert.equal(await h.funnel.deliver(routineResult()), "deferred");
+  assert.equal(await h.funnel.deliver(routineResult()), "deferred", "a held row stays held");
   assert.deepEqual(await h.log.due(undefined, NOW), []);
   assert.deepEqual(
     (await h.log.due(undefined, NOW + HOUR)).map(({ title }) => title),
@@ -113,9 +125,13 @@ test("a deferred row is invisible to phones until it is due", async (t) => {
 test("suppressed rows are logged but never notified", async (t) => {
   const h = await harness({ decide: async () => ({ kind: "suppress", reason: "daily_limit" }) });
   t.after(h.cleanup);
+  const input = routineResult();
 
-  assert.equal(await h.funnel.deliver(routineResult()), "suppressed");
-  assert.equal((await h.log.due(undefined, NOW)).length, 1, "the row is kept");
+  assert.equal(await h.funnel.deliver(input), "suppressed");
+  const row = await h.log.find(input.botId, input.dedupeKey);
+  assert.equal(row?.suppressed, true, "the row is kept for the record");
+  assert.deepEqual(await h.log.due(undefined, NOW), [], "phones never hear it");
+  assert.deepEqual(await h.log.due(undefined, NOW + 24 * HOUR), [], "it never becomes due");
   assert.equal(h.calls.mac.length, 0);
   assert.equal(h.calls.telegram.length, 0);
 });
@@ -143,24 +159,65 @@ test("one message is deduped per Bot, not across Bots", async (t) => {
   assert.equal((await h.log.due(undefined, NOW)).length, 2);
 });
 
-test("a send that failed is retried under the same row, not treated as a duplicate", async (t) => {
-  const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-delivery-"));
-  t.after(() => rm(profile, { recursive: true, force: true }));
-  const log = createBotDeliveryLog({ profileDir: () => profile });
-  let telegramCalls = 0;
-  const funnel = createBotDeliveryFunnel({
-    log,
-    gate: ALWAYS_NOW_GATE,
-    mac: async () => undefined,
+test("a Telegram failure retries only Telegram, never the Mac banner again", async (t) => {
+  let telegramAttempts = 0;
+  const h = await harness(ALWAYS_NOW_GATE, {
     telegram: async () => {
-      telegramCalls += 1;
-      if (telegramCalls === 1) throw new Error("The Telegram outbox is unavailable.");
+      telegramAttempts += 1;
+      if (telegramAttempts === 1) throw new Error("The Telegram outbox is unavailable.");
     },
-    now: () => NOW,
   });
+  t.after(h.cleanup);
+  const input = routineResult();
 
-  await assert.rejects(funnel.deliver(routineResult()), /outbox is unavailable/u);
-  assert.equal(await funnel.deliver(routineResult()), "sent");
-  assert.equal(telegramCalls, 2);
-  assert.equal((await log.due(undefined, NOW)).length, 1, "the retry reused the row");
+  await assert.rejects(h.funnel.deliver(input), /outbox is unavailable/u);
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal((await h.log.find(input.botId, input.dedupeKey))?.sentAt, undefined, "not yet sent");
+
+  assert.equal(await h.funnel.deliver(input), "sent");
+  assert.equal(h.calls.mac.length, 1, "the Mac banner is shown exactly once");
+  assert.equal(h.calls.telegram.length, 2);
+
+  const row = await h.log.find(input.botId, input.dedupeKey);
+  assert.equal(row?.macSentAt, NOW, "the Mac send is remembered");
+  assert.equal(row?.telegramSentAt, NOW, "the retry stamped Telegram");
+  assert.equal(row?.sentAt, NOW, "sentAt is all channels done");
+  assert.equal((await h.log.due(undefined, NOW)).length, 1, "the retry reused the row");
+
+  assert.equal(await h.funnel.deliver(input), "duplicate");
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal(h.calls.telegram.length, 2);
+});
+
+test("a gate that counts calls is asked once across a delivery and its retry", async (t) => {
+  let gateCalls = 0;
+  let holdNewMessages = false;
+  const gate: BotDeliveryGate = {
+    decide: async () => {
+      gateCalls += 1;
+      return holdNewMessages ? { kind: "defer", until: NOW + HOUR } : { kind: "now" };
+    },
+  };
+  let telegramAttempts = 0;
+  const h = await harness(gate, {
+    telegram: async () => {
+      telegramAttempts += 1;
+      if (telegramAttempts === 1) throw new Error("The Telegram outbox is unavailable.");
+    },
+  });
+  t.after(h.cleanup);
+  const input = routineResult();
+
+  await assert.rejects(h.funnel.deliver(input), /outbox is unavailable/u);
+  // A cap arriving between the two attempts would hold a new message, but the
+  // stored row already passed the gate and must still be finished.
+  holdNewMessages = true;
+
+  assert.equal(await h.funnel.deliver(input), "sent");
+  assert.equal(gateCalls, 1, "the gate saw the delivery, not its retry");
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal(h.calls.telegram.length, 2);
+
+  assert.equal(await h.funnel.deliver(input), "duplicate");
+  assert.equal(gateCalls, 1, "a duplicate never reaches the gate");
 });
