@@ -3199,7 +3199,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             {questionnaireExpired ? <AskUserQuestionExpiryNotice state="expired" /> : null}
             {questionnaire?.expiresAt && !questionnaireExpired ? (
               <AskUserQuestionCountdown
-                key={questionnaire.promptId}
+                key={`countdown:${questionnaire.promptId}`}
                 expiresAt={questionnaire.expiresAt}
               />
             ) : null}
