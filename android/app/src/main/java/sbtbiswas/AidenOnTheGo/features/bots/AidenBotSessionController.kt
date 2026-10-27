@@ -535,6 +535,8 @@ class AidenBotSessionController(
     private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
     /** How long a taken message that nothing on the Mac shows stays before it goes (FR-m5). */
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
+    /** Revision 41: how many bytes of shared images this chat keeps in memory. */
+    sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
@@ -568,8 +570,8 @@ class AidenBotSessionController(
     private var claimsEpoch: String? = null
     /** The run a Stop was pressed in, by its `startedAt`. */
     private var stopStartedAt: Long? = null
-    /** Revision 41: images the Bot shared, read once while this chat is open; never written to disk. */
-    private val sharedImages = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+    /** Revision 41: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
+    private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
 
     init {
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
@@ -627,6 +629,7 @@ class AidenBotSessionController(
         restoreJob?.cancel()
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
+        sharedImages.clear()
     }
 
     /**
@@ -649,13 +652,14 @@ class AidenBotSessionController(
 
     /**
      * Revision 41 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
-     * send them (it left the chat, or the phone is offline). Each image is read once and kept while
-     * this chat is open; a failed read is tried again the next time the image is drawn. An id the
-     * transcript doesn't show is never asked for.
+     * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,
+     * within a byte budget and only while the transcript still shows them; one that was dropped, or
+     * whose read failed, is read again the next time it is drawn. An id the transcript doesn't show
+     * is never asked for.
      */
     suspend fun sharedImageData(entryId: String): ByteArray? {
         sharedImages[entryId]?.let { return it }
-        if (_state.value.entries.none { it is AidenBotSessionEntry.SharedImage && it.id == entryId }) return null
+        if (entryId !in shownSharedImageIds()) return null
         val data = try {
             bounded { transport.sharedImage(botId, entryId) }
         } catch (error: CancellationException) {
@@ -663,9 +667,27 @@ class AidenBotSessionController(
         } catch (_: Exception) {
             return null
         }
-        sharedImages[entryId] = data
+        sharedImages.retainOnly(shownSharedImageIds())
+        sharedImages.put(entryId, data)
         return data
     }
+
+    /**
+     * The attachment the shared image viewer draws. Entry ids (`entry_7`) repeat across Bots and
+     * Macs, and the viewer caches pictures for the whole app by attachment id, so the id it sees
+     * names this Mac and Bot too. Reads still go to [sharedImageData] with the entry's own id.
+     */
+    fun sharedImageAttachment(image: AidenBotSessionEntry.SharedImage): AidenMessageAttachment =
+        image.attachment.copy(id = "bot-image:$imageScope:${image.id}")
+
+    private val imageScope: String by lazy {
+        val owner = sessionKey?.let { "${it.instanceId}\u0000${it.deviceId}\u0000" }.orEmpty() + botId
+        java.security.MessageDigest.getInstance("SHA-256").digest(owner.toByteArray())
+            .take(12).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun shownSharedImageIds(): Set<String> =
+        _state.value.entries.filterIsInstance<AidenBotSessionEntry.SharedImage>().mapTo(HashSet()) { it.id }
 
     /** [block], or [AidenBotSessionTimeout] once it has run past [requestLimitMillis]. */
     private suspend fun <T : Any> bounded(block: suspend () -> T): T =

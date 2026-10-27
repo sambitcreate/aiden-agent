@@ -451,9 +451,9 @@ private fun AidenBotSessionContent(
                         )
                         // Revision 41: the image the Bot shared, read from the Mac when it is drawn.
                         is AidenBotSessionEntry.SharedImage -> AidenMessageImageAttachments(
-                            attachments = listOf(entry.attachment),
+                            attachments = listOf(controller.sharedImageAttachment(entry)),
                             edge = AidenMessageMediaEdge.LEADING
-                        ) { attachment -> controller.sharedImageData(attachment.id) }
+                        ) { controller.sharedImageData(entry.id) }
                     }
                 }
                 if (!partial.isNullOrEmpty()) {

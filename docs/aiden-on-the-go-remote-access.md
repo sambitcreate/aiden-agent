@@ -79,7 +79,7 @@ When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone
 
 ## Images a Bot shares
 
-When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 41) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps it only while the chat is open. With an older phone or Mac, or on another Mac viewing the Bot, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
+When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 41) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. With an older phone or Mac, or on another Mac viewing the Bot, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
 
 ## Values read from a web page
 

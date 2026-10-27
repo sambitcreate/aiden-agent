@@ -1050,6 +1050,56 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
 }
 
 @MainActor
+/// Revision 41 (`bot:images`): the bytes of images a Bot shared, kept while
+/// its chat is open within a byte budget. The least recently drawn image goes
+/// first; one that is dropped is read from the Mac again the next time it is
+/// drawn. An image larger than the whole budget is never kept.
+struct AidenSharedImageBytes {
+    /// About four of the largest images the Mac sends (8 MiB each).
+    static let defaultMaxBytes = 32 * 1024 * 1024
+
+    let maxBytes: Int
+    private var images: [String: Data] = [:]
+    /// Least recently drawn first.
+    private var order: [String] = []
+    private(set) var byteCount = 0
+
+    init(maxBytes: Int = Self.defaultMaxBytes) { self.maxBytes = maxBytes }
+
+    mutating func data(for id: String) -> Data? {
+        guard let data = images[id] else { return nil }
+        order.removeAll { $0 == id }
+        order.append(id)
+        return data
+    }
+
+    mutating func insert(_ data: Data, for id: String) {
+        remove(id)
+        guard data.count <= maxBytes else { return }
+        images[id] = data
+        order.append(id)
+        byteCount += data.count
+        while byteCount > maxBytes, let oldest = order.first, oldest != id { remove(oldest) }
+    }
+
+    /// Drops every image the transcript no longer shows.
+    mutating func retainOnly(_ ids: Set<String>) {
+        for id in order where !ids.contains(id) { remove(id) }
+    }
+
+    mutating func removeAll() {
+        images = [:]
+        order = []
+        byteCount = 0
+    }
+
+    private mutating func remove(_ id: String) {
+        guard let data = images.removeValue(forKey: id) else { return }
+        order.removeAll { $0 == id }
+        byteCount -= data.count
+    }
+}
+
 @Observable
 final class AidenBotSessionModel {
     enum Action: Hashable, Sendable {
@@ -1102,8 +1152,8 @@ final class AidenBotSessionModel {
     private(set) var isAttaching = false
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
-    /// Revision 41: images the Bot shared, read once while this chat is open; never written to disk.
-    @ObservationIgnored private var sharedImages: [String: Data] = [:]
+    /// Revision 41: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
+    @ObservationIgnored private var sharedImages: AidenSharedImageBytes
     /// The Bot's Chat activity wording, from its detail.
     var wording: AidenBotChatActivityWording = .follows
     /// What the running turn is doing (revision 30), or nil.
@@ -1187,9 +1237,11 @@ final class AidenBotSessionModel {
         outboxStore: AidenBotOutboxStore? = .shared,
         retryDelays: [Duration] = [.seconds(1), .seconds(4)],
         requestLimit: Duration = .seconds(12),
+        sharedImageBudget: Int = AidenSharedImageBytes.defaultMaxBytes,
         now: @escaping () -> Date = { Date() }
     ) {
         self.botID = botID
+        self.sharedImages = AidenSharedImageBytes(maxBytes: sharedImageBudget)
         self.transport = transport
         self.cacheKey = cacheKey
         self.cache = cache
@@ -1228,6 +1280,7 @@ final class AidenBotSessionModel {
         released = true
         backoffTask?.cancel()
         flushTask?.cancel()
+        sharedImages.removeAll()
     }
 
     var state: AidenBotSessionStateKind? { stateView?.state }
@@ -2487,20 +2540,28 @@ final class AidenBotSessionModel {
 
     /// Revision 41 (`bot:images`): the bytes of an image the Bot shared, or nil
     /// when the Mac can't send it (it left the chat, or the phone is offline).
-    /// Each image is read once and kept while this chat is open; a failed read
-    /// is tried again the next time the image is drawn.
+    /// Images are kept while this chat is open, within a byte budget and only
+    /// while the transcript still shows them; one that was dropped, or whose
+    /// read failed, is read again the next time it is drawn.
     func sharedImageData(entryId: String) async -> Data? {
-        if let cached = sharedImages[entryId] { return cached }
-        let entryShown = entries.contains { entry in
-            if case let .sharedImage(image) = entry { return image.id == entryId }
-            return false
-        }
-        guard entryShown else { return nil }
+        if let cached = sharedImages.data(for: entryId) { return cached }
+        guard shownSharedImageIDs.contains(entryId) else { return nil }
         guard let data = try? await aidenBotWithin(requestLimit, { [transport, botID] in
             try await transport.botSessionImage(botId: botID, entryId: entryId)
         }) else { return nil }
-        sharedImages[entryId] = data
+        sharedImages.retainOnly(shownSharedImageIDs)
+        sharedImages.insert(data, for: entryId)
         return data
+    }
+
+    /// Tests only: bytes of shared images held now.
+    var sharedImageByteCount: Int { sharedImages.byteCount }
+
+    private var shownSharedImageIDs: Set<String> {
+        Set(entries.compactMap { entry in
+            if case let .sharedImage(image) = entry { return image.id }
+            return nil
+        })
     }
 
     func requestConnection(pluginId: String) async {
