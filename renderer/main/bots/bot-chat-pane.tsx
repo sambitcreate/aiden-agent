@@ -446,7 +446,7 @@ const SEND_MORPH_MS = 90;
 
 /**
  * The sent words leave the composer and become their bubble: a copy of the
- * bubble starts as bare text where the words sat in the composer, then moves
+ * bubble starts as bare text where the words sat in the composer, then arcs
  * to the bubble's place as its fill comes in. The copy floats above the chat
  * (the transcript clips anything over the composer) while the real bubble
  * holds its space unseen, and it is swapped for the real one when it lands.
@@ -468,6 +468,7 @@ function useSendMorph(
     }
     bubble.style.visibility = "hidden";
     let ghost: HTMLElement | null = null;
+    let sideways: Animation | null = null;
     let animation: Animation | null = null;
     let done = false;
     const finish = () => {
@@ -502,18 +503,25 @@ function useSendMorph(
       ghost = copy;
       const dx = origin.left - (target.left + (parseFloat(style.paddingLeft) || 0));
       const dy = origin.top - (target.top + (parseFloat(style.paddingTop) || 0));
+      // The two axes ease apart so the words arc into place: across first, then
+      // up, instead of sliding along a straight line.
+      sideways = copy.animate([{ translate: `${dx}px 0` }, { translate: "0 0" }], {
+        duration: SEND_MORPH_MS,
+        easing: "cubic-bezier(0.2, 0.9, 0.3, 1)",
+      });
       animation = copy.animate(
         [
-          { transform: `translate(${dx}px, ${dy}px)`, backgroundColor: "transparent" },
-          { transform: "translate(0, 0)", backgroundColor: style.backgroundColor },
+          { transform: `translateY(${dy}px)`, backgroundColor: "transparent" },
+          { transform: "translateY(0)", backgroundColor: style.backgroundColor },
         ],
-        { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+        { duration: SEND_MORPH_MS, easing: "cubic-bezier(0.55, 0, 0.6, 1)" },
       );
       animation.onfinish = finish;
       animation.oncancel = finish;
     });
     return () => {
       cancelAnimationFrame(frame);
+      sideways?.cancel();
       animation?.cancel();
       finish();
     };
