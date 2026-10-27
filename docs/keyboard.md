@@ -42,8 +42,10 @@ work while Aiden is in the background.
 | `/` | Slash commands in the message box |
 
 The approval keys are fixed rather than set in Settings. They act only on the
-open chat's approval (the first one in a Bot chat), never while you have typed
-something or a menu or dialog is open, and the buttons show them. When an
+open chat's approval (the first one in a Bot chat), and only from the message
+box or a button. They never act while the message box holds text, while focus
+is in another text field, the terminal or the file editor, or while a menu or
+dialog is open. The buttons show them. When an
 approval appears, screen readers announce it.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
