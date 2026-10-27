@@ -807,6 +807,7 @@
         "renderer/components/interface-polish.test.tsx",
         "renderer/components/markdown-math.test.tsx",
         "renderer/components/message-bubble.test.tsx",
+        "renderer/lib/user-message-fold.test.ts",
         "renderer/components/classifier-approval.test.tsx",
         "renderer/components/device-features.test.tsx",
         "renderer/components/device-mini-player.test.tsx",
