@@ -18,6 +18,7 @@
 // builds; it never decides what a Bot may use.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
@@ -125,6 +126,13 @@ export function isConnected(pluginId: string): Promise<boolean> {
     hasOAuthTokens: (server, preset) =>
       hasOAuthTokens({ ...server, url: server.url ?? (preset.transport === "http" ? preset.url : undefined) }),
   });
+}
+
+/** Where a call a rule handed to the person would have acted: the Bot's own browser or computer, else nowhere. */
+export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefined {
+  if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) return "browser";
+  if (toolName === BOT_COMPUTER_TOOL_NAME || toolName === BOT_COMPUTER_SHELL_TOOL_NAME) return "computer";
+  return undefined;
 }
 
 // Routine services load lazily: they import the scheduler, which must not
@@ -417,9 +425,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
-      tools.push(botHandoffCandidate(botId, botHandoffs));
-      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       const signInOnComputer = has("computer") && facts.hasComputer;
+      // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
+      tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(
         signInCandidate(botId, botHandoffs, {
           ...(deps.botName ? { botName: deps.botName } : {}),

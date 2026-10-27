@@ -485,7 +485,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
     }
   };
 
-  /** Finish on <Mac>: bring the sign-in forward in the Bot's own browser there. */
+  /** Finish on <Mac>: bring the sign-in, or a step on the Bot's own screen, forward there. */
   const finishHandoff = (pending: AidenRemoteBotHandoff) =>
     run("handoff", async () => {
       const outcome = await peerHostsApi.call(hostId, {
@@ -497,8 +497,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       });
       if (outcome.ok) {
         const opened = (outcome.value as { opened?: unknown } | null)?.opened === true;
-        if (opened) toast.success(`Finish signing in on ${hostName}.`);
-        else toast.info(`Open Aiden on ${hostName} to finish signing in.`);
+        const what = pending.kind === "sign_in" ? "signing in" : "this step";
+        if (opened) toast.success(`Finish ${what} on ${hostName}.`);
+        else toast.info(`Open Aiden on ${hostName} to finish ${what}.`);
       } else if (outcome.error.remoteCode === "handoff_expired") {
         hideCard(pending.waitId);
         toast.info("That card was already answered or closed.");

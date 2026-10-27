@@ -371,8 +371,10 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
-  steps, and the rules editor says so. A rule's hand-off card has no Open
-  button in this lane.
+  steps, and the rules editor says so. A rule's hand-off card in this lane
+  offers "Open <Bot>’s computer", which takes the computer over for the person,
+  and the Bot can hand a step over there itself with `hand_off`'s
+  `where: "computer"`.
 - **Routines and Telegram.** Unlike the Bot's browser, which those turns never
   get, the Bot may use its own computer on routine runs and Telegram turns,
   where nobody is watching, and without asking per step as Computer Use on the

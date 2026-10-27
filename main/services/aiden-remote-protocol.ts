@@ -116,7 +116,18 @@ export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
  * whose closed hand-off decoder rejects the key, so only holders get it.
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION;
+/**
+ * Contract revision 41 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only
+ * `AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION`): a step a Bot hands
+ * back that is on its own browser or computer never carries `open` for any
+ * device (the page is the Bot's, not the person's), and a device that also
+ * negotiates `bot:handoff-on-mac` is told so with `onMac: true`, so it offers
+ * "Finish on your Mac" (the open-on-Mac route) instead. Earlier hand-off
+ * decoders are closed, so only holders get the key.
+ */
+export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 41 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -293,9 +304,10 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
  * open-on-Mac and pause routes. It is an opt-in like `bot:cards`: the routes
  * still need `bot:read` and `bot:write`. Revision 40: `bot:handoff-notes`,
  * offered beside it, adds `takesNote: false` to a card that takes no note; it
- * changes nothing without `bot:handoffs`.
+ * changes nothing without `bot:handoffs`. Revision 41: `bot:handoff-on-mac`,
+ * offered the same way, adds `onMac: true` to a step on the Bot's own screen.
  */
-export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:handoff-notes"] as const;
+export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:handoff-notes", "bot:handoff-on-mac"] as const;
 
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
@@ -1426,6 +1438,13 @@ export interface AidenRemoteBotHandoff {
    * note is welcome.
    */
   takesNote?: false;
+  /**
+   * Contract revision 41: present, as `true`, only on an action card whose
+   * step is on the Bot's own browser or computer, for a device holding
+   * `bot:handoff-on-mac`. Such a card never carries `open`; the device offers
+   * Finish on your Mac (`open-on-mac`) beside Done and Skip.
+   */
+  onMac?: true;
 }
 
 /** `POST /bots/{botId}/handoffs/{waitId}/answer`. A non-blank `note` is at most 4,000 characters. */
@@ -5801,8 +5820,12 @@ export function parseAidenRemoteBotHandoffWaitId(value: unknown, label = "Bot ha
 /** Revision 37: the hand-off a Bot waits on. `null` in a session means nothing is waiting. */
 export function parseAidenRemoteBotHandoff(value: unknown): AidenRemoteBotHandoff {
   if (!isRecord(value)) throw new Error("Bot hand-off must be an object.");
-  assertExactKeys(value, ["waitId", "kind", "action", "why", "open", "takesNote"], "Bot hand-off");
+  assertExactKeys(value, ["waitId", "kind", "action", "why", "open", "takesNote", "onMac"], "Bot hand-off");
   if (hasOwn(value, "takesNote") && value.takesNote !== false) throw new Error("Bot hand-off takesNote must be false when present.");
+  if (hasOwn(value, "onMac") && value.onMac !== true) throw new Error("Bot hand-off onMac must be true when present.");
+  if (hasOwn(value, "onMac") && (value.kind !== "action" || hasOwn(value, "open"))) {
+    throw new Error("Bot hand-off onMac is only for an action card without open.");
+  }
   let open: { url: string } | undefined;
   if (hasOwn(value, "open")) {
     if (!isRecord(value.open)) throw new Error("Bot hand-off open must be an object.");
@@ -5820,6 +5843,7 @@ export function parseAidenRemoteBotHandoff(value: unknown): AidenRemoteBotHandof
     ...(hasOwn(value, "why") ? { why: boundedText(value.why, "Bot hand-off why", BOT_HANDOFF_WHY_MAX_CHARS) } : {}),
     ...(open ? { open } : {}),
     ...(hasOwn(value, "takesNote") ? { takesNote: false as const } : {}),
+    ...(hasOwn(value, "onMac") ? { onMac: true as const } : {}),
   };
 }
 
@@ -6071,6 +6095,8 @@ export interface AidenRemoteBotHandoffsFixture {
   capability: AidenRemoteBotHandoffCapability;
   /** Revision 40: a card a password-or-code rule opened, which takes no note. */
   noNoteHandoff: AidenRemoteBotHandoff;
+  /** Revision 41: a step on the Bot's own screen, as a `bot:handoff-on-mac` holder sees it. */
+  onMacHandoff: AidenRemoteBotHandoff;
   /** A running session waiting on a hand-off, as a holder sees it. */
   session: AidenRemoteBotSession;
   /** The hand-off opening, settling and the person's answer as their message. */
@@ -6166,7 +6192,7 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
   assertExactKeys(
     value,
     [
-      "capability", "noNoteHandoff", "session", "events", "answer", "openOnMac", "pause", "unpause",
+      "capability", "noNoteHandoff", "onMacHandoff", "session", "events", "answer", "openOnMac", "pause", "unpause",
       "pausedSession", "pausedSummary", "pausedDetail", "pausedError", "legacy",
     ],
     "Bot hand-offs fixture",
@@ -6174,6 +6200,8 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
   const capability = enumMember(value.capability, AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES, "Bot hand-offs fixture capability");
   const noNoteHandoff = parseAidenRemoteBotHandoff(value.noNoteHandoff);
   if (noNoteHandoff.takesNote !== false) throw new Error("Bot hand-offs fixture noNoteHandoff must take no note.");
+  const onMacHandoff = parseAidenRemoteBotHandoff(value.onMacHandoff);
+  if (onMacHandoff.onMac !== true) throw new Error("Bot hand-offs fixture onMacHandoff must be on the Mac.");
   if (!Array.isArray(value.events)) throw new Error("Bot hand-offs fixture events must be an array.");
   const answer = requestResponseRecord(value.answer, "Bot hand-off answer");
   const openOnMac = requestResponseRecord(value.openOnMac, "Bot hand-off open-on-Mac");
@@ -6229,6 +6257,7 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
   return {
     capability,
     noNoteHandoff,
+    onMacHandoff,
     session,
     events: value.events.map(parseAidenRemoteBotSessionEvent),
     answer: {

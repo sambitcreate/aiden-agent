@@ -49,7 +49,9 @@ fun aidenBotHandoffOpenHost(url: String): String? {
  * Contract revision 37 (`bot:handoffs`): a step the Bot hands back to the person, "Your turn: …",
  * shown beside the question and approval cards. Done and Skip answer it once, by its wait id; Open
  * opens the page it names in the phone's browser. A sign-in is finished in the Bot's own browser
- * on the Mac, so it offers Finish on your Mac and Skip instead (iOS and desktop parity).
+ * on the Mac, so it offers Finish on your Mac and Skip instead (iOS and desktop parity). A step on
+ * the Bot's own browser or computer ([AidenBotHandoff.onMac], revision 41) offers Finish on your
+ * Mac, Skip and Done.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -91,9 +93,19 @@ fun AidenBotHandoffCard(
             handoff.why?.let { why ->
                 Text(why, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
             }
+            if (handoff.onMac && macOpened == null) {
+                Text(stringResource(R.string.bot_handoff_on_mac_detail), style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+            }
             macOpened?.let { opened ->
                 Text(
-                    stringResource(if (opened) R.string.bot_handoff_mac_opened else R.string.bot_handoff_mac_closed),
+                    stringResource(
+                        when {
+                            signIn && opened -> R.string.bot_handoff_mac_opened
+                            signIn -> R.string.bot_handoff_mac_closed
+                            opened -> R.string.bot_handoff_step_mac_opened
+                            else -> R.string.bot_handoff_step_mac_closed
+                        }
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.secondary
                 )
@@ -111,6 +123,13 @@ fun AidenBotHandoffCard(
                     )
                     AidenTonalButton(text = stringResource(R.string.bot_handoff_skip), enabled = canAnswer, onClick = onSkip)
                 } else {
+                    if (handoff.onMac) {
+                        AidenTonalButton(
+                            text = stringResource(R.string.bot_session_finish_on_mac),
+                            enabled = canAnswer && !isFinishing,
+                            onClick = onFinishOnMac
+                        )
+                    }
                     handoff.openUrl?.takeIf { AidenBotHandoffWire.isOpenUrl(it) }?.let { url ->
                         val host = aidenBotHandoffOpenHost(url)
                         AidenTonalButton(

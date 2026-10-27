@@ -50,8 +50,12 @@ export interface BotComputerHandoffDeps {
   onError?(error: unknown): void;
 }
 
-/** Open `url` on the Bot's computer for the card `waitId`, with the person in control. False when nothing opened. */
-export type BotComputerHandoffOpener = (botId: string, waitId: string, url: string) => Promise<boolean>;
+/**
+ * Hand the Bot's computer to the person for the card `waitId`, opening `url`
+ * in Safari there when given (a sign-in always gives one; an action may not).
+ * False when nothing opened.
+ */
+export type BotComputerHandoffOpener = (botId: string, waitId: string, url: string | undefined) => Promise<boolean>;
 
 function heldKey(botId: string, waitId: string): string {
   return `${botId}\u0000${waitId}`;
@@ -103,7 +107,7 @@ export function createBotComputerHandoffOpener(deps: BotComputerHandoffDeps): Bo
     }
     try {
       await run(botId, guestDriverSuspendScript(), "stop its screen helper");
-      await run(botId, botComputerSignInOpenScript(url), "open the sign-in page");
+      if (url !== undefined) await run(botId, botComputerSignInOpenScript(url), "open the page");
     } catch (error) {
       release(botId, waitId);
       deps.onError?.(error);

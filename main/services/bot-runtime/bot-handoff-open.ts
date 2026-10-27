@@ -1,12 +1,17 @@
 // What **Open** on a hand-off card does (plan §4.1, §5.2), from the Mac or a
 // phone. Pure: the openers come in as dependencies.
 //
-// | Card                  | From the Mac                                    | From a phone                            |
-// |-----------------------|-------------------------------------------------|-----------------------------------------|
-// | sign-in               | the Bot's computer or browser, by `target`      | the Bot's chat, then the same opener    |
-// | action with a link    | the Bot's browser, else the system browser      | the Bot's chat (the phone opens it)     |
-// | a rule's, with a link | the Bot's browser only                          | the Bot's chat (the phone gets no link) |
-// | action without a link | nothing                                         | the Bot's chat                          |
+// | Card                       | From the Mac                                | From a phone                            |
+// |----------------------------|---------------------------------------------|-----------------------------------------|
+// | sign-in                    | the Bot's computer or browser, by `target`  | the Bot's chat, then the same opener    |
+// | action on the Bot's screen | the Bot's browser or computer, by `target`  | the Bot's chat, then the same opener    |
+// | action with a link         | the Bot's browser, else the system browser  | the Bot's chat (the phone opens it)     |
+// | a rule's, with a link      | the Bot's browser only                      | the Bot's chat (the phone gets no link) |
+// | action without a link      | nothing                                     | the Bot's chat                          |
+//
+// An action on the Bot's screen (`target` set: the Bot's `hand_off` named
+// where, or a rule stopped a browser or computer call) never opens in the
+// system browser, and phones get no link for it: they finish it on the Mac.
 //
 // A link is checked again here, so only an https page without credentials is
 // opened. A sign-in never falls back to the system browser: the Bot could not
@@ -29,8 +34,8 @@ export interface BotHandoffOpeners {
   focusChat(botId: string): Promise<void>;
   /** Open `url` in the Bot's own browser, holding the tab for the person; false when the Bot has none. */
   botBrowser?(botId: string, waitId: string, url: string, hold: "handoff" | "sign_in"): Promise<boolean>;
-  /** Open `url` on the Bot's own computer, with the person in control; false when the Bot has none. */
-  botComputer?(botId: string, waitId: string, url: string): Promise<boolean>;
+  /** Hand the Bot's own computer to the person, opening `url` there if given; false when the Bot has none. */
+  botComputer?(botId: string, waitId: string, url: string | undefined): Promise<boolean>;
   /** The Bot's browser or computer failed, and the card fell back (the system browser, or the chat). */
   onOpenerError?(error: unknown): void;
 }
@@ -52,6 +57,24 @@ async function openInBotBrowser(prompt: BotPendingHandoff, url: string, openers:
   }
 }
 
+/**
+ * An action on the Bot's own screen: its browser (the page, held for the
+ * person, or just the Browser tab without one) or its computer (taken over
+ * for the person, with the page in Safari when there is one).
+ */
+async function openOnBotScreen(
+  prompt: BotPendingHandoff,
+  target: "browser" | "computer",
+  link: string | undefined,
+  openers: BotHandoffOpeners,
+): Promise<BotHandoffOpened> {
+  if (target === "computer") {
+    return (await openers.botComputer?.(prompt.botId, prompt.waitId, link)) === true ? "computer" : "none";
+  }
+  if (link === undefined) return openers.botBrowser ? "browser" : "none";
+  return (await openInBotBrowser(prompt, link, openers)) ? "browser" : "none";
+}
+
 export async function openBotHandoff(
   prompt: BotPendingHandoff,
   from: BotHandoffOpenFrom,
@@ -65,6 +88,17 @@ export async function openBotHandoff(
     let opened: BotHandoffOpened = "none";
     try {
       if (link !== undefined) opened = await openSignIn(prompt, link, openers);
+    } catch (error) {
+      openers.onOpenerError?.(error);
+    }
+    return opened === "none" ? "focused" : opened;
+  }
+  if (prompt.target !== undefined) {
+    if (from === "desktop") return openOnBotScreen(prompt, prompt.target, link, openers);
+    await openers.focusChat(prompt.botId);
+    let opened: BotHandoffOpened = "none";
+    try {
+      opened = await openOnBotScreen(prompt, prompt.target, link, openers);
     } catch (error) {
       openers.onOpenerError?.(error);
     }

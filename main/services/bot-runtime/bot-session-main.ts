@@ -68,7 +68,7 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
+import { createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -267,7 +267,7 @@ const extension: BotExtensionDeps = {
   beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
-  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request)),
+  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
   // Into the stopped call's own conversation, never through the harness host,
   // whose per-Bot lock a pause or quit holds while it waits for this call.
   recordHandoff: async (record, conversation) => {

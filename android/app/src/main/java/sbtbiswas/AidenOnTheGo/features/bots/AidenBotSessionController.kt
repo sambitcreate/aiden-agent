@@ -290,7 +290,7 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * Which of `bot:cards`, `bot:activity`, `bot:handoffs` and `bot:handoff-notes` [installation] holds. The Mac shapes a
+ * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes` and `bot:handoff-on-mac` [installation] holds. The Mac shapes a
  * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
  * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
  * saved features while it connects, before this connection has negotiated a grant, so the chat
@@ -302,7 +302,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_CARDS,
         AidenRemoteCapability.BOT_ACTIVITY,
         AidenRemoteCapability.BOT_HANDOFFS,
-        AidenRemoteCapability.BOT_HANDOFF_NOTES
+        AidenRemoteCapability.BOT_HANDOFF_NOTES,
+        AidenRemoteCapability.BOT_HANDOFF_ON_MAC
     )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
@@ -1576,13 +1577,13 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 37: Finish on your Mac, for a sign-in hand-off. The card stays; it then says
-     * whether the Mac brought the Bot's browser forward. A retry after an unknown outcome reuses
-     * the key.
+     * Revision 37: Finish on your Mac, for a sign-in hand-off (and, revision 41, a step on the
+     * Bot's own screen there). The card stays; it then says whether the Mac brought the Bot's
+     * browser or computer forward. A retry after an unknown outcome reuses the key.
      */
     suspend fun finishHandoffOnMac(): Boolean {
         val handoff = _state.value.session?.handoff ?: return false
-        if (handoff.kind != AidenBotHandoffKind.SIGN_IN) return false
+        if (handoff.kind != AidenBotHandoffKind.SIGN_IN && !handoff.onMac) return false
         var claimed = false
         _state.update { current ->
             if (current.isFinishingHandoffOnMac) current else {

@@ -116,7 +116,8 @@ export interface PeerClient {
  * lists it in `serverCapabilities`, and in a call of its own after the rest
  * (`"own_call"`): a host that does not know a name refuses the whole request.
  * `bot:handoff-notes` (revision 40), asked for the same way, also tells this
- * Mac when a hand-off card takes no note.
+ * Mac when a hand-off card takes no note, and `bot:handoff-on-mac` (revision
+ * 41) when a step is on the Bot's own screen there.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],
@@ -129,6 +130,7 @@ const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string,
   ["bot:activity", AIDEN_REMOTE_BOT_ACTIVITY_FEATURE],
   ["bot:handoffs", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
   ["bot:handoff-notes", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
+  ["bot:handoff-on-mac", AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE, "own_call"],
 ];
 
 /** Unary requests and streams (feed plus live runs) have separate budgets. */

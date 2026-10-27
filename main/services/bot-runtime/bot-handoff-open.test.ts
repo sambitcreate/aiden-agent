@@ -92,6 +92,42 @@ test("a sign-in from a phone brings the chat forward first, then opens on the Ma
   assert.deepEqual(await open(SIGN_IN, "phone"), { opened: "focused", calls: ["chat bot:ada"] });
 });
 
+test("a step on the Bot's own screen opens there, never in the system browser, from the Mac or a phone", async () => {
+  const inBrowser = card({ action: "Choose the delivery slot", open: LINK, target: "browser" });
+  assert.deepEqual(await open(inBrowser, "desktop", { browser: true }), {
+    opened: "browser",
+    calls: ["browser bot:ada w-1 https://bank.example/verify handoff"],
+  });
+  assert.deepEqual(
+    await open(inBrowser, "desktop", { browser: false }),
+    { opened: "none", calls: ["browser bot:ada w-1 https://bank.example/verify handoff"] },
+    "no fallback to the person's own browser",
+  );
+  assert.deepEqual(
+    await open(card({ target: "browser" }), "desktop", { browser: true }),
+    { opened: "browser", calls: [] },
+    "without a page, Open shows the Bot's browser as it is",
+  );
+  assert.deepEqual(await open(inBrowser, "phone", { browser: true }), {
+    opened: "browser",
+    calls: ["chat bot:ada", "browser bot:ada w-1 https://bank.example/verify handoff"],
+  });
+  const onComputer = card({ action: "Approve the payment in the bank app", target: "computer" });
+  assert.deepEqual(await open(onComputer, "desktop", { computer: true }), {
+    opened: "computer",
+    calls: ["computer bot:ada w-1 undefined"],
+  });
+  assert.deepEqual(await open(onComputer, "phone", { computer: true }), {
+    opened: "computer",
+    calls: ["chat bot:ada", "computer bot:ada w-1 undefined"],
+  });
+  assert.deepEqual(
+    await open(onComputer, "phone"),
+    { opened: "focused", calls: ["chat bot:ada"] },
+    "a phone's Finish on your Mac still brings the chat forward when the computer can't open",
+  );
+});
+
 test("a link that is not a plain https page is never opened, whoever asks", async () => {
   for (const url of ["http://bank.example/verify", "javascript:alert(1)", "https://ada:secret@bank.example/", "file:///etc/passwd"]) {
     assert.deepEqual(await open(card({ open: { url } }), "desktop", { browser: true }), { opened: "none", calls: [] }, url);

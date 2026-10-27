@@ -212,6 +212,17 @@ class AidenBotHandoffsContractTest {
         assertEquals(false, decodedNoNote.takesNote)
         assertEquals(noNote, decodedNoNote.toJson())
         assertEquals(true, AidenBotHandoff.parse(handoff).takesNote)
+        // Revision 41: a step on the Bot's own screen says so, only as true, on an action without a page.
+        val onMac = handoffs.getValue("onMacHandoff").jsonObject
+        val decodedOnMac = AidenBotHandoff.parse(onMac)
+        assertTrue(decodedOnMac.onMac)
+        assertNull(decodedOnMac.openUrl)
+        assertEquals(onMac, decodedOnMac.toJson())
+        assertFalse(AidenBotHandoff.parse(handoff).onMac)
+        refuses(onMac.with("onMac" to JsonPrimitive(false)))
+        refuses(onMac.with("onMac" to JsonPrimitive("true")))
+        refuses(onMac.with("kind" to JsonPrimitive("sign_in")))
+        refuses(onMac.with("open" to open))
         // Both optional fields may be left out.
         val bare = wire.decodeFromString(AidenBotSession.serializer(), session.with("handoff" to handoff.without("why").without("open")).toString())
         assertEquals(AidenBotHandoff(waitId, AidenBotHandoffKind.ACTION, "Enter the 2FA code your bank sent you"), bare.handoff)
@@ -319,6 +330,12 @@ class AidenBotHandoffsContractTest {
         assertFalse(aidenShouldRequestBotHandoffs(mac(base + both, emptyList()), installationHolding(base + both)))
         // Notes without hand-offs are not an offer.
         assertTrue(aidenBotHandoffGrantsToRequest(mac(base, listOf(notes)), installationHolding(base)).isEmpty())
+        // Revision 41: on-Mac steps ride the same way.
+        val onMac = AidenRemoteCapability.BOT_HANDOFF_ON_MAC
+        assertEquals(both + onMac, aidenBotHandoffGrantsToRequest(mac(base, both + onMac), installationHolding(base)))
+        assertEquals(listOf(onMac), aidenBotHandoffGrantsToRequest(mac(base + both, listOf(onMac)), installationHolding(base + both)))
+        assertTrue(aidenBotHandoffGrantsToRequest(mac(base, listOf(onMac)), installationHolding(base)).isEmpty())
+        assertTrue(aidenBotSessionFeedGrants(installationHolding(base + both + onMac)).contains(onMac))
 
         val names = base.map { it.rawValue }
         val granted = names + "bot:handoffs" + "bot:handoff-notes"
