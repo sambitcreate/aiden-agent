@@ -18,6 +18,7 @@ import {
 import { describeRichLink, MAX_RICH_LINKS_PER_MESSAGE } from "../lib/rich-link";
 import { CodeBlock } from "./code-block";
 import { RichLink } from "./rich-link";
+import { TranscriptImage } from "./transcript-image";
 
 /**
  * Model-written Markdown inside a native visual. Remote images never load (they
@@ -33,6 +34,8 @@ interface MarkdownProps {
   content: string;
   richLinks?: boolean;
   restricted?: RestrictedMarkdown;
+  /** A caller that reuses its tree for another message supplies that message's identity. */
+  imageScope?: string;
 }
 
 interface MarkdownContentProps extends MarkdownProps {
@@ -155,6 +158,7 @@ function useMarkdownPlugins(content: string, richLinks: boolean, streaming = fal
 }
 
 const components: Components = {
+  img: ({ src, alt, title }) => <TranscriptImage key={src} src={src} alt={alt} title={title} />,
   // Unwrap <pre> — CodeBlock renders its own container/scroller.
   pre: ({ children }) => <>{children}</>,
   code: ({ className, children, ...props }) => {
@@ -233,21 +237,22 @@ export const MarkdownContent = React.memo(function MarkdownContent({
   richLinks = false,
   restricted,
   streaming = false,
+  imageScope,
 }: MarkdownContentProps) {
   const plugins = useMarkdownPlugins(content, richLinks, streaming);
   return (
     <RestrictedMarkdownContext.Provider value={restricted ?? null}>
-      <ReactMarkdown {...plugins} components={restricted ? restrictedComponents : components}>
+      <ReactMarkdown key={imageScope} {...plugins} components={restricted ? restrictedComponents : components}>
         {content}
       </ReactMarkdown>
     </RestrictedMarkdownContext.Provider>
   );
 });
 
-export const Markdown = React.memo(function Markdown({ content, richLinks = false, restricted }: MarkdownProps) {
+export const Markdown = React.memo(function Markdown({ content, richLinks = false, restricted, imageScope }: MarkdownProps) {
   return (
     <div className={MARKDOWN_CLASSNAME}>
-      <MarkdownContent content={content} richLinks={richLinks} restricted={restricted} />
+      <MarkdownContent content={content} richLinks={richLinks} restricted={restricted} imageScope={imageScope} />
     </div>
   );
 });
@@ -261,11 +266,12 @@ export const MarkdownInline = React.memo(function MarkdownInline({
   content,
   richLinks = false,
   restricted,
+  imageScope,
 }: MarkdownProps) {
   const plugins = useMarkdownPlugins(content, richLinks);
   return (
     <RestrictedMarkdownContext.Provider value={restricted ?? null}>
-      <ReactMarkdown {...plugins} components={restricted ? restrictedInlineComponents : inlineComponents}>
+      <ReactMarkdown key={imageScope} {...plugins} components={restricted ? restrictedInlineComponents : inlineComponents}>
         {content}
       </ReactMarkdown>
     </RestrictedMarkdownContext.Provider>

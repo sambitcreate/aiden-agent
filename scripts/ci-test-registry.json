@@ -1175,7 +1175,10 @@
         "main/handlers/telegram.test.ts",
         "main/services/telegram/telegram-pairing.test.ts",
         "main/services/telegram/telegram-delivery.test.ts",
-        "renderer/components/settings/telegram-pairing-panel.test.tsx"
+        "renderer/components/settings/telegram-pairing-panel.test.tsx",
+        "main/services/transcript-image-fetch.test.ts",
+        "main/handlers/transcript-images.test.ts",
+        "renderer/components/transcript-image.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",
