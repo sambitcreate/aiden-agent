@@ -84,9 +84,7 @@ export const AIDEN_REMOTE_PROTOCOL_VERSION = 1 as const;
  * at merge): Chat Summary rows may carry `lastRunFailed: true` when the newest
  * assistant output is a failed turn, so an unread row can say Failed.
  *
- * Contract revision 37 (provisional; re-claim the next revision after `main`'s
- * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION`):
- * Bot hand-offs and pause on phones (`bot:handoffs`). A device that negotiates
+ * Contract revision 37: Bot hand-offs and pause on phones (`bot:handoffs`). A device that negotiates
  * `bot:handoffs` receives the session `handoff` field and frame, the `paused`
  * session state, Bot `paused` flags and the `bot_paused` error code, and may
  * answer hand-offs, open them on the Mac and pause or unpause a Bot. Devices
@@ -108,7 +106,17 @@ export const AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION = 38 as const;
  * without it keep the summary-only card.
  */
 export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION;
+/**
+ * Contract revision 40 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION`):
+ * a device that also negotiates `bot:handoff-notes` is told when a hand-off
+ * card takes no note (one a password-or-code rule opened): the card carries
+ * `takesNote: false`, so the device hides its note box instead of learning
+ * from a `400` that the note was refused. Revision 37 shipped in v0.61.0,
+ * whose closed hand-off decoder rejects the key, so only holders get it.
+ */
+export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -283,9 +291,11 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES = ["bot:activity"] as const;
  * `handoff` field and frames, the `paused` session state and Bot `paused`
  * flags, and the `bot_paused` error code; it may call the hand-off answer,
  * open-on-Mac and pause routes. It is an opt-in like `bot:cards`: the routes
- * still need `bot:read` and `bot:write`.
+ * still need `bot:read` and `bot:write`. Revision 40: `bot:handoff-notes`,
+ * offered beside it, adds `takesNote: false` to a card that takes no note; it
+ * changes nothing without `bot:handoffs`.
  */
-export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs"] as const;
+export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:handoff-notes"] as const;
 
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
@@ -1410,6 +1420,12 @@ export interface AidenRemoteBotHandoff {
   why?: string;
   /** An https page that helps. */
   open?: { url: string };
+  /**
+   * Contract revision 40: present, as `false`, only on a card whose answer
+   * may carry no note (a password-or-code rule opened it). Absent means a
+   * note is welcome.
+   */
+  takesNote?: false;
 }
 
 /** `POST /bots/{botId}/handoffs/{waitId}/answer`. A non-blank `note` is at most 4,000 characters. */
@@ -5785,7 +5801,8 @@ export function parseAidenRemoteBotHandoffWaitId(value: unknown, label = "Bot ha
 /** Revision 37: the hand-off a Bot waits on. `null` in a session means nothing is waiting. */
 export function parseAidenRemoteBotHandoff(value: unknown): AidenRemoteBotHandoff {
   if (!isRecord(value)) throw new Error("Bot hand-off must be an object.");
-  assertExactKeys(value, ["waitId", "kind", "action", "why", "open"], "Bot hand-off");
+  assertExactKeys(value, ["waitId", "kind", "action", "why", "open", "takesNote"], "Bot hand-off");
+  if (hasOwn(value, "takesNote") && value.takesNote !== false) throw new Error("Bot hand-off takesNote must be false when present.");
   let open: { url: string } | undefined;
   if (hasOwn(value, "open")) {
     if (!isRecord(value.open)) throw new Error("Bot hand-off open must be an object.");
@@ -5802,6 +5819,7 @@ export function parseAidenRemoteBotHandoff(value: unknown): AidenRemoteBotHandof
     action,
     ...(hasOwn(value, "why") ? { why: boundedText(value.why, "Bot hand-off why", BOT_HANDOFF_WHY_MAX_CHARS) } : {}),
     ...(open ? { open } : {}),
+    ...(hasOwn(value, "takesNote") ? { takesNote: false as const } : {}),
   };
 }
 
@@ -6051,6 +6069,8 @@ export interface AidenRemoteBotActivityFixture {
  */
 export interface AidenRemoteBotHandoffsFixture {
   capability: AidenRemoteBotHandoffCapability;
+  /** Revision 40: a card a password-or-code rule opened, which takes no note. */
+  noNoteHandoff: AidenRemoteBotHandoff;
   /** A running session waiting on a hand-off, as a holder sees it. */
   session: AidenRemoteBotSession;
   /** The hand-off opening, settling and the person's answer as their message. */
@@ -6146,12 +6166,14 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
   assertExactKeys(
     value,
     [
-      "capability", "session", "events", "answer", "openOnMac", "pause", "unpause",
+      "capability", "noNoteHandoff", "session", "events", "answer", "openOnMac", "pause", "unpause",
       "pausedSession", "pausedSummary", "pausedDetail", "pausedError", "legacy",
     ],
     "Bot hand-offs fixture",
   );
   const capability = enumMember(value.capability, AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES, "Bot hand-offs fixture capability");
+  const noNoteHandoff = parseAidenRemoteBotHandoff(value.noNoteHandoff);
+  if (noNoteHandoff.takesNote !== false) throw new Error("Bot hand-offs fixture noNoteHandoff must take no note.");
   if (!Array.isArray(value.events)) throw new Error("Bot hand-offs fixture events must be an array.");
   const answer = requestResponseRecord(value.answer, "Bot hand-off answer");
   const openOnMac = requestResponseRecord(value.openOnMac, "Bot hand-off open-on-Mac");
@@ -6206,6 +6228,7 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
   }
   return {
     capability,
+    noNoteHandoff,
     session,
     events: value.events.map(parseAidenRemoteBotSessionEvent),
     answer: {

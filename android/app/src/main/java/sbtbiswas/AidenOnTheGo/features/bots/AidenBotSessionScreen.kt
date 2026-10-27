@@ -547,6 +547,7 @@ private fun AidenBotSessionContent(
                     AidenBotComposerMode.MESSAGE -> aidenBotChatPlaceholder(identity.name)
                     AidenBotComposerMode.HANDOFF_NOTE -> stringResource(R.string.bot_handoff_note_placeholder)
                     AidenBotComposerMode.HELD_FOR_SIGN_IN -> stringResource(R.string.bot_handoff_sign_in_placeholder)
+                    AidenBotComposerMode.HELD_FOR_NO_NOTE -> stringResource(R.string.bot_handoff_no_note_placeholder)
                     AidenBotComposerMode.PAUSED -> stringResource(R.string.bot_paused_placeholder, identity.name)
                 },
                 enabled = ui.composerEnabled,

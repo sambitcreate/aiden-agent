@@ -822,9 +822,9 @@ final class AidenRemoteCoordinator {
             installationId: installation.id,
             generation: generation
         )
-        for capability in Self.capabilitiesAskedForAlone {
+        for capabilities in Self.capabilitiesAskedForAlone {
             await negotiateCapabilityAloneIfNeeded(
-                capability,
+                capabilities,
                 client: client,
                 installationId: installation.id,
                 generation: generation
@@ -834,8 +834,12 @@ final class AidenRemoteCoordinator {
 
     /// Opt-ins a Mac older than their revision refuses by name, in the order
     /// they are asked for after the progress batch: `bot:handoffs` (revision
-    /// 37), then `schedule:cards` (revision 39).
-    static let capabilitiesAskedForAlone: [AidenRemoteCapability] = [.botHandoffs, .scheduleCards]
+    /// 37), with `bot:handoff-notes` (revision 40) in the same call when the
+    /// Mac offers it, then `schedule:cards` (revision 39).
+    static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
+        [.botHandoffs, .botHandoffNotes],
+        [.scheduleCards],
+    ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
     /// after the authenticated server advertises the matching feature. A
@@ -897,22 +901,29 @@ final class AidenRemoteCoordinator {
     /// only while the Mac lists them in `serverCapabilities`. A Mac that does
     /// not know a name refuses the whole request with a 400, so naming it in
     /// the batch could cost the device every other opt-in. A refusal leaves the
-    /// earlier grants as they are.
+    /// earlier grants as they are. Revision 40: the rest of a group, such as
+    /// `bot:handoff-notes`, joins its first opt-in's call only while the Mac
+    /// offers that first one and lists the member too, so a Mac on an earlier
+    /// revision still grants `bot:handoffs`, and a device that holds it asks
+    /// for the notes alone once its Mac updates.
     private func negotiateCapabilityAloneIfNeeded(
-        _ capability: AidenRemoteCapability,
+        _ capabilities: [AidenRemoteCapability],
         client: AidenRemoteClient,
         installationId: String,
         generation: Int
     ) async {
         guard isCurrentContext(installationId: installationId, generation: generation),
               let server = self.server, server.instanceId == installationId,
-              server.serverCapabilities?.contains(capability) == true,
-              let installation = installationStore.installations.first(where: { $0.id == installationId }),
-              !installation.hasNegotiatedAccess(to: capability) else {
+              let first = capabilities.first, server.serverCapabilities?.contains(first) == true,
+              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
             return
         }
+        let missing = capabilities.filter {
+            server.serverCapabilities?.contains($0) == true && !installation.hasNegotiatedAccess(to: $0)
+        }
+        guard !missing.isEmpty else { return }
         do {
-            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: [capability])
+            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
             guard isCurrentContext(installationId: installationId, generation: generation) else { return }
             let refreshedServer = try await client.server()
             guard isCurrentContext(installationId: installationId, generation: generation),

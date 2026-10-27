@@ -670,11 +670,12 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 37 adds `bot:handoffs`, asked for in a call of its own.
     /// Contract revision 39 adds `schedule:cards`, also asked for alone, after
     /// any other negotiation.
+    /// Contract revision 40 adds `bot:handoff-notes`, asked for with `bot:handoffs`.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
-        Self(rawValue: "schedule:cards"),
+        Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -691,6 +692,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// needs `bot:write`). A Mac that predates it refuses the whole request
     /// that names it, so the device asks for it alone.
     static let botHandoffs = Self(rawValue: "bot:handoffs")
+
+    /// Revision 40: a hand-off card that takes no note says so (`takesNote`).
+    /// It grants no authority. A Mac on an earlier revision refuses the name, so the
+    /// device asks for it only from a Mac that offers it.
+    static let botHandoffNotes = Self(rawValue: "bot:handoff-notes")
 
     /// Revision 39: the device receives the display-only
     /// `schedule` card on scheduled-task approvals, which the host adds only
