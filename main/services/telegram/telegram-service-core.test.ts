@@ -101,6 +101,8 @@ function createMockApi(opts: MockApiOptions) {
   const pending = [...(opts.batches ?? [])];
   const sentMessages: SentMessage[] = [];
   const richMessages: Array<{ chatId: number; threadId?: number; markdown: string }> = [];
+  const documents: Array<Parameters<TelegramBotApi["sendDocument"]>[0]> = [];
+  const richDrafts: Array<Parameters<TelegramBotApi["sendRichMessageDraft"]>[0]> = [];
   const voiceMessages: Array<{ chatId: number; threadId?: number; bytes: Uint8Array }> = [];
   const editedMessages: Array<Parameters<TelegramBotApi["editMessageText"]>[0]> = [];
   const calls: string[] = [];
@@ -117,6 +119,13 @@ function createMockApi(opts: MockApiOptions) {
     async setMyCommands(commands: readonly { command: string; description: string }[]) { commandRegistrations.push(commands); },
     richMessages,
     voiceMessages,
+    documents,
+    richDrafts,
+    async sendDocument(params: Parameters<TelegramBotApi["sendDocument"]>[0]) {
+      documents.push(params);
+      return { message_id: documents.length, chat: { id: params.chatId, type: "private" as const }, date: 0 };
+    },
+    async sendRichMessageDraft(params: Parameters<TelegramBotApi["sendRichMessageDraft"]>[0]) { richDrafts.push(params); },
     calls,
     getMeCalls: () => getMeCalls,
     getUpdatesCalls: () => getUpdatesCalls,
@@ -139,7 +148,10 @@ function createMockApi(opts: MockApiOptions) {
       }
       if (pending.length > 0) return pending.shift() as TelegramUpdate[];
       if (opts.autoStop ?? true) {
-        opts.stop();
+        // Leave the host running through the accepted turn's microtasks. A real
+        // transport stop now cancels pending output, rather than delivering afterward.
+        setImmediate(opts.stop);
+        if (_signal && !_signal.aborted) await once(_signal, "abort");
         return [];
       }
       // Park the loop without busy-spinning; stopping the service releases it.
@@ -542,6 +554,8 @@ interface HarnessOptions {
   admitRunInput?: import("./telegram-service-core.js").TelegramServiceDeps["admitRunInput"];
   mediaGroupDebounceMs?: number;
   handleExtensionUpdate?: import("./telegram-service-core.js").TelegramServiceDeps["handleExtensionUpdate"];
+  transformOutbound?: import("./telegram-service-core.js").TelegramServiceDeps["transformOutbound"];
+  readOutboundAttachment?: import("./telegram-service-core.js").TelegramServiceDeps["readOutboundAttachment"];
   synthesizeVoice?: import("./telegram-service-core.js").TelegramServiceDeps["synthesizeVoice"];
   delayAfterFirstBatch?: boolean;
   existingChats?: MockTurnOptions["existingChats"];
@@ -614,6 +628,8 @@ function harness(o: HarnessOptions = {}) {
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
+    transformOutbound: o.transformOutbound,
+    readOutboundAttachment: o.readOutboundAttachment,
     storeInboundFile: o.storeInboundFile,
     botIngress: o.botIngress,
     getToken: () => Promise.resolve("mock-token"),
@@ -2665,7 +2681,8 @@ test("a queued ordinary turn rechecks No Access at dispatch even without a works
   await waitFor(() => h.turnMock.startCalls() === 1);
   denied = true;
   h.turnMock.completePendingTurn();
-  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("No Access at dispatch")));
+  await waitFor(() => h.logs.errors.some(({ cause }) => cause instanceof Error && cause.message.includes("No Access at dispatch")));
+  assert.equal(h.api.sentMessages.some(({ text }) => text.includes("No Access at dispatch")), false);
   assert.equal(h.turnMock.startCalls(), 1);
   assert.equal(h.service.queueSize, 0);
   h.service.stop();
@@ -2716,4 +2733,113 @@ test("No Access prevents a reaction extension from receiving project authority",
   await waitFor(() => h.api.getUpdatesCalls() > 1);
   assert.equal(extensionCalls, 0);
   assert.equal(h.turnMock.startCalls(), 0);
+});
+
+function deliveryBarrier() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function externalCounts(api: ReturnType<typeof createMockApi>) {
+  return [api.sentMessages.length, api.richMessages.length, api.editedMessages.length, api.voiceMessages.length, api.documents.length, api.richDrafts.length, api.sendChatActionCalls()];
+}
+
+test("a stale compaction confirmation cannot compact No Access; recovery callbacks remain usable", async () => {
+  let denied = false;
+  let compactions = 0;
+  const message = makeMessage(10, BOT, "session controls");
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "project",
+    assertWorkspaceAccess: async (id) => { if (id === "project" && denied) throw new TelegramWorkspaceAccessError(); },
+    compactChat: async () => { compactions++; return { compacted: true }; },
+    batches: [[{ update_id: 1, callback_query: { id: "ask", from: person(42), message, data: "compact:ask" } }],
+      [{ update_id: 2, callback_query: { id: "confirm", from: person(42), message, data: "compact:yes" } },
+        { update_id: 3, callback_query: { id: "recover", from: person(42), message, data: "workspace:set:off" } }]],
+    autoStop: false,
+  });
+  const getUpdates = h.api.getUpdates;
+  h.api.getUpdates = async (...args) => {
+    const updates = await getUpdates(...args);
+    if (updates.some(({ update_id }) => update_id === 2)) denied = true;
+    return updates;
+  };
+  await h.service.start();
+  await waitFor(() => h.api.answerCallbackQueryCalls() === 3);
+  assert.equal(compactions, 0);
+  assert.equal(h.config.state.telegramWorkspaceId, undefined);
+  h.service.stop();
+});
+
+test("revocation during outbound transformation prevents both Rich and HTML replies", async (t) => {
+  for (const rendering of ["rich", "html"] as const) await t.test(rendering, async () => {
+    const entered = deliveryBarrier(), resume = deliveryBarrier();
+    let denied = false;
+    const h = harness({
+      enabled: true, allowedUserId: 42, telegramWorkspaceId: "project", telegramRendering: rendering,
+      workspaces: [{ id: "project", name: "Project", folderPath: "/project" }],
+      assertWorkspaceAccess: async () => { if (denied) throw new TelegramWorkspaceAccessError(); },
+      transformOutbound: async () => { entered.resolve(); await resume.promise; return "Private generated answer"; },
+      batches: [[makeUpdate(1, makeMessage(10, person(42), "task"))]], autoStop: false,
+    });
+    await h.service.start(); await entered.promise;
+    denied = true; await h.service.revalidateWorkspaces();
+    const before = externalCounts(h.api);
+    resume.resolve();
+    await waitFor(() => !h.service.isActive);
+    assert.deepEqual(externalCounts(h.api), before);
+    assert.equal(h.api.richMessages.length, 0);
+    assert.equal(h.api.sentMessages.length, 0);
+    h.service.stop();
+  });
+});
+
+test("revocation while voice or file output is prepared prevents upload and error/fallback sends", async (t) => {
+  for (const preparation of ["automatic voice", "explicit voice", "failed voice", "attachment", "failed attachment"] as const) await t.test(preparation, async () => {
+    const entered = deliveryBarrier(), resume = deliveryBarrier();
+    let denied = false;
+    const attachment = preparation.includes("attachment");
+    const h = harness({
+      enabled: true, allowedUserId: 42, telegramWorkspaceId: "project", telegramRendering: "rich",
+      telegramVoiceMode: preparation === "automatic voice" ? "always" : "hidden",
+      reply: attachment ? '<!-- telegram_attach path="private.txt" -->' : preparation === "automatic voice" ? "Private answer" : '<!-- telegram_voice text="Private answer" -->',
+      workspaces: [{ id: "project", name: "Project", folderPath: "/project" }],
+      assertWorkspaceAccess: async () => { if (denied) throw new TelegramWorkspaceAccessError(); },
+      synthesizeVoice: async () => { entered.resolve(); await resume.promise; if (preparation === "failed voice") throw new Error("Synthetic voice failure"); return { bytes: new Uint8Array([1]), name: "voice.ogg", mimeType: "audio/ogg" }; },
+      readOutboundAttachment: async () => { entered.resolve(); await resume.promise; if (preparation === "failed attachment") throw new Error("Synthetic file failure"); return { bytes: new Uint8Array([2]), name: "private.txt", mimeType: "text/plain" }; },
+      batches: [[makeUpdate(1, makeMessage(10, person(42), "task"))]], autoStop: false,
+    });
+    await h.service.start(); await entered.promise;
+    denied = true; await h.service.revalidateWorkspaces();
+    const before = externalCounts(h.api);
+    resume.resolve();
+    await waitFor(() => !h.service.isActive);
+    assert.deepEqual(externalCounts(h.api), before);
+    assert.equal(h.api.voiceMessages.length + h.api.documents.length + h.api.sentMessages.length + h.api.richMessages.length, 0);
+    h.service.stop();
+  });
+});
+
+test("explicit connect still serves a configured owner without persisting startup enablement", async () => {
+  const h = harness({ enabled: false, allowedUserId: 42, batches: [[makeUpdate(1, makeMessage(10, person(42), "hello"))]], autoStop: false });
+  await h.service.connect();
+  await waitFor(() => h.api.sentMessages.some(({ text }) => text.includes("Mock reply")));
+  assert.equal(h.config.state.enabled, false);
+  h.service.stop();
+});
+
+test("an authorized prepared attachment still uploads once", async () => {
+  const h = harness({
+    enabled: true, allowedUserId: 42, telegramWorkspaceId: "project",
+    workspaces: [{ id: "project", name: "Project", folderPath: "/project" }],
+    assertWorkspaceAccess: async () => {},
+    reply: '<!-- telegram_attach path="report.txt" -->',
+    readOutboundAttachment: async () => ({ bytes: new Uint8Array([3]), name: "report.txt", mimeType: "text/plain" }),
+    batches: [[makeUpdate(1, makeMessage(10, person(42), "send report"))]], autoStop: false,
+  });
+  await h.service.start();
+  await waitFor(() => h.api.documents.length === 1);
+  assert.equal(h.api.documents[0]?.name, "report.txt");
+  assert.deepEqual([...h.api.documents[0]!.bytes], [3]);
+  h.service.stop();
 });
