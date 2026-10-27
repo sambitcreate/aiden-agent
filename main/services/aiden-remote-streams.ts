@@ -13,6 +13,10 @@ import {
   createRemoteChatGenerationOwner,
   type RemoteChatGenerationOwnerController,
 } from "./chat-generation-owner.js";
+import {
+  approvalScheduleCard,
+  type AidenRemoteApprovalSchedule,
+} from "./aiden-remote-approval-schedule.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
@@ -125,6 +129,11 @@ export interface AidenRemotePendingApproval {
    * when a broader-than-once scope is available; "once" is always implied.
    */
   scopes?: ToolApprovalScope[];
+  /**
+   * Display-only scheduled-task card (contract revision 39), sent only to a
+   * device holding `schedule:cards` and `schedule:read`. Never changes `canAllow`.
+   */
+  schedule?: AidenRemoteApprovalSchedule;
   /** Exact renderer-safe facts are host-only and never enter the mobile wire contract. */
   details?: ToolApprovalDetails;
 }
@@ -1409,16 +1418,22 @@ export class AidenRemoteStreamService {
     return this.requireStream(deviceId, streamId).chatId;
   }
 
-  pendingApproval(deviceId: string, streamId: string): AidenRemotePendingApproval | null {
+  pendingApproval(
+    deviceId: string,
+    streamId: string,
+    options: { scheduleCard?: boolean } = {},
+  ): AidenRemotePendingApproval | null {
     const stream = this.requireStream(deviceId, streamId);
     const approval = this.pendingApprovalForStream(stream.streamId);
     if (!approval) return null;
     const { details: _hostOnly, scopes, ...mobile } = approval;
     const canAllow = approvalIsHostOnly(approval.details) ? false : approval.canAllow;
+    const schedule = options.scheduleCard === true ? approvalScheduleCard(approval.details) : undefined;
     return {
       ...mobile,
       canAllow,
       ...(canAllow && scopes ? { scopes } : {}),
+      ...(schedule ? { schedule } : {}),
     };
   }
 

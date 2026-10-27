@@ -15,7 +15,7 @@ import {
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_PHONE_RUN_CAPABILITIES,
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
-  AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
+  AIDEN_REMOTE_OPT_IN_CAPABILITIES,
 } from "./aiden-remote-protocol.js";
 import {
   AIDEN_REMOTE_DEVELOPMENT_LAN_PORT,
@@ -259,13 +259,16 @@ function isMobileSimulatorCapability(
   );
 }
 
-/** Revision 27/30/36 opt-ins (`bot:cards`, `bot:activity`, `bot:handoffs`): no authority, any device type. */
-function isBotOptInCapability(
+/**
+ * Display opt-ins (`bot:cards`, `bot:activity`, `bot:handoffs`,
+ * `schedule:cards`): no authority, any device type.
+ */
+function isOptInCapability(
   value: unknown,
-): value is (typeof AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES)[number] {
+): value is (typeof AIDEN_REMOTE_OPT_IN_CAPABILITIES)[number] {
   return (
     typeof value === "string" &&
-    (AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
+    (AIDEN_REMOTE_OPT_IN_CAPABILITIES as readonly string[]).includes(value)
   );
 }
 
@@ -806,7 +809,7 @@ export class AidenRemoteStateRegistry {
         !isSimulatorCapability(capability) &&
         !isMobileSimulatorCapability(capability) &&
         !isHostCapability(capability) &&
-        !isBotOptInCapability(capability))
+        !isOptInCapability(capability))
     ) {
       return null;
     }
@@ -836,7 +839,7 @@ export class AidenRemoteStateRegistry {
             isSimulatorCapability(capability) ||
             isMobileSimulatorCapability(capability) ||
             isHostCapability(capability) ||
-            isBotOptInCapability(capability)) &&
+            isOptInCapability(capability)) &&
           !granted.has(capability as AidenRemoteCapability),
       );
       const acceptsProgress = accepts.some(isProgressCapability);

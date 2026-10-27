@@ -1,5 +1,5 @@
 {
-  "contractRevision": 37,
+  "contractRevision": 39,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -249,7 +249,7 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }] } } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }, { "id": "tool-4", "order": 3, "kind": "tool", "toolCallId": "call-4", "toolName": "web_fetch", "label": "Fetch web page", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "detail": "acme.example", "extraction": { "version": 1, "host": "acme.example", "cut": false, "fields": [{ "name": "pro_monthly", "status": "extracted", "value": "20", "confidence": 0.97, "sourceLine": "Pro is $20 per month, billed monthly." }, { "name": "team_yearly", "status": "uncertain", "value": "1399", "confidence": 0.92, "notFound": true }, { "name": "enterprise", "status": "null" }] } }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "question_required", "terminal": false, "payload": { "promptId": "q-fixture-01", "questions": [{ "question": "Which tolerance should the chamfer use?", "header": "Chamfer", "multiSelect": false, "options": [{ "label": "0.5 mm", "description": "Standard shop chamfer." }, { "label": "1.0 mm", "description": "Heavy chamfer for handling." }] }], "expiresAt": "2026-08-18T19:06:10.000Z" } },
@@ -1539,7 +1539,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 37,
+    "contractRevision": 39,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2541,5 +2541,519 @@
         "error": { "code": "operation_stale", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
       }
     }
+  },
+  "scheduleCards": {
+    "capability": "schedule:cards",
+    "streamApproval": {
+      "approval": {
+        "approvalId": "approval_fixture_schedule_01",
+        "streamId": "stream_fixture_01",
+        "chatId": "chat_fixture_01",
+        "summary": "Create scheduled task \"Morning briefing\" · Weekdays at 9:00 AM · Read-only access · project Aiden Agent (workspace_fixture_01) · OpenRouter / Qwen3 Coder",
+        "toolCallId": "tool_fixture_schedule_01",
+        "toolName": "schedule_task",
+        "expiresAt": "2026-10-22T19:06:08.000Z",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ],
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      }
+    },
+    "phoneRunEvents": [
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 1,
+        "timestamp": "2026-10-22T19:10:01.000Z",
+        "type": "run.started",
+        "terminal": false,
+        "payload": {
+          "runId": "run_fixture_schedule_01",
+          "chatId": "chat_fixture_01",
+          "origin": "renderer"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 2,
+        "timestamp": "2026-10-22T19:10:02.000Z",
+        "type": "approval_required",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_02",
+          "summary": "Create scheduled task \"Inbox triage\" · Every hour (United Kingdom Time) · Full access · MCP Gmail (mcp_gmail), Linear (mcp_linear) · OpenRouter / Qwen3 Coder",
+          "toolCallId": "tool_fixture_schedule_02",
+          "toolName": "schedule_task",
+          "canAllow": true,
+          "scopes": [
+            "once",
+            "chat"
+          ],
+          "schedule": {
+            "action": "create",
+            "name": "Inbox triage",
+            "cadence": "Every hour",
+            "timezone": "Europe/London",
+            "nextRunAt": "2026-10-22T20:00:00.000Z",
+            "mode": "llm",
+            "permission": "full",
+            "connectors": [
+              "Gmail",
+              "Linear"
+            ],
+            "providerName": "OpenRouter",
+            "modelName": "Qwen3 Coder",
+            "notify": false,
+            "enabled": true,
+            "schedulerEnabled": true,
+            "prompt": "Label new support emails, draft replies to billing questions and file a Linear issue for each bug report."
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 3,
+        "timestamp": "2026-10-22T19:10:03.000Z",
+        "type": "approval_resolved",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_02",
+          "decision": "allow"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 4,
+        "timestamp": "2026-10-22T19:10:04.000Z",
+        "type": "approval_required",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_03",
+          "summary": "Change the assistant automation \"Daily standup\"?",
+          "toolCallId": "tool_fixture_schedule_03",
+          "toolName": "edit_automation",
+          "canAllow": false
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 5,
+        "timestamp": "2026-10-22T19:10:05.000Z",
+        "type": "approval_resolved",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_03",
+          "decision": "deny"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 6,
+        "timestamp": "2026-10-22T19:10:06.000Z",
+        "type": "done",
+        "terminal": true,
+        "payload": {
+          "messageId": "message_fixture_assistant_03"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 6,
+        "timestamp": "2026-10-22T19:10:06.000Z",
+        "type": "run.ended",
+        "terminal": true,
+        "payload": {
+          "runId": "run_fixture_schedule_01",
+          "chatId": "chat_fixture_01",
+          "state": "done"
+        }
+      }
+    ],
+    "cards": [
+      {
+        "label": "create-read-only-project",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "full-access-connectors",
+        "schedule": {
+          "action": "create",
+          "name": "Inbox triage",
+          "cadence": "Every hour",
+          "timezone": "Europe/London",
+          "nextRunAt": "2026-10-22T20:00:00.000Z",
+          "mode": "llm",
+          "permission": "full",
+          "connectors": [
+            "Gmail",
+            "Linear"
+          ],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": false,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Label new support emails, draft replies to billing questions and file a Linear issue for each bug report."
+        }
+      },
+      {
+        "label": "scheduling-off",
+        "schedule": {
+          "action": "create",
+          "name": "Weekly dependency audit",
+          "cadence": "Every Monday at 8:00 AM",
+          "timezone": "America/New_York",
+          "mode": "script",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": false,
+          "script": "npm outdated --json > reports/outdated.json && npm audit --omit=dev"
+        }
+      },
+      {
+        "label": "paused-update",
+        "schedule": {
+          "action": "update",
+          "name": "Release notes draft",
+          "cadence": "Every Friday at 4:30 PM",
+          "timezone": "America/Los_Angeles",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": false,
+          "schedulerEnabled": true,
+          "prompt": "Draft release notes from the pull requests merged this week, grouped by feature area."
+        }
+      },
+      {
+        "label": "truncated-prompt",
+        "schedule": {
+          "action": "create",
+          "name": "Long research digest",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest.",
+          "truncated": true
+        }
+      }
+    ],
+    "rejected": [
+      {
+        "label": "unknown-key",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "taskId": "task_fixture_01"
+        }
+      },
+      {
+        "label": "bidi-name",
+        "schedule": {
+          "action": "create",
+          "name": "Morning\u202ebriefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "control-in-cadence",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays\nat 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "script-in-llm-mode",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "script": "echo hi"
+        }
+      },
+      {
+        "label": "offset-next-run",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T09:00:00+02:00",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "empty-cadence",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "too-many-connectors",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "connectors": [
+            "Connector 0",
+            "Connector 1",
+            "Connector 2",
+            "Connector 3",
+            "Connector 4",
+            "Connector 5",
+            "Connector 6",
+            "Connector 7",
+            "Connector 8",
+            "Connector 9",
+            "Connector 10",
+            "Connector 11",
+            "Connector 12",
+            "Connector 13",
+            "Connector 14",
+            "Connector 15",
+            "Connector 16"
+          ],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "truncated-false",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "truncated": false
+        }
+      },
+      {
+        "label": "unknown-permission",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "admin",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "oversized-name",
+        "schedule": {
+          "action": "create",
+          "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "oversized-prompt",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP"
+        }
+      },
+      {
+        "label": "missing-flag",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      }
+    ]
   }
 }

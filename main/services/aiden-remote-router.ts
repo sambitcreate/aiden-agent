@@ -45,6 +45,7 @@ import {
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
+  AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -1674,6 +1675,16 @@ function botActivityWired(dependencies: AidenRemoteRouterDependencies): boolean 
   return dependencies.botSessions?.supportsActivity === true && dependencies.bots?.supportsChatActivity === true;
 }
 
+/** Revision 39: schedule cards ride on stream approvals and phone run approvals. */
+function scheduleCardsWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return Boolean(dependencies.streams || dependencies.hostRuns);
+}
+
+/** The `schedule` card is sent only to a device that opted in and may read schedules. */
+function holdsScheduleCards(device: Pick<AidenRemoteRouterAuthenticatedDevice, "capabilities">): boolean {
+  return device.capabilities.has("schedule:cards") && device.capabilities.has("schedule:read");
+}
+
 /**
  * Revision 37: the hand-off answer, open-on-Mac and pause routes and the
  * holder projection ship together, or not at all.
@@ -1758,6 +1769,8 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
+    // Revision 39: a display opt-in for any device type while approvals are served.
+    ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2145,6 +2158,11 @@ export function createAidenRemoteRequestHandler(
             // Revision 37: an opt-in to hand-off and pause shapes, offered only while their routes are wired.
             if (!botHandoffsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
+            if (!scheduleCardsWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -3863,6 +3881,7 @@ export function createAidenRemoteRequestHandler(
         const pending = dependencies.streams.pendingApproval(
           device.id,
           streamApprovalMatch[1]!,
+          { scheduleCard: holdsScheduleCards(device) },
         );
         const requiredCapability = pending
           ? dependencies.streams.approvalRequiredCapability(

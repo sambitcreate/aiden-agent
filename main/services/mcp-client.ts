@@ -22,6 +22,8 @@ export interface McpCallOptions {
 /** A client that can make raw MCP requests (tests may pass a narrower fake). */
 export type McpRequester = Pick<McpClient, "request">;
 
+export { AIDEN_MCP_CLIENT_NAME } from "../../renderer/shared/connector-catalog.js";
+
 export function createMcpClient(name: string, version = "1.0.0"): McpClient {
   return new McpClient({ name, version, capabilities: {} });
 }

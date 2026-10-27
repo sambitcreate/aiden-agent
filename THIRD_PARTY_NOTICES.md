@@ -23,6 +23,17 @@ Copyright (c) 2014 Ryan L McIntyre
 MIT License. See `renderer/lib/ghostty-terminal/fonts/LICENSE`
 
 
+## iMCP menu bar mark
+
+The iMCP connector's icon (`renderer/components/settings/mcp-preset-icons.tsx`)
+is the path from iMCP's `Assets/icon.svg`, recolored with `currentColor`.
+Aiden does not bundle the iMCP app; it runs the copy the person installs.
+Source: https://github.com/mattt/iMCP
+
+Copyright 2025 Mattt (https://mat.tt)
+
+MIT License. See https://github.com/mattt/iMCP/blob/main/LICENSE.md
+
 ## Chart.js
 
 Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
@@ -866,3 +877,15 @@ koffi: Copyright (C) 2026 Niels Martignène
 MIT License. The package's `licenses/` folder carries each license; see
 https://github.com/handy-computer/transcribe.cpp and
 https://github.com/Koromix/koffi
+
+## pi-web-access (web page extract mode)
+
+The `web_fetch` extract mode follows the field types, the 0.80 confidence
+threshold and the text-matching rules of `field-extract.ts` in pi-web-access
+v0.45.0 (https://github.com/nicobailon/pi-web-access). Aiden's implementation is
+its own code (`main/services/web-extract-core.ts`); no pi-web-access files are
+vendored or installed.
+
+Copyright (c) 2025 Nico Bailon
+
+MIT License. See https://github.com/nicobailon/pi-web-access/blob/main/LICENSE
