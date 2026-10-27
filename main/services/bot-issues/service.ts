@@ -139,6 +139,16 @@ function statusEntry(issue: BotIssue): BotIssueStatusEntryData {
 export function createBotIssueService(dependencies: BotIssueServiceDependencies): BotIssueService {
   const listeners = new Set<(botId: string) => void>();
 
+  /**
+   * The raise still writing for a Bot and key. The stored row is durable before
+   * its chat entry and banner are, so a second raise in that window reads the
+   * row with the side-effect flags still unset and would repeat both. It waits
+   * for the attempt already running instead. The entry leaves the map when that
+   * attempt settles, so a later raise can still repair a failure.
+   */
+  const raising = new Map<string, Promise<BotIssue>>();
+  const raiseKeyOf = (botId: string, dedupeKey: string) => `${botId}\u0000${dedupeKey}`;
+
   const notify = (botId: string) => {
     for (const listener of [...listeners]) {
       try {
@@ -233,52 +243,68 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
     });
   }
 
-  return {
-    async raise(input) {
-      const raised = await dependencies.store.change(input.botId, (issues) => {
-        const existing = issues.find((issue) => isOpen(issue) && issue.dedupeKey === input.dedupeKey);
-        if (existing) return { issues, result: { issue: existing, created: false, superseded: undefined } };
+  /** Write the new issue, then every side effect it has not landed yet. */
+  async function deliverRaise(
+    input: Omit<BotIssue, "id" | "createdAt" | "resolvedAt" | "resolution">,
+  ): Promise<BotIssue> {
+    const raised = await dependencies.store.change(input.botId, (issues) => {
+      const existing = issues.find((issue) => isOpen(issue) && issue.dedupeKey === input.dedupeKey);
+      if (existing) return { issues, result: { issue: existing, created: false, superseded: undefined } };
 
-        const at = dependencies.now();
-        const issue = buildIssue(input, randomUUID(), at);
-        const open = issues.filter(isOpen);
-        // The ninth open issue settles the oldest: the person always has at
-        // most eight decisions, and the card they lose says why it left.
-        const oldest =
-          open.length < BOT_ISSUE_LIMITS.openPerBot
-            ? undefined
-            : [...open].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
-        const superseded =
-          oldest === undefined ? undefined : { ...oldest, resolvedAt: at, resolution: "superseded" as const };
-        return {
-          issues: [issue, ...(superseded === undefined ? issues : issues.map((row) => (row.id === superseded.id ? superseded : row)))],
-          result: { issue, created: true, superseded },
-        };
+      const at = dependencies.now();
+      const issue = buildIssue(input, randomUUID(), at);
+      const open = issues.filter(isOpen);
+      // The ninth open issue settles the oldest: the person always has at
+      // most eight decisions, and the card they lose says why it left.
+      const oldest =
+        open.length < BOT_ISSUE_LIMITS.openPerBot
+          ? undefined
+          : [...open].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
+      const superseded =
+        oldest === undefined ? undefined : { ...oldest, resolvedAt: at, resolution: "superseded" as const };
+      return {
+        issues: [issue, ...(superseded === undefined ? issues : issues.map((row) => (row.id === superseded.id ? superseded : row)))],
+        result: { issue, created: true, superseded },
+      };
+    });
+
+    const issue = raised.issue;
+    if (raised.superseded) {
+      await dependencies.appendEntry(input.botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(raised.superseded));
+    }
+    // The issue is durable before its chat entry and banner are: a raise that
+    // failed halfway is repaired here, one missing side effect at a time.
+    if (issue.entryAppended !== true) {
+      await dependencies.appendEntry(input.botId, BOT_ISSUE_ENTRY_KIND, published(issue));
+      await remember(input.botId, issue.id, { entryAppended: true });
+      notify(input.botId);
+    }
+    if (issue.delivered !== true) {
+      await dependencies.funnel.deliver({
+        botId: input.botId,
+        class: "issue",
+        dedupeKey: `issue:${issue.id}`,
+        title: issue.title,
+        body: issue.body,
+        status: "info",
       });
+      await remember(input.botId, issue.id, { delivered: true });
+    }
+    return published(issue);
+  }
 
-      const issue = raised.issue;
-      if (raised.superseded) {
-        await dependencies.appendEntry(input.botId, BOT_ISSUE_STATUS_ENTRY_KIND, statusEntry(raised.superseded));
-      }
-      // The issue is durable before its chat entry and banner are: a raise that
-      // failed halfway is repaired here, one missing side effect at a time.
-      if (issue.entryAppended !== true) {
-        await dependencies.appendEntry(input.botId, BOT_ISSUE_ENTRY_KIND, published(issue));
-        await remember(input.botId, issue.id, { entryAppended: true });
-        notify(input.botId);
-      }
-      if (issue.delivered !== true) {
-        await dependencies.funnel.deliver({
-          botId: input.botId,
-          class: "issue",
-          dedupeKey: `issue:${issue.id}`,
-          title: issue.title,
-          body: issue.body,
-          status: "info",
-        });
-        await remember(input.botId, issue.id, { delivered: true });
-      }
-      return published(issue);
+  return {
+    raise(input) {
+      const key = raiseKeyOf(input.botId, input.dedupeKey);
+      const inFlight = raising.get(key);
+      if (inFlight) return inFlight;
+      const attempt = deliverRaise(input);
+      raising.set(key, attempt);
+      const settle = () => {
+        if (raising.get(key) === attempt) raising.delete(key);
+      };
+      void attempt.then(settle, settle);
+      return attempt;
     },
 
     resolve(botId, dedupeKey, resolution) {

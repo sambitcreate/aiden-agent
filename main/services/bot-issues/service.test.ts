@@ -56,6 +56,8 @@ function setup(
     deliveryFailures?: number;
     /** What the routine service says when Resume is pressed. */
     resume?: () => Promise<BotIssueResumeResult>;
+    /** Hold chat writes until the test releases them, so a raise can start mid-attempt. */
+    holdAppends?: boolean;
   } = {},
 ) {
   const profile = tempProfile();
@@ -66,12 +68,27 @@ function setup(
   let clock = 1_000;
   let appendFailures = options.appendFailures ?? 0;
   let deliveryFailures = options.deliveryFailures ?? 0;
+  let markAppending!: () => void;
+  const appending = new Promise<void>((resolve) => {
+    markAppending = resolve;
+  });
+  let releaseAppends = () => {};
+  const heldAppends =
+    options.holdAppends === true
+      ? new Promise<void>((resolve) => {
+          releaseAppends = resolve;
+        })
+      : undefined;
   const issues: BotIssueService = createBotIssueService({
     store,
     appendEntry: async (botId, kind, data) => {
       if (appendFailures > 0) {
         appendFailures -= 1;
         throw new Error("the conversation could not be written");
+      }
+      if (heldAppends) {
+        markAppending();
+        await heldAppends;
       }
       appends.push({ botId, kind, data });
     },
@@ -109,6 +126,12 @@ function setup(
     appends,
     deliveries,
     calls,
+    /** Resolves when a held chat write has started. */
+    appending,
+    /** Lets every held chat write finish. */
+    releaseAppends() {
+      releaseAppends();
+    },
     tick(by = 1) {
       clock += by;
       return clock;
@@ -329,6 +352,35 @@ test("a raise retries delivery the funnel never took", async () => {
 
   await harness.issues.raise(ISSUE);
   assert.equal(harness.deliveries.length, 1, "and the retry is not retried again");
+});
+
+test("two raises of the same key in flight write one card and one banner", async () => {
+  const harness = setup({ holdAppends: true });
+
+  // The first raise is durable but still waiting to write its chat card. A
+  // second raise inside that window used to read the row with its side-effect
+  // flags still unset and repeat both the card and the banner.
+  const first = harness.issues.raise(ISSUE);
+  await harness.appending;
+  const second = harness.issues.raise(ISSUE);
+
+  harness.releaseAppends();
+  const [opened, again] = await Promise.all([first, second]);
+
+  assert.deepEqual(again, opened, "both callers see the one issue");
+  assert.equal(harness.appends.length, 1, "one chat entry, not two");
+  assert.deepEqual(
+    harness.deliveries.map((delivery) => delivery.dedupeKey),
+    [`issue:${opened.id}`],
+    "one banner, not two",
+  );
+  assert.deepEqual(await harness.issues.list(BOT_ID, { open: true }), [opened]);
+
+  // The in-flight entry is gone once the attempt settled, so a later raise
+  // still repairs a failure instead of returning the finished promise.
+  await harness.issues.raise(ISSUE);
+  assert.equal(harness.appends.length, 1, "a settled raise never doubles the card");
+  assert.equal(harness.deliveries.length, 1, "or the banner");
 });
 
 test("two concurrent answers run the host action once", async () => {
