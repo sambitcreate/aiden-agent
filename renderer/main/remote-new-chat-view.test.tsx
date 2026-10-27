@@ -271,6 +271,32 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
   assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
 });
 
+test("a paired Mac's paused or interrupted Bot says so in place of its purpose", () => {
+  const view = dom(
+    renderToStaticMarkup(
+      <RemoteBotsSection
+        groups={[
+          {
+            host: studio,
+            bots: [
+              { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests", status: "paused" },
+              { id: "bot-2", name: "Scribe", purpose: "Takes notes", status: "interrupted" },
+              { id: "bot-3", name: "Planner", purpose: "Plans the week", working: true },
+            ],
+          },
+        ]}
+        opening={null}
+        onOpen={noop}
+      />,
+    ),
+  );
+  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"), true);
+  assert.equal(view.button(/^Scribe, on Studio, interrupted$/u)?.textContent?.includes("Interrupted — tap to resume"), true);
+  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Working…"), true);
+  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week/u);
+  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"), false, "a paused Bot's chat still opens");
+});
+
 test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac with no match", () => {
   const groups = [
     { host: studio, bots: [{ id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" }, { id: "bot-2", name: "Scribe" }] },

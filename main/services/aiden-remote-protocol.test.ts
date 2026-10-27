@@ -2761,8 +2761,13 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
   assert.deepEqual(parseAidenRemoteBotHandoff(card), card);
   const { why: _why, open: _open, ...bare } = card;
   assert.deepEqual(parseAidenRemoteBotHandoff({ ...bare, kind: "sign_in" }), { ...bare, kind: "sign_in" });
+  assert.deepEqual(parseAidenRemoteBotHandoff({ ...card, takesNote: false }), { ...card, takesNote: false });
+  assert.deepEqual(parseAidenRemoteBotHandoff(raw.botHandoffs.noNoteHandoff), raw.botHandoffs.noNoteHandoff);
   for (const invalid of [
     { ...card, extra: true },
+    { ...card, takesNote: true },
+    { ...card, takesNote: "false" },
+    { ...card, takesNote: null },
     { ...card, kind: "payment" },
     { ...card, waitId: "wait id" },
     { ...card, action: "   " },

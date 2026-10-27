@@ -605,6 +605,8 @@ enum AidenBotHandoffKind: String, Codable, Sendable {
 /// The hand-off a Bot waits on (`handoff` on the session and `handoff` frames).
 /// Answered once, by `waitId`: Done or Skip, with an optional note. A sign-in
 /// is finished on the Mac, so the phone offers Finish on your Mac and Skip.
+/// Revision 40: a card a password-or-code rule opened carries
+/// `takesNote: false` (`takesNote`), so it is answered without a note.
 struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     struct Open: Codable, Equatable, Sendable {
         let url: String
@@ -629,8 +631,18 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     let action: String
     let why: String?
     let open: Open?
+    /// Revision 40: false on a card whose answer may carry no note, so the
+    /// composer holds instead of sending a code to the Bot as Done's note.
+    let takesNote: Bool
 
-    init(waitId: String, kind: AidenBotHandoffKind, action: String, why: String? = nil, open: Open? = nil) throws {
+    init(
+        waitId: String,
+        kind: AidenBotHandoffKind,
+        action: String,
+        why: String? = nil,
+        open: Open? = nil,
+        takesNote: Bool = true
+    ) throws {
         try AidenBotHandoffWire.validateWaitID(waitId)
         try AidenBotWire.validateString(action, field: "action", maxLength: AidenBotHandoffWire.maxActionLength, allowEmpty: false)
         guard !AidenBotHandoffWire.isBlank(action) else { throw AidenBotContractError.invalidField("action") }
@@ -642,17 +654,22 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
         self.action = action
         self.why = why
         self.open = open
+        self.takesNote = takesNote
     }
 
     init(from decoder: Decoder) throws {
-        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "kind", "action", "why", "open"])
+        try AidenBotWire.requireOnlyKeys(decoder, allowed: ["waitId", "kind", "action", "why", "open", "takesNote"])
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        // Only ever `false` when present (revision 40).
+        let takesNote = try AidenBotWire.optional(Bool.self, from: values, forKey: .takesNote)
+        if takesNote == true { throw AidenBotContractError.invalidField("takesNote") }
         try self.init(
             waitId: try values.decode(String.self, forKey: .waitId),
             kind: try values.decode(AidenBotHandoffKind.self, forKey: .kind),
             action: try values.decode(String.self, forKey: .action),
             why: try AidenBotWire.optional(String.self, from: values, forKey: .why),
-            open: try AidenBotWire.optional(Open.self, from: values, forKey: .open)
+            open: try AidenBotWire.optional(Open.self, from: values, forKey: .open),
+            takesNote: takesNote == nil
         )
     }
 
@@ -663,10 +680,11 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
         try values.encode(action, forKey: .action)
         try values.encodeIfPresent(why, forKey: .why)
         try values.encodeIfPresent(open, forKey: .open)
+        if !takesNote { try values.encode(false, forKey: .takesNote) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case waitId, kind, action, why, open
+        case waitId, kind, action, why, open, takesNote
     }
 }
 

@@ -2389,6 +2389,25 @@ class AidenBotSessionControllerTest {
     }
 
     @Test
+    fun aCardThatTakesNoNoteHoldsTheComposerAndIsAnsweredOnlyBare() = runTest {
+        val noNote = handoffSession.copy(handoff = handoffSession.handoff!!.copy(takesNote = false))
+        val transport = HandoffTransport(noNote)
+        val controller = AidenBotSessionController(noNote.botId, transport, backgroundScope)
+        controller.refetch()
+        assertEquals(AidenBotComposerMode.HELD_FOR_NO_NOTE, controller.state.value.composerMode)
+        assertFalse("a code typed here would reach the Bot", controller.state.value.composerEnabled)
+        assertFalse(controller.state.value.composerAnswersHandoff)
+
+        assertFalse(controller.answerHandoff(AidenBotHandoffOutcome.DONE, "123456"))
+        assertTrue("a note never leaves the phone for this card", transport.answers.isEmpty())
+        assertNotEquals("the card still waits", null, controller.state.value.handoff)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.DONE))
+        assertEquals(AidenBotHandoffAnswerRequest(AidenBotHandoffOutcome.DONE), transport.answers.single().request)
+        assertEquals(AidenBotComposerMode.MESSAGE, controller.state.value.composerMode)
+    }
+
+    @Test
     fun aSignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() = runTest {
         val signIn = handoffSession.copy(handoff = handoffSession.handoff!!.copy(kind = AidenBotHandoffKind.SIGN_IN, openUrl = null))
         val transport = HandoffTransport(signIn)

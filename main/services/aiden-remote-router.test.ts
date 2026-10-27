@@ -258,6 +258,7 @@ async function fixture(options: {
               capability !== "bot:activity" &&
               capability !== "bot:cards" &&
               capability !== "bot:handoffs" &&
+              capability !== "bot:handoff-notes" &&
               capability !== "schedule:cards",
           )
         ) {
@@ -5756,9 +5757,10 @@ function recordingHandoffSessions(seen: string[], supportsHandoffs: boolean) {
 
 const HANDOFF_WAIT = "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f";
 
-test("bot:handoffs is offered and negotiable only while the hand-off and pause routes are wired, with no new feature token", async () => {
+test("bot:handoffs and bot:handoff-notes are offered and negotiable only while the hand-off and pause routes are wired, with no new feature token", async () => {
   const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
-  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:handoffs"] }) };
+  const handoffCapabilities = ["bot:handoffs", "bot:handoff-notes"];
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: handoffCapabilities }) };
   const features: Record<string, string[]> = {};
   for (const wired of [true, false]) {
     const app = await fixture({
@@ -5769,13 +5771,15 @@ test("bot:handoffs is offered and negotiable only while the hand-off and pause r
     });
     try {
       const server = await (await fetch(`${app.base}/server`, { headers })).json();
-      assert.equal(server.serverCapabilities.includes("bot:handoffs"), wired);
-      assert.equal(server.capabilities.includes("bot:handoffs"), false, "offered, not yet granted");
+      for (const capability of handoffCapabilities) {
+        assert.equal(server.serverCapabilities.includes(capability), wired, capability);
+        assert.equal(server.capabilities.includes(capability), false, `${capability} offered, not yet granted`);
+      }
       features[String(wired)] = server.features;
       const response = await fetch(`${app.base}/device/capabilities`, negotiate);
       assert.equal(response.status, wired ? 200 : 404);
       const body = await response.json();
-      if (wired) assert.ok(body.capabilities.includes("bot:handoffs"));
+      if (wired) for (const capability of handoffCapabilities) assert.ok(body.capabilities.includes(capability), capability);
       else assert.equal(body.error?.code, "not_found");
     } finally {
       await app.close();
@@ -5792,7 +5796,7 @@ test("bot:handoffs is offered and negotiable only while the hand-off and pause r
   });
   try {
     const server = await (await fetch(`${legacy.base}/server`, { headers })).json();
-    assert.equal((server.serverCapabilities ?? []).includes("bot:handoffs"), false);
+    for (const capability of handoffCapabilities) assert.equal((server.serverCapabilities ?? []).includes(capability), false, capability);
   } finally {
     await legacy.close();
   }
@@ -6150,5 +6154,38 @@ test("a fully wired host tells every device type at most the server feature budg
     const announced = remoteHostCapabilities({ features: aidenRemoteServerFeatures({ type }, everything), capabilities: desktopGrants });
     const unrestricted = remoteHostCapabilities({ features: [...allTokens], capabilities: desktopGrants });
     assert.deepEqual([...announced].sort(), [...unrestricted].sort(), type);
+  }
+});
+
+test("a paired desktop's host feed carries paused Bot rows only when it holds bot:handoffs on a host that serves them", async () => {
+  const cases: Array<[grants: AidenRemoteCapability[], wired: boolean, expected: boolean]> = [
+    [[...HOST_GRANTS, "bot:read", "bot:handoffs"], true, true],
+    [[...HOST_GRANTS, "bot:read"], true, false],
+    [[...HOST_GRANTS, "bot:read", "bot:handoffs"], false, false],
+  ];
+  for (const [grants, wired, expected] of cases) {
+    const audiences: Array<boolean | undefined> = [];
+    const mac = await fixture({
+      hostFeed: {
+        open: async (device, _cursor, response) => {
+          audiences.push(device.botHandoffs);
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end();
+        },
+      },
+      deviceType: "mac",
+      acceptsProgressCapabilities: true,
+      acceptsBotCapabilities: true,
+      capabilities: grants,
+      botSessions: recordingHandoffSessions([], wired),
+    });
+    try {
+      const feed = await fetch(`${mac.base}/host/events`, { headers: HOST_HEADERS });
+      assert.equal(feed.status, 200);
+      await feed.text();
+      assert.deepEqual(audiences, [expected], JSON.stringify({ grants, wired }));
+    } finally {
+      await mac.close();
+    }
   }
 });

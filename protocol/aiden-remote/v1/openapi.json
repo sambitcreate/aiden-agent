@@ -7257,6 +7257,7 @@
                 "bot:cards",
                 "bot:activity",
                 "bot:handoffs",
+                "bot:handoff-notes",
                 "schedule:cards"
               ]
             },
@@ -7296,6 +7297,7 @@
                 "bot:cards",
                 "bot:activity",
                 "bot:handoffs",
+                "bot:handoff-notes",
                 "schedule:cards"
               ]
             },
@@ -7438,6 +7440,7 @@
                 "bot:cards",
                 "bot:activity",
                 "bot:handoffs",
+                "bot:handoff-notes",
                 "schedule:cards"
               ]
             },
@@ -7486,6 +7489,7 @@
                 "bot:cards",
                 "bot:activity",
                 "bot:handoffs",
+                "bot:handoff-notes",
                 "schedule:cards"
               ]
             },
@@ -16928,6 +16932,10 @@
               }
             },
             "additionalProperties": false
+          },
+          "takesNote": {
+            "description": "Contract revision 40, only for devices that also hold bot:handoff-notes: present, and false, only on a card whose answer may carry no note (one the Bot's password-or-code rule opened). Clients hide the note box for it; a note with its answer is 400 invalid_request whether or not the device was told.",
+            "const": false
           }
         },
         "additionalProperties": false

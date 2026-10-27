@@ -137,6 +137,11 @@ test("Bots are grouped by host, without hosts that have none", () => {
           bots: [
             { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" },
             { id: "bot-4" },
+            { id: "bot-6", name: "Paused one", sessionState: "paused", paused: true },
+            { id: "bot-7", name: "Stopped one", sessionState: "interrupted" },
+            { id: "bot-8", name: "Busy one", sessionState: "running" },
+            // A host that sends this Mac the revision-35 rows says only `unavailable`.
+            { id: "bot-9", name: "Older host's paused one", sessionState: "unavailable" },
           ],
         }),
       ],
@@ -152,6 +157,10 @@ test("Bots are grouped by host, without hosts that have none", () => {
         [
           { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests" },
           { id: "bot-4", name: "Untitled Bot" },
+          { id: "bot-6", name: "Paused one", status: "paused" },
+          { id: "bot-7", name: "Stopped one", status: "interrupted" },
+          { id: "bot-8", name: "Busy one", working: true },
+          { id: "bot-9", name: "Older host's paused one" },
         ],
       ],
       ["host-d", [{ id: "bot-5", name: "Scribe" }]],

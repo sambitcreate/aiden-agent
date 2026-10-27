@@ -91,10 +91,18 @@ internal fun aidenProgressCapabilitiesToRequest(
 
 /**
  * Revision 37: a Mac that offers `bot:handoffs` in `serverCapabilities` is asked for it, in a
- * call of its own after the progress grants, unless [installation] already holds it.
+ * call of its own after the progress grants, unless [installation] already holds it. Revision 40:
+ * `bot:handoff-notes` joins that call only when the Mac offers it too, so a Mac on an earlier
+ * revision still grants hand-offs, and a phone that holds them asks for the notes alone once its Mac updates.
  */
+internal fun aidenBotHandoffGrantsToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> {
+    if (!server.offersBotHandoffs) return emptyList()
+    val offered = if (server.offersBotHandoffNotes) AidenRemoteCapability.PHONE_BOT_HANDOFFS else listOf(AidenRemoteCapability.BOT_HANDOFFS)
+    return offered.filterNot { server.capabilities.contains(it) || installation.hasNegotiatedAccess(it) }
+}
+
 internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: AidenInstallation): Boolean =
-    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_HANDOFFS, server, installation)
+    aidenBotHandoffGrantsToRequest(server, installation).isNotEmpty()
 
 /**
  * Revision 39: a Mac that offers `schedule:cards` in `serverCapabilities` is asked
@@ -116,8 +124,8 @@ private fun aidenShouldRequestSoloCapability(
 internal data class AidenSoloCapabilityNegotiation(val server: AidenServer, val granted: List<AidenRemoteCapability>?)
 
 /**
- * Revision 37: asks [server] for `bot:handoffs` in a call of its own (`accepts` names nothing
- * else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
+ * Revision 37: asks [server] for `bot:handoffs` (and, revision 40, `bot:handoff-notes` when it
+ * offers them) in a call of its own (`accepts` names nothing else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
  * or 404 only means it can't grant it), the read failed, or the pairing changed while it ran
  * ([stillCurrent]). [AidenSoloCapabilityNegotiation.granted] is set only once the Mac's own
  * `serverCapabilities` lists every grant it returned. A 401 or a revoked credential is rethrown.
@@ -128,7 +136,7 @@ internal suspend fun aidenRequestBotHandoffs(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestSoloCapability(AidenRemoteCapability.BOT_HANDOFFS, client, server, installation, stillCurrent)
+    aidenRequestCapabilitiesAlone(aidenBotHandoffGrantsToRequest(server, installation), client, stillCurrent)
 
 /**
  * Revision 39: asks [server] for `schedule:cards` alone, exactly as
@@ -141,18 +149,20 @@ internal suspend fun aidenRequestScheduleCards(
     installation: AidenInstallation,
     stillCurrent: () -> Boolean = { true }
 ): AidenSoloCapabilityNegotiation? =
-    aidenRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, client, server, installation, stillCurrent)
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestScheduleCards(server, installation)) listOf(AidenRemoteCapability.SCHEDULE_CARDS) else emptyList(),
+        client,
+        stillCurrent
+    )
 
-private suspend fun aidenRequestSoloCapability(
-    capability: AidenRemoteCapability,
+private suspend fun aidenRequestCapabilitiesAlone(
+    missing: List<AidenRemoteCapability>,
     client: AidenRemoteClient,
-    server: AidenServer,
-    installation: AidenInstallation,
     stillCurrent: () -> Boolean
 ): AidenSoloCapabilityNegotiation? {
-    if (!stillCurrent() || !aidenShouldRequestSoloCapability(capability, server, installation)) return null
+    if (!stillCurrent() || missing.isEmpty()) return null
     return try {
-        val complete = client.updateDeviceCapabilities(listOf(capability))
+        val complete = client.updateDeviceCapabilities(missing)
         if (!stillCurrent()) return null
         val refreshed = client.server()
         if (!stillCurrent()) return null

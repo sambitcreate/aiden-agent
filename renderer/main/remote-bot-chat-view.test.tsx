@@ -405,6 +405,24 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there a
   assert.equal(handoffAnswers().length, 0);
 });
 
+test("a password-or-code card from another Mac takes no note: no note box, and Done answers it bare", async () => {
+  const { calls, handoffAnswers } = await mountHandoff({
+    ...RUNNING_WITH_HANDOFF,
+    handoff: { ...BANK_HANDOFF, takesNote: false },
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(screen.queryByText(/Planner reads any note you send/u), null);
+  assert.ok(
+    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done" });
+  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
+});
+
 test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {
   const { peerCalls } = await mountHandoff(SESSION);
   await screen.findByText("Two meetings and a dentist.");

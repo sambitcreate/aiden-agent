@@ -30,6 +30,7 @@ import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
 import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
 import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
 import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
@@ -1412,7 +1413,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -2813,6 +2814,42 @@ test("a waiting hand-off reads as the shared fixture shows it, to holders and to
     assert.equal("handoff" in cardsOnly, false);
     assert.equal(last(cardsOnly.entries)?.id, `handoff-notice:${HANDOFF_WAIT_ID}`);
   } finally {
+    await service.close();
+  }
+});
+
+test("only a device that also asked for hand-off notes is told a password card takes no note; a rev-37 holder gets the card it can decode", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const NOTES = { handoffs: true, handoffNotes: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const notes = await openAudienceStream(service, NOTES);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await notes.until(() => notes.frames.length >= 1, "the notes snapshot");
+    handOff({
+      waitId: fixture.noNoteHandoff.waitId,
+      action: fixture.noNoteHandoff.action,
+      why: undefined,
+      open: undefined,
+      source: "rule",
+      rule: { id: BOT_LOCKED_RULES[0]!.id, label: "Enter passwords or codes" },
+    });
+    const { takesNote: _takesNote, ...rev37Card } = fixture.noNoteHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, NOTES)).handoff, fixture.noNoteHandoff);
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev37Card);
+    // Asking for notes without hand-offs is still a legacy device.
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffNotes: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await notes.until(() => card(notes) !== undefined, "the notes hand-off frame");
+    assert.deepEqual(card(notes), fixture.noNoteHandoff);
+    assert.deepEqual(card(holder), rev37Card);
+  } finally {
+    await holder.close();
+    await notes.close();
     await service.close();
   }
 });

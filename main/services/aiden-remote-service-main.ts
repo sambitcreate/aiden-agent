@@ -1003,9 +1003,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                       ...(repository ? { repository } : {}),
                     };
                   }),
-                  // Paired desktops get the revision-35 Bot rows: no `paused` state or flag.
+                  // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
+                  // Bot reads as unavailable); a holder gets `paused` (revision 37).
                   bots: (botList?.bots ?? []).map((bot) =>
                     projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                  ) as unknown as AidenRemoteHostFeedBot[],
+                  handoffBots: (botList?.bots ?? []).map((bot) =>
+                    projectBotSummaryForAudience(bot, { handoffs: true }),
                   ) as unknown as AidenRemoteHostFeedBot[],
                 };
               },
