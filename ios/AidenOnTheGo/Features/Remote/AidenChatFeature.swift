@@ -2964,10 +2964,6 @@ final class AidenChatViewModel {
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
-        // Once sent, the Mac holds this pick as the chat's own model.
-        if !chat.isBotChat {
-            modelPreferenceStore.forgetChat(for: context.instanceId, chatID: chat.id)
-        }
         let request = retryAttempt?.request ?? AidenTurnRequestBuilder.make(
             text: text,
             providerId: modelSelection.providerId,
@@ -3037,6 +3033,18 @@ final class AidenChatViewModel {
                 request: request,
                 idempotencyKey: idempotencyKey
             )
+            // The Mac now holds this pick as the chat's own model.
+            if !chat.isBotChat {
+                modelPreferenceStore.forgetChat(
+                    for: context.instanceId,
+                    chatID: chat.id,
+                    matching: AidenChatModelSelection(
+                        providerId: request.providerId,
+                        modelId: request.modelId,
+                        thinkingLevel: request.thinkingLevel
+                    )
+                )
+            }
             guard !isRemoved else { return }
             for reference in submittedAttachments { ownedUploadReferences.removeValue(forKey: reference.id) }
             let stream = AidenChatCache.ActiveStream(

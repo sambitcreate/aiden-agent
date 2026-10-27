@@ -113,13 +113,15 @@ final class AidenModelPreferenceStore: @unchecked Sendable {
         persistLocked(next)
     }
 
-    /// Drops a chat's unsent pick once it is sent: the Mac then holds it as
-    /// the chat's own model.
-    func forgetChat(for instanceID: String, chatID: String) {
+    /// Drops a chat's unsent pick once the Mac accepts a send with it: the Mac
+    /// then holds it as the chat's own model.
+    func forgetChat(for instanceID: String, chatID: String, matching selection: AidenChatModelSelection? = nil) {
         lock.lock()
         defer { lock.unlock() }
         guard let existing = snapshot.chatSelections?[instanceID],
-              existing.contains(where: { $0.chatId == chatID }) else { return }
+              let stored = existing.first(where: { $0.chatId == chatID }) else { return }
+        // A newer pick made while a send was pending stays.
+        if let selection, stored.entry != Self.entry(selection) { return }
         var next = snapshot
         let remaining = existing.filter { $0.chatId != chatID }
         next.chatSelections?[instanceID] = remaining.isEmpty ? nil : remaining

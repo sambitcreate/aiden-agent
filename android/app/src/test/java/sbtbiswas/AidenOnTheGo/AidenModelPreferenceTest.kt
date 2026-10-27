@@ -189,7 +189,10 @@ class AidenModelPreferenceTest {
         assertNull("chat picks are not the new-chat default", relaunched.selection("mac-a"))
         assertNull(relaunched.chatSelection("mac-b", "chat-a"))
 
-        relaunched.forgetChat("mac-a", "chat-a")
+        // The Mac accepted a send made with an older pick: the newer pick stays.
+        relaunched.forgetChat("mac-a", "chat-a", matching = AidenChatModelSelection("openai", "gpt-5.6", "low"))
+        assertEquals(pick, AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-a"))
+        relaunched.forgetChat("mac-a", "chat-a", matching = pick)
         assertNull(AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-a"))
         assertEquals("gemini-flash", AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-b")?.modelId)
 
@@ -429,6 +432,9 @@ class AidenModelPreferenceTest {
                     path.endsWith("/models") -> MockResponse().setBody(fullCatalog)
                     path.endsWith("/chats/${chatA.id}") -> MockResponse().setBody(wireJson.encodeToString(chatA))
                     path.endsWith("/chats/${chatB.id}") -> MockResponse().setBody(wireJson.encodeToString(chatB))
+                    path.endsWith("/chats/${chatA.id}/turns") -> MockResponse().setResponseCode(429).setBody(
+                        """{"error":{"code":"rate_limited","message":"Slow down","requestId":"r","retryable":false}}"""
+                    )
                     else -> MockResponse().setResponseCode(404).setBody(
                         """{"error":{"code":"not_found","message":"Not found","requestId":"r","retryable":false}}"""
                     )
@@ -444,7 +450,7 @@ class AidenModelPreferenceTest {
                 installations.addInstallation(AidenPairingExchange(
                     instanceId = "instance-models", deviceId = "device-models",
                     endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
-                    credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ)
+                    credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
                 ), null)
                 val cache = AidenChatCache(directory)
                 val drafts = AidenChatDraftStore(directory)
@@ -478,6 +484,17 @@ class AidenModelPreferenceTest {
                 assertEquals("openai", reopened.selectedProviderId.value)
                 assertEquals("gpt-5.6", reopened.selectedModelId.value)
                 assertEquals("max", reopened.selectedThinkingLevel.value)
+
+                // A send the Mac turns away keeps the pick for the next visit.
+                withTimeout(5_000) { reopened.isLoading.first { !it } }
+                reopened.updateDraft("Hello")
+                assertTrue(reopened.canSend)
+                reopened.send()
+                withTimeout(5_000) { reopened.presentedError.first { it != null } }
+                withTimeout(5_000) { reopened.isStarting.first { !it } }
+                val afterRejection = open(chatA, key = "chat-a-after-rejection")
+                assertEquals("gpt-5.6", afterRejection.selectedModelId.value)
+                assertEquals("max", afterRejection.selectedThinkingLevel.value)
             }
         } finally {
             runBlocking(main) {

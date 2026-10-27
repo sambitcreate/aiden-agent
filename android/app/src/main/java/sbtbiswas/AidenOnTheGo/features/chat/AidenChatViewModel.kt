@@ -1416,9 +1416,6 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value
         )
-        // Once sent, the Mac holds this pick as the chat's own model.
-        if (!currentChat.isBotChat && instanceId.isNotEmpty()) modelPreferenceStore.forgetChat(instanceId, chatId)
-
         val request = retryAttempt?.request ?: AidenTurnRequestBuilder.make(
             text = text,
             providerId = turnModel.providerId,
@@ -1476,6 +1473,14 @@ class AidenChatViewModel(
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                // The Mac now holds this pick as the chat's own model.
+                if (!currentChat.isBotChat && instanceId.isNotEmpty()) {
+                    modelPreferenceStore.forgetChat(
+                        instanceId,
+                        chatId,
+                        matching = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+                    )
+                }
                 lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,

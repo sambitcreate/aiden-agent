@@ -6642,6 +6642,9 @@ final class AidenChatTests: XCTestCase {
                 if path == "/api/aiden/v1/chats/chat-progress-lifecycle" {
                     return (200, "application/json", Data(hostChat.utf8))
                 }
+                if request.httpMethod == "POST", path.hasSuffix("/turns") {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Slow down","requestId":"request-1","retryable":false}}"#.utf8))
+                }
                 return nil
             }
             await model.load(observeProgress: false)
@@ -6662,6 +6665,15 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(reopened.selectedProviderId, "openai")
         XCTAssertEqual(reopened.selectedModelId, "gpt-5.6")
         XCTAssertEqual(reopened.selectedThinkingLevel, "max")
+
+        // A send the Mac turns away keeps the pick for the next visit.
+        reopened.draft = "Hello"
+        XCTAssertTrue(reopened.canSend)
+        await reopened.send()
+        XCTAssertNotNil(reopened.presentedError)
+        let afterRejection = try await open()
+        XCTAssertEqual(afterRejection.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(afterRejection.selectedThinkingLevel, "max")
     }
 
     func testModelPreferenceStoreKeepsUnsentChatPicksUntilSentOrUnpaired() throws {
@@ -6682,7 +6694,14 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(relaunched.selection(for: "mac-a"), "chat picks are not the new-chat default")
         XCTAssertNil(relaunched.chatSelection(for: "mac-b", chatID: "chat-a"))
 
-        relaunched.forgetChat(for: "mac-a", chatID: "chat-a")
+        // The Mac accepted a send made with an older pick: the newer pick stays.
+        relaunched.forgetChat(
+            for: "mac-a",
+            chatID: "chat-a",
+            matching: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low")
+        )
+        XCTAssertEqual(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-a"), pick)
+        relaunched.forgetChat(for: "mac-a", chatID: "chat-a", matching: pick)
         XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-a"))
         XCTAssertEqual(
             AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-b")?.modelId,

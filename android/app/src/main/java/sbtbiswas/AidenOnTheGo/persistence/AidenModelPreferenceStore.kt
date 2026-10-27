@@ -105,11 +105,16 @@ class AidenModelPreferenceStore(private val storageDir: File) {
         save(snapshot.copy(chats = snapshot.chats + (instanceId to updated)))
     }
 
-    /** Drops a chat's unsent pick once it is sent: the Mac then holds it as the chat's own model. */
+    /** Drops a chat's unsent pick once the Mac accepts a send with it: the Mac then holds it as the chat's own model. */
     @Synchronized
-    fun forgetChat(instanceId: String, chatId: String) {
+    fun forgetChat(instanceId: String, chatId: String, matching: AidenChatModelSelection? = null) {
         val existing = snapshot.chats[instanceId] ?: return
-        if (existing.none { it.chatId == chatId }) return
+        val stored = existing.firstOrNull { it.chatId == chatId }?.entry ?: return
+        // A newer pick made while a send was pending stays.
+        if (matching != null &&
+            (stored.providerId != matching.providerId || stored.modelId != matching.modelId ||
+                stored.thinkingLevel != matching.thinkingLevel?.takeIf(::isSafeId))
+        ) return
         val remaining = existing.filter { it.chatId != chatId }
         save(snapshot.copy(chats = if (remaining.isEmpty()) snapshot.chats - instanceId else snapshot.chats + (instanceId to remaining)))
     }
