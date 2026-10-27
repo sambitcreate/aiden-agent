@@ -304,7 +304,7 @@
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
     "globals": "^17.3.0",
-    "happy-dom": "20.14.5",
+    "happy-dom": "21.0.4",
     "oxfmt": "^0.26.0",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.20.5",
@@ -320,7 +320,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "highlight.js": "^11.9.0",
-    "katex": "^0.16.47",
+    "katex": "0.18.2",
     "lucide-react": "^0.542.0",
     "plotly.js-dist-min": "^3.7.0",
     "qrcode": "^1.5.4",
@@ -334,13 +334,16 @@
     "three": "^0.186.1",
     "@json-render/core": "0.21.0",
     "@json-render/react": "0.21.0",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "overrides": {
     "@earendil-works/pi-ai@0.87.1": {
       "@google/genai": "$@google/genai",
       "openai": "7.19.0"
-    }
+    },
+    "katex": "$katex",
+    "body-parser": "2.4.0",
+    "tinypool": "2.1.2"
   },
   "engines": {
     "node": ">=22.19"
