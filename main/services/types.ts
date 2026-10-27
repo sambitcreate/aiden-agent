@@ -1,5 +1,6 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
@@ -577,6 +578,8 @@ export interface ScheduledRun {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why an otherwise indistinguishable failure happened. Bot routines only. */
+  failure?: BotRoutineFailure;
   chatId?: string;
 }
 

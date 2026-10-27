@@ -623,6 +623,37 @@ test("failures always surface, even when the Bot would otherwise stay silent", a
   assert.equal(h.session.sends.length, 1, "no submission is attempted without a model");
 });
 
+test("records a classified failure on the run", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  h.session.replies.push({
+    kind: "failed",
+    error: "model_error",
+    reason: "model_error",
+    detail: "429 rate limit",
+  });
+
+  const run = await h.run(task, undefined, { kind: "automatic", fireTime: 1 });
+
+  assert.equal(run.result, "error");
+  assert.equal(run.failure?.kind, "temporary");
+  assert.equal(run.failure?.code, "rate_limit");
+  // The person and the healing features see the provider's words, not the code.
+  assert.match(run.error ?? "", /429 rate limit/u);
+  assert.notEqual(run.error, "model_error");
+
+  // Persisted with the run, not only returned by the executor.
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.failure?.kind, "temporary");
+  assert.match(stored?.failure?.detail ?? "", /429 rate limit/u);
+});
+
 test("a routine that fires while its Bot is paused is skipped without touching the paused turn", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());

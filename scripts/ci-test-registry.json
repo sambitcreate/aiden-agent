@@ -560,6 +560,7 @@
         "main/services/bot-routine-notes.test.ts",
         "main/services/bot-routine-proposals.test.ts",
         "main/services/bot-routine-notifications.test.ts",
+        "renderer/shared/bot-routine-failure.test.ts",
         "main/services/bot-system-prompt.test.ts",
         "main/services/bot-tool-authority.test.ts",
         "main/services/chat-application-service.test.ts",

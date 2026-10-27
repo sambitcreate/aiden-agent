@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { classifyBotRoutineFailure, type BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
 import {
   parseBotRoutineSchedule,
@@ -122,6 +123,8 @@ interface BotRoutineOutcome {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why a failed run failed, in the healing vocabulary. */
+  failure?: BotRoutineFailure;
   /** Whether the person should hear about this run. */
   surface: boolean;
   /** The Pi admission or reply may have committed; retry by request id later. */
@@ -129,6 +132,16 @@ interface BotRoutineOutcome {
 }
 
 class RoutineOutcomeUnknown extends Error {}
+
+/** A failure whose cause is already classified; its message stays the detail. */
+class RoutineFailure extends Error {
+  constructor(
+    message: string,
+    readonly failure: BotRoutineFailure,
+  ) {
+    super(message);
+  }
+}
 
 function message(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(0, 4_096);
@@ -188,7 +201,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       return { result: "skipped", reason: "bot_paused", output: "", surface: false };
     }
     if (state.kind === "needs_model") {
-      throw new Error("This Bot needs an AI model before its routines can run.");
+      throw new RoutineFailure(
+        "This Bot needs an AI model before its routines can run.",
+        classifyBotRoutineFailure({ sessionReason: "needs_model" }),
+      );
     }
     if (state.kind === "unavailable") {
       throw new Error("Bots are open in another Aiden window.");
@@ -240,7 +256,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       if (trigger.kind === "automatic") throw new RoutineOutcomeUnknown(message(error));
       throw error;
     }
-    if (outcome.kind === "failed") throw new Error(outcome.error);
+    if (outcome.kind === "failed") {
+      // Pi's reason code alone ("model_error") says nothing a person can act on.
+      // Keep its detail as the error, and classify the cause for healing.
+      throw new RoutineFailure(
+        outcome.detail ?? outcome.error,
+        classifyBotRoutineFailure({ reason: outcome.reason, detail: outcome.detail }),
+      );
+    }
     if (outcome.kind === "interrupted") {
       // Pi can report a paused submission without settling it. Keep the
       // automatic fire's receipt until the person resumes that same turn.
@@ -349,6 +372,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           // Failures always surface; a cancellation is the person's own action.
           surface: !cancelled && !uncertain,
           uncertain,
+          // A doubtful fire is retried by receipt, never counted as a failure.
+          ...(!cancelled && !uncertain
+            ? {
+                failure: error instanceof RoutineFailure
+                  ? error.failure
+                  : { kind: "other", code: "run_failed" },
+              }
+            : {}),
         };
       }
       // A scheduled fire skipped while the Bot was paused is recorded under
@@ -365,6 +396,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(outcome.reason ? { reason: outcome.reason } : {}),
         output: outcome.output,
         ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+        ...(outcome.failure !== undefined ? { failure: outcome.failure } : {}),
       });
       if (outcome.surface) {
         dependencies.notify(task, outcome.error ?? outcome.output);
