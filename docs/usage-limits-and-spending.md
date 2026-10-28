@@ -40,6 +40,7 @@ A limit can cover one model (a 429 or an overload) or the whole sign-in or key (
 A workspace chat retries a failed request up to five times, waiting 2 to 32 seconds (see the [agent loop resilience plan](plans/agent-loop-resilience-plan.md)), and a Bot does the same through Pi Durable's retry setting. Aiden's wait sits underneath those retries, in the stream function, so a usage limit is waited out before they see it.
 
 - A chat never retries a usage limit Aiden gave up on, one that outlasts the longest wait, or one turned away by the give-up rule above. The error carries a marker the chat's retry check reads, so the reply fails once with the reset time instead of showing "Trying again".
+- A Bot's stuck-run watchdog does not count a usage-limit wait against a run: it neither stops a routine nor asks "Still working?" while the wait lasts.
 - A Bot's retries are Pi Durable's own and do not read the marker. The give-up rule refuses each of them at once without sending, so the run still ends promptly.
 - With waiting off (**Don't wait**), a usage limit is an ordinary failure and is retried like any other.
 
