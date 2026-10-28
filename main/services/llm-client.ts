@@ -999,7 +999,7 @@ async function prepareGeneration(
       return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
-  const shareImage = (attachment: Attachment) => {
+  const shareImage = (attachment: Attachment, toolCallId: string) => {
     const existing = responseImages();
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
       throw new Error("This response already contains the maximum number of images.");
@@ -1012,6 +1012,7 @@ async function prepareGeneration(
       throw new Error("The images shared in this response exceed the 16 MB limit.");
     }
     sharedImages.push(attachment);
+    imagePlacements.record(attachment.id, toolCallId);
   };
   const runtime =
     botContext?.prepared.runtime ??
@@ -1944,8 +1945,9 @@ async function prepareGeneration(
         if (displayedImageIds.has(artifact.attachment.id)) return false;
         displayedImageIds.add(artifact.attachment.id);
         displayedImages.push(artifact.attachment);
-        // Only generated images claim their call's row (and its Lens placeholder).
-        if (source.tool === "generate_image") imagePlacements.record(artifact.attachment.id, source.toolCallId);
+        // Every image sits at its call's row; only a generate_image call's
+        // Lens placeholder claims (reveals) its own images.
+        imagePlacements.record(artifact.attachment.id, source.toolCallId);
         const placedToolCallId = imagePlacements.publicIdFor(artifact.attachment.id);
         sendGeneration(streamId, "chat:artifact", {
           streamId,

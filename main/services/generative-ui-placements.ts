@@ -51,7 +51,7 @@ export function createArtifactPlacementLedger() {
 
 export type ArtifactPlacementLedger = ReturnType<typeof createArtifactPlacementLedger>;
 
-/** Persisted generate_image placements for the attachments a reply keeps. */
+/** Persisted image placements (each image's producing call) for the attachments a reply keeps. */
 export function imageAttachmentPlacements(
   ledger: ArtifactPlacementLedger,
   attachments: readonly { id: string }[],
