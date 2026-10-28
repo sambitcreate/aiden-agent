@@ -3251,7 +3251,7 @@ export const llmClient = {
       };
       let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([]) : declared;
       let deferredTools = withOnDemandDeferred(runtimeTools);
-      let runtimeContributions = {
+      const runtimeContributions = {
         ...modelContributions,
         tools: runtimeTools,
       };
@@ -3425,7 +3425,6 @@ export const llmClient = {
         // Tools this chat already loaded or called stay declared from the start.
         runtimeTools = onDemandTools.initialTools(initialMessages);
         deferredTools = withOnDemandDeferred(runtimeTools);
-        runtimeContributions = { ...runtimeContributions, tools: runtimeTools };
         generationContextOptions.tools = runtimeTools;
         generationContextOptions.deferredTools = deferredTools;
       }
@@ -3505,7 +3504,7 @@ export const llmClient = {
       const observedStream: typeof realStream = pace.wrap(warmedStream);
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
-        contributions: runtimeContributions,
+        contributions: { ...runtimeContributions, tools: runtimeTools },
         deferredTools,
         contextPromptSections,
         // Servers that finished discovery after the turn started stay behind
