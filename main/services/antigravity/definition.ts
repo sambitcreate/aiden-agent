@@ -4,7 +4,8 @@
  * Launch environment, profile isolation and protocol quirks follow T3 Code
  * apps/server/src/provider/{antigravityAuthSupport,acp/AntigravityProtocol,
  * acp/AntigravityAcpSupport}.ts @ f870c419fc (MIT), re-checked against
- * Antigravity ACP 1.3.0 (docs/plans/antigravity-acp-spike.md).
+ * Antigravity ACP 1.3.0 (docs/plans/antigravity-acp-spike.md); the pinned 1.4.3
+ * runtime reports the same identity, capabilities and sign-in method.
  */
 import type { RequestPermissionRequest, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk";
 import { readFile, writeFile, mkdir, rename } from "node:fs/promises";

@@ -23,6 +23,7 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
@@ -105,6 +106,11 @@ async function fixture(options: {
   visualViewer?: boolean;
   /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
+  /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
+  botIssueCount?: number;
+  botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
+  /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
+  contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -164,6 +170,7 @@ async function fixture(options: {
     avatar: { semantic: { version: 1 as const, shape: "orb" as const, color: "sky" as const } },
     health: "ready" as const,
     ...(options.pausedBot ? { sessionState: "paused" as const, paused: true } : {}),
+    ...(options.botIssueCount === undefined ? {} : { issueCount: options.botIssueCount }),
     access: botAccess,
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
@@ -259,6 +266,7 @@ async function fixture(options: {
               capability !== "bot:cards" &&
               capability !== "bot:handoffs" &&
               capability !== "bot:handoff-notes" &&
+              capability !== "bot:issues" &&
               capability !== "schedule:cards",
           )
         ) {
@@ -462,6 +470,15 @@ async function fixture(options: {
             cancelForkSummary: async (id: string) => {
               calls.push(`fork-summary-cancel:${id}`);
               return { cancelled: true };
+            },
+          }
+        : {}),
+      ...(options.contextPressure
+        ? {
+            supportsContextPressure: true,
+            contextPressure: async (id: string, selection?: { providerId: string; modelId: string }) => {
+              calls.push(`context-pressure:${id}:${selection ? `${selection.providerId}/${selection.modelId}` : "chat-model"}`);
+              return options.contextPressure as never;
             },
           }
         : {}),
@@ -1039,6 +1056,7 @@ async function fixture(options: {
           },
         }
       : {}),
+    ...(options.botRoutineWebhook ? { botRoutineWebhook: options.botRoutineWebhook } : {}),
   };
   const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
@@ -2399,6 +2417,31 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
     assert.equal(inbox.status, 200);
     assert.equal((await inbox.json()).conversations[0].canRespondToApproval, true);
 
+    // A search reaches the Bot service as typed, whichever way the client encoded it.
+    for (const [encoded, typed] of [
+      ["plan%20week", "plan week"],
+      ["caf%C3%A9%20%26%20bar", "café & bar"],
+      ["100%25+done%2B", "100% done+"],
+    ] as const) {
+      const searched = await fetch(`${app.base}/bot-conversations?query=${encoded}`, { headers });
+      assert.equal(searched.status, 200, encoded);
+      await searched.arrayBuffer();
+      assert.equal(app.calls[app.calls.length - 1], `bots:conversations:device-authorized-12345678:${typed}`, encoded);
+    }
+    // Only query values are decoded: an encoded path, a broken escape, an
+    // escape that isn't UTF-8 or one that decodes to a control is refused.
+    for (const target of [
+      "/bot%2Dconversations",
+      "/bot-conversations?query=plan%2",
+      "/bot-conversations?query=%FF",
+      "/bot-conversations?query=a%00b",
+      "/bot-conversations?query=a%0Ab",
+    ]) {
+      const refused = await fetch(`${app.base}${target}`, { headers });
+      assert.equal(refused.status, 400, target);
+      assert.equal((await refused.json()).error.code, "invalid_request", target);
+    }
+
     const uploaded = await fetch(`${app.base}/bots/bot-1/avatar`, {
       method: "PUT",
       headers: {
@@ -2436,6 +2479,9 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
       ),
       [
         "bots:conversations:device-authorized-12345678:plan week",
+        "bots:conversations:device-authorized-12345678:plan week",
+        "bots:conversations:device-authorized-12345678:café & bar",
+        "bots:conversations:device-authorized-12345678:100% done+",
         "bots:avatar:put:device-authorized-12345678:bot-1:bot_revision_1:bot-avatar-put-key-0001",
         `bots:avatar:content:bot-1:${metadata.assetRevision}`,
         `bots:avatar:delete:bot-1:${metadata.assetRevision}`,
@@ -3890,6 +3936,8 @@ function concreteRequestPath(template: string): string {
         case ":segment":
         case ":offset":
           return "0";
+        case ":token":
+          return "t".repeat(43);
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
@@ -6187,5 +6235,384 @@ test("a paired desktop's host feed carries paused Bot rows only when it holds bo
     } finally {
       await mac.close();
     }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 42: Bot issues on phones (`bot:issues`)
+// ---------------------------------------------------------------------------
+
+const ISSUE_ID = "issue_card_1";
+
+/** A Bot session service that records which view each route asked for. */
+function recordingIssueSessions(seen: string[], supportsIssues: boolean) {
+  const base = recordingHandoffSessions([], true) as unknown as Record<string, unknown>;
+  const state = { state: "idle" as const, interrupted: false };
+  return {
+    ...base,
+    supportsIssues,
+    session: async (botId: string, options: { issues?: boolean } = {}) => {
+      seen.push(`session:${options.issues === true ? "issues" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null };
+    },
+    openEvents: async (
+      _deviceId: string,
+      _botId: string,
+      response: import("node:http").ServerResponse,
+      admit: () => void,
+      options: { issues?: boolean } = {},
+    ) => {
+      seen.push(`events:${options.issues === true ? "issues" : "plain"}`);
+      admit();
+      response.writeHead(204);
+      response.end();
+    },
+    actIssue: async (deviceId: string, botId: string, issueId: string, key: string, body: unknown) => {
+      seen.push(`act:${deviceId}:${botId}:${issueId}:${key}:${JSON.stringify(body)}`);
+      return { result: "done" as const };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("bot:issues is offered and negotiable only while the issue route is wired, with no new feature token", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["bot:issues"] }),
+  };
+  const features: Record<string, string[]> = {};
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingIssueSessions([], wired),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:issues"), wired);
+      assert.equal(server.capabilities.includes("bot:issues"), false, "offered, not yet granted");
+      features[String(wired)] = server.features;
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      const body = await response.json();
+      if (wired) assert.ok(body.capabilities.includes("bot:issues"));
+      else assert.equal(body.error?.code, "not_found");
+    } finally {
+      await app.close();
+    }
+  }
+  // The `/server` feature budget is unchanged: the capability alone announces revision 42.
+  assert.deepEqual(features.true, features.false);
+
+  // A device that never accepted the Bot vocabulary is not told about it.
+  const legacy = await fixture({
+    capabilities: ["server:read", "bot:read"],
+    deviceType: "iphone",
+    botSessions: recordingIssueSessions([], true),
+  });
+  try {
+    const server = await (await fetch(`${legacy.base}/server`, { headers })).json();
+    assert.equal(server.serverCapabilities, undefined);
+  } finally {
+    await legacy.close();
+  }
+});
+
+test("issue cards reach only a device holding bot:issues, and only its summaries carry issueCount", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  for (const [label, capabilities, holder] of [
+    ["holder", ["server:read", "bot:read", "bot:write", "chat:read", "bot:issues"], true],
+    ["plain", ["server:read", "bot:read", "bot:write", "chat:read"], false],
+    ["other opt-ins", ["server:read", "bot:read", "bot:write", "chat:read", "bot:handoffs", "bot:cards"], false],
+  ] as Array<[string, AidenRemoteCapability[], boolean]>) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingIssueSessions(seen, true),
+      botIssueCount: 2,
+    });
+    try {
+      const session = await fetch(`${app.base}/bots/bot-1/session`, { headers });
+      await session.arrayBuffer();
+      const stream = await fetch(`${app.base}/bots/bot-1/session/events`, { headers });
+      await stream.arrayBuffer();
+      const list = await (await fetch(`${app.base}/bots`, { headers })).json();
+      const detail = await (await fetch(`${app.base}/bots/bot-1`, { headers })).json();
+      assert.equal(list.bots[0].issueCount, holder ? 2 : undefined, label);
+      assert.equal(detail.issueCount, holder ? 2 : undefined, label);
+      assert.deepEqual(seen.splice(0), [
+        `session:${holder ? "issues" : "plain"}`,
+        `events:${holder ? "issues" : "plain"}`,
+      ], label);
+    } finally {
+      await app.close();
+    }
+  }
+});
+
+test("the issue act route runs one action per key, answers not_open, and refuses an action the card never offers", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const calls: Array<{ botId: string; issueId: string; action: string }> = [];
+  let answer: "done" | "not_open" | "invalid" = "done";
+  const issues = {
+    list: async () => [],
+    act: async (botId: string, issueId: string, action: { kind: string }) => {
+      calls.push({ botId, issueId, action: action.kind });
+      return answer;
+    },
+    onChange: () => () => {},
+  };
+  const bot = {
+    id: "bot-1",
+    revision: "bot_revision_1",
+    name: "Planner",
+    instructions: "Plan.",
+    avatar: { version: 1 as const, shape: "orb" as const, color: "sky" as const },
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  };
+  const ledger = new Map<string, unknown>();
+  const sessions = new AidenRemoteBotSessionService({
+    bots: {
+      bot: async () => bot,
+      summaryOf: async () => { throw new Error("not used"); },
+      executeIdempotent: async (scope, _input, action) => {
+        if (ledger.has(scope.key)) return ledger.get(scope.key) as never;
+        try {
+          const result = await action();
+          ledger.set(scope.key, result);
+          return result;
+        } catch (error) {
+          // The real ledger forgets a refusal that never ran and surfaces its cause.
+          if (error instanceof AidenOperationNotExecutedError) throw error.cause;
+          throw error;
+        }
+      },
+    },
+    runtime: async () => ({}) as never,
+    issues,
+    projectorIdleMs: 60_000,
+  });
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "bot:issues"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions,
+  });
+  const post = (key: string | undefined, body: unknown) => ({
+    method: "POST",
+    headers: {
+      ...headers,
+      "content-type": "application/json",
+      ...(key === undefined ? {} : { "idempotency-key": key }),
+    },
+    body: JSON.stringify(body),
+  });
+  try {
+    const url = `${app.base}/bots/bot-1/issues/${ISSUE_ID}/act`;
+    const first = await fetch(url, post("issue-act-request-0001", { action: { kind: "stop_run" } }));
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { result: "done" });
+    // A repeat with the same key replays the receipt; the host action runs once.
+    const replay = await fetch(url, post("issue-act-request-0001", { action: { kind: "stop_run" } }));
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), { result: "done" });
+    assert.deepEqual(calls, [{ botId: "bot-1", issueId: ISSUE_ID, action: "stop_run" }]);
+
+    // not_open is a success.
+    answer = "not_open";
+    const gone = await fetch(url, post("issue-act-request-0002", { action: { kind: "open_chat" } }));
+    assert.equal(gone.status, 200);
+    assert.deepEqual(await gone.json(), { result: "not_open" });
+
+    // An action the card no longer offers records nothing; the same key is
+    // checked again once the card offers it.
+    answer = "invalid";
+    const stale = await fetch(url, post("issue-act-request-0003", { action: { kind: "keep_waiting" } }));
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).error.code, "operation_stale");
+    answer = "done";
+    const retried = await fetch(url, post("issue-act-request-0003", { action: { kind: "keep_waiting" } }));
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await retried.json(), { result: "done" });
+
+    // Unknown kinds, desktop-only settings and a malformed body never reach the host.
+    const before = calls.length;
+    for (const body of [
+      { action: { kind: "surprise" } },
+      { action: { kind: "open_settings", section: "model" } },
+      { action: { kind: "resume_routine" } },
+      { action: { kind: "stop_run" }, extra: true },
+    ]) {
+      const response = await fetch(url, post("issue-act-request-0004", body));
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.equal((await response.json()).error.code, "invalid_request");
+    }
+    assert.equal(calls.length, before);
+
+    // Missing key and capability are refused before anything runs.
+    assert.equal((await fetch(url, post(undefined, { action: { kind: "stop_run" } }))).status, 400);
+    const refused = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: sessions,
+    });
+    try {
+      const response = await fetch(`${refused.base}/bots/bot-1/issues/${ISSUE_ID}/act`, post("issue-act-request-0005", { action: { kind: "stop_run" } }));
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    } finally {
+      await refused.close();
+    }
+    const unwired = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write", "bot:issues"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingHandoffSessions([], true),
+    });
+    try {
+      const response = await fetch(`${unwired.base}/bots/bot-1/issues/${ISSUE_ID}/act`, post("issue-act-request-0006", { action: { kind: "stop_run" } }));
+      assert.equal(response.status, 404);
+      assert.equal((await response.json()).error.code, "not_found");
+    } finally {
+      await unwired.close();
+    }
+  } finally {
+    await app.close();
+    await sessions.close();
+  }
+});
+
+test("a Bot routine link needs no device credential, answers with no body, and never opens other routes", async () => {
+  const seen: Array<{ token: string; contentType?: string; body: string }> = [];
+  const app = await fixture({
+    authenticate: "invalid",
+    botRoutineWebhook: async (request) => {
+      seen.push({ token: request.token, contentType: request.contentType, body: new TextDecoder().decode(request.body) });
+      return { status: 202 };
+    },
+  });
+  try {
+    const token = "A".repeat(43);
+    const accepted = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "ping" });
+    assert.equal(accepted.status, 202);
+    assert.equal(await accepted.text(), "");
+    assert.deepEqual(seen, [{ token, contentType: "text/plain", body: "ping" }]);
+    const get = await fetch(`${app.base}/hooks/bot-routines/${token}`);
+    assert.equal(get.status, 405);
+    const tooLarge = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "x".repeat(17_000) });
+    assert.equal(tooLarge.status, 413);
+    const server = await fetch(`${app.base}/server`, { headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1" } });
+    assert.notEqual(server.status, 200, "a routine token is not a device credential");
+    const logged = JSON.stringify(app.logs);
+    assert.ok(!logged.includes(token), "the token never reaches the log");
+  } finally {
+    await app.close();
+  }
+});
+
+test("context pressure is a desktop chat read gated by its feature, chat:read and the Bot-chat rule", async () => {
+  const answer = {
+    chatId: "chat-1",
+    pressure: {
+      contextTokens: 9_000,
+      contextWindow: 128_000,
+      inputBudgetTokens: 100_000,
+      reservedTokens: 28_000,
+      percentOfWindow: 7,
+      percentOfUsableInput: 9,
+      shouldCompact: false,
+      messageTokens: 3_000,
+      staticTokens: 6_000,
+      source: "estimated",
+      computedAt: 1_787_166_120_000,
+    },
+  };
+  const read = (base: string, query = "") => fetch(`${base}/chats/chat-1/context${query}`, { headers: HOST_HEADERS });
+  const contextCalls = (calls: string[]) => calls.filter((call) => call.startsWith("context-pressure:"));
+
+  const unwired = await fixture({ deviceType: "mac", capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), false);
+    const response = await read(unwired.base);
+    assert.equal(response.status, 404);
+    assert.equal(await errorCode(response), "not_found");
+  } finally {
+    await unwired.close();
+  }
+
+  // Phones are never told about it: their feature list is capped and they have no meter.
+  const phone = await fixture({ deviceType: "iphone", contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), false);
+  } finally {
+    await phone.close();
+  }
+
+  const desktop = await fixture({ deviceType: "mac", contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${desktop.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), true);
+    const own = await read(desktop.base);
+    assert.equal(own.status, 200);
+    assert.deepEqual(await own.json(), answer);
+    const picked = await read(desktop.base, "?providerId=custom:local&modelId=org/model-large:free");
+    assert.equal(picked.status, 200);
+    await picked.arrayBuffer();
+    // The same pair percent-encoded names the same model.
+    const encoded = await read(desktop.base, "?providerId=custom%3Alocal&modelId=org%2Fmodel-large%3Afree");
+    assert.equal(encoded.status, 200);
+    await encoded.arrayBuffer();
+    for (const query of [
+      "?providerId=custom:local",
+      "?modelId=model-1",
+      "?providerId=p&modelId=m&draft=hello",
+      "?providerId=p&providerId=q&modelId=m",
+      "?providerId=&modelId=m",
+      `?providerId=p&modelId=${"m".repeat(257)}`,
+      "?providerId=p+q&modelId=m",
+      "?providerId=p%00&modelId=m",
+      "?providerId=p%zz&modelId=m",
+    ]) {
+      const refused = await read(desktop.base, query);
+      assert.equal(refused.status, 400, query);
+      assert.equal(await errorCode(refused), "invalid_request", query);
+    }
+    assert.deepEqual(contextCalls(desktop.calls), [
+      "context-pressure:chat-1:chat-model",
+      "context-pressure:chat-1:custom:local/org/model-large:free",
+      "context-pressure:chat-1:custom:local/org/model-large:free",
+    ]);
+    assert.equal((await fetch(`${desktop.base}/chats/chat-1/context`, { method: "POST", headers: HOST_HEADERS })).status, 404);
+  } finally {
+    await desktop.close();
+  }
+
+  const noRead = await fixture({ deviceType: "mac", contextPressure: answer, capabilities: ["server:read"] });
+  try {
+    const response = await read(noRead.base);
+    assert.equal(response.status, 403);
+    assert.equal(await errorCode(response), "capability_denied");
+    assert.deepEqual(contextCalls(noRead.calls), []);
+  } finally {
+    await noRead.close();
+  }
+
+  // A Bot chat is unreachable without bot:read, as on every other chat read.
+  const botChat = await fixture({ deviceType: "mac", botChat: true, contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const response = await read(botChat.base);
+    assert.equal(response.status, 404);
+    await response.arrayBuffer();
+    assert.deepEqual(contextCalls(botChat.calls), []);
+  } finally {
+    await botChat.close();
   }
 });

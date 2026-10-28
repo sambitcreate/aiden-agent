@@ -91,7 +91,12 @@ export type BotNotice =
 
 export type BotReplyOutcome =
   | { kind: "completed"; text: string }
-  | { kind: "failed"; error: string }
+  /**
+   * `error` is the person-facing message. `reason` is Pi's own reason code and
+   * `detail` the provider text it settled the submission with; callers classify
+   * a routine failure from them, never from the message.
+   */
+  | { kind: "failed"; error: string; reason?: string; detail?: string }
   /**
    * No answer now. `settled`: the turn ended without one for good (dismissed,
    * stopped or deleted); otherwise it is paused and Resume can still answer it.
@@ -135,10 +140,21 @@ export type BotSessionErrorReason =
   | "paused_by_person";
 
 export class BotSessionError extends Error {
-  constructor(readonly reason: BotSessionErrorReason, message?: string) {
+  /**
+   * `authority`: the typed `BotRuntimeAuthorityError` classification behind
+   * this refusal (for example `model_changed`), so routines can record it.
+   */
+  constructor(readonly reason: BotSessionErrorReason, message?: string, readonly authority?: string) {
     super(message ?? defaultMessage(reason));
     this.name = "BotSessionError";
   }
+}
+
+/** The typed classification of a `BotRuntimeAuthorityError`, by name (it may come from another module instance). */
+function authorityOf(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "BotRuntimeAuthorityError") return undefined;
+  const classification = (error as { classification?: unknown }).classification;
+  return typeof classification === "string" && classification ? classification : undefined;
 }
 
 function defaultMessage(reason: BotSessionErrorReason): string {
@@ -491,13 +507,14 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
   async function modelFor(
     botId: string,
-  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string }> {
+  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string; authority?: string }> {
     try {
       const ref = await deps.resolveModel(botId);
       return ref === null ? { kind: "none" } : { kind: "ok", ref };
     } catch (error) {
       const message = error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error");
-      return { kind: "error", message };
+      const authority = authorityOf(error);
+      return { kind: "error", message, ...(authority !== undefined ? { authority } : {}) };
     }
   }
 
@@ -510,7 +527,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
-    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
+    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
     const model = resolved.ref;
     await registry.refresh();
     const agent = await conversation.agent(ctx);
@@ -574,7 +591,16 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
     }
     if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
-    return { kind: "failed", error: settled.reason ?? "The reply failed." };
+    // Pi's detail carries the provider's own words (`model_error` uses a string);
+    // structured details such as `{ reason: "restart_limit" }` add nothing the
+    // reason code does not already say.
+    const detail = typeof settled.detail === "string" && settled.detail.trim() ? settled.detail : undefined;
+    return {
+      kind: "failed",
+      error: settled.reason ?? "The reply failed.",
+      ...(settled.reason !== undefined ? { reason: settled.reason } : {}),
+      ...(detail !== undefined ? { detail } : {}),
+    };
   }
 
   /** Whether the Bot's harness has work its scheduler is running now. */

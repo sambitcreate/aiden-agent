@@ -23,6 +23,9 @@ import type { SidebarHost } from "../lib/sidebar-remote-groups";
 import type { RemoteChatSnapshot } from "../lib/hosts/remote-chat-session";
 import { applyRemoteRunEvents, initialRemoteRunView, type RemoteRunView } from "../lib/hosts/remote-stream-translator";
 import type { ChatRunInputAdmissionResult } from "../shared/chat-run-input";
+import { chatMessageQueue, discardChatMessageQueue } from "../lib/chat-message-queue";
+import type { HostModelCatalog } from "../lib/hosts/host-resources";
+import { hostResourceKey } from "../shared/peer-host";
 import { forkSummaryHoldsSend, type ChatForkLineageV1, type ChatForkSummaryV1 } from "../shared/chat-copy-contract";
 import {
   RemoteChatPane,
@@ -140,6 +143,9 @@ class StubHost implements HostChatAdapter {
   }
   async rename() {}
   async remove() {}
+  async contextPressure() {
+    return { ok: false as const, error: { code: "unused", message: "Read from the query cache in these tests." } };
+  }
   dispose() {}
 }
 
@@ -155,9 +161,12 @@ function parse(markup: string) {
   return (document.documentElement?.textContent ?? "").replace(/\s+/g, " ");
 }
 
-function render(props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, "host" | "snapshot">) {
+function render(
+  props: Partial<RemoteChatPaneProps> & Pick<RemoteChatPaneProps, "host" | "snapshot">,
+  client = new QueryClient(),
+) {
   const markup = renderToStaticMarkup(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={client}>
       <CommandSystemProvider>
         <RemoteChatPane
           title="Release notes"
@@ -226,7 +235,9 @@ test("a run started on the host streams into the open chat, and its composer can
   const view = render({ host: online, snapshot: snapshot(online, { run: live }), chat: session(online).chat() });
 
   assert.match(view.text, /Release notes/);
-  assert.match(view.text, /Studio · Connected/);
+  const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
+  assert.equal(chip?.textContent, "Runs on Studio", "the header says which Mac runs this chat");
+  assert.equal(chip?.getAttribute("data-remote-host-availability"), "online");
   assert.match(view.text, /Summarise the release notes/);
   // The live row follows the host's run (its text reveals client-side).
   assert.match(view.text, /Responding…/);
@@ -242,6 +253,124 @@ test("a run started on the host streams into the open chat, and its composer can
   assert.doesNotMatch(view.text, /last-known transcript/);
   assert.equal(view.button(/Reconnect/), undefined);
   assert.ok(view.button(/Chat actions/), "rename and delete act on the host");
+});
+
+test("the composer sits on the transcript column once, as wide as a local chat's", () => {
+  const view = render({ host: online, snapshot: snapshot(online), chat: session(online).chat() });
+  const composer = view.all.find((node) => node.hasAttribute("data-browser-composer-inset"));
+  assert.ok(composer, "the chat has a composer");
+  const columns = (node: Element) => (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
+  assert.ok(columns(composer), "the composer centres itself on the column");
+  for (let parent = composer.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
+    assert.equal(columns(parent), false, "a second column around it would narrow it by another dock gutter");
+  }
+});
+
+const hostModels: HostModelCatalog = {
+  providers: [
+    {
+      id: "acme",
+      label: "Acme",
+      models: [
+        { id: "deep", label: "Deep", supportsImages: false, thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium", thinkingCanDisable: false, hidden: false },
+        { id: "fast", label: "Fast", supportsImages: true, thinkingLevels: [], thinkingCanDisable: true, hidden: false },
+      ],
+    },
+  ],
+  defaults: {},
+};
+const onDeep = (patch: Partial<RemoteChatSnapshot> = {}) =>
+  snapshot(online, {
+    transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: false, model: { providerId: "acme", modelId: "deep" } },
+    ...patch,
+  });
+
+test("the composer shows the host's model for this chat and the effort levels that Mac runs it at", () => {
+  const view = render({ host: online, snapshot: onDeep(), chat: session(online).chat(), models: hostModels });
+  assert.ok(view.button(/^Model on Studio: Deep$/), "the chat's own model, read from its host");
+  const effort = view.all.find((node) => node.getAttribute("role") === "radiogroup" && /thinking level/u.test(node.getAttribute("aria-label") ?? ""));
+  assert.ok(effort, "an effort control for a model with levels");
+  const radios = Array.from(effort.getElementsByTagName("*")).filter((node) => node.getAttribute("role") === "radio");
+  assert.equal(radios.find((node) => node.getAttribute("aria-checked") === "true")?.getAttribute("aria-label"), "Thinking: medium effort", "the host's default effort");
+
+  const fast = render({
+    host: online,
+    snapshot: snapshot(online, {
+      transcript: { chatId: "chat-1", revision: "r1", messages, hasOlder: false, model: { providerId: "acme", modelId: "fast" } },
+    }),
+    chat: session(online).chat(),
+    models: hostModels,
+  });
+  assert.ok(fast.button(/^Model on Studio: Fast$/));
+  assert.equal(
+    fast.all.some((node) => node.getAttribute("role") === "radiogroup" && /thinking level/u.test(node.getAttribute("aria-label") ?? "")),
+    false,
+    "a model with no effort choice shows no control",
+  );
+});
+
+test("the composer shows the context meter the chat's host projects for its next turn", () => {
+  const client = new QueryClient();
+  client.setQueryData(hostQueryKeys.contextPressure("host-b", "chat-1", "r1"), {
+    contextTokens: 42_000,
+    contextWindow: 200_000,
+    inputBudgetTokens: 168_000,
+    reservedTokens: 32_000,
+    percentOfWindow: 21,
+    percentOfUsableInput: 25,
+    shouldCompact: false,
+    messageTokens: 30_000,
+    staticTokens: 12_000,
+    source: "provider-anchored",
+    computedAt: 1,
+  });
+  const granted = render(
+    { host: online, snapshot: onDeep(), chat: session(online, [...RUN_CONTROL, "contextPressure"]).chat(), models: hostModels },
+    client,
+  );
+  assert.ok(granted.button(/^Context usage, 25 percent$/), "the meter reads the host's projection");
+  const older = render({ host: online, snapshot: onDeep(), chat: session(online).chat(), models: hostModels }, client);
+  assert.equal(Boolean(older.button(/^Context usage/)), false, "a host without the projection shows no meter rather than a guess");
+});
+
+test("a failed reply offers Try again, and a failure only that Mac can fix offers a model switch instead", () => {
+  const failed = (category: "network" | "context_window"): ChatMessage[] => [
+    ...messages,
+    { id: "m3", role: "assistant", content: "", createdAt: 3, providerFailure: { version: 1, category, attempts: 1, retryExhausted: true } },
+  ];
+  const network = render({
+    host: online,
+    snapshot: onDeep({ transcript: { chatId: "chat-1", revision: "r1", messages: failed("network"), hasOlder: false } }),
+    chat: session(online).chat(),
+    models: hostModels,
+  });
+  assert.ok(network.button(/^Try again$/));
+  assert.ok(network.button(/^Switch model$/));
+
+  const full = render({
+    host: online,
+    snapshot: onDeep({ transcript: { chatId: "chat-1", revision: "r1", messages: failed("context_window"), hasOlder: false } }),
+    chat: session(online).chat(),
+    models: hostModels,
+  });
+  assert.equal(full.button(/Compact/), undefined, "compaction runs on that Mac, not from here");
+  assert.ok(full.button(/^Switch model$/));
+});
+
+test("messages queued while the host is replying wait on this Mac in the list a local chat shows", () => {
+  const key = hostResourceKey({ hostId: "host-b", resourceId: "chat-1" });
+  chatMessageQueue(key).add({ id: "q-1", text: "After this, run the tests", attachments: [] });
+  try {
+    const live = run([event(1, "run.started", { runId: "run-1", chatId: "chat-1" }), event(2, "text_delta", { text: "Working" })]);
+    const { control, adapter, chat } = session(online);
+    const view = render({ host: online, snapshot: snapshot(online, { run: live }), chat: chat() });
+    assert.match(view.text, /1 queued/u);
+    assert.match(view.text, /After this, run the tests/u);
+    assert.equal(control.getSnapshot().sending, false);
+    assert.deepEqual(adapter.inputs, [], "nothing was handed to the host's own queue");
+  } finally {
+    discardChatMessageQueue(key);
+  }
 });
 
 test("a host that grants reading only shows no composer and says why", () => {
@@ -283,15 +412,14 @@ test("an offline host keeps the last-known transcript visible and offers a recon
 
   assert.match(view.text, /Summarise the release notes/);
   assert.match(view.text, /Here is the summary so far/);
-  assert.match(view.text, /Studio · Offline/);
   assert.match(view.text, /Showing the last-known transcript/);
   const status = view.all.find((node) => node.getAttribute("role") === "status" && node.getAttribute("data-host-availability"));
   assert.equal(status?.getAttribute("data-host-availability"), "offline");
   assert.ok(view.button(/Reconnect/), "the status row reconnects the host");
   // Older pages cannot be read while the host is away.
   assert.ok(view.button(/Load older messages/)?.hasAttribute("disabled"));
-  const marker = view.all.find((node) => node.getAttribute("role") === "img");
-  assert.equal(marker?.getAttribute("aria-label"), "On Studio, offline");
+  const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
+  assert.equal(chip?.textContent, "Runs on Studio · Offline", "the header chip says the host is away");
 });
 
 test("a host that needs re-pairing points to Connections instead of reconnecting", () => {
@@ -537,7 +665,7 @@ test("opening a remote chat directly waits for the paired hosts before calling t
     client.setQueryData(hostQueryKeys.list(), [studioView]);
     client.setQueryData(hostQueryKeys.statuses(), [connected]);
   });
-  assert.match(live, /Studio · Connected/);
+  assert.match(live, /Runs on Studio/);
 });
 
 test("a remote chat whose Mac is unpaired, turned off or unreadable says so once the hosts are known", async () => {

@@ -17,6 +17,59 @@ export function remoteHostMarkerLabel(hostLabel: string, stale: boolean): string
   return stale ? `On ${hostLabel}, offline` : `On ${hostLabel}`;
 }
 
+export function remoteHostAvailabilityLabel(host: SidebarHost): string {
+  switch (host.availability) {
+    case "online":
+      return "Connected";
+    case "connecting":
+      return "Connecting…";
+    case "blocked":
+      return "Needs re-pairing";
+    default:
+      return "Offline";
+  }
+}
+
+/**
+ * Sits beside a paired computer's chat title where a local chat shows its
+ * workspace, so it is always clear the chat runs elsewhere. It names only the
+ * host while connected and adds the state, in a soft status fill, when not.
+ */
+export function RemoteHostChip({ host }: { host: SidebarHost }) {
+  const status = remoteHostAvailabilityLabel(host);
+  const blocked = host.availability === "blocked";
+  const offline = host.availability === "offline";
+  const Icon = blocked ? KeyRound : offline ? CloudOff : Globe;
+  return (
+    <span
+      data-remote-host-chip
+      data-remote-host-availability={host.availability}
+      title={`Runs on ${host.label} · ${status}`}
+      className={cn(
+        "no-drag inline-flex h-7 min-w-0 max-w-56 shrink items-center gap-1 rounded-button px-2 text-small [corner-shape:squircle]",
+        blocked
+          ? "bg-status-red-surface text-primary"
+          : offline
+            ? "bg-status-warning-surface text-primary"
+            : "bg-control/50 text-secondary",
+      )}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn(
+          "size-3.5 shrink-0",
+          blocked ? "text-status-red" : offline ? "text-status-warning" : undefined,
+        )}
+      />
+      <span className="min-w-0 truncate">
+        <span className="sr-only">Runs on </span>
+        {host.label}
+        {host.availability === "online" ? null : <span className="text-secondary">{` · ${status}`}</span>}
+      </span>
+    </span>
+  );
+}
+
 /** Soft globe that marks a row as living on another machine. */
 export function RemoteHostMarker({
   hostLabel,
