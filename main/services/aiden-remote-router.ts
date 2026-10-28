@@ -334,7 +334,7 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
-        // Contract revision 44 (`bot:images`).
+        // Contract revision 45 (`bot:images`).
         | "sharedImage"
         | "supportsSharedImages"
         // Contract revision 42 (`bot:issues`).
@@ -1813,13 +1813,13 @@ function holdsBotHandoffOnMac(
   return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
 }
 
-/** Revision 44: shared-image entries and their byte route ship together, or not at all. */
+/** Revision 45: shared-image entries and their byte route ship together, or not at all. */
 function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
   return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
 }
 
-/** Whether this device is sent `shared_image` entries (revision 44). */
+/** Whether this device is sent `shared_image` entries (revision 45). */
 function holdsBotImages(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1934,7 +1934,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
-    // Revision 44: offered only while shared images and their route are wired.
+    // Revision 45: offered only while shared images and their route are wired.
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
@@ -2358,7 +2358,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 44: an opt-in to shared-image entries, offered only while their route is wired.
+            // Revision 45: an opt-in to shared-image entries, offered only while their route is wired.
             if (!botImagesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
             }

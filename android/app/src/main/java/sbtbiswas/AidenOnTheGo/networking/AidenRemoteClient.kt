@@ -2112,7 +2112,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 44 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
      * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
      * Mac's inline image limit, is accepted.
      */

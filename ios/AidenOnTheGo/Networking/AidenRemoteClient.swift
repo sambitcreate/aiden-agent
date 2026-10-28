@@ -2197,7 +2197,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
 
-    /// Revision 44 (`bot:images`): the bytes of an image the Bot shared, read
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared, read
     /// while it is in the Bot's current conversation. Only PNG and JPEG, at
     /// most the Mac's inline image limit, are accepted.
     func botSessionImage(botId: String, entryId: String) async throws -> Data {

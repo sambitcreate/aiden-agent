@@ -136,7 +136,7 @@ protocol AidenBotSessionTransport: Sendable {
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     /// Revision 37: `DELETE /bots/{botId}/pause`.
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
-    /// Revision 44 (`bot:images`): the bytes of an image the Bot shared.
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared.
     func botSessionImage(botId: String, entryId: String) async throws -> Data
     /// Revision 42 (`bot:issues`): carry out one action a card offers.
     func actOnBotIssue(
@@ -1084,7 +1084,7 @@ private final class AidenBotRequestRace<T: Sendable>: @unchecked Sendable {
     }
 }
 
-/// Revision 44 (`bot:images`): the bytes of images a Bot shared, kept while
+/// Revision 45 (`bot:images`): the bytes of images a Bot shared, kept while
 /// its chat is open within a byte budget. The least recently drawn image goes
 /// first; one that is dropped is read from the Mac again the next time it is
 /// drawn. An image larger than the whole budget is never kept.
@@ -1193,7 +1193,7 @@ final class AidenBotSessionModel {
     private(set) var isAttaching = false
     /// The bytes of each staged photo, for its thumbnail; never written to disk.
     @ObservationIgnored private var attachmentImages: [String: Data] = [:]
-    /// Revision 44: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
+    /// Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk.
     @ObservationIgnored private var sharedImages: AidenSharedImageBytes
     /// The Bot's Chat activity wording, from its detail.
     var wording: AidenBotChatActivityWording = .follows
@@ -2679,7 +2679,7 @@ final class AidenBotSessionModel {
 
     // MARK: Connect cards
 
-    /// Revision 44 (`bot:images`): the bytes of an image the Bot shared, or nil
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared, or nil
     /// when the Mac can't send it (it left the chat, or the phone is offline).
     /// Images are kept while this chat is open, within a byte budget and only
     /// while the transcript still shows them; one that was dropped, or whose
