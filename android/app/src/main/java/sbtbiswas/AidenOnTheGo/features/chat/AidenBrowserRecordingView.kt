@@ -51,7 +51,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenBrowserRecordingRecap
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
 
 /**
- * What a recording card can do in this chat (contract revision 42): read the
+ * What a recording card can do in this chat (contract revision 44): read the
  * video from the Mac, and let the saved file go once the player closes.
  */
 @Stable

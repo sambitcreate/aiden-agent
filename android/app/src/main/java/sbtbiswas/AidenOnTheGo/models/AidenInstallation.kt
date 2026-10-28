@@ -186,7 +186,7 @@ data class AidenServer(
         get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
-     * The Mac offers `bot:images` (revision 41). Like `schedule:cards`, the offer in
+     * The Mac offers `bot:images` (revision 43). Like `schedule:cards`, the offer in
      * `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
      */
     val offersBotImages: Boolean
@@ -207,7 +207,7 @@ data class AidenServer(
     val supportsChatVisualViewer: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
 
-    /** A browser recording's Play reads the video from the Mac (revision 42). */
+    /** A browser recording's Play reads the video from the Mac (revision 44). */
     val supportsBrowserRecordings: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_BROWSER_RECORDINGS_FEATURE)
 

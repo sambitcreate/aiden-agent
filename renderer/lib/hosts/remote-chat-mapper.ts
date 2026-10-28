@@ -19,6 +19,8 @@ export interface RemoteMessagesWindow {
   revision: string;
   messages: ChatMessage[];
   hasOlder: boolean;
+  /** The chat's model, carried by hosts with `chat-messages-window-metadata-v1`. */
+  model?: { providerId: string; modelId: string };
 }
 
 /** The paged transcript of one open remote chat. */
@@ -28,6 +30,8 @@ export interface RemoteTranscript {
   revision: string | null;
   messages: ChatMessage[];
   hasOlder: boolean;
+  /** The chat's model as the newest window reported it, when the host says. */
+  model?: { providerId: string; modelId: string };
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -126,6 +130,8 @@ export function mapRemoteMessagesWindow(value: unknown): RemoteMessagesWindow {
   const revision = text(input?.revision);
   if (!input || !chatId || !revision || !Array.isArray(input.messages) || typeof input.hasOlder !== "boolean")
     throw new Error("The host returned an unreadable transcript page.");
+  const providerId = text(input.providerId);
+  const modelId = text(input.modelId);
   return {
     chatId,
     revision,
@@ -133,6 +139,8 @@ export function mapRemoteMessagesWindow(value: unknown): RemoteMessagesWindow {
       .map(mapRemoteMessage)
       .filter((message): message is ChatMessage => message !== null),
     hasOlder: input.hasOlder,
+    // The host sends the pair together or not at all.
+    ...(providerId && modelId ? { model: { providerId, modelId } } : {}),
   };
 }
 
@@ -170,19 +178,22 @@ export function emptyRemoteTranscript(chatId: string): RemoteTranscript {
  */
 export function mergeNewestWindow(current: RemoteTranscript, window: RemoteMessagesWindow): RemoteTranscript {
   const first = window.messages[0];
+  // The newest window is the current word on the chat's model.
+  const model = window.model ? { model: window.model } : {};
   if (!first) {
     // An empty newest window means the chat has no visible messages at all.
-    return { chatId: window.chatId, revision: window.revision, messages: [], hasOlder: false };
+    return { chatId: window.chatId, revision: window.revision, messages: [], hasOlder: false, ...model };
   }
   const overlap = current.messages.findIndex((message) => message.id === first.id);
   if (overlap < 0) {
-    return { chatId: window.chatId, revision: window.revision, messages: window.messages, hasOlder: window.hasOlder };
+    return { chatId: window.chatId, revision: window.revision, messages: window.messages, hasOlder: window.hasOlder, ...model };
   }
   return {
     chatId: window.chatId,
     revision: window.revision,
     messages: [...current.messages.slice(0, overlap), ...window.messages],
     hasOlder: current.hasOlder,
+    ...model,
   };
 }
 

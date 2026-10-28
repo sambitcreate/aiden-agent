@@ -57,6 +57,22 @@ import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * A request query value as the Mac reads it back. Macs before contract revision
+ * 41 refuse any `%` in a URL, so what they could read stays literal: a space
+ * travels as `+`, which every Mac decodes, and the separators ids, dates and
+ * cursors use stay as they are. Only a character that can't travel literally
+ * (`& + # %`, quotes, accents, emoji) is percent-encoded, which revision 41
+ * Macs accept.
+ */
+object AidenHostQuery {
+    private val literalEscapes = Regex("%(3A|40|2F|24|2C|3B|3D|21|28|29|7E)", RegexOption.IGNORE_CASE)
+
+    fun value(raw: String): String =
+        URLEncoder.encode(raw, Charsets.UTF_8.name())
+            .replace(literalEscapes) { match -> match.value.substring(1).toInt(16).toChar().toString() }
+}
+
 data class AidenPreferredChatSummaryPage(
     val summaries: List<AidenChatSummary>,
     val nextCursor: String?,
@@ -1115,7 +1131,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 42 (`chat-browser-recordings-v1`): the video a completed
+     * Revision 44 (`chat-browser-recordings-v1`): the video a completed
      * `browser_recording_stop` step in [chatId] names, streamed to
      * `<recordingId>.mp4` or `.webm` in [directory] rather than held in memory.
      * Only MP4 or WebM with `no-store` and `nosniff`, non-empty and at most
@@ -1959,7 +1975,8 @@ class AidenRemoteClient(
     /** Finished Bot routine runs to post as local notifications; pass the previous `now` as [since]. */
     suspend fun botRoutineNotifications(since: Instant? = null): AidenBotRoutineNotificationList {
         val query = since?.let {
-            "?since=" + java.net.URLEncoder.encode(InstantIso8601Serializer.millisecondFormat.format(it), "UTF-8")
+            // Its `:` stays literal, so Macs before revision 41 read it too.
+            "?since=" + AidenHostQuery.value(InstantIso8601Serializer.millisecondFormat.format(it))
         } ?: ""
         return executeRequest(
             "/bots/routine-notifications$query",
@@ -1973,9 +1990,9 @@ class AidenRemoteClient(
         spec: AidenBotConversationQuery
     ): AidenBotConversationPage {
         val params = mutableListOf<String>()
-        if (spec.cursor != null) params.add("cursor=${spec.cursor}")
-        if (spec.query != null) params.add("query=${spec.query}")
-        if (spec.botId != null) params.add("botId=${spec.botId}")
+        if (spec.cursor != null) params.add("cursor=${AidenHostQuery.value(spec.cursor)}")
+        if (spec.query != null) params.add("query=${AidenHostQuery.value(spec.query)}")
+        if (spec.botId != null) params.add("botId=${AidenHostQuery.value(spec.botId)}")
         if (spec.limit != null) params.add("limit=${spec.limit}")
         val queryString = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
 
@@ -2129,7 +2146,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 41 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Revision 43 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
      * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
      * Mac's inline image limit, is accepted.
      */

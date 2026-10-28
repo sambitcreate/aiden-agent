@@ -902,7 +902,7 @@ fun AidenChatDetailScreen(
             }
         }
 
-        // Revision 42: a browser recording's Play reads the video from a Mac that serves it.
+        // Revision 44: a browser recording's Play reads the video from a Mac that serves it.
         val canPlayBrowserRecordings = remember(serverInfo, viewModel) { viewModel.canPlayBrowserRecordings }
         val recordingPlayback = remember(viewModel, canPlayBrowserRecordings) {
             if (canPlayBrowserRecordings) {

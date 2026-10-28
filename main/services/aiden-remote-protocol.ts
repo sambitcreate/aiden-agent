@@ -117,7 +117,16 @@ export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
 /**
- * Contract revision 41 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 43 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_CONTRACT_REVISION`):
+ * `GET /chats/{chatId}/context` (`chat-context-pressure-v1`, announced to
+ * paired desktops only) returns the next-request context projection the
+ * host's own composer meter shows, reduced to an allowlist of counts. It
+ * carries no breakdown, prompt cache, tool or server names, paths or text.
+ */
+export const AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_CONTRACT_REVISION = 41 as const;
+/**
+ * Contract revision 43 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`):
  * images a Bot shares (`share_image`) reach phones. A device that negotiates
  * `bot:images` receives `shared_image` session entries (name, type and size,
@@ -125,16 +134,16 @@ export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
  * `GET /bots/{botId}/session/images/{entryId}`. Every other device gets an
  * assistant line naming the image and pointing to the Mac instead.
  */
-export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 41 as const;
+export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 43 as const;
 /**
- * Contract revision 42 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 44 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`):
  * a completed `browser_recording_stop` step on a version 3 generation timeline
  * may carry a display-only `recording` recap (id, type, length, size), and a
  * device that may read the chat reads the video from
  * `GET /chats/{chatId}/recordings/{recordingId}`. Older clients ignore it.
  */
-export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 42 as const;
+export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 44 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -319,7 +328,7 @@ export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:hando
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
 /**
- * Contract revision 41: a device holding `bot:images` receives `shared_image`
+ * Contract revision 43: a device holding `bot:images` receives `shared_image`
  * session entries and may read their bytes from the session image route
  * (which still needs `bot:read` and `chat:read`). It grants no other authority.
  */
@@ -494,12 +503,18 @@ export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
  */
 export const AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1" as const;
 /**
- * Server feature token for browser recordings (contract revision 42):
+ * Server feature token for browser recordings (contract revision 44):
  * `GET /chats/{chatId}/recordings/{recordingId}` serves a video the agent
  * recorded of a browser tab, for a chat whose timeline names it. Announced
  * only while the route is wired.
  */
 export const AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE = "chat-browser-recordings-v1" as const;
+/**
+ * Server feature token for `GET /chats/{chatId}/context` (contract revision
+ * 41): the host's next-request context pressure for one workspace chat.
+ * Announced to paired desktops only, while the host wires the projection.
+ */
+export const AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE = "chat-context-pressure-v1" as const;
 
 /** Host feed replay retention; a gap beyond either bound produces a fresh snapshot. */
 export const AIDEN_REMOTE_HOST_FEED_MAX_EVENTS = 1_000;
@@ -1240,7 +1255,7 @@ export type AidenRemoteBotSessionEntry =
       createdAt?: string;
     }
   /**
-   * Contract revision 41, only for devices holding `bot:images`: an image the
+   * Contract revision 43, only for devices holding `bot:images`: an image the
    * Bot shared. The bytes are read from
    * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
    */
@@ -1253,12 +1268,12 @@ export type AidenRemoteBotSessionEntry =
       size: number;
     };
 
-/** Revision 41: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
+/** Revision 43: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
 export type AidenRemoteBotSharedImageMimeType = (typeof AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES)[number];
-/** Revision 41: the largest image a session image read returns (the desktop's inline image limit). */
+/** Revision 43: the largest image a session image read returns (the desktop's inline image limit). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
-/** Revision 41: the longest image name on the wire. */
+/** Revision 43: the longest image name on the wire. */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS = 255;
 /** Session entry types that only `bot:images` devices receive. */
 export const AIDEN_REMOTE_BOT_IMAGE_ENTRY_TYPES = ["shared_image"] as const;
@@ -1816,7 +1831,7 @@ export interface AidenRemoteContractFixture {
   botHandoffs?: AidenRemoteBotHandoffsFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
-  /** Revision 41 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
+  /** Revision 43 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
   botImages?: AidenRemoteBotImagesFixture;
   browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
@@ -4637,6 +4652,124 @@ export function parseAidenRemoteSkillCatalog(
   return { skills };
 }
 
+/**
+ * Contract revision 41 (`chat-context-pressure-v1`): the only fields of the
+ * host's next-request context projection that cross the wire. The host's
+ * `breakdown`, `promptCache` and provider-anchor detail stay on the Mac.
+ */
+export const AIDEN_REMOTE_CONTEXT_PRESSURE_FIELDS = [
+  "contextTokens",
+  "contextWindow",
+  "inputBudgetTokens",
+  "reservedTokens",
+  "percentOfWindow",
+  "percentOfUsableInput",
+  "shouldCompact",
+  "messageTokens",
+  "staticTokens",
+  "source",
+  "computedAt",
+] as const;
+
+/**
+ * A provider or model id `GET /chats/{chatId}/context` can name. Request URLs
+ * carry no percent-encoding, so only characters a query takes literally are
+ * allowed (and no `'`, which the WHATWG URL parser escapes in an https
+ * query): ids such as `custom:local`, `org/model:free` and `model@2024` fit.
+ */
+export const AIDEN_REMOTE_CONTEXT_MODEL_ID = /^[A-Za-z0-9._~:@/!$()*,;-]{1,256}$/u;
+
+/** Every count and percentage is a non-negative finite number; `computedAt` is epoch milliseconds. */
+export interface AidenRemoteContextPressure {
+  contextTokens: number;
+  contextWindow: number;
+  inputBudgetTokens: number;
+  reservedTokens: number;
+  percentOfWindow: number;
+  percentOfUsableInput: number;
+  shouldCompact: boolean;
+  messageTokens: number;
+  staticTokens: number;
+  source: "provider-anchored" | "estimated";
+  computedAt: number;
+}
+
+/** `GET /chats/{chatId}/context`. `pressure` is null when the host cannot project the chat now. */
+export interface AidenRemoteChatContextPressure {
+  chatId: string;
+  pressure: AidenRemoteContextPressure | null;
+}
+
+/** The JSON safe-integer bound: an epoch-ms `computedAt` and every count fit, an overflowed figure does not. */
+const AIDEN_REMOTE_CONTEXT_PRESSURE_MAX_VALUE = Number.MAX_SAFE_INTEGER;
+
+function contextPressureNumber(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > AIDEN_REMOTE_CONTEXT_PRESSURE_MAX_VALUE
+  ) {
+    throw new Error(`${label} must be a bounded non-negative number.`);
+  }
+  return value;
+}
+
+export function parseAidenRemoteContextPressure(
+  value: unknown,
+  label = "Context pressure",
+): AidenRemoteContextPressure {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, AIDEN_REMOTE_CONTEXT_PRESSURE_FIELDS, label);
+  if (typeof value.shouldCompact !== "boolean") throw new Error(`${label} shouldCompact must be a boolean.`);
+  if (value.source !== "provider-anchored" && value.source !== "estimated") {
+    throw new Error(`${label} source is not supported.`);
+  }
+  const contextWindow = contextPressureNumber(value.contextWindow, `${label} contextWindow`);
+  if (contextWindow < 1) throw new Error(`${label} contextWindow must be positive.`);
+  return {
+    contextTokens: contextPressureNumber(value.contextTokens, `${label} contextTokens`),
+    contextWindow,
+    inputBudgetTokens: contextPressureNumber(value.inputBudgetTokens, `${label} inputBudgetTokens`),
+    reservedTokens: contextPressureNumber(value.reservedTokens, `${label} reservedTokens`),
+    percentOfWindow: contextPressureNumber(value.percentOfWindow, `${label} percentOfWindow`),
+    percentOfUsableInput: contextPressureNumber(value.percentOfUsableInput, `${label} percentOfUsableInput`),
+    shouldCompact: value.shouldCompact,
+    messageTokens: contextPressureNumber(value.messageTokens, `${label} messageTokens`),
+    staticTokens: contextPressureNumber(value.staticTokens, `${label} staticTokens`),
+    source: value.source,
+    computedAt: contextPressureNumber(value.computedAt, `${label} computedAt`),
+  };
+}
+
+/**
+ * Reduce the host's own projection to the wire allowlist. Anything else the
+ * projection carries (`breakdown`, `promptCache`, anchor detail) is dropped,
+ * and a projection the allowlist cannot describe is refused.
+ */
+export function projectAidenRemoteContextPressure(pressure: object): AidenRemoteContextPressure {
+  const source = pressure as Readonly<Record<string, unknown>>;
+  const picked: Record<string, unknown> = {};
+  for (const field of AIDEN_REMOTE_CONTEXT_PRESSURE_FIELDS) picked[field] = source[field];
+  return parseAidenRemoteContextPressure(picked);
+}
+
+export function parseAidenRemoteChatContextPressure(
+  value: unknown,
+  label = "Chat context pressure",
+): AidenRemoteChatContextPressure {
+  if (!isRecord(value)) throw new Error(`${label} must be an object.`);
+  assertExactKeys(value, ["chatId", "pressure"], label);
+  if (typeof value.chatId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/u.test(value.chatId)) {
+    throw new Error(`${label} chatId must be a public identifier.`);
+  }
+  if (!hasOwn(value, "pressure")) throw new Error(`${label} must carry pressure.`);
+  return {
+    chatId: value.chatId,
+    pressure: value.pressure === null ? null : parseAidenRemoteContextPressure(value.pressure, `${label} pressure`),
+  };
+}
+
 export interface AidenRemoteStreamInputRequest {
   mode: AidenRemoteRunInputMode;
   text: string;
@@ -6184,7 +6317,7 @@ export interface AidenRemoteScheduleCardsFixture {
   rejected: Array<{ label: string; schedule: unknown }>;
 }
 
-/** Revision 41: one image a Bot shared, as each kind of device reads it. */
+/** Revision 43: one image a Bot shared, as each kind of device reads it. */
 export interface AidenRemoteBotImagesFixture {
   capability: (typeof AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES)[number];
   /** What a `bot:images` device is sent. */
@@ -6195,7 +6328,7 @@ export interface AidenRemoteBotImagesFixture {
   imagePath: string;
 }
 
-/** Revision 42: a recording stop step as the timeline carries it, and where its video is read. */
+/** Revision 44: a recording stop step as the timeline carries it, and where its video is read. */
 export interface AidenRemoteBrowserRecordingsFixture {
   /** A completed `browser_recording_stop` tool step with its `recording` recap. */
   step: Record<string, unknown>;

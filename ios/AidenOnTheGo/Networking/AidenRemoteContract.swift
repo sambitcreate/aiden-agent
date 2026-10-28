@@ -671,7 +671,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 39 adds `schedule:cards`, also asked for alone, after
     /// any other negotiation.
     /// Contract revision 40 adds `bot:handoff-notes`, asked for with `bot:handoffs`.
-    /// Contract revision 41 adds `bot:images`, asked for alone.
+    /// Contract revision 43 adds `bot:images`, asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -700,7 +700,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// device asks for it only from a Mac that offers it.
     static let botHandoffNotes = Self(rawValue: "bot:handoff-notes")
 
-    /// Revision 41: the device receives `shared_image` Bot session entries
+    /// Revision 43: the device receives `shared_image` Bot session entries
     /// and may read their bytes. It grants no other authority. A Mac on an
     /// earlier revision refuses the name, so the device asks for it alone.
     static let botImages = Self(rawValue: "bot:images")

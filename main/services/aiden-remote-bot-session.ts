@@ -33,7 +33,7 @@
 //   which drops the old line from their transcript. The person's answer is
 //   their message for everyone. Idempotent results are stored in the holder
 //   view and projected per device after the ledger returns.
-// - Contract revision 41 (`bot:images`): an image the Bot shared is a
+// - Contract revision 43 (`bot:images`): an image the Bot shared is a
 //   `shared_image` entry (name, type, size) for devices holding it, which read
 //   the bytes from the session image route. Every other device gets an
 //   assistant line under the same id that names the image and points to the Mac.
@@ -500,7 +500,7 @@ export function projectBotSessionEntries(
         break;
       }
       case "shared_image": {
-        // Revision 41: name, type and size only; the bytes have their own route.
+        // Revision 43: name, type and size only; the bytes have their own route.
         const image = sharedImageWireOf(entry);
         if (image) output.push({ type: "shared_image", id, ...image });
         break;
@@ -527,7 +527,7 @@ function sharedImageWireOf(image: {
   return { name: wireText(image.name, AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS).trim() || "image", mimeType, size: image.size };
 }
 
-/** What a device without `bot:images` reads for a shared image (revision 41). */
+/** What a device without `bot:images` reads for a shared image (revision 43). */
 export function botSharedImageLegacyText(name: string): string {
   return `I shared an image: ${name}. Open this chat on your Mac to see it.`;
 }
@@ -707,7 +707,7 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
-  /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 41). */
+  /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 43). */
   images: boolean;
 }
 
@@ -988,7 +988,7 @@ class BotLiveProjector {
     const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
     const bare = entry && withoutSubmissionId(entry);
     const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
-    // Revision 41: a shared image reaches a device without `bot:images` as its line.
+    // Revision 43: a shared image reaches a device without `bot:images` as its line.
     const imageLine = entry?.type === "shared_image"
       ? sseFrame(id, "entry", { ...data, payload: { entry: withoutSharedImage(entry) } })
       : undefined;
@@ -1159,7 +1159,7 @@ class BotLiveProjector {
   }
 
   /**
-   * Revision 41: the bytes of a shared image in the current conversation, by
+   * Revision 43: the bytes of a shared image in the current conversation, by
    * its wire entry id, or null when no shown entry has that id. Bytes that do
    * not match their type or the size bound are refused like a missing image.
    */
@@ -1583,7 +1583,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Shared images on phones (revision 41, `bot:images`). The bytes come from
+   * Shared images on phones (revision 43, `bot:images`). The bytes come from
    * the conversation itself, so every host that serves Bot sessions serves them.
    */
   get supportsSharedImages(): boolean {

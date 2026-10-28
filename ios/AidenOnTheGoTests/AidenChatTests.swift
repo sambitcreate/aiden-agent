@@ -771,7 +771,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Fetched web page acme.example")
     }
 
-    // MARK: Browser recordings (contract revision 42)
+    // MARK: Browser recordings (contract revision 44)
 
     private static let fixtureRecordingID = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
 
@@ -10505,7 +10505,7 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         data: Data
     ) -> (HTTPURLResponse, Data) {
         var headers = ["Content-Type": contentType]
-        // Media routes answer as the Mac does (revision 42 recordings).
+        // Media routes answer as the Mac does (revision 44 recordings).
         if contentType.hasPrefix("video/") {
             headers["Cache-Control"] = "no-store"
             headers["X-Content-Type-Options"] = "nosniff"

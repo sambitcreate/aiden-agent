@@ -63,6 +63,8 @@ import {
   AIDEN_REMOTE_CHAT_VISUALS_FEATURE,
   AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE,
   AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE,
+  AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE,
+  AIDEN_REMOTE_CONTEXT_MODEL_ID,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_HOST_EVENTS_FEATURE,
@@ -195,7 +197,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -325,7 +327,7 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
-        // Contract revision 41 (`bot:images`).
+        // Contract revision 43 (`bot:images`).
         | "sharedImage"
         | "supportsSharedImages"
       >
@@ -437,6 +439,7 @@ export type AidenRemoteRouteLabel =
   | "chatAgents"
   | "chatAgentInterrupt"
   | "chatSkills"
+  | "chatContext"
   | "chatProgressEvents"
   | "chatAttachment"
   | "chatVisualDocument"
@@ -537,6 +540,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatAgents: ["/chats/:id/agents"],
   chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
   chatSkills: ["/chats/:id/skills"],
+  chatContext: ["/chats/:id/context"],
   chatProgressEvents: ["/chats/:id/progress/events"],
   chatAttachment: [
     "/chats/:id/attachments",
@@ -1090,6 +1094,19 @@ async function runChatMutation<T>(
   }
 }
 
+/** Every `%` starts a hex escape, the escapes decode as UTF-8, and none is a control character. */
+export function isSafeEncodedQuery(query: string): boolean {
+  if (!query.includes("%")) return true;
+  if (/%(?![0-9A-Fa-f]{2})/u.test(query)) return false;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(query.replace(/\+/gu, " "));
+  } catch {
+    return false;
+  }
+  return !hasAsciiControl(decoded);
+}
+
 function requestTarget(
   request: IncomingMessage,
   acceptStrippedBasePath: boolean,
@@ -1099,7 +1116,6 @@ function requestTarget(
     !raw ||
     raw.length > MAX_REQUEST_URL_LENGTH ||
     raw.includes("#") ||
-    raw.includes("%") ||
     raw.includes("\\") ||
     hasAsciiControl(raw)
   ) {
@@ -1111,6 +1127,16 @@ function requestTarget(
   }
   const query = raw.indexOf("?");
   const path = query < 0 ? raw : raw.slice(0, query);
+  // Paths are never percent-decoded, so an encoded segment can't hide a
+  // traversal. Query values may be encoded (a search with spaces or accents),
+  // but only as well-formed UTF-8 escapes that decode to no control character.
+  if (path.includes("%") || (query >= 0 && !isSafeEncodedQuery(raw.slice(query + 1)))) {
+    throw new AidenRemoteServiceError(
+      "invalid_request",
+      "The request URL is invalid.",
+      400,
+    );
+  }
   if (
     !path.startsWith("/") ||
     path.includes("//") ||
@@ -1231,6 +1257,30 @@ function chatAgentsQuery(query: string): { turnId?: string } {
     );
   }
   return { turnId };
+}
+
+/**
+ * `GET /chats/{chatId}/context` takes no query (the chat's own model), or
+ * exactly `providerId` and `modelId` together (contract revision 41).
+ */
+function chatContextQuery(query: string): { providerId: string; modelId: string } | undefined {
+  if (!query) return undefined;
+  const invalid = () =>
+    new AidenRemoteServiceError("invalid_request", "The chat context query is invalid.", 400);
+  const params = new URLSearchParams(query);
+  if (
+    params.size !== 2 ||
+    params.getAll("providerId").length !== 1 ||
+    params.getAll("modelId").length !== 1
+  ) {
+    throw invalid();
+  }
+  const providerId = params.get("providerId")!;
+  const modelId = params.get("modelId")!;
+  // A selection is limited to the characters model ids use
+  // (`org/model:tag@version` included), whether sent literally or encoded.
+  if (!AIDEN_REMOTE_CONTEXT_MODEL_ID.test(providerId) || !AIDEN_REMOTE_CONTEXT_MODEL_ID.test(modelId)) throw invalid();
+  return { providerId, modelId };
 }
 
 function chatSummariesQuery(query: string): { limit: number; cursor?: string } {
@@ -1501,6 +1551,7 @@ export interface AidenRemoteServerFeatureSupport {
   browserRecordings: boolean;
   fork: boolean;
   forkSummary: boolean;
+  contextPressure: boolean;
   hostEvents: boolean;
   runs: boolean;
   pairingRequests: boolean;
@@ -1556,6 +1607,8 @@ export function aidenRemoteServerFeatures(
     ...(desktop && support.hostEvents ? [AIDEN_REMOTE_HOST_EVENTS_FEATURE] : []),
     ...(desktop && support.runs ? [AIDEN_REMOTE_RUN_STREAMS_FEATURE, AIDEN_REMOTE_RUN_CONTROL_FEATURE] : []),
     ...(desktop && support.pairingRequests ? [AIDEN_REMOTE_PAIRING_REQUESTS_FEATURE] : []),
+    // The composer context meter for a paired Mac's chat (contract revision 41).
+    ...(desktop && support.contextPressure ? [AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE] : []),
     // Phones get only the phone-scoped run subset (contract revision 24).
     ...(phone && support.runs ? [AIDEN_REMOTE_PHONE_RUN_CONTROL_FEATURE] : []),
     // Bots rework (contract revision 25): each token is announced only
@@ -1725,13 +1778,13 @@ function holdsBotHandoffNotes(
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
 }
 
-/** Revision 41: shared-image entries and their byte route ship together, or not at all. */
+/** Revision 43: shared-image entries and their byte route ship together, or not at all. */
 function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
   return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
 }
 
-/** Whether this device is sent `shared_image` entries (revision 41). */
+/** Whether this device is sent `shared_image` entries (revision 43). */
 function holdsBotImages(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1802,7 +1855,7 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
-    // Revision 41: offered only while shared images and their route are wired.
+    // Revision 43: offered only while shared images and their route are wired.
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
@@ -2114,6 +2167,7 @@ export function createAidenRemoteRequestHandler(
               Boolean(dependencies.chats?.browserRecording) && dependencies.chats?.supportsBrowserRecordings === true,
             fork: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForks === true,
             forkSummary: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForkSummaries === true,
+            contextPressure: Boolean(dependencies.chats?.contextPressure) && dependencies.chats?.supportsContextPressure === true,
             hostEvents: hostCapabilitySupported(dependencies, "host:events"),
             runs: hostCapabilitySupported(dependencies, "runs:observe"),
             pairingRequests: Boolean(dependencies.pairingRequests),
@@ -2199,7 +2253,7 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 41: an opt-in to shared-image entries, offered only while their route is wired.
+            // Revision 43: an opt-in to shared-image entries, offered only while their route is wired.
             if (!botImagesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
             }
@@ -3758,6 +3812,20 @@ export function createAidenRemoteRequestHandler(
           200,
           await dependencies.chats.chatSkillCatalog(device.id, chatSkillsMatch[1]!, device.capabilities.has("app-controls:read")),
         );
+        return;
+      }
+      const chatContextMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/context$/u.exec(path);
+      if (chatContextMatch && request.method === "GET") {
+        route = "chatContext";
+        const selection = chatContextQuery(query);
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.contextPressure || chats.supportsContextPressure !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(chats, device, chatContextMatch[1]!, "read");
+        writeJson(response, 200, await chats.contextPressure(chatContextMatch[1]!, selection));
         return;
       }
       const chatProgressEventsMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/progress\/events$/u.exec(path);

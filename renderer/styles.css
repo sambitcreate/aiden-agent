@@ -872,6 +872,26 @@ textarea {
   );
 }
 
+/* A long sent prompt folds to a few lines behind its chevron. The fade is a
+   mask, not a gradient in the bubble's colour, so it holds over any fill (a
+   queued Bot bubble mixes its own). Height eases between the folded and the
+   natural size; Reduce Motion drops the transition with every other one. */
+.user-message-fold[data-foldable="true"] {
+  overflow: clip;
+  overflow-clip-margin: 4px;
+  interpolate-size: allow-keywords;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+.user-message-fold[data-folded="true"] {
+  height: calc(var(--user-message-fold-lines) * 1lh);
+  mask-image: linear-gradient(to bottom, black calc(100% - 1.5lh), transparent);
+}
+
+.user-message-bubble {
+  scroll-margin-top: calc(var(--scroll-area-sticky-top, 0px) + 0.75rem);
+}
+
 /* Promote the same live artifact iframe into Chromium's top layer. Keeping the
    node mounted preserves interactive state while escaping transcript masks. */
 .aiden-html-artifact-popover:not(:popover-open) {

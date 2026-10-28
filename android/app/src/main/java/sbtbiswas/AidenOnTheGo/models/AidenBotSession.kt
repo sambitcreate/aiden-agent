@@ -123,7 +123,7 @@ object AidenBotSessionWire {
     const val MAX_SUBMISSION_ID_LENGTH = 64
     const val MAX_PLUGIN_ID_LENGTH = 80
     const val MAX_ROUTINE_ID_LENGTH = 160
-    /** Revision 41: a shared image's name, and its largest size (the Mac's inline image limit). */
+    /** Revision 43: a shared image's name, and its largest size (the Mac's inline image limit). */
     const val MAX_SHARED_IMAGE_NAME_LENGTH = 255
     const val MAX_SHARED_IMAGE_BYTES = 8 * 1_048_576
     val SHARED_IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg")
@@ -310,7 +310,7 @@ sealed class AidenBotSessionEntry {
     }
 
     /**
-     * Revision 41 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
+     * Revision 43 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
      * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
      */
     @Serializable

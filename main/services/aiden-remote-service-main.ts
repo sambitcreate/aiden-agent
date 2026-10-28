@@ -574,7 +574,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
-            // Revision 42: phones play the agent's browser recordings their chats name.
+            // Revision 44: phones play the agent's browser recordings their chats name.
             browserRecordings: {
               read: async (recordingId: string) =>
                 (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
@@ -638,6 +638,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             resolveSkillInvocation: (workspaceId, invocationId) =>
               skillRegistry.resolveFresh(workspaceId, invocationId),
+            // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
+            contextPressure: async (chatId, selection) =>
+              (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,

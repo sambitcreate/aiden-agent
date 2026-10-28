@@ -225,6 +225,8 @@ export function RemoteModelPicker({
   selected,
   disabled,
   onSelect,
+  open,
+  onOpenChange,
 }: {
   hostLabel: string;
   catalog: HostModelCatalog | undefined;
@@ -232,8 +234,17 @@ export function RemoteModelPicker({
   selected: HostModelChoice | undefined;
   disabled?: boolean;
   onSelect(choice: HostModelChoice): void;
+  /** Lets another control (a failure card's Switch model) open the menu. */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }) {
-  const providers = catalog?.providers ?? [];
+  // A hidden model is listed only for the chat already on it.
+  const providers = (catalog?.providers ?? []).flatMap((provider) => {
+    const models = provider.models.filter(
+      (entry) => !entry.hidden || (selected?.providerId === provider.id && selected.modelId === entry.id),
+    );
+    return models.length > 0 ? [{ ...provider, models }] : [];
+  });
   const model = selected
     ? providers.find((provider) => provider.id === selected.providerId)?.models.find((entry) => entry.id === selected.modelId)
     : undefined;
@@ -244,7 +255,7 @@ export function RemoteModelPicker({
     ),
   );
   return (
-    <DropdownMenu>
+    <DropdownMenu {...(open !== undefined ? { open } : {})} {...(onOpenChange ? { onOpenChange } : {})}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="transparent"

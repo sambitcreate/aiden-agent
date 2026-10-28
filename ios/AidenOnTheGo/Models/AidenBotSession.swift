@@ -16,7 +16,7 @@ enum AidenBotSessionWire {
     static let maxReasonLength = 280
     static let maxEpochLength = 64
     static let maxSubmissionIDLength = 64
-    /// Revision 41: a shared image's name and its largest size (the Mac's inline image limit).
+    /// Revision 43: a shared image's name and its largest size (the Mac's inline image limit).
     static let maxSharedImageNameLength = 255
     static let maxSharedImageBytes = 8 * 1_048_576
     static let sharedImageMIMETypes: Set<String> = ["image/png", "image/jpeg"]
@@ -234,7 +234,7 @@ struct AidenBotRoutineProposalCard: Equatable, Sendable {
     }
 }
 
-/// Contract revision 41 (`bot:images`): an image the Bot shared. The bytes are
+/// Contract revision 43 (`bot:images`): an image the Bot shared. The bytes are
 /// read from `GET /bots/{botId}/session/images/{id}`, never sent in the session.
 struct AidenBotSharedImage: Equatable, Sendable {
     let id: String
@@ -258,7 +258,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case memoryUpdate(id: String, createdAt: AidenRemoteTimestamp?)
     /// Revision 27 (`bot:cards`): a routine the Bot suggested.
     case routineProposal(AidenBotRoutineProposalCard)
-    /// Revision 41 (`bot:images`): an image the Bot shared.
+    /// Revision 43 (`bot:images`): an image the Bot shared.
     case sharedImage(AidenBotSharedImage)
 
     /// The entry types this client renders. A revision-27 client skips any

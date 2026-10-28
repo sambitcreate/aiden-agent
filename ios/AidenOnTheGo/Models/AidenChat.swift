@@ -691,7 +691,7 @@ struct AidenWebExtractRecap: Codable, Equatable, Sendable {
 }
 
 /// The video the agent recorded of a browser tab, carried on its completed
-/// `browser_recording_stop` timeline step (contract revision 42).
+/// `browser_recording_stop` timeline step (contract revision 44).
 /// Display-only: the recording's id, type, length and size, never the video,
 /// its path or the page. Decoding throws for any recap the desktop parser
 /// (`parseBrowserRecordingRecap`) rejects, including one with other keys;
@@ -904,7 +904,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let questionnaire: AidenQuestionnaireRecap?
     /// Present only on a completed `web_fetch` step that ran in extract mode.
     let extraction: AidenWebExtractRecap?
-    /// Present only on a completed `browser_recording_stop` step (revision 42).
+    /// Present only on a completed `browser_recording_stop` step (revision 44).
     let recording: AidenBrowserRecordingRecap?
 
     init(

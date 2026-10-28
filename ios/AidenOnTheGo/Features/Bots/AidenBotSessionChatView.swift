@@ -527,7 +527,7 @@ struct AidenBotSessionChatView: View {
                 }
             )
         case let .sharedImage(image):
-            // Revision 41: the image the Bot shared, read from the Mac when it is drawn.
+            // Revision 43: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(
                 attachments: [image.attachment],
                 edge: .leading,

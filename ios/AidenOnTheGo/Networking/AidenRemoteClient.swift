@@ -3,6 +3,31 @@ import Foundation
 import ImageIO
 import zlib
 
+/// A request query as the Mac reads it back. Macs before contract revision 41
+/// refuse any `%` in a URL, so what they could read stays literal: a space
+/// travels as `+`, which every Mac decodes, and the separators ids, dates and
+/// cursors use stay as they are. Only a character that can't travel literally
+/// (`& + # %`, accents, emoji) is percent-encoded, which revision 41 Macs
+/// accept. `URLQueryItem` alone sends a space as `%20` and `+` as itself.
+enum AidenHostQuery {
+    private static let literal: CharacterSet = {
+        var set = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        // `=` is safe in a value (the Mac splits each pair at its first `=`),
+        // and base64 cursors carry it, so it stays literal for older Macs.
+        set.insert(charactersIn: "-._~!*'():@/$,;?= ")
+        return set
+    }()
+
+    static func value(_ raw: String) -> String {
+        (raw.addingPercentEncoding(withAllowedCharacters: literal) ?? "")
+            .replacingOccurrences(of: " ", with: "+")
+    }
+
+    static func encode(_ items: [URLQueryItem]) -> String {
+        items.map { "\(value($0.name))=\(value($0.value ?? ""))" }.joined(separator: "&")
+    }
+}
+
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
     case ipad
@@ -113,7 +138,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 42: a completed `browser_recording_stop` step's video
+    /// Contract revision 44: a completed `browser_recording_stop` step's video
     /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
     /// step's `recording` recap is additive; the token alone gates Play.
     static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
@@ -300,7 +325,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The Mac serves the agent's browser recordings (revision 42).
+    /// The Mac serves the agent's browser recordings (revision 44).
     var supportsChatBrowserRecordings: Bool {
         features.contains(Self.chatBrowserRecordingsFeature)
     }
@@ -1548,7 +1573,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return html
     }
 
-    /// Revision 42 (`chat-browser-recordings-v1`): the video a completed
+    /// Revision 44 (`chat-browser-recordings-v1`): the video a completed
     /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
     /// most the recorder's 128 MiB limit, with the no-store and nosniff
     /// headers, is accepted.
@@ -2187,7 +2212,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
 
-    /// Revision 41 (`bot:images`): the bytes of an image the Bot shared, read
+    /// Revision 43 (`bot:images`): the bytes of an image the Bot shared, read
     /// while it is in the Bot's current conversation. Only PNG and JPEG, at
     /// most the Mac's inline image limit, are accepted.
     func botSessionImage(botId: String, entryId: String) async throws -> Data {
@@ -3093,7 +3118,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 throw AidenRemoteClientError.invalidEndpoint
             }
-            components.queryItems = query
+            components.percentEncodedQuery = AidenHostQuery.encode(query)
             guard let queryURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
             url = queryURL
         }
