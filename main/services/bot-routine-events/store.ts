@@ -1,6 +1,8 @@
 // Event routines per Bot, in `<profile>/bots/<dir>/event-routines.json`: what
 // to do, when (the trigger), and the bookkeeping the dispatcher's limits need
-// (seen event ids, the last run, today's count, one held event).
+// (seen event ids, the last run, today's count, one held event). A watch
+// routine also keeps its check state: the output's hash, a bounded copy of
+// the output for the next diff, and when it was checked and is next due.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -36,12 +38,51 @@ export interface BotEventRoutine {
   held?: { eventId: string; payload: string; at: number };
   /** Accepted events whose run isn't recorded yet; replayed after a restart. */
   running?: Array<{ eventId: string; payload: string; at: number }>;
+  /** Watch routines only: what the last checks found. */
+  watch?: BotWatchState;
+}
+
+export interface BotWatchState {
+  /** sha256 hex of the last good output's exact bytes; absent until the baseline. */
+  hash?: string;
+  /** The last good output, cut to {@link BOT_WATCH_SNAPSHOT_CHARS}, for the next diff. */
+  snapshot?: string;
+  sameSince?: number;
+  lastCheckAt?: number;
+  nextCheckAt?: number;
+  lastResult?: BotWatchResult;
+  failures: number;
+  lastError?: string;
+}
+
+export const BOT_WATCH_SNAPSHOT_CHARS = 16_000;
+const WATCH_RESULTS: ReadonlySet<string> = new Set<BotWatchResult>(["baseline", "no_change", "changed", "error"]);
+
+function parseWatchState(value: unknown): BotWatchState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { failures: 0 };
+  const record = value as Record<string, unknown>;
+  const time = (key: string) => typeof record[key] === "number" && Number.isFinite(record[key]) ? { [key]: record[key] as number } : {};
+  return {
+    ...(typeof record.hash === "string" && /^[a-f0-9]{64}$/u.test(record.hash) ? { hash: record.hash } : {}),
+    ...(typeof record.snapshot === "string" ? { snapshot: record.snapshot.slice(0, BOT_WATCH_SNAPSHOT_CHARS) } : {}),
+    ...time("sameSince"),
+    ...time("lastCheckAt"),
+    ...time("nextCheckAt"),
+    ...(typeof record.lastResult === "string" && WATCH_RESULTS.has(record.lastResult) ? { lastResult: record.lastResult as BotWatchResult } : {}),
+    failures: typeof record.failures === "number" && Number.isInteger(record.failures) && record.failures >= 0 ? record.failures : 0,
+    ...(typeof record.lastError === "string" ? { lastError: record.lastError.slice(0, 200) } : {}),
+  };
+}
+
+/** Where a watch's check state starts over: a new source (or a new watch) is checked right away. */
+function freshWatch(at: number): BotWatchState {
+  return { failures: 0, nextCheckAt: at };
 }
 
 export const BOT_EVENT_RUNNING_MAX = 4;
 
 export type { BotEventRoutineView } from "../../../renderer/shared/bot-event-routines.js";
-import type { BotEventRoutineView } from "../../../renderer/shared/bot-event-routines.js";
+import type { BotEventRoutineView, BotWatchResult } from "../../../renderer/shared/bot-event-routines.js";
 
 export function viewOf(routine: BotEventRoutine): BotEventRoutineView {
   return {
@@ -52,7 +93,13 @@ export function viewOf(routine: BotEventRoutine): BotEventRoutineView {
     trigger: routine.trigger,
     enabled: routine.enabled,
     ...(routine.lastRunAt !== undefined ? { lastRunAt: routine.lastRunAt } : {}),
+    ...(routine.trigger.kind === "watch" && routine.watch ? { watch: watchView(routine.watch) } : {}),
   };
+}
+
+function watchView(state: BotWatchState): NonNullable<BotEventRoutineView["watch"]> {
+  const { hash: _hash, snapshot: _snapshot, ...shown } = state;
+  return shown;
 }
 
 export function hashWebhookToken(token: string): string {
@@ -113,6 +160,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
       ? { held: { eventId: held.eventId, payload: held.payload, at: held.at } }
       : {}),
     ...(running.length ? { running } : {}),
+    ...(trigger.kind === "watch" ? { watch: parseWatchState(record.watch) } : {}),
   };
 }
 
@@ -129,6 +177,23 @@ function cleanInput(input: BotEventRoutineInput): { name: string; prompt: string
   if (!name || [...name].length > 120) throw new Error("Give the routine a name of at most 120 characters.");
   if (!prompt || prompt.length > 32 * 1024) throw new Error("Say what the routine should do.");
   return { name, prompt, trigger: parseBotRoutineTrigger(input.trigger) };
+}
+
+type WatchTrigger = Extract<BotRoutineTrigger, { kind: "watch" }>;
+
+/**
+ * A person's edit of a watch: a new source starts over with a fresh baseline;
+ * a new interval moves the next check; turning it back on clears the failure
+ * count and checks soon.
+ */
+function nextWatchState(state: BotWatchState, before: WatchTrigger, after: WatchTrigger, reenabled: boolean, at: number): BotWatchState {
+  if (JSON.stringify(before.source) !== JSON.stringify(after.source)) return freshWatch(at);
+  let next = state;
+  if (before.everyMinutes !== after.everyMinutes) {
+    next = { ...next, nextCheckAt: (next.lastCheckAt ?? at) + after.everyMinutes * 60_000 };
+  }
+  if (reenabled) next = { ...next, failures: 0, nextCheckAt: at };
+  return next;
 }
 
 export function createBotEventRoutineStore(options: { profileDir(): string; now?(): number }) {
@@ -190,6 +255,8 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           updatedAt: at,
           ...(minted ? { tokenHash: minted.tokenHash } : {}),
           seenEventIds: [],
+          // The first check takes the baseline soon after the person adds it.
+          ...(clean.trigger.kind === "watch" ? { watch: freshWatch(at) } : {}),
         };
         await save(botId, [...routines, routine]);
         return { routine, ...(minted ? { token: minted.token } : {}) };
@@ -208,7 +275,12 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           trigger: input.trigger ?? current.trigger,
         });
         if (clean.trigger.kind !== current.trigger.kind) throw new Error("Make a new routine to change what starts it.");
-        const next: BotEventRoutine = { ...current, ...clean, enabled: input.enabled ?? current.enabled, updatedAt: now() };
+        const at = now();
+        const enabled = input.enabled ?? current.enabled;
+        const next: BotEventRoutine = { ...current, ...clean, enabled, updatedAt: at };
+        if (clean.trigger.kind === "watch" && current.trigger.kind === "watch") {
+          next.watch = nextWatchState(current.watch ?? { failures: 0 }, current.trigger, clean.trigger, !current.enabled && enabled, at);
+        }
         routines[index] = next;
         await save(botId, routines);
         return next;

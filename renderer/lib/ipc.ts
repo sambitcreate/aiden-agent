@@ -1743,7 +1743,7 @@ export const botsApi = {
     list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
     create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
-    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string }) =>
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
     remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
     rotateLink: (input: { botId: string; id: string }) =>

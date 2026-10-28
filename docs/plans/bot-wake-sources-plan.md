@@ -37,6 +37,7 @@ Read from `NousResearch/hermes-agent` on 2026-10-28 (product reference, no copie
    - The hash is saved before the run. A failed check counts as a failure, never a change, and repeated failures raise a Bot issue and pause the watch.
    - Watches go through the event dispatcher's limits (5-minute gap, 24 a day), and the Bot proposes them with step 1's card.
    - Use cases: CI status (`gh run list …`), a status page, an inbox count.
+   - Built (2026-10-28): `main/services/bot-routine-events/watch.ts` (scheduler, hash, diff) and `watch-sources.ts` (URL and script checks), with the state kept in `event-routines.json`. Redirects are not followed: a 3xx is a failed check that asks for the final address. The event id is the hash plus the check time, so a status that flips back is a new event. Three failures turn the watch off (`enabled: false`) with one `routine_paused` issue.
 
 ## Follow-ups (not in this stack)
 

@@ -567,6 +567,7 @@
         "main/services/bot-delivery/gate.test.ts",
         "main/services/bot-commitments/proposer.test.ts",
         "main/services/bot-routine-events/events.test.ts",
+        "main/services/bot-routine-events/watch.test.ts",
         "main/services/bot-skills/skills.test.ts",
         "main/services/bot-learning/learning.test.ts",
         "main/services/bot-runtime/bot-run-watchdog.test.ts",
