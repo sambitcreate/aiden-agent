@@ -1260,6 +1260,11 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
       botId: string;
       expectedRevision: string;
       access: BotAccessUpdate;
+      /**
+       * Refuse, writing nothing, when the saved Custom grants no longer match
+       * the snapshot this save binds against (checked on every retry).
+       */
+      refuseDriftedGrants?: boolean;
     }) {
       await ensureOperational();
       return runBotMutation(input.botId, async () => {
@@ -1282,6 +1287,19 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
             snapshot.catalog.revision,
           );
           const savedBinding = await deps.capabilityStore.getBotBinding(input.botId);
+          if (
+            input.refuseDriftedGrants &&
+            savedBinding &&
+            (await deps.catalog.reconcile(savedBinding, {
+              audienceId: input.audienceId,
+              botId: input.botId,
+              snapshot,
+            })).state !== "ready"
+          ) {
+            throw new Error(
+              "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings, then add this app there.",
+            );
+          }
           const binding = access.accessMode === "custom"
             ? await deps.catalog.bindCustom({
                 audienceId: input.audienceId,
@@ -1723,23 +1741,16 @@ export function createBotApplicationService(deps: BotApplicationDependencies) {
         throw new Error("Connect this app in Aiden first.");
       }
       if (policy.custom.connectionIds.includes(option.id)) return "already_allowed";
-      // Saving the selection re-binds all of it to current facts. One app's tap
-      // must not quietly re-approve anything else that changed since the
-      // person last saved this Bot's access, so that is reviewed in settings.
-      const saved = await deps.capabilityStore.getBotBinding(input.botId);
-      if (
-        saved &&
-        (await deps.catalog.reconcile(saved, { audienceId: input.audienceId, botId: input.botId })).state !== "ready"
-      ) {
-        throw new Error(
-          "Some of this Bot's access changed since you last saved it. Review it in the Bot's settings, then add this app there.",
-        );
-      }
       // The policy revision fences a change made on another surface meanwhile.
+      // Saving re-binds the whole selection to current facts, so one app's tap
+      // must not quietly re-approve anything else that changed since the
+      // person last saved this Bot's access: the save refuses then, under the
+      // same inventory lease it binds with.
       await service.updateBotAccess({
         audienceId: input.audienceId,
         botId: input.botId,
         expectedRevision: policy.revision,
+        refuseDriftedGrants: true,
         access: {
           accessMode: "custom",
           catalogRevision: snapshot.catalog.revision,
