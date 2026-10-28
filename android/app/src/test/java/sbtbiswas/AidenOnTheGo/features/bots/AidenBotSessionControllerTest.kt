@@ -2502,6 +2502,31 @@ class AidenBotSessionControllerTest {
     }
 
     @Test
+    fun aStepOnTheBotsOwnScreenIsFinishedOnTheMacOrAnsweredDone() = runTest {
+        val onMac = handoffSession.copy(handoff = handoffSession.handoff!!.copy(openUrl = null, onMac = true))
+        val transport = HandoffTransport(onMac)
+        val controller = AidenBotSessionController(onMac.botId, transport, backgroundScope)
+        controller.refetch()
+        assertEquals("a note still marks the step done", AidenBotComposerMode.HANDOFF_NOTE, controller.state.value.composerMode)
+
+        transport.opened = true
+        assertTrue(controller.finishHandoffOnMac())
+        assertEquals(AidenBotHandoffMacPrompt(onMac.handoff!!.waitId, opened = true), controller.state.value.handoffMacPrompt)
+        assertNotEquals("the card stays", null, controller.state.value.handoff)
+
+        assertTrue(controller.answerHandoff(AidenBotHandoffOutcome.DONE))
+        assertEquals(AidenBotHandoffAnswerRequest(AidenBotHandoffOutcome.DONE), transport.answers.single().request)
+    }
+
+    @Test
+    fun aPlainStepIsNotSentToTheMac() = runTest {
+        val transport = HandoffTransport(handoffSession)
+        val controller = AidenBotSessionController(handoffSession.botId, transport, backgroundScope)
+        controller.refetch()
+        assertFalse("a step on the person's own page opens on the phone", controller.finishHandoffOnMac())
+    }
+
+    @Test
     fun aSignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() = runTest {
         val signIn = handoffSession.copy(handoff = handoffSession.handoff!!.copy(kind = AidenBotHandoffKind.SIGN_IN, openUrl = null))
         val transport = HandoffTransport(signIn)

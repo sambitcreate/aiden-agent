@@ -2424,6 +2424,13 @@
       "action": "Enter the code your bank texted you",
       "takesNote": false
     },
+    "onMacHandoff": {
+      "waitId": "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b",
+      "kind": "action",
+      "action": "Choose the delivery slot on the checkout page",
+      "why": "The shop wants you to pick the time yourself.",
+      "onMac": true
+    },
     "session": {
       "botId": "bot_fixture_01",
       "epoch": "epoch_fixture_36",

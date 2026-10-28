@@ -4483,6 +4483,7 @@ final class AidenRemoteClientTests: XCTestCase {
     /// Contract revision 40: a Mac that offers `bot:handoff-notes` is asked
     /// for it with `bot:handoffs`; a Mac on revision 37 is never asked for it,
     /// and once that Mac updates, the device asks for the notes alone.
+    /// Revision 43's `bot:handoff-on-mac` rides the same way.
     @MainActor
     func testCoordinatorAsksForHandoffNotesOnlyFromAMacThatOffersThem() async throws {
         for macUpdates in [false, true] {
@@ -4507,7 +4508,7 @@ final class AidenRemoteClientTests: XCTestCase {
                         "appVersion": "1.0.0",
                         "capabilities": granted,
                         "serverCapabilities": ["server:read", "workspace:read", "tasks:read", "bot:handoffs"]
-                            + (offersNotes ? ["bot:handoff-notes"] : []),
+                            + (offersNotes ? ["bot:handoff-notes", "bot:handoff-on-mac"] : []),
                         "features": ["chat-tasks-v1"],
                         "connectionMode": "lan",
                         "serverTime": "2026-10-26T12:00:00.000Z",
@@ -4546,13 +4547,14 @@ final class AidenRemoteClientTests: XCTestCase {
                 offersNotes = true
                 accepts = []
                 await connect()
-                XCTAssertEqual(accepts, [["bot:handoff-notes"]], "after the update, only the notes are missing")
+                XCTAssertEqual(accepts, [["bot:handoff-notes", "bot:handoff-on-mac"]], "after the update, only the notes and on-Mac steps are missing")
             } else {
-                XCTAssertEqual(accepts, [["tasks:read"], ["bot:handoffs", "bot:handoff-notes"]], "notes ride with hand-offs")
+                XCTAssertEqual(accepts, [["tasks:read"], ["bot:handoffs", "bot:handoff-notes", "bot:handoff-on-mac"]], "notes ride with hand-offs")
             }
             let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
             XCTAssertTrue(installation.hasNegotiatedAccess(to: .botHandoffs))
             XCTAssertTrue(installation.hasNegotiatedAccess(to: .botHandoffNotes))
+            XCTAssertTrue(installation.hasNegotiatedAccess(to: .botHandoffOnMac))
             XCTAssertTrue(
                 aidenBotSessionFeedGrants(installation).contains(.botHandoffNotes),
                 "a Bot chat reopens its feed once the notes are granted"

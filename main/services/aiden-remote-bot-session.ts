@@ -483,7 +483,8 @@ export function projectBotSessionEntries(
           name: suggestion.name,
           iconId: suggestion.iconId,
           reason: wireText(entry.card.reason.trim(), 280) || `Connect ${suggestion.name}.`,
-          status: entry.card.status,
+          // `needs_access` is desktop-only; phones keep offering "Finish on your Mac".
+          status: entry.card.status === "needs_access" ? "pending" : entry.card.status,
         };
         const index = cards.get(suggestion.pluginId);
         if (index === undefined) {
@@ -724,6 +725,8 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
+  /** `bot:handoff-on-mac` beside it: a step on the Bot's own screen says so (revision 43). */
+  onMac: boolean;
   /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 44). */
   images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
@@ -732,12 +735,17 @@ interface Audience {
 
 /**
  * A hand-off as `audience` reads it: `takesNote` only for a device that holds
- * `bot:handoff-notes`. v0.61.0 holds `bot:handoffs` and rejects the key.
+ * `bot:handoff-notes`, and `onMac` only for one that holds
+ * `bot:handoff-on-mac`. Earlier decoders are closed and reject the keys.
  */
 function handoffForAudience(handoff: AidenRemoteBotHandoff | null, audience: Audience): AidenRemoteBotHandoff | null {
-  if (handoff === null || audience.notes || handoff.takesNote === undefined) return handoff;
-  const { takesNote: _takesNote, ...card } = handoff;
-  return card;
+  if (handoff === null) return handoff;
+  const { takesNote, onMac, ...card } = handoff;
+  return {
+    ...card,
+    ...(takesNote !== undefined && audience.notes ? { takesNote } : {}),
+    ...(onMac !== undefined && audience.onMac ? { onMac } : {}),
+  };
 }
 
 interface Subscriber extends Audience {
@@ -961,7 +969,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.images}:${subscriber.issues}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1223,7 +1231,12 @@ class BotLiveProjector {
     }
   }
 
-  private async publish(view: ConversationView): Promise<void> {
+  /**
+   * `snapshotChanges` sends any changed entry as a fresh snapshot instead of an
+   * entry event: a refresh can touch an old entry outside a phone's window,
+   * which an entry event would append at the bottom of its chat.
+   */
+  private async publish(view: ConversationView, { snapshotChanges = false } = {}): Promise<void> {
     if (this.closed) return;
     const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);
@@ -1251,7 +1264,10 @@ class BotLiveProjector {
     // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
     const kept = previous.filter((entry) => nextIds.has(entry.id)).map((entry) => entry.id);
     const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
-    const rewritten = kept.length !== previous.length || kept.some((id, index) => order[index] !== id);
+    const rewritten =
+      kept.length !== previous.length ||
+      kept.some((id, index) => order[index] !== id) ||
+      (snapshotChanges && next.some((entry) => previousById.get(entry.id) !== JSON.stringify(withoutSubmissionId(entry))));
 
     this.entries = next;
     if (rewritten) {
@@ -1317,6 +1333,13 @@ class BotLiveProjector {
       this.subscribers.delete(subscriber);
       this.armIdle();
     };
+  }
+
+  /** Re-reads the transcript's connect cards, so one finished on the Mac shows Connected. */
+  refreshCards(): Promise<void> {
+    return this.serial(async () => {
+      if (!this.closed && this.view) await this.publish(this.view, { snapshotChanges: true });
+    });
   }
 
   private armIdle(): void {
@@ -1530,7 +1553,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2069,7 +2092,11 @@ export class AidenRemoteBotSessionService {
     );
   }
 
-  /** Pending connect cards show what is true now (connected, or Not now). */
+  /**
+   * Pending connect cards show what is true now (connected, or Not now). An
+   * app left out of the Bot's access stays pending here: the phone's "Finish
+   * on your Mac" opens the Bot's chat, where the Mac offers "Add to this Bot".
+   */
   private async resolveCards(
     botId: string,
     entries: AidenRemoteBotSessionEntry[],
@@ -2078,8 +2105,9 @@ export class AidenRemoteBotSessionService {
     if (!resolve) return entries;
     return Promise.all(entries.map(async (entry) => {
       if (entry.type !== "connect_card" || entry.status !== "pending") return entry;
-      const status = await resolve(botId, { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: "pending" })
+      const resolved = await resolve(botId, { type: "connect_card", pluginId: entry.pluginId, reason: entry.reason, status: "pending" })
         .catch(() => entry.status);
+      const status = resolved === "needs_access" ? "pending" : resolved;
       return status === entry.status ? entry : { ...entry, status };
     }));
   }
@@ -2149,6 +2177,7 @@ export class AidenRemoteBotSessionService {
       activity: options.activity === true && this.supportsActivity,
       handoffs: options.handoffs === true && this.supportsHandoffs,
       notes: options.handoffs === true && options.handoffNotes === true && this.supportsHandoffs,
+      onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
       images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
     };
@@ -2234,6 +2263,14 @@ export class AidenRemoteBotSessionService {
     if (!owned) return;
     this.subscriptions.delete(deviceId);
     for (const handle of [...owned]) handle.close();
+  }
+
+  /** An app was connected or set up on the Mac: open Bot streams re-read their pending connect cards. */
+  async refreshConnectCards(): Promise<void> {
+    const projectors = await Promise.allSettled([...this.projectors.values()]);
+    await Promise.all(
+      projectors.map((result) => (result.status === "fulfilled" ? result.value.refreshCards().catch(() => undefined) : undefined)),
+    );
   }
 
   async close(): Promise<void> {

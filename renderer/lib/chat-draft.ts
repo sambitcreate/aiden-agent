@@ -52,6 +52,13 @@ function rememberedGitState(
 
 const drafts = new Map<string, ChatDraft>();
 const owners = new Map<string, number>();
+/**
+ * Empty drafts dropped because their view closed (Settings, Bots, another
+ * page). Returning to that address with Back reopens a blank new agent there
+ * instead of a chat that "is no longer available".
+ */
+const closedEmptyDrafts = new Map<string, { workspaceId: string; gitMode: ChatDraftGitMode }>();
+const CLOSED_EMPTY_DRAFT_LIMIT = 32;
 const listeners = new Set<() => void>();
 let snapshot: readonly ChatDraft[] | null = null;
 const notify = () => {
@@ -76,11 +83,12 @@ export function listChatDrafts(): readonly ChatDraft[] {
 
 export function createChatDraft(
   workspaceId: string,
-  id = crypto.randomUUID(),
+  id: string = crypto.randomUUID(),
   initialText?: string,
   options: { gitMode?: ChatDraftGitMode } = {},
 ): ChatDraft {
   if (drafts.has(id)) throw new Error("This draft already exists.");
+  closedEmptyDrafts.delete(id);
   // Multiple New activations can supersede navigation before a pane mounts.
   // Only keep drafts that acquired a view owner, have a send to settle, or
   // hold text the user can return to.
@@ -102,6 +110,18 @@ export function createChatDraft(
   drafts.set(id, draft);
   notify();
   return draft;
+}
+
+/**
+ * Reopen an empty draft whose view closed, at the same id, so history entries
+ * that point at it (Settings' Back to app, the sidebar's Back) land on a blank
+ * new agent. Returns undefined for any other id.
+ */
+export function reopenClosedChatDraft(id: string): ChatDraft | undefined {
+  if (drafts.has(id)) return undefined;
+  const closed = closedEmptyDrafts.get(id);
+  if (!closed) return undefined;
+  return createChatDraft(closed.workspaceId, id, undefined, { gitMode: closed.gitMode });
 }
 
 export function updateChatDraft(id: string, update: Pick<Partial<Chat>, "workspaceId" | "title">): void {
@@ -270,6 +290,14 @@ export function discardChatDraft(id: string): void {
   }
 }
 
+function rememberClosedEmptyDraft(draft: ChatDraft, workspaceId: string): void {
+  closedEmptyDrafts.delete(draft.chat.id);
+  closedEmptyDrafts.set(draft.chat.id, { workspaceId, gitMode: draft.gitMode });
+  if (closedEmptyDrafts.size > CLOSED_EMPTY_DRAFT_LIMIT) {
+    closedEmptyDrafts.delete(closedEmptyDrafts.keys().next().value!);
+  }
+}
+
 /** Delay disposal one microtask so StrictMode's effect replay can reacquire it. */
 export function retainChatDraft(id: string): () => void {
   if (!drafts.has(id)) return () => {};
@@ -285,6 +313,7 @@ export function retainChatDraft(id: string): () => void {
       if (owners.has(id)) return;
       const draft = drafts.get(id);
       if (!draft?.hasContent) {
+        if (draft && !draft.sending && draft.chat.workspaceId) rememberClosedEmptyDraft(draft, draft.chat.workspaceId);
         discardChatDraft(id);
         return;
       }

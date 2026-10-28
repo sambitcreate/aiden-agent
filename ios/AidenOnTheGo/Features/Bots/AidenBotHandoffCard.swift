@@ -6,7 +6,8 @@ import SwiftUI
 /// Done and Skip answer it once, by its wait id; Open opens the page it names
 /// in the phone's browser. A sign-in is finished in the Bot's own browser on
 /// the Mac, so it offers Finish on your Mac and Skip instead (desktop and
-/// Android parity).
+/// Android parity). A step on the Bot's own browser or computer (`onMac`,
+/// revision 43) offers Finish on your Mac, Skip and Done.
 struct AidenBotHandoffCard: View {
     let handoff: AidenRemoteBotHandoff
     /// This phone may answer: it is connected and may change Bots.
@@ -40,6 +41,11 @@ struct AidenBotHandoffCard: View {
                     .foregroundStyle(palette.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if handoff.onMac, macPrompt == nil {
+                Text(AidenBotSessionCopy.handoffOnMacDetail)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
             if let macPrompt {
                 Text(macPrompt)
                     .font(.footnote)
@@ -70,7 +76,12 @@ struct AidenBotHandoffCard: View {
                 .buttonBorderShape(.capsule)
                 .disabled(!canAnswer)
         case .action:
-            if let url = openURLValue {
+            if handoff.onMac {
+                Button(AidenBotSessionCopy.finishOnMac, action: onFinishOnMac)
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    .disabled(!canAnswer || isFinishing)
+            } else if let url = openURLValue {
                 Button(openLabel(url)) { openURL(url) }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)

@@ -46,8 +46,8 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`
-/// and `bot:images` the pairing holds.
+/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`,
+/// `bot:handoff-on-mac` and `bot:images` the pairing holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac, .botImages].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -200,9 +200,12 @@ struct AidenBotHandoffMacPrompt: Equatable, Sendable {
     let waitId: String
     /// The Mac brought the hand-off forward; otherwise no Aiden window could show it.
     let opened: Bool
+    /// A sign-in, or (revision 43) a step on the Bot's own screen.
+    var signIn: Bool = true
 
     var text: String {
-        opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac
+        if signIn { return opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac }
+        return opened ? AidenBotSessionCopy.finishStepOnMac : AidenBotSessionCopy.openAidenOnMacForStep
     }
 }
 
@@ -255,6 +258,10 @@ enum AidenBotSessionCopy {
     static let handoffFilesWait = "Send files after you answer the card."
     static let finishSigningInOnMac = "Finish signing in on your Mac."
     static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    /// Revision 43: a step on the Bot's own browser or computer.
+    static let finishStepOnMac = "Finish this step on your Mac."
+    static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
+    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."
     static let pauseBot = "Pause Bot"
     static let resumeBot = "Resume Bot"
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
@@ -2311,7 +2318,9 @@ final class AidenBotSessionModel {
                 try await transport.openBotHandoffOnMac(botId: botID, waitId: waitId, idempotencyKey: key)
             }
             retainedHandoffOpen = nil
-            if handoff?.waitId == waitId { handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened) }
+            if handoff?.waitId == waitId {
+                handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened, signIn: shown.kind == .signIn)
+            }
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedHandoffOpen = nil }
             if error is CancellationError { return }
