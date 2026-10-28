@@ -262,10 +262,10 @@ internal fun aidenValidateBotPaused(sessionState: AidenBotSessionState?, paused:
     }
 }
 
-/** Revision 41: the most open "Needs you" cards a Bot keeps. */
+/** Revision 42: the most open "Needs you" cards a Bot keeps. */
 internal const val AIDEN_BOT_MAX_ISSUE_COUNT = 8
 
-/** Revision 41: `issueCount` is sent only above zero, and never above the host's own limit. */
+/** Revision 42: `issueCount` is sent only above zero, and never above the host's own limit. */
 internal fun aidenValidateBotIssueCount(issueCount: Int?, field: String) {
     if (issueCount != null && issueCount !in 1..AIDEN_BOT_MAX_ISSUE_COUNT) {
         throw AidenBotContractException.InvalidField("$field issueCount")
@@ -290,7 +290,7 @@ data class AidenBotSummary(
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
     /**
-     * Revision 41 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
      * Present only above zero; a Mac or phone without the grant never sends it.
      */
     @OptIn(ExperimentalSerializationApi::class)
@@ -421,7 +421,7 @@ data class AidenBotDetail(
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
     /**
-     * Revision 41 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
      * Present only above zero; a Mac or phone without the grant never sends it.
      */
     @OptIn(ExperimentalSerializationApi::class)

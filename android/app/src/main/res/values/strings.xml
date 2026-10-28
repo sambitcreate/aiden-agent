@@ -728,7 +728,7 @@
     <string name="bot_paused_title">%1$s is paused.</string>
     <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
     <string name="bot_paused_placeholder">%1$s is paused</string>
-    <!-- Bots: issues (contract revision 41), copy shared with iOS and desktop -->
+    <!-- Bots: issues (contract revision 42), copy shared with iOS and desktop -->
     <string name="bot_issue_needs_you">Needs you</string>
     <string name="bot_issue_open_on_mac">Open on your Mac</string>
     <string name="bot_issue_open_chat">Open chat</string>

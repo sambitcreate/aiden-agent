@@ -604,7 +604,7 @@ enum AidenBotRoutineNotificationStatus: String, Codable, Sendable {
 }
 
 /// What a phone-feed item is: a routine result (revision 27; `kind` absent) or,
-/// since revision 41, one of the Bot's "Needs you" cards (`bot:issues`).
+/// since revision 42, one of the Bot's "Needs you" cards (`bot:issues`).
 enum AidenBotNotificationKind: String, Codable, Sendable {
     case routine, issue
 }

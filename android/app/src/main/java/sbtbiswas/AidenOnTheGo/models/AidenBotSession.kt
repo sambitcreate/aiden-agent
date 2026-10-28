@@ -695,7 +695,7 @@ object AidenBotSessionActivitySerializer :
     override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
 }
 
-// Contract revision 41 (`bot:issues`): the Bot's host-owned "Needs you" cards.
+// Contract revision 42 (`bot:issues`): the Bot's host-owned "Needs you" cards.
 
 /** The bounds the Mac's own issue parsers use. */
 object AidenRemoteIssueWire {
@@ -753,7 +753,7 @@ data class AidenBotIssueAction(
 }
 
 /**
- * Contract revision 41 (`bot:issues` devices only): one host-owned "Needs you" card. A settled
+ * Contract revision 42 (`bot:issues` devices only): one host-owned "Needs you" card. A settled
  * card (`resolved`) offers nothing a phone may take.
  */
 @Serializable
@@ -864,7 +864,7 @@ data class AidenBotSession(
      */
     val handoff: AidenBotHandoff? = null,
     /**
-     * Revision 41 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
+     * Revision 42 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
      * from an older Mac or a device without the grant; an empty list means no card is open.
      */
     val issues: List<AidenBotIssue>? = null
@@ -912,7 +912,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
         // A hand-off is written only when one waits, so an older Mac's session reads back as it came.
         val handoff = value.handoff?.let { mapOf("handoff" to it.toJson()) } ?: emptyMap()
-        // Revision 41: the list is written only when this session carries one at all.
+        // Revision 42: the list is written only when this session carries one at all.
         val issues = value.issues?.let {
             mapOf("issues" to jsonEncoder.json.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), it))
         } ?: emptyMap()
@@ -937,7 +937,7 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
         // Revision 37: `handoff` reaches only `bot:handoffs` devices, as `null` when nothing waits.
         val handoff = body["handoff"]?.let { if (it is JsonNull) null else AidenBotHandoff.parse(it) }
-        // Revision 41: `issues` reaches only `bot:issues` devices; absent from every other session.
+        // Revision 42: `issues` reaches only `bot:issues` devices; absent from every other session.
         val issues = body["issues"]?.let { if (it is JsonNull) null else AidenBotIssue.parseList(it) }
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
@@ -1060,7 +1060,7 @@ sealed class AidenBotSessionEventPayload {
     data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
     /** Revision 37: the step the Bot handed back appeared (non-null) or was settled (null). */
     data class Handoff(val handoff: AidenBotHandoff?) : AidenBotSessionEventPayload()
-    /** Revision 41: the Bot's issue cards, oldest first; an empty list clears them. */
+    /** Revision 42: the Bot's issue cards, oldest first; an empty list clears them. */
     data class Issues(val issues: List<AidenBotIssue>) : AidenBotSessionEventPayload() {
         init {
             AidenBotIssue.validateList(issues)

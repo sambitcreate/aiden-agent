@@ -35,10 +35,22 @@ export function eventRoutineTask(routine: BotEventRoutine): ScheduledTask {
   } as ScheduledTask;
 }
 
+/** Event runs whose result didn't reach the delivery log yet: their receipt stays for replay. */
+const undelivered = new Set<string>();
+
 const executor = createBotRoutineExecutor({
   store: scheduleStore,
   ports: async () => (await import("../scheduled-bot-routines-main.js")).botRoutinePorts(),
-  deliver: async (input) => (await import("../bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
+  deliver: async (input) => {
+    try {
+      const outcome = await (await import("../bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input);
+      if (input.requestId) undelivered.delete(input.requestId);
+      return outcome;
+    } catch (error) {
+      if (input.requestId) undelivered.add(input.requestId);
+      throw error;
+    }
+  },
   broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
   afterRun: async (task, run) => {
     await eventRoutineAfterRun(task, run).catch((error: unknown) =>
@@ -114,9 +126,10 @@ const dispatcher = createBotRoutineEventDispatcher({
       runId: requestId,
       signal: new AbortController().signal,
     });
-    // Only a run recorded under the event's own id is its answer; an
-    // uncertain one (recorded under another id) is replayed on next start.
-    return { settled: run.id === requestId };
+    // Only a run recorded under the event's own id, and handed to the
+    // delivery log, is settled; anything else is replayed on next start
+    // (the replay reads the saved run and only retries its delivery).
+    return { settled: run.id === requestId && !undelivered.has(requestId) };
   },
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
   now: Date.now,

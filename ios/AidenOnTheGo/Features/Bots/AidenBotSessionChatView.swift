@@ -371,7 +371,7 @@ struct AidenBotSessionChatView: View {
                             outgoingBubble(message, model: model)
                         }
                         ForEach(model.openIssues) { issue in
-                            // Revision 41: a "Needs you" card from the host.
+                            // Revision 42: a "Needs you" card from the host.
                             AidenBotIssueCardView(
                                 issue: issue,
                                 canAct: canWrite && model.canActOnIssue,
@@ -1383,7 +1383,7 @@ struct AidenBotRoutineProposalCardView: View {
     }
 }
 
-/// Revision 41 (`bot:issues`): a "Needs you" card the host raised, with up to
+/// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
 /// two actions. A card that offers nothing a phone can do (the Mac's own
 /// settings opened it) says "Open on your Mac".
 struct AidenBotIssueCardView: View {

@@ -72,8 +72,11 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     let retryAt: number | undefined;
     const claimed = await dependencies.store.mutate(botId, routineId, (routine) => {
       if (!routine.held || !routine.enabled) return { result: undefined };
-      if (full(routine)) {
-        retryAt = now + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+      // Still inside the 5-minute gap (a newer event ran since this was held),
+      // or every receipt slot is busy: wait for whichever ends later.
+      const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+      if (full(routine) || now < gapEnds) {
+        retryAt = Math.max(gapEnds, full(routine) ? now + BOT_ROUTINE_EVENT_LIMITS.minGapMs : now);
         return { result: undefined };
       }
       const count = routine.day?.key === today ? routine.day.count : 0;

@@ -147,7 +147,12 @@ test("older transcript content remains findable, copyable and keyboard reachable
   await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
   await page.mouse.wheel(0, -500);
   await expect(viewport).toHaveAttribute("data-follow", "false");
-  const found = await page.evaluate(() => (window as unknown as { find(text: string): boolean }).find("History marker 0."));
+  // Find must reach the oldest row from wherever the caret is: startup can
+  // leave one in the composer, below the transcript, so wrap like Find does.
+  const found = await page.evaluate(() =>
+    (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
+      .find("History marker 0.", false, false, true),
+  );
   expect(found).toBe(true);
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("History marker 0.");
   const copy = page.getByRole("button", { name: "Copy message", exact: true }).first();

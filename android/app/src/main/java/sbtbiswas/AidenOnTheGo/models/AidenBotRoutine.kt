@@ -323,7 +323,7 @@ enum class AidenBotRoutineNotificationStatus {
     @SerialName("failed") FAILED
 }
 
-/** Revision 41: a routine result (absent `kind`) or one of the Bot's "Needs you" cards. */
+/** Revision 42: a routine result (absent `kind`) or one of the Bot's "Needs you" cards. */
 @Serializable
 enum class AidenBotNotificationKind {
     @SerialName("routine") ROUTINE,
@@ -332,14 +332,14 @@ enum class AidenBotNotificationKind {
 
 /**
  * One finished Bot routine run the phone may post once, as `aiden.bot-routine.<id>`, or (revision
- * 41, `bot:issues`) one issue card. An issue item's [routineName] is the card's title and it
+ * 42, `bot:issues`) one issue card. An issue item's [routineName] is the card's title and it
  * carries no [routineId] or [status].
  */
 @Serializable
 data class AidenBotRoutineNotification(
     /** The routine run id. */
     val id: String,
-    /** Revision 41: absent means [AidenBotNotificationKind.ROUTINE]. */
+    /** Revision 42: absent means [AidenBotNotificationKind.ROUTINE]. */
     val kind: AidenBotNotificationKind? = null,
     val botId: String,
     val botName: String,

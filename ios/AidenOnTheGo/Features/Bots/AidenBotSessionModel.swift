@@ -136,7 +136,7 @@ protocol AidenBotSessionTransport: Sendable {
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     /// Revision 37: `DELETE /bots/{botId}/pause`.
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
-    /// Revision 41 (`bot:issues`): carry out one action a card offers.
+    /// Revision 42 (`bot:issues`): carry out one action a card offers.
     func actOnBotIssue(
         botId: String,
         issueId: String,
@@ -254,7 +254,7 @@ enum AidenBotSessionCopy {
     static func pausedDetail(_ name: String) -> String { "\(name) won’t reply or run routines until you resume it." }
     static func pausedPlaceholder(_ name: String) -> String { "\(name) is paused" }
 
-    // Revision 41 (`bot:issues`), shared with desktop and Android.
+    // Revision 42 (`bot:issues`), shared with desktop and Android.
     static let issueNeedsYou = "Needs you"
     /// A card whose only action opens the Mac's own settings.
     static let issueOpenOnMac = "Open on your Mac"
@@ -1078,7 +1078,7 @@ final class AidenBotSessionModel {
         /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
         /// call, made without showing a pause the Mac hasn't confirmed.
         case answerHandoff, openHandoffOnMac, unpause
-        /// Revision 41 (`bot:issues`): one action a "Needs you" card offers.
+        /// Revision 42 (`bot:issues`): one action a "Needs you" card offers.
         case actIssue
     }
 
@@ -1106,7 +1106,7 @@ final class AidenBotSessionModel {
     private(set) var approval: AidenRemoteBotApproval?
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
-    /// Revision 41 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
+    /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
     private(set) var issues: [AidenRemoteBotIssue] = []
     /// The card an action is on its way for, so its buttons wait.
     private(set) var actingIssue: AidenRemoteBotIssue?
@@ -1162,7 +1162,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
-    /// Revision 41: the request UUID of a card action, kept per card and action
+    /// Revision 42: the request UUID of a card action, kept per card and action
     /// so a retried tap replays the Mac's receipt instead of running twice.
     @ObservationIgnored private var retainedIssueActions: [String: (request: AidenBotIssueActRequest, key: UUID)] = [:]
     /// Called when a hand-off frame (never a snapshot) names a new wait, so
@@ -2057,7 +2057,7 @@ final class AidenBotSessionModel {
         }
     }
 
-    // MARK: Bot issues (revision 41, `bot:issues`)
+    // MARK: Bot issues (revision 42, `bot:issues`)
 
     /// The cards the chat shows: the host's open issues. A settled card is
     /// kept out of the transcript, as the Mac shows it as a quiet line.
@@ -2077,7 +2077,7 @@ final class AidenBotSessionModel {
         }
     }
 
-    /// Carries out one action a card offers (revision 41). The Mac settles the
+    /// Carries out one action a card offers (revision 42). The Mac settles the
     /// card and sends the new list; a settling action drops the card here at
     /// once and puts it back if the request didn't reach the Mac (R18). The
     /// request UUID survives an ambiguous failure, so retrying the same tap

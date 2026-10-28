@@ -707,7 +707,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// it alone, after any other negotiation.
     static let scheduleCards = Self(rawValue: "schedule:cards")
 
-    /// Revision 41: the device receives the Bot session `issues` list and
+    /// Revision 42: the device receives the Bot session `issues` list and
     /// `issues` frames, a summary `issueCount`, and issue items in the routine
     /// notification feed, and may answer a card through
     /// `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
@@ -2871,7 +2871,7 @@ private enum AidenBotPrivateResponseValidator {
         if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
             return true
         }
-        // Revision 41: the issue act route's receipt is `{ result: ... }`, not a tool result.
+        // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if root == "botIssues", key == "result" {
             return parentPath.isEmpty
                 || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))

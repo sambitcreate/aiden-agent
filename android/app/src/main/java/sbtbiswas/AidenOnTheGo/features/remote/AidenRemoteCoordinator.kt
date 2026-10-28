@@ -112,7 +112,7 @@ internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: 
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
 
 /**
- * Revision 41: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
+ * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
  * in a call of its own after every other negotiation, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -163,7 +163,7 @@ internal suspend fun aidenRequestScheduleCards(
     )
 
 /**
- * Revision 41: asks [server] for `bot:issues` alone, exactly as
+ * Revision 42: asks [server] for `bot:issues` alone, exactly as
  * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
  * leaves the pairing as it was; the Bot chat then shows no issue cards.
  */
@@ -506,7 +506,7 @@ class AidenRemoteCoordinator(
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
                 )
-                // Revision 41: `bot:issues` goes alone too, so an older Mac that refuses the
+                // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
                 // name never costs this phone its other grants.
                 val negotiatedServer = negotiateSoloCapability(
                     generation = generation,

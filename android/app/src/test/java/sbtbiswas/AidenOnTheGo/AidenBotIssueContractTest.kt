@@ -29,7 +29,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import java.util.UUID
 
 /**
- * Contract revision 41 (`bot:issues`): the "Needs you" cards, their frame, the act route and the
+ * Contract revision 42 (`bot:issues`): the "Needs you" cards, their frame, the act route and the
  * phone-feed item, read from the fixture every client shares.
  */
 class AidenBotIssueContractTest {
@@ -79,7 +79,7 @@ class AidenBotIssueContractTest {
             AidenRemoteCapability.BOT_ISSUES.rawValue,
             issues.getValue("capability").jsonPrimitive.content
         )
-        // The whole fixture, the revision-41 root included, passes the shared guards.
+        // The whole fixture, the revision-42 root included, passes the shared guards.
         AidenRawJsonDuplicateKeyScanner.validate(fixtureText)
         AidenBotPrivateResponseValidator.validate(fixtureText, AidenBotPrivateResponseScope.SharedFixture)
 

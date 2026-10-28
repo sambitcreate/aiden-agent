@@ -471,7 +471,7 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
-        // Revision 41: the issue act route's receipt is `{ result: ... }`, not a tool result.
+        // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
         if (root == "botIssues" && key == "result") {
             return parentPath.isEmpty() ||
                 (parentPath + key).joinToString(".") in listOf("act.response.result", "notOpen.result")
@@ -569,7 +569,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val SCHEDULE_CARDS = AidenRemoteCapability("schedule:cards")
         /**
-         * Contract revision 41: this phone receives the Bot session `issues` list and frame, the
+         * Contract revision 42: this phone receives the Bot session `issues` list and frame, the
          * summary `issueCount` and issue items in the routine notification feed, and may answer a
          * card through `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
          * It grants no authority. The Mac offers it only in `serverCapabilities`, and it is asked
@@ -606,7 +606,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)
 
-        /** Revision 41: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
         /** Every grant `POST /device/capabilities` may add. */

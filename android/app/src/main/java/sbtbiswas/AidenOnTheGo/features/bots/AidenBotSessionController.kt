@@ -66,7 +66,7 @@ interface AidenBotSessionTransport {
     suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView =
         throw AidenRemoteClientException.InvalidResponse()
 
-    /** Revision 41 (`bot:issues`): carries out one action a "Needs you" card offers. */
+    /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
     suspend fun actOnIssue(
         botId: String,
         issueId: String,
@@ -225,7 +225,7 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
         // Revision 37: the frame carries the whole hand-off, or null once it is settled.
         is AidenBotSessionEventPayload.Handoff ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, handoff = payload.handoff))
-        // Revision 41: the frame carries the whole card list; an empty list clears it.
+        // Revision 42: the frame carries the whole card list; an empty list clears it.
         is AidenBotSessionEventPayload.Issues ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, issues = payload.issues))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
@@ -366,7 +366,7 @@ data class AidenBotSessionUiState(
     val handoffMacPrompt: AidenBotHandoffMacPrompt? = null,
     /** Revision 37: Resume on a paused Bot is on its way. */
     val isUnpausing: Boolean = false,
-    /** Revision 41: the cards whose action is on its way, so their buttons wait. */
+    /** Revision 42: the cards whose action is on its way, so their buttons wait. */
     val actingIssueIds: Set<String> = emptySet(),
     val actionError: String? = null,
     /** A notice about unsent messages; shown in place of [actionError] until dismissed or the next send. */
@@ -404,7 +404,7 @@ data class AidenBotSessionUiState(
     /** Revision 37: the step the Bot handed back, while it waits. */
     val handoff: AidenBotHandoff? get() = session?.handoff
 
-    /** Revision 41: the host's open "Needs you" cards, oldest first. */
+    /** Revision 42: the host's open "Needs you" cards, oldest first. */
     val openIssues: List<AidenBotIssue> get() = session?.issues.orEmpty().filter { !it.resolved }
     fun isActingOn(issue: AidenBotIssue): Boolean = actingIssueIds.contains(issue.id)
     /** The composer's text goes to an action hand-off as Done's note, unless the card takes none. */
@@ -1674,7 +1674,7 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 41 (`bot:issues`): carries out one action a "Needs you" card offers. A settling
+     * Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. A settling
      * action drops the card here and puts it back if the request didn't reach the Mac; the Mac's
      * own `issues` frame is the truth either way. A retry after an unknown outcome reuses its key,
      * so the host action never runs twice.
@@ -1851,7 +1851,7 @@ class AidenBotSessionController(
         const val HANDOFF_EXPIRED = "That card was already answered or closed."
         const val HANDOFF_NOT_SENT = "That answer wasn’t sent. Please try again."
         const val HANDOFF_NOTE_TOO_LONG = "Keep the note under 4,000 characters."
-        /** Revision 41 copy, shared with iOS and desktop. */
+        /** Revision 42 copy, shared with iOS and desktop. */
         const val ISSUE_STALE = "This card changed. Pull to refresh and try again."
         const val ISSUE_NOT_SENT = "That didn’t reach your Mac. Please try again."
         /** The bound on each request to the Mac (FR-I3), the same as iOS. */

@@ -758,7 +758,7 @@ struct AidenBotHandoffOpenOnMacReceipt: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case waitId, opened }
 }
 
-// MARK: Contract revision 41 (`bot:issues`)
+// MARK: Contract revision 42 (`bot:issues`)
 
 enum AidenRemoteIssueWire {
     /// The host keeps at most this many open issues per Bot.
@@ -832,7 +832,7 @@ struct AidenBotIssueAction: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case kind, routineId }
 }
 
-/// Contract revision 41 (`bot:issues`): one host-owned "Needs you" card, sent
+/// Contract revision 42 (`bot:issues`): one host-owned "Needs you" card, sent
 /// only to a device holding `bot:issues`. A settled card (`resolved`) offers
 /// nothing a phone may take.
 struct AidenRemoteBotIssue: Codable, Equatable, Identifiable, Sendable {
@@ -1035,7 +1035,7 @@ struct AidenBotSession: Codable, Equatable, Sendable {
     let queued: [AidenBotQueuedMessage]
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot waits on, or nil.
     let handoff: AidenRemoteBotHandoff?
-    /// Revision 41 (`bot:issues`): the Bot's issue cards, oldest first. Empty
+    /// Revision 42 (`bot:issues`): the Bot's issue cards, oldest first. Empty
     /// from a Mac or device without `bot:issues`.
     let issues: [AidenRemoteBotIssue]
 
@@ -1166,7 +1166,7 @@ struct AidenBotSessionEvent: Codable, Equatable, Sendable {
         case queued([AidenBotQueuedMessage])
         /// Revision 37: the waiting hand-off appeared (`handoff`) or was settled (nil).
         case handoff(AidenRemoteBotHandoff?)
-        /// Revision 41: the Bot's issue cards, oldest first; an empty list clears them.
+        /// Revision 42: the Bot's issue cards, oldest first; an empty list clears them.
         case issues([AidenRemoteBotIssue])
         /// The host closed this session; reconnect for a new epoch.
         case closed

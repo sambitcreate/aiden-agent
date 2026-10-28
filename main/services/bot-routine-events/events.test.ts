@@ -149,6 +149,29 @@ test("with four runs unfinished, a fifth event waits as the held one and no rece
   assert.equal((await store.list("bot-a"))[0]?.held?.eventId, "e5");
 });
 
+test("a held event released after a newer one ran still waits out the 5-minute gap", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const finish: Array<() => void> = [];
+  const h = dispatcherHarness(store, () => new Promise<void>((resolve) => finish.push(resolve)));
+  const start = h.clock.at;
+  for (const id of ["e1", "e2", "e3", "e4"]) {
+    assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: id, payload: id }), "queued");
+    h.clock.at += 5 * MIN;
+  }
+  assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e5", payload: "e5" }), "held");
+  for (let attempt = 0; attempt < 200 && finish.length < 4; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  finish.splice(0).forEach((resolve) => resolve());
+  for (let attempt = 0; attempt < 200 && (await store.list("bot-a"))[0]?.running; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  h.clock.at = start + 21 * MIN;
+  assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e6", payload: "e6" }), "queued");
+  await h.advance(start + 25 * MIN);
+  assert.equal(h.runs.some((run) => run.eventId === "e5"), false, "only a minute after e6, so it waits");
+  await h.advance(start + 26 * MIN);
+  for (let attempt = 0; attempt < 200 && !h.runs.some((run) => run.eventId === "e5"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(h.runs.map((run) => run.eventId), ["e1", "e2", "e3", "e4", "e6", "e5"]);
+});
+
 test("the 25th event of the day is refused, and a disabled routine refuses events", async () => {
   const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
   const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });

@@ -183,7 +183,7 @@ enum AidenBotWire {
         return paused
     }
 
-    /// Revision 41 (`bot:issues`): a Bot's open-issue count, absent from a Mac
+    /// Revision 42 (`bot:issues`): a Bot's open-issue count, absent from a Mac
     /// or device without `bot:issues`. The host sends it only above zero.
     static let maxIssueCount = AidenRemoteIssueWire.maxPerBot
 
@@ -349,7 +349,7 @@ struct AidenBotSummary: Codable, Equatable, Identifiable, Sendable {
     /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
     /// agrees with a `paused` session state; a Mac sends it only as `true`.
     let paused: Bool
-    /// Revision 41 (`bot:issues`): how many open "Needs you" cards the Bot
+    /// Revision 42 (`bot:issues`): how many open "Needs you" cards the Bot
     /// holds. Present only for a device holding `bot:issues`, and only above zero.
     let issueCount: Int?
 
@@ -481,7 +481,7 @@ struct AidenBotDetail: Codable, Equatable, Identifiable, Sendable {
     /// Revision 37 (`bot:handoffs`): the person paused this Bot. It always
     /// agrees with a `paused` session state.
     let paused: Bool
-    /// Revision 41 (`bot:issues`): how many open "Needs you" cards the Bot
+    /// Revision 42 (`bot:issues`): how many open "Needs you" cards the Bot
     /// holds. Present only for a device holding `bot:issues`, and only above zero.
     let issueCount: Int?
 

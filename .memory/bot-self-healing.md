@@ -11,7 +11,7 @@ Spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §4–§5. Plan
 - **Bot issues:** `renderer/shared/bot-issues.ts`, `main/services/bot-issues/{store,service,service-main}.ts`.
   - Per-Bot `issues.json`, chat entries `aiden.bot-issue` and `aiden.bot-issue-status`, at most 8 open.
   - Raises are coalesced in flight. A failed append or delivery is repaired by the next raise. `act` claims the issue by id.
-  - Open issues count toward `needsYou`. Remote `bot:issues` (revision 41) is in `aiden-remote-bot-issues.ts`.
+  - Open issues count toward `needsYou`. Remote `bot:issues` (revision 42) is in `aiden-remote-bot-issues.ts`.
 - **Recovery:** `main/services/bot-routine-recovery.ts` (+ `-main.ts`), called from the executor's `afterRun` dependency (desktop only; the CLI does not wire it).
   - A retry is a `pendingRoutineFires` entry with `retry: {failedRunId, attempt}`. The request id is `<failedRunId>:retry-N`; the trigger is `{kind: "retry", requestId, failedRunId, attempt}`.
   - The pending scan waits for the first future retry instead of backing off.

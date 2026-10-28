@@ -96,7 +96,7 @@ object AidenBotSessionTags {
     const val COMPOSER = "bot_session_composer"
     const val MEMORY_CAPTION = "bot_session_memory_caption"
     const val PROPOSAL_CARD = "bot_session_proposal_card"
-    /** Revision 41: one "Needs you" card. */
+    /** Revision 42: one "Needs you" card. */
     const val ISSUE_CARD = "bot_session_issue_card"
 }
 
@@ -295,7 +295,7 @@ private fun AidenBotSessionContent(
     val canRequestConnections = serverInfo?.supportsBotConnectionRequests == true
     val canAnswerProposals = serverInfo?.supportsBotProactive == true
     val canOpenMemory = serverInfo?.supportsBotMemory == true
-    // Revision 41: issue cards come only from a Mac offering `bot:issues`; actions also need write.
+    // Revision 42: issue cards come only from a Mac offering `bot:issues`; actions also need write.
     val canWriteBots = coordinator.installationStore.activeInstallation?.canWriteBots == true
     val listState = rememberLazyListState()
     // The Mac's transcript, or the cached one while connecting (R14).
@@ -470,7 +470,7 @@ private fun AidenBotSessionContent(
                         onRemove = { controller.discardSend(message.id) }
                     )
                 }
-                // Revision 41 (`bot:issues`): the host's "Needs you" cards.
+                // Revision 42 (`bot:issues`): the host's "Needs you" cards.
                 items(ui.openIssues, key = { "issue-${it.id}" }) { issue ->
                     AidenBotIssueCard(
                         issue = issue,
@@ -879,7 +879,7 @@ fun AidenBotRoutineProposalCard(
 }
 
 /**
- * Revision 41 (`bot:issues`): a "Needs you" card the host raised, with up to two actions. A card
+ * Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to two actions. A card
  * that offers nothing a phone can do (the Mac's own settings opened it) says "Open on your Mac".
  */
 @Composable

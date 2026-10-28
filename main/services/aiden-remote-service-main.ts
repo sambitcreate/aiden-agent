@@ -636,6 +636,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             resolveSkillInvocation: (workspaceId, invocationId) =>
               skillRegistry.resolveFresh(workspaceId, invocationId),
+            // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
+            contextPressure: async (chatId, selection) =>
+              (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
@@ -767,7 +770,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return new Map(rows);
             },
             health: (botId) => projectBotHealth(botId),
-            // Revision 41: the holder's `issueCount`; the router drops it for
+            // Revision 42: the holder's `issueCount`; the router drops it for
             // every device that did not negotiate `bot:issues`.
             issues: {
               openCount: async (botId) => (await botIssues.list(botId, { open: true })).length,
@@ -885,7 +888,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 approvals: botApprovals,
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
-                // Revision 41: the desktop's own issue service raises, settles and acts.
+                // Revision 42: the desktop's own issue service raises, settles and acts.
                 issues: botIssues,
                 openHandoffOnMac: async (botId, waitId) => {
                   const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
@@ -1017,7 +1020,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   }),
                   // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
                   // Bot reads as unavailable); a holder gets `paused` (revision 37).
-                  // `issueCount` (revision 41) is a phone shape: the host feed keeps
+                  // `issueCount` (revision 42) is a phone shape: the host feed keeps
                   // its revision-40 rows for every desktop.
                   bots: (botList?.bots ?? []).map((bot) =>
                     projectBotSummaryIssuesForAudience(

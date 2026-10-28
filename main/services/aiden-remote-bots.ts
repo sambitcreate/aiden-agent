@@ -205,7 +205,7 @@ export function projectAidenRemoteBotSummary(
     ...(sessionState === undefined ? {} : { sessionState }),
     // Revision 37: the holder view; the router drops it for devices without `bot:handoffs`.
     ...(sessionState === "paused" ? { paused: true } : {}),
-    // Revision 41: the holder view; the router drops it for devices without `bot:issues`.
+    // Revision 42: the holder view; the router drops it for devices without `bot:issues`.
     ...(issueCount === undefined || issueCount <= 0 ? {} : { issueCount }),
   });
 }
@@ -285,7 +285,7 @@ export interface AidenRemoteBotServiceOptions {
     botIds: readonly string[],
   ) => Promise<ReadonlyMap<string, AidenRemoteBotHealth>>;
   /**
-   * Contract revision 41 (`bot:issues`): how many open "Needs you" cards the
+   * Contract revision 42 (`bot:issues`): how many open "Needs you" cards the
    * Bot holds, for the summary's `issueCount`. The router sends it only to a
    * device that negotiated `bot:issues`.
    */

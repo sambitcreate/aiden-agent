@@ -242,7 +242,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
-   * Revision 41: the Bot's host-owned "Needs you" cards (the same service the
+   * Revision 42: the Bot's host-owned "Needs you" cards (the same service the
    * desktop chat and sidebar read). With it the host announces `bot:issues`
    * and serves the issue act route.
    */
@@ -304,7 +304,7 @@ export interface AidenRemoteBotSessionServiceOptions {
   memory?: Pick<BotMemoryService, "view" | "edit">;
   /** Answers to routine proposals (`bot-proactive-v1`); the desktop answers through the same service. */
   proposals?: { respond(input: BotRoutineProposalRespondInput): Promise<BotRoutineProposalRespondResult> };
-  /** The Bot routine notification feed (`bot-proactive-v1`). Issue items need `bot:issues` (revision 41). */
+  /** The Bot routine notification feed (`bot-proactive-v1`). Issue items need `bot:issues` (revision 42). */
   routineNotifications?: {
     list(
       since: number | undefined,
@@ -679,7 +679,7 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
-  /** `bot:issues`: the `issues` frame and snapshot key (revision 41). */
+  /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
 }
 
@@ -734,7 +734,7 @@ class BotLiveProjector {
   approval: AidenRemoteBotApproval | null = null;
   /** The waiting hand-off (revision 37), with the line devices without `bot:handoffs` show for it. */
   handoff: ProjectedHandoff | null = null;
-  /** The Bot's issue cards (revision 41), oldest first; only `bot:issues` devices are sent them. */
+  /** The Bot's issue cards (revision 42), oldest first; only `bot:issues` devices are sent them. */
   issues: AidenRemoteBotIssue[] = [];
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
@@ -787,7 +787,7 @@ class BotLiveProjector {
     private readonly activityDeps?: ProjectorActivity,
     /** Revision 37; without it no hand-off is ever projected. */
     private readonly readHandoff: () => Promise<ProjectedHandoff | null> = async () => null,
-    /** Revision 41; without it no issue card is ever projected. */
+    /** Revision 42; without it no issue card is ever projected. */
     private readonly readIssues?: () => Promise<AidenRemoteBotIssue[]>,
   ) {
     this.classifier = activityDeps
@@ -1500,7 +1500,7 @@ export class AidenRemoteBotSessionService {
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
     options.handoffs?.onChange(refresh);
-    // Revision 41: a card raised, settled or superseded reaches open streams.
+    // Revision 42: a card raised, settled or superseded reaches open streams.
     options.issues?.onChange(refresh);
     // A pause or unpause on the Mac changes only the state; open streams hear it here.
     this.stopStateChanges = options.stateChanges?.(refresh);
@@ -1553,7 +1553,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Bot issues on phones (revision 41, `bot:issues`): the issue service is
+   * Bot issues on phones (revision 42, `bot:issues`): the issue service is
    * wired. Without it the host never offers the capability, sends no `issues`
    * key, and refuses the act route.
    */
@@ -1854,7 +1854,7 @@ export class AidenRemoteBotSessionService {
     return this.options.handoffs!;
   }
 
-  /** Revision 41: the Bot issue service, or the route is unavailable. */
+  /** Revision 42: the Bot issue service, or the route is unavailable. */
   private issueService() {
     if (!this.supportsIssues) {
       throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
@@ -1933,7 +1933,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Revision 41: carry out one action a card offers (`bot:issues`). Idempotent
+   * Revision 42: carry out one action a card offers (`bot:issues`). Idempotent
    * per request UUID. `not_open` is a success: the card is gone or already
    * settled. An action the card never offered is `409 operation_stale`, and
    * records nothing for its key so a retry after a refresh is evaluated afresh.

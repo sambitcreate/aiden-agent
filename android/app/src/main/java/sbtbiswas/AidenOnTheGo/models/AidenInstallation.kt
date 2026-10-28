@@ -186,7 +186,7 @@ data class AidenServer(
         get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
-     * The Mac offers `bot:issues` (revision 41). There is no `/server` feature token: the offer
+     * The Mac offers `bot:issues` (revision 42). There is no `/server` feature token: the offer
      * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
      */
     val offersBotIssues: Boolean

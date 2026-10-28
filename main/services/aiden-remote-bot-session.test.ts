@@ -3365,7 +3365,7 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
 });
 
 // ---------------------------------------------------------------------------
-// Contract revision 41: Bot issues on phones (`bot:issues`)
+// Contract revision 42: Bot issues on phones (`bot:issues`)
 // ---------------------------------------------------------------------------
 
 const ISSUES_HOLDER = { issues: true };

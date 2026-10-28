@@ -186,7 +186,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     var proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] {
         locked { _proposalRequests }
     }
-    /// Revision 41: the next card actions' receipts, in order; `done` once they run out.
+    /// Revision 42: the next card actions' receipts, in order; `done` once they run out.
     func queueIssueResult(_ result: Result<AidenBotIssueActReceipt, Error>) {
         locked { _issueResults.append(result) }
     }
@@ -4889,7 +4889,7 @@ final class AidenBotSessionHandoffTests: XCTestCase {
     }
 }
 
-/// Contract revision 41 (`bot:issues`): the "Needs you" cards, their frame and
+/// Contract revision 42 (`bot:issues`): the "Needs you" cards, their frame and
 /// the act route, driven by the shared fixture's `botIssues` section.
 @MainActor
 final class AidenBotIssueTests: XCTestCase {

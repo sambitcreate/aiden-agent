@@ -1,4 +1,4 @@
-// Contract revision 41 (`bot:issues`): what each kind of device is sent about
+// Contract revision 42 (`bot:issues`): what each kind of device is sent about
 // a Bot's host-owned "Needs you" cards. Pure.
 //
 // A card is the desktop's own `aiden.bot-issue` entry: the host raises it,

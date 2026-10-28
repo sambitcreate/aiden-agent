@@ -261,7 +261,7 @@ struct AidenBotHandoffsContractFixture: Decodable {
     let legacy: Legacy
 }
 
-/// Revision 41 (`bot:issues`): "Needs you" cards on the session, their frame,
+/// Revision 42 (`bot:issues`): "Needs you" cards on the session, their frame,
 /// the act route and the phone-feed item.
 struct AidenBotIssuesContractFixture: Decodable {
     struct Act: Decodable {
@@ -478,7 +478,7 @@ struct AidenRemoteContractFixture: Decodable {
     let botSessionCards: AidenBotSession
     /// Revision 37: present from a revision-37 fixture.
     let botHandoffs: AidenBotHandoffsContractFixture?
-    /// Revision 41: present from a revision-41 fixture.
+    /// Revision 42: present from a revision-42 fixture.
     let botIssues: AidenBotIssuesContractFixture?
     /// Revision 39: present from a revision-39 fixture.
     let scheduleCards: AidenScheduleCardsContractFixture?

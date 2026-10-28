@@ -219,7 +219,7 @@ export function applyRemoteBotSessionEvent(
     case "handoff":
       return { ...next({}), handoff: event.payload.handoff };
     case "issues":
-      // Contract revision 41: Bot issue cards are a phone surface in this
+      // Contract revision 42: Bot issue cards are a phone surface in this
       // revision; the Mac reads the same cards from its own Bot transcript.
       return next({});
   }

@@ -50,7 +50,7 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
       const notifications: AidenRemoteBotRoutineNotification[] = [];
       for (const row of await dependencies.log.due(since, at)) {
         // Routine results are the revision-27 feed. Issue cards join it only
-        // for a device that negotiated `bot:issues` (revision 41), whose
+        // for a device that negotiated `bot:issues` (revision 42), whose
         // decoder accepts `kind: "issue"`; every other device still gets
         // routine results alone.
         const issue = row.class === "issue" && options.issues === true;
