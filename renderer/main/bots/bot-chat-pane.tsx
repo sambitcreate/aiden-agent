@@ -12,6 +12,7 @@ import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
 import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
+import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
@@ -638,6 +639,8 @@ export function TranscriptEntries({
   onRunRoutine,
   onRespondToProposal,
   onRespondToSkill,
+  onRespondToLesson,
+  onUndoLearning,
   onActOnIssue,
   connectLabel,
   connecting,
@@ -666,6 +669,10 @@ export function TranscriptEntries({
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Keep or decline a lesson from a routine's runs. */
+  onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
+  /** Undo a correction lesson or the newest memory tidy. */
+  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "memory_tidy" }): Promise<void>;
   /** Add or decline a proposed (or found) skill. */
   onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
   /** Connect cards' button text, e.g. where the connection is finished. */
@@ -787,6 +794,28 @@ export function TranscriptEntries({
                 status={row.status}
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
               />
+            ) : null;
+          case "lesson_proposal":
+            return onRespondToLesson ? (
+              <LessonProposalCard
+                key={row.id}
+                lesson={row.lesson}
+                status={row.status}
+                onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
+              />
+            ) : null;
+          case "lesson_learned":
+            return onUndoLearning ? (
+              <LearnedLine
+                key={row.id}
+                text={`Learned: ${row.lesson.lesson}`}
+                undone={row.status === "retired"}
+                onUndo={() => onUndoLearning({ kind: "lesson", lessonId: row.lesson.lessonId })}
+              />
+            ) : null;
+          case "memory_tidy":
+            return onUndoLearning ? (
+              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "memory_tidy" })} />
             ) : null;
           case "skill_proposal":
             return onRespondToSkill ? (
@@ -1457,6 +1486,22 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
           onRespondToSkill={respondToSkill}
+          onRespondToLesson={async (lessonId, decision) => {
+            try {
+              return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
+              throw error;
+            }
+          }}
+          onUndoLearning={async (target) => {
+            try {
+              await botsApi.learning.undoInChat({ botId: current.id, target });
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
+              throw error;
+            }
+          }}
           onActOnIssue={actOnIssue}
         />
         {shownSends.map((send) => {

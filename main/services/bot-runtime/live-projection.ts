@@ -18,6 +18,13 @@
 // of every run is observed and reported (`onRunSettled`) for list rows.
 
 import {
+  BOT_LESSON_LEARNED_ENTRY_KIND,
+  BOT_LESSON_PROPOSAL_ENTRY_KIND,
+  BOT_LESSON_STATUS_ENTRY_KIND,
+  botLessonCardOf,
+  botLessonStatusOf,
+} from "../../../renderer/shared/bot-lessons.js";
+import {
   BOT_SKILL_PROPOSAL_ENTRY_KIND,
   BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND,
   botSkillProposalOf,
@@ -138,7 +145,7 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy"]);
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -293,7 +300,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   };
   const issued = new Map<string, number>();
   const skillStatus = new Map<string, "added" | "dismissed">();
+  const lessonStatus = new Map<string, "active" | "dismissed" | "retired">();
   for (const record of entries) {
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) {
+      const status = botLessonStatusOf(record.data);
+      if (status) lessonStatus.set(status.lessonId, status.status);
+      continue;
+    }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
       if (status) proposalStatus.set(status.proposalId, status);
@@ -398,6 +411,27 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND || record.kind === BOT_LESSON_LEARNED_ENTRY_KIND) {
+      const lesson = botLessonCardOf(record.data);
+      if (lesson) {
+        const proposal = record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND;
+        mapped.push({
+          entry: {
+            id,
+            type: proposal ? "lesson_proposal" : "lesson_learned",
+            lesson,
+            status: lessonStatus.get(lesson.lessonId) ?? (proposal ? "pending" : "active"),
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) continue;
+    if (record.kind === "aiden.memory-tidy") {
+      mapped.push({ entry: { id, type: "memory_tidy" }, turn: null });
+      continue;
+    }
     if (record.kind === BOT_ISSUE_ENTRY_KIND) {
       const issue = botIssueOf(record.data);
       if (issue) {

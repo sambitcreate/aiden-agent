@@ -107,6 +107,8 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   routineNotes?(botId: string, taskId: string): Promise<string>;
   /** True once when the stuck-run watchdog stopped this Bot's current run. */
   consumeStall?(botId: string): boolean;
+  /** The Bot's behavior fingerprint now, recorded on the run. */
+  fingerprint?(botId: string): Promise<string | undefined>;
   /** The newest turn's claim check: a reply that says a failed step worked. */
   checkClaims?(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
 }
@@ -458,6 +460,9 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
             : {}),
         };
       }
+      const fingerprint = ports?.fingerprint
+        ? await ports.fingerprint(task.botId).catch(() => undefined)
+        : undefined;
       // A scheduled fire skipped while the Bot was paused is recorded under
       // its own request id, so the catch-up after Resume submits that exact
       // id and any repeat of the catch-up dedupes against it.
@@ -474,6 +479,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(outcome.error !== undefined ? { error: outcome.error } : {}),
         ...(outcome.failure !== undefined ? { failure: outcome.failure } : {}),
         ...(outcome.claimCheck !== undefined ? { claimCheck: outcome.claimCheck } : {}),
+        ...(fingerprint !== undefined ? { fingerprint } : {}),
       });
       let retrying = false;
       try {

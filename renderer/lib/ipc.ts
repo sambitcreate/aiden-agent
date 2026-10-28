@@ -1749,6 +1749,16 @@ export const botsApi = {
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
   },
+  /** What a Bot learned: the page's overview, Undo, and lesson answers. */
+  learning: {
+    get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
+    undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
+    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "memory_tidy" } }) =>
+      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
+    respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
+      invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),
+    removeLesson: (input: { botId: string; lessonId: string }) => invoke<void>("bots:lessons:remove", input),
+  },
   /** Skills a Bot proposed (or found in its folder) and the person's answer. */
   skillProposals: {
     respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>

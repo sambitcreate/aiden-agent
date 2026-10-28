@@ -589,6 +589,8 @@ export interface ScheduledRun {
   failure?: BotRoutineFailure;
   /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
   claimCheck?: { stepIds: string[]; toolNames: string[] };
+  /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
+  fingerprint?: string;
   chatId?: string;
 }
 

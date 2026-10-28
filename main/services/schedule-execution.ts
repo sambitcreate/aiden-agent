@@ -130,8 +130,14 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       // delivery log, the Mac banner, Telegram and the phone feed.
       deliver: async (input) => (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
       broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
-      afterRun: async (task, run, trigger) =>
-        (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().afterRun(task, run, trigger),
+      afterRun: async (task, run, trigger) => {
+        const outcome = await (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().afterRun(task, run, trigger);
+        // Reflection runs on its own time; the routine's delivery never waits for it.
+        void import("./bot-learning/learning-main.js")
+          .then(({ afterRoutineRunForLearning }) => afterRoutineRunForLearning(task, run))
+          .catch(() => undefined);
+        return outcome;
+      },
     }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {

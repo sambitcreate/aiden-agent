@@ -185,6 +185,15 @@ export type BotTranscriptEntry =
       routineId?: string;
       at?: number;
     }
+  /** A lesson from a routine's runs, waiting for Keep; or a Learned line from a correction; or a tidy. */
+  | {
+      id: string;
+      type: "lesson_proposal" | "lesson_learned";
+      lesson: import("./bot-lessons.js").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+      at?: number;
+    }
+  | { id: string; type: "memory_tidy"; at?: number }
   /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
   | {
       id: string;

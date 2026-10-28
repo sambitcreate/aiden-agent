@@ -532,6 +532,13 @@ export interface BotMemoryReviewDeps {
   onError?(botId: string, error: unknown): void;
   /** Extra add-only tools for this Bot's review, built per run. */
   extras?(botId: string): MemoryReviewExtras | undefined;
+  /** The daily learning budget; a refused reservation skips the run without a marker. */
+  reserve?(botId: string): Promise<{ ok: true; settle(outputTokens: number | undefined): Promise<void> } | { ok: false }>;
+  /** Memory as text before the run, and a record of what the run added (for Undo). */
+  snapshot?(botId: string): Promise<string>;
+  recordChange?(botId: string, before: string, result: MemoryReviewResult): Promise<void>;
+  /** The review settled; the Bot is idle (memory tidying may follow). */
+  afterReview?(botId: string): void;
   delayMs?: number;
   interval?: number;
   timeoutMs?: number;
@@ -590,6 +597,9 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
       if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
       let result: MemoryReviewResult;
       const extras = deps.extras?.(botId);
+      const reserved = deps.reserve ? await deps.reserve(botId) : undefined;
+      if (reserved && !reserved.ok) return { kind: "skipped", reason: "too_soon" };
+      const before = await deps.snapshot?.(botId).catch(() => undefined);
       try {
         result = await runMemoryReview({
           botId,
@@ -603,6 +613,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
           ...(extras ? { extras } : {}),
         });
       } catch (error) {
+        await reserved?.settle(undefined).catch(() => undefined);
         // Cancelled (delete, shutdown): the Bot's conversation may be gone, so no marker.
         if (controller.signal.aborted) return { kind: "aborted" };
         // Access changed: stop here. A marker records only what was already saved;
@@ -620,10 +631,15 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
         }
         return { kind: "failed" };
       }
+      await reserved?.settle(undefined).catch(() => undefined);
       // Cancelled once the answer was in (a pause): no marker, so the window is reviewed again later.
       if (!(await writeMarker(botId, controller, { source: "review", added: result.added, targets: result.targets }))) {
         return { kind: "aborted" };
       }
+      if (result.added > 0 && before !== undefined) {
+        await deps.recordChange?.(botId, before, result).catch((error: unknown) => deps.onError?.(botId, error));
+      }
+      deps.afterReview?.(botId);
       return { kind: "reviewed", added: result.added, targets: result.targets };
     } catch (error) {
       // Revoked before the run started (while reading the transcript).

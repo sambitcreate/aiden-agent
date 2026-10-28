@@ -28,7 +28,16 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     state: (botId) => runtime.state(botId),
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
-    routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
+    // Notes, then the lessons the person kept for this routine.
+    routineNotes: async (botId, taskId) => {
+      const [{ botLessons }, { renderRoutineLessons }] = await Promise.all([
+        import("./bot-learning/learning-main.js"),
+        import("./bot-lessons/prompt.js"),
+      ]);
+      const lessons = renderRoutineLessons(await botLessons.list(botId, { scope: { kind: "routine", routineId: taskId }, status: "active" }));
+      return [await botRoutineNotes.render(botId, taskId), lessons].filter(Boolean).join("\n\n");
+    },
+    fingerprint: async (botId) => (await import("./bot-learning/learning-main.js")).botFingerprint(botId),
     consumeStall: (botId) => botRunStalls.consume(botId),
     checkClaims: async (botId) => (await import("./bot-runtime/bot-session-main.js")).botTurnClaims(botId),
   };
@@ -48,6 +57,7 @@ export const botRoutineService = createBotRoutineService({
   routineResumed: async (botId, routineId) =>
     (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().resumed(botId, routineId),
   routineDeleted: async (botId, routineId) => {
+    await import("./bot-learning/learning-main.js").then(({ botLessons }) => botLessons.forgetRoutine(botId, routineId)).catch(() => undefined);
     await botRoutineNotes.clear(botId, routineId);
     try {
       const { settleBotIssuesForRoutine } = await import("./bot-issues/service-main.js");

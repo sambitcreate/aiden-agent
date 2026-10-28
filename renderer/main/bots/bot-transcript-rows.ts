@@ -58,6 +58,13 @@ export type BotTranscriptRow =
       proposal: import("../../shared/bot-skill-proposals").BotSkillProposalEntryData;
       status: import("../../shared/bot-skill-proposals").BotSkillProposalStatus;
     }
+  | {
+      kind: "lesson_proposal" | "lesson_learned";
+      id: string;
+      lesson: import("../../shared/bot-lessons").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+    }
+  | { kind: "memory_tidy"; id: string }
   /** A "Needs you" issue the host raised; settles to one quiet line. */
   | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
@@ -153,6 +160,13 @@ export function botTranscriptRows(
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
           });
+          break;
+        case "lesson_proposal":
+        case "lesson_learned":
+          rows.push({ kind: entry.type, id: entry.id, lesson: entry.lesson, status: entry.status });
+          break;
+        case "memory_tidy":
+          rows.push({ kind: "memory_tidy", id: entry.id });
           break;
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });

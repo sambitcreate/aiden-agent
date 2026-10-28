@@ -20,4 +20,5 @@ export const botSkillProposals = createBotSkillProposalService({
     await (await botSessionRuntime()).appendEntry(botId, kind, data as JsonValue);
   },
   invalidate: invalidateBotSkills,
+  recordAdded: async (botId, change) => (await import("../bot-learning/learning-main.js")).recordBotSkillAdded(botId, change),
 });

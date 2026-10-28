@@ -55,6 +55,15 @@ import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
 import { checkBotTurnClaims } from "./bot-claim-check.js";
 import { commitmentReviewExtras } from "../bot-commitments/commitments-main.js";
+import { renderBotLessons } from "../bot-lessons/prompt.js";
+import {
+  botLearningBudget,
+  botLessons,
+  howToReviewExtras,
+  maybeTidyMemory,
+  memorySnapshotText,
+  recordMemoryChange,
+} from "../bot-learning/learning-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -188,7 +197,8 @@ async function promptRules(botId: string) {
  * work runs on exactly the grant it holds. Its signal aborts the work when
  * access changes; `revalidate` fences every provider request and memory write.
  */
-async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
+/** Admission for background learning work (memory review, reflection, tidying). */
+export async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
   if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) return { ok: false, reason: "no_model" };
   if (!(await botStore.get(botId))) return { ok: false, reason: "not_admitted" };
   let admission: BotRuntimeAuthorityAdmission | undefined;
@@ -223,7 +233,16 @@ const memoryReview = createBotMemoryReview({
   isIdle: async (botId) => (await (await botSessionRuntime()).state(botId)).kind === "idle",
   admit: admitMemoryWork,
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} memory review failed.`, error),
-  extras: (botId) => commitmentReviewExtras(botId),
+  extras: (botId) => {
+    const followUps = commitmentReviewExtras(botId);
+    const howTo = howToReviewExtras(botId);
+    return { tools: [...followUps.tools, ...howTo.tools], instructions: [...followUps.instructions, ...howTo.instructions] };
+  },
+  reserve: (botId) => botLearningBudget.reserve(botId, "review", 3_072),
+  snapshot: (botId) => memorySnapshotText(botId),
+  recordChange: (botId, before, result) =>
+    recordMemoryChange(botId, "memory_review", before, `Remembered ${result.added} thing${result.added === 1 ? "" : "s"}`),
+  afterReview: (botId) => void maybeTidyMemory(botId).catch(() => undefined),
 });
 
 const compactionSteering = createBotCompactionSteering({
@@ -261,7 +280,12 @@ const extension: BotExtensionDeps = {
         [withBotManagedWorkspace("", workspace, fileAuthority).trim(), renderBotRulesSection(bot.name, await promptRules(bot.id))]
           .filter((part) => part.length > 0)
           .join("\n\n"),
-        [botRoutineGuidance(toolNames), tools.guidance(bot.id, offered.toolNames)].filter(Boolean).join("\n\n"),
+        [
+          botRoutineGuidance(toolNames),
+          tools.guidance(bot.id, offered.toolNames),
+          // How-to lessons from the person's corrections: below authority, as data.
+          renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
+        ].filter(Boolean).join("\n\n"),
       ];
     });
   },

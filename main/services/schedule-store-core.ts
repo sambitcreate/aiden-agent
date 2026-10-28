@@ -544,6 +544,7 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     error: typeof run.error === "string" ? run.error.slice(0, STORED_ERROR_LIMIT) : undefined,
     ...(failure ? { failure } : {}),
     ...(claimCheck ? { claimCheck } : {}),
+    ...(typeof run.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(run.fingerprint) ? { fingerprint: run.fingerprint } : {}),
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,
   };
 }

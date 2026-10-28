@@ -30,6 +30,7 @@ import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
 import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
+import { registerBotLearningHandlers } from "./bot-learning.js";
 import { botHealthReports } from "../services/bot-health/health-main.js";
 import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
@@ -252,6 +253,21 @@ export function registerBotHandlers(): void {
     if (typeof fields.proposalId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.proposalId)) throw new Error("Invalid skill response.");
     const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
     return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
+  });
+  // Profile → What I've learned, and the chat's lesson cards and Undo lines.
+  const learning = () => import("../services/bot-learning/learning-main.js");
+  registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    overview: async (botId) => (await learning()).botLearningOverview(botId),
+    undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
+    undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    undoNewestTidy: async (botId) => {
+      const module = await learning();
+      const newest = (await module.botLearningHistory.list(botId)).find((change) => change.kind === "memory_tidy" && !change.undoneAt && !change.undoOf);
+      return newest ? module.undoBotLearning(botId, newest.id) : { ok: false, code: "not_found" };
+    },
+    respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
+    removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
