@@ -67,6 +67,12 @@ export type BotRoutineProposalRecord = BotRoutineProposalEntryData & {
   settledBy?: "host";
   /** The Bot revised this card into the proposal with this id. */
   supersededBy?: string;
+  /**
+   * This card replaces the proposal with this id. Saved with the new card,
+   * before the old one settles, so a revision cut short (a failed write, a
+   * quit) still finishes: the old card can't be accepted and holds no slot.
+   */
+  revises?: string;
 };
 
 export type BotRoutineProposeResult =
@@ -151,8 +157,8 @@ export interface BotRoutineProposalServiceDependencies {
   conversationEntries(botId: string): Promise<readonly { kind: string; data?: unknown }[]>;
   /** A suggestion was answered (follow-ups queue behind the pending limit). */
   onSettled?(botId: string, proposalId: string, status: Exclude<BotRoutineProposalStatus, "pending">): void;
-  /** A waiting card was revised into a new one; it was not answered. */
-  onRevised?(botId: string, replacedId: string, proposalId: string): void;
+  /** A waiting card was revised into a new one (`replacement`); it was not answered. */
+  onRevised?(botId: string, replacedId: string, replacement: BotRoutineProposalEntryData): void;
   now?(): number;
   newId?(): string;
 }
@@ -199,10 +205,20 @@ function isRecord(value: unknown): value is BotRoutineProposalRecord {
     typeof record.label === "string" &&
     typeof record.createdAt === "number" &&
     (record.status === "pending" || record.status === "accepted" || record.status === "dismissed") &&
+    (record.revises === undefined || typeof record.revises === "string") &&
     (isObject(record.trigger)
       ? record.schedule === undefined && record.timezone === undefined
       : isObject(record.schedule) && typeof record.timezone === "string")
   );
+}
+
+/**
+ * The cards still waiting for an answer. A card whose replacement is already
+ * saved is not one of them, even before its revision finishes settling it.
+ */
+function waiting(records: readonly BotRoutineProposalRecord[]): BotRoutineProposalRecord[] {
+  const replaced = new Set(records.flatMap((record) => (record.status === "pending" && record.revises ? [record.revises] : [])));
+  return records.filter((record) => record.status === "pending" && !replaced.has(record.proposalId));
 }
 
 function isObject(value: unknown): value is object {
@@ -398,7 +414,35 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       const created = await createdFrom(botId, record.proposalId);
       if (created) await settle(botId, records, index, "accepted", { routineId: created.id, append });
     }
+    await finishRevisions(botId, records, append);
     return records;
+  }
+
+  function revised(botId: string, replacedId: string, replacement: BotRoutineProposalRecord): void {
+    try {
+      dependencies.onRevised?.(botId, replacedId, entryData(replacement));
+    } catch {
+      // A listener never changes the card.
+    }
+  }
+
+  /**
+   * Settle every card whose replacement is saved but which is still open: a
+   * revision cut short after saving the new card. Must run inside
+   * `serial(botId)`.
+   */
+  async function finishRevisions(
+    botId: string,
+    records: BotRoutineProposalRecord[],
+    append: Append = sessionAppend(botId),
+  ): Promise<void> {
+    for (const replacement of [...records]) {
+      if (replacement.revises === undefined) continue;
+      const index = records.findIndex((record) => record.proposalId === replacement.revises);
+      if (index < 0 || records[index]!.status !== "pending") continue;
+      await settle(botId, records, index, "dismissed", { append, supersededBy: replacement.proposalId });
+      revised(botId, replacement.revises, replacement);
+    }
   }
 
   /**
@@ -454,14 +498,13 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
 
     /** The suggestions still waiting for an answer, for the Bot's `routines list` and `revise`. */
     async pending(botId: string): Promise<Array<{ proposalId: string; name: string; label: string }>> {
-      return (await load(botId))
-        .filter((record) => record.status === "pending")
+      return waiting(await load(botId))
         .map((record) => ({ proposalId: record.proposalId, name: record.name, label: botRoutineProposalWhen(record) }));
     },
 
     /** How many suggestions wait for an answer. */
     async pendingCount(botId: string): Promise<number> {
-      return (await load(botId)).filter((record) => record.status === "pending").length;
+      return waiting(await load(botId)).length;
     },
 
     /** The stored proposals, settling any whose routine already exists. */
@@ -504,7 +547,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (backoff?.code === "declined_before") {
           return { ok: false, code: "declined_before", error: DECLINED_BEFORE };
         }
-        if (records.filter((record) => record.status === "pending").length >= BOT_ROUTINE_PROPOSAL_PENDING_LIMIT) {
+        if (waiting(records).length >= BOT_ROUTINE_PROPOSAL_PENDING_LIMIT) {
           return {
             ok: false,
             code: "too_many_pending",
@@ -558,17 +601,21 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (renamed && !input.requested && !input.hostFollowUp && proposalBackoff(records, content.name, now())?.code === "declined_before") {
           return { ok: false, code: "declined_before", error: DECLINED_BEFORE };
         }
-        const record = recordOf(content, reason ?? current.reason, now());
+        // The new card names the card it replaces before either is shown,
+        // so a revision cut short after this save still finishes.
+        const record: BotRoutineProposalRecord = { ...recordOf(content, reason ?? current.reason, now()), revises: current.proposalId };
         records.push(record);
         await save(botId, records);
         const proposal = entryData(record);
-        await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
-        await settle(botId, records, index, "dismissed", { append, supersededBy: record.proposalId });
         try {
-          dependencies.onRevised?.(botId, current.proposalId, record.proposalId);
-        } catch {
-          // A listener never changes the card.
+          await append(BOT_ROUTINE_PROPOSAL_ENTRY_KIND, { ...proposal });
+        } catch (error) {
+          // The new card was never shown: the old one stays the one to answer.
+          await save(botId, records.filter((entry) => entry !== record));
+          throw error;
         }
+        await settle(botId, records, index, "dismissed", { append, supersededBy: record.proposalId });
+        revised(botId, current.proposalId, record);
         return { ok: true, proposal, replaced: current.proposalId };
       });
     },
@@ -585,6 +632,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     respond(input: BotRoutineProposalRespondInput & { settledBy?: "host" }): Promise<BotRoutineProposalServiceRespondResult> {
       return serial(input.botId, async () => {
         const records = await load(input.botId);
+        await finishRevisions(input.botId, records);
         const index = records.findIndex((record) => record.proposalId === input.proposalId);
         const record = records[index];
         if (!record) throw new BotRoutineProposalNotFoundError();

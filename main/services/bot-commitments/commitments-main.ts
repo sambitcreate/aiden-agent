@@ -5,6 +5,7 @@
 import { app, logger } from "../../platform.js";
 import { BOT_ROUTINE_PROPOSAL_PENDING_LIMIT } from "../../../renderer/shared/bot-routine-proposals.js";
 import type { MemoryReviewExtras } from "../bot-memory/review.js";
+import type { BotCommitmentRevisedCard } from "./proposer.js";
 import { createBotCommitmentProposer } from "./proposer.js";
 import { createBotCommitmentStore, localDate } from "./store.js";
 import { NOTE_FOLLOW_UP_INSTRUCTIONS, createNoteFollowUpTool } from "./tool.js";
@@ -49,7 +50,7 @@ export function commitmentProposalSettled(botId: string, proposalId: string, sta
 }
 
 /** A follow-up's card was revised: keep the follow-up on the card that replaced it. */
-export function commitmentProposalRevised(botId: string, replacedId: string, proposalId: string): void {
-  void botCommitmentProposer.onProposalRevised(botId, replacedId, proposalId).catch((error: unknown) =>
+export function commitmentProposalRevised(botId: string, replacedId: string, replacement: BotCommitmentRevisedCard): void {
+  void botCommitmentProposer.onProposalRevised(botId, replacedId, replacement).catch((error: unknown) =>
     logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error));
 }

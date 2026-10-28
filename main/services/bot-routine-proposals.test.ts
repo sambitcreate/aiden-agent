@@ -80,7 +80,7 @@ function harness() {
       profileDir: () => root,
       routines,
       eventRoutines: events,
-      onRevised: (...revision) => void revisions.push(revision),
+      onRevised: (botId, replacedId, replacement) => void revisions.push([botId, replacedId, replacement.proposalId]),
       defaultTimezone: () => "UTC",
       appendEntry: async (botId, kind, data) => {
         if (failures.statusAppend && kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) throw new Error("disk full");
@@ -541,6 +541,37 @@ test("revising a waiting card replaces it without taking another slot, and only 
   // Renaming a waiting card into one the person just turned down is a new idea.
   const renamed = await proposals.revise("bot-a", revised.proposal.proposalId, { ...dailyPlan, name: "gym  Reminder" });
   assert.equal(renamed.ok === false && renamed.code, "declined_before");
+});
+
+test("a revision cut short after its new card is shown still replaces the old card, even with both slots taken", async () => {
+  const { proposals, failures, start, revisions, cards } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // The new card lands, then the old card's status write fails; Aiden quits.
+  failures.statusAppend = true;
+  await assert.rejects(proposals.revise("bot-a", first.proposal.proposalId, { ...dailyPlan, schedule: { kind: "daily", time: "10:00" } }));
+  failures.statusAppend = false;
+  const restarted = start();
+
+  const waitingIds = (await restarted.pending("bot-a")).map((entry) => entry.proposalId);
+  assert.equal(waitingIds.length, 2, "the replacement takes only the old card's slot");
+  assert.ok(!waitingIds.includes(first.proposal.proposalId), "the old card no longer waits");
+  assert.equal(await restarted.pendingCount("bot-a"), 2);
+  const refused = await restarted.propose("bot-a", { ...dailyPlan, name: "Third idea" });
+  assert.equal(refused.ok === false && refused.code, "too_many_pending");
+
+  await assert.rejects(
+    restarted.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+    "the old 09:00 card can't add its routine",
+  );
+  const replacementId = waitingIds.find((id) => id !== second.proposal.proposalId)!;
+  assert.deepEqual(revisions, [["bot-a", first.proposal.proposalId, replacementId]], "the revision is reported once it finishes");
+  assert.deepEqual(cards().map((card) => card.status), ["dismissed", "pending", "pending"]);
+  const accepted = await restarted.respond({ botId: "bot-a", proposalId: replacementId, decision: "accept" });
+  assert.equal(accepted.status, "accepted");
 });
 
 test("the routines tool lists and pauses event routines, shows waiting cards, and never shows a link", async () => {

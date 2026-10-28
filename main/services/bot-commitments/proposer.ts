@@ -18,6 +18,12 @@ export function commitmentProposal(commitment: BotCommitment): Omit<BotRoutineCr
   };
 }
 
+/** The card that replaced a follow-up's card: its id and when it would run. */
+export interface BotCommitmentRevisedCard {
+  proposalId: string;
+  schedule?: unknown;
+}
+
 export interface BotCommitmentProposerDependencies {
   commitments: BotCommitmentStore;
   proposals: {
@@ -41,6 +47,8 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
     const today = localDate(dependencies.now(), dependencies.timeZone());
     const records = await dependencies.commitments.list(botId);
     for (const record of records) {
+      // A card revised into a repeating schedule or a trigger has no day to pass.
+      if (record.status === "proposed" && record.openEnded) continue;
       const overdue = daysBetween(today, record.dueDate) < 0 ||
         (daysBetween(today, record.dueDate) === 0 && record.status === "waiting");
       if (!overdue) continue;
@@ -86,10 +94,21 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
       if (record) await dependencies.commitments.update(botId, record.id, { status });
       await this.pump(botId);
     },
-    /** The Bot revised a follow-up's card: the follow-up now waits on the new card. */
-    async onProposalRevised(botId: string, replacedId: string, proposalId: string): Promise<void> {
+    /**
+     * The Bot revised a follow-up's card: the follow-up now waits on the new
+     * card, and expires on that card's day. A card revised into a repeating
+     * schedule or a trigger no longer expires; it waits for the answer.
+     */
+    async onProposalRevised(botId: string, replacedId: string, replacement: BotCommitmentRevisedCard): Promise<void> {
       const record = (await dependencies.commitments.list(botId)).find((entry) => entry.proposalId === replacedId);
-      if (record) await dependencies.commitments.update(botId, record.id, { proposalId });
+      if (!record) return;
+      const schedule = replacement.schedule;
+      const once = schedule && typeof schedule === "object" && (schedule as { kind?: unknown }).kind === "once"
+        ? (schedule as { date: string; time: string })
+        : undefined;
+      await dependencies.commitments.update(botId, record.id, once
+        ? { proposalId: replacement.proposalId, dueDate: once.date, dueTime: once.time, openEnded: undefined }
+        : { proposalId: replacement.proposalId, openEnded: true });
     },
   };
 }
