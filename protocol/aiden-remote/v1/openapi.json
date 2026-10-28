@@ -1582,7 +1582,7 @@
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 44. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "description": "Contract revision 45. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
         "responses": {
           "200": {
             "description": "The spending status",
@@ -1613,7 +1613,7 @@
         "operationId": "allowMoreChatSpending",
         "x-aiden-capability": "chat:write",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 44. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "description": "Contract revision 45. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -2518,7 +2518,7 @@
         "operationId": "getBotSpending",
         "x-aiden-capability": "bot:read",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 44. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "description": "Contract revision 45. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
         "responses": {
           "200": {
             "description": "The spending status",
@@ -2553,7 +2553,7 @@
           "bot:write"
         ],
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 44. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "description": "Contract revision 45. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -8738,6 +8738,11 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "toolCallId": {
+            "type": "string",
+            "pattern": "^call-[1-9][0-9]*$",
+            "description": "Contract revision 44: on an assistant image, the timeline tool step that produced it. Clients draw the image at that step; an image without it trails the reply."
           }
         },
         "additionalProperties": false
@@ -14055,7 +14060,7 @@
         "required": [
           "spending"
         ],
-        "description": "Contract revision 44 (spending-limits-v1).",
+        "description": "Contract revision 45 (spending-limits-v1).",
         "properties": {
           "spending": {
             "oneOf": [

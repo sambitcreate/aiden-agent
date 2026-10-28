@@ -1588,7 +1588,7 @@ test("a send moving into place holds its entry until it lands, and a reply that 
   );
 });
 
-test("a send main is slow to accept says Sending… after two seconds, and never once main took it", async () => {
+test("a send main is slow to accept looks sent and says Getting ready, never Sending…", async () => {
   let answer: (result: unknown) => void = () => undefined;
   await mountChat({
     "bots:live:subscribe": () => snapshot(),
@@ -1598,10 +1598,11 @@ test("a send main is slow to accept says Sending… after two seconds, and never
   fireEvent.change(box, { target: { value: "Plan dinner" } });
   fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
   await screen.findByText("Plan dinner");
-  assert.equal(screen.queryByText("Sending…"), null);
-  assert.ok(await screen.findByText("Sending…", {}, { timeout: 3000 }));
+  assert.ok((await screen.findAllByText("Getting ready")).length > 0);
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  assert.equal(screen.queryByText("Sending…"), null, "a slow send still never says Sending…");
+  assert.ok(screen.getAllByText("Getting ready").length > 0, "the status line carries the wait");
   await act(async () => answer({ submissionId: "s1", deduped: false }));
-  await waitFor(() => assert.equal(screen.queryByText("Sending…"), null));
   assert.ok(screen.getByText("Plan dinner"), "the message stays until its entry arrives");
 });
 

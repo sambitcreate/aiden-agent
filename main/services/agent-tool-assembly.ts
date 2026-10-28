@@ -84,7 +84,7 @@ export interface ToolContext {
   /** Explicitly expose cross-target Telegram delivery to attended local agents. */
   allowTelegramDirect?: boolean;
   /** Generation-scoped sink for assistant images that become durable with the final response. */
-  shareImage?: (attachment: Attachment) => void;
+  shareImage?: (attachment: Attachment, toolCallId: string) => void;
   /** Main-owned Bot assembly supplies its own exact multi-root file tools. */
   includeCodingTools?: boolean;
   /** Main-owned Bot assembly may withhold skills until exact grants are joined. */

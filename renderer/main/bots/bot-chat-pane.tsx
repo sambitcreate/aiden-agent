@@ -431,7 +431,8 @@ function BotQueuedBubble({
 /**
  * A message the person just sent, shown at once while main accepts it. It
  * looks like the entry it becomes (same row, same Copy and Reply), so the
- * hand-over is invisible; "Sending…" shows only when main is slow to answer.
+ * hand-over is invisible. It never says "Sending…": the "Getting ready" line
+ * below the transcript carries a slow start.
  * A message sent while the Bot works shows as Queued straight away. It leaves
  * when the projected entry (or the queued message) with the same words
  * arrives, or when the send fails.
@@ -448,7 +449,6 @@ function BotPendingSendBubble({
   onMorphEnd(): void;
   onReply(text: string): void;
 }) {
-  const slow = useSlowSend(send);
   const rowRef = React.useRef<HTMLDivElement | null>(null);
   useSendMorph(rowRef, morphFrom, onMorphEnd);
   return (
@@ -460,7 +460,6 @@ function BotPendingSendBubble({
           <BotMessageActions text={send.text} from="You" align="end" onReply={onReply}>
             <SafeMessageBubble role="user" content={send.text} showCopy={false} />
           </BotMessageActions>
-          {slow ? <span className="self-end text-small text-tertiary">Sending…</span> : null}
         </div>
       )}
     </div>
@@ -572,28 +571,13 @@ function useSendMorph(
   }, [origin, rowRef]);
 }
 
-/** Whether a send main has not answered has waited long enough to say "Sending…". */
-function useSlowSend(send: BotPendingSend): boolean {
-  const waiting = !send.accepted;
-  const [slow, setSlow] = React.useState(() => waiting && Date.now() - send.at >= SLOW_SEND_MS);
-  React.useEffect(() => {
-    if (!waiting) {
-      setSlow(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSlow(true), Math.max(0, send.at + SLOW_SEND_MS - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [waiting, send.at]);
-  return waiting && slow;
-}
-
 /** A send shown before main answers; `seen` names what was already on screen when it was made. */
 interface BotPendingSend {
   requestId: string;
   text: string;
   /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
   seen: ReadonlySet<string>;
-  /** When it was sent, for "Sending…" and the "Getting ready" line. */
+  /** When it was sent, for the "Getting ready" line. */
   at: number;
   /** A follow-up sent while the Bot worked: it shows as Queued, and starts no turn of its own. */
   queued: boolean;
@@ -652,9 +636,6 @@ export function settleBotPendingSends(
   const matches = matchBotPendingSends(pending, snapshot);
   return pending.filter((send) => holding.has(send.requestId) || !matches.has(send.requestId));
 }
-
-/** How long main may take to accept a send before its message says "Sending…". */
-const SLOW_SEND_MS = 2000;
 
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
 const PENDING_SEND_SETTLE_MS = 4000;

@@ -114,7 +114,7 @@ export const AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION = 38 as const;
  */
 export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
 /**
- * Contract revision 44 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 40 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION`):
  * a device that also negotiates `bot:handoff-notes` is told when a hand-off
  * card takes no note (one a password-or-code rule opened): the card carries
@@ -155,7 +155,17 @@ export const AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION = 42 as const;
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
 /**
- * Contract revision 44 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 44 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only
+ * `AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`): an assistant message's
+ * image attachment may carry `toolCallId`, the timeline tool step that
+ * produced it (`display_image`, `share_image` or `generate_image`), so a phone
+ * draws the image at that step as the desktop does instead of after the
+ * reply. Older clients ignore the key; an image without it trails the reply.
+ */
+export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
+/**
+ * Contract revision 45 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`):
  * spending limits on phones (`spending-limits-v1`). `GET /chats/{chatId}/spending`
  * and `GET /bots/{botId}/spending` return the chat's or Bot's limit and what it
@@ -164,7 +174,7 @@ export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
  * limit is refused with `operation_stale` and the limit's own message, so
  * older phones show that line and need nothing new.
  */
-export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 44 as const;
+export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 45 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -218,7 +228,7 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_FEATURE = "bot-activity-v1" as const;
  */
 export const AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE = "bot-attachments-v1" as const;
 /**
- * Spending limits on phones (contract revision 44). Announced to phones only
+ * Spending limits on phones (contract revision 45). Announced to phones only
  * while the host wires its spending ledger: `GET /chats/{chatId}/spending`,
  * `GET /bots/{botId}/spending` and their `POST …/spending/allow-more`.
  */
@@ -1929,7 +1939,7 @@ export interface AidenRemoteContractFixture {
   botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
-  /** Revision 44 (`spending-limits-v1`): spending status, Allow more and the refusals. */
+  /** Revision 45 (`spending-limits-v1`): spending status, Allow more and the refusals. */
   spending?: AidenRemoteSpendingFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -7721,7 +7731,7 @@ function spendingAmount(record: Record<string, unknown>, key: string, positive: 
   return value;
 }
 
-/** Revision 44: `GET`/`POST …/spending` bodies. */
+/** Revision 45: `GET`/`POST …/spending` bodies. */
 export function parseAidenRemoteSpendingStatus(value: unknown): AidenRemoteSpendingStatus {
   if (!isRecord(value)) throw new Error("Spending status must be an object.");
   assertExactKeys(value, ["spending"], "Spending status");

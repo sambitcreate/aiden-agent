@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import AidenOnTheGo
 
-/// Revision 44: the spending notice's words and its Allow more, against a
+/// Revision 45: the spending notice's words and its Allow more, against a
 /// transport that behaves like the Mac's ledger.
 @MainActor
 final class AidenSpendingTests: XCTestCase {

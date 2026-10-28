@@ -18,7 +18,8 @@ import {
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
-import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { withInferredImagePlacements } from "../../renderer/shared/image-placements.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
@@ -177,6 +178,11 @@ export interface AidenRemoteMessageAttachmentProjection {
   mimeType: string;
   kind: "image" | "text";
   size: number;
+  /**
+   * Additive (contract revision 44): on an assistant image, the timeline tool
+   * step that produced it, so a phone draws the image at that step.
+   */
+  toolCallId?: string;
 }
 
 export interface AidenRemoteMessageOutcomeProjection {
@@ -378,16 +384,42 @@ function projectedAttachmentId(value: string): string {
     : `legacy_${createHash("sha256").update(value).digest("base64url")}`;
 }
 
-function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachmentProjection[] {
-  return (safeStoredAttachments(value) ?? []).map((attachment) => ({
-    id: projectedAttachmentId(attachment.id),
-    name: safeAttachmentDisplayName(attachment.name),
-    mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
-      ? attachment.mimeType
-      : attachment.kind === "image" ? "image/unknown" : "text/plain",
-    kind: attachment.kind,
-    size: attachment.size,
-  }));
+function projectMessageAttachments(message: ChatMessage): AidenRemoteMessageAttachmentProjection[] {
+  const attachments = safeStoredAttachments(message.attachments) ?? [];
+  const placements = assistantImagePlacements(message, attachments);
+  return attachments.map((attachment) => {
+    const toolCallId = attachment.kind === "image" ? placements?.get(attachment.id) : undefined;
+    return {
+      id: projectedAttachmentId(attachment.id),
+      name: safeAttachmentDisplayName(attachment.name),
+      mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
+        ? attachment.mimeType
+        : attachment.kind === "image" ? "image/unknown" : "text/plain",
+      kind: attachment.kind,
+      size: attachment.size,
+      ...(toolCallId && VISUAL_TOOL_CALL_ID.test(toolCallId) ? { toolCallId } : {}),
+    };
+  });
+}
+
+/**
+ * Contract revision 44: the call that produced each assistant image, as the
+ * desktop places it (stored placements, plus the in-order pairing for replies
+ * saved before every image recorded its call).
+ */
+function assistantImagePlacements(
+  message: ChatMessage,
+  attachments: readonly Attachment[],
+): ReadonlyMap<string, string> | undefined {
+  if (message.role !== "assistant") return undefined;
+  const stored = new Map(
+    (parseChatImagePlacements(message.imagePlacements) ?? []).map((placement) => [placement.attachmentId, placement.toolCallId]),
+  );
+  return withInferredImagePlacements(
+    parseGenerationTimeline(message.timeline, message.content.length),
+    attachments,
+    stored,
+  );
 }
 
 const MAX_PROJECTED_VISUALS = 40;
@@ -532,22 +564,25 @@ function chatRevision(chat: Chat): string {
     updatedAt: chat.updatedAt,
     messages: chat.messages
       .filter((message) => message.role === "user" || message.role === "assistant")
-      .map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: remoteMessageText(message),
-        reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
-          ? message.reasoning : null,
-        createdAt: message.createdAt,
-        attachments: projectMessageAttachments(message.attachments),
-        htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
-          id: artifact.mediaId,
-          title: artifact.title,
-        })),
-        visuals: projectMessageVisuals(message, projectMessageAttachments(message.attachments)),
-        outcome: projectMessageOutcome(message) ?? null,
-        timeline: projectMessageTimeline(message) ?? null,
-      })),
+      .map((message) => {
+        const attachments = projectMessageAttachments(message);
+        return {
+          id: message.id,
+          role: message.role,
+          content: remoteMessageText(message),
+          reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
+            ? message.reasoning : null,
+          createdAt: message.createdAt,
+          attachments,
+          htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
+            id: artifact.mediaId,
+            title: artifact.title,
+          })),
+          visuals: projectMessageVisuals(message, attachments),
+          outcome: projectMessageOutcome(message) ?? null,
+          timeline: projectMessageTimeline(message) ?? null,
+        };
+      }),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }
@@ -610,7 +645,7 @@ function projectMessage(
   chat: Chat,
   message: ChatMessage & { role: "user" | "assistant" },
 ): AidenRemoteMessageProjection {
-  const attachments = projectMessageAttachments(message.attachments);
+  const attachments = projectMessageAttachments(message);
   const visuals = projectMessageVisuals(message, attachments);
   const appPanels = parseAppControlPanels(message.appPanels);
   const outcome = projectMessageOutcome(message);
@@ -1836,7 +1871,7 @@ export class AidenRemoteChatService {
     const chat = await this.chat(chatId);
     const unavailable = () => new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
     for (const message of chat.messages) {
-      const projected = projectMessageVisuals(message, projectMessageAttachments(message.attachments))
+      const projected = projectMessageVisuals(message, projectMessageAttachments(message))
         .find((visual) => visual.id === visualId);
       if (!projected) continue;
       let source: VisualViewerSource;

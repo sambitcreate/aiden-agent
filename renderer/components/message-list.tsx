@@ -50,6 +50,7 @@ import {
 import { chatsApi } from "../lib/ipc";
 import { ImageScanPlaceholder, useImageGenerationSlots } from "./image-generation-placeholder";
 import { imageGenerationRowSlots, type ImageGenerationSlot } from "../lib/image-generation-slots";
+import { withInferredImagePlacements } from "../shared/image-placements";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
@@ -90,7 +91,7 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /**
    * Producing toolCallId per live artifact: HTML visuals by mediaId
-   * (render_artifact) and generated images by attachment id (generate_image).
+   * (render_artifact) and images by attachment id (generate_image, display_image, share_image).
    */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
   /** mediaIds of live visuals the model asked to span the chat pane. */
@@ -156,7 +157,7 @@ interface AssistantResponseProps {
   fork?: MessageForkAction;
   /** Save and copy actions for images stored in this (settled) response. */
   imageActions?: MessageImageActions;
-  /** Generated image attachment id → the generate_image toolCallId that produced it. */
+  /** Image attachment id → the toolCallId of the call that produced it. */
   imagePlacements?: ReadonlyMap<string, string>;
   /** HTML visuals this response owns, placed after their producing tool row. */
   visuals?: readonly ChatHtmlArtifactV1[];
@@ -225,7 +226,7 @@ function AssistantResponse({
     streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
     reasoning ?? "",
   );
-  // Generated images and their placeholders sit at their generate_image row.
+  // Images and generate_image placeholders sit at their producing call's row.
   const imageSlots = imageGenerationRowSlots(
     timeline ? rows : null,
     imageGeneration.slots,
@@ -504,9 +505,16 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   const assistant = Boolean(live) || message?.role === "assistant";
   const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
   const storedImagePlacements = message?.imagePlacements;
+  const messageTimeline = message?.role === "assistant" ? message.timeline : undefined;
+  const messageAttachments = message?.attachments;
   const imagePlacements = React.useMemo(
-    () => new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
-    [storedImagePlacements],
+    () =>
+      withInferredImagePlacements(
+        messageTimeline,
+        messageAttachments ?? [],
+        new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
+      ),
+    [messageAttachments, messageTimeline, storedImagePlacements],
   );
   const row = (
     <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length

@@ -138,7 +138,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 44: a chat's or Bot's spending limit, and Allow more
+    /// Contract revision 45: a chat's or Bot's spending limit, and Allow more
     /// once it is reached.
     static let spendingLimitsFeature = "spending-limits-v1"
 
@@ -324,7 +324,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The chat and Bot screens show the spending notice with Allow more (revision 44).
+    /// The chat and Bot screens show the spending notice with Allow more (revision 45).
     var supportsSpendingLimits: Bool {
         features.contains(Self.spendingLimitsFeature)
     }
@@ -605,7 +605,7 @@ enum AidenSpendingOwner: Equatable, Hashable, Sendable {
     case bot(String)
 }
 
-/// Revision 44 (`spending-limits-v1`). Amounts are US dollars.
+/// Revision 45 (`spending-limits-v1`). Amounts are US dollars.
 struct AidenSpending: Codable, Equatable, Sendable {
     enum Period: String, Codable, Sendable { case chat, month }
     enum State: String, Codable, Sendable { case under, nearing, reached }
@@ -1319,7 +1319,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                        headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
     }
 
-    /// Revision 44: the chat's or Bot's spending limit, or `spending: nil` without one.
+    /// Revision 45: the chat's or Bot's spending limit, or `spending: nil` without one.
     func spending(owner: AidenSpendingOwner) async throws -> AidenSpendingStatus {
         try await send(method: "GET", path: try spendingPath(owner))
     }

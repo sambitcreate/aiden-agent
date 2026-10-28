@@ -211,7 +211,7 @@ data class AidenServer(
     val supportsChatVisualViewer: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
 
-    /** The chat and Bot screens show the spending notice with Allow more (revision 44). */
+    /** The chat and Bot screens show the spending notice with Allow more (revision 45). */
     val supportsSpendingLimits: Boolean
         get() = features.contains(AidenRemoteProtocol.SPENDING_LIMITS_FEATURE)
 

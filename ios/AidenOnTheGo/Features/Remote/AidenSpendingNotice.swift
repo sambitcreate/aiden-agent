@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-/// Revision 44: what a chat or Bot says about its spending limit above the
+/// Revision 45: what a chat or Bot says about its spending limit above the
 /// composer. The words match the Mac and Android.
 enum AidenSpendingCopy {
     struct Notice: Equatable {

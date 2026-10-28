@@ -310,7 +310,7 @@ These routes were frozen as contract in Phase 1 and implemented in Phase 4 throu
 - `GET /bots/{botId}/avatar/{assetRevision}`: authenticated canonical 512 × 512 PNG only, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Bot ID and asset revision must match the current main-owned record.
 - `POST /bots/{botId}/handoffs/{waitId}/answer`, `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`, and `POST` / `DELETE /bots/{botId}/pause` (contract revision 37): need `bot:read`, `bot:write` and `bot:handoffs`, plus an `Idempotency-Key`. See "Bot hand-offs and pause, revision 37".
 - `POST /bots/{botId}/issues/{issueId}/act` (contract revision 42): needs `bot:read`, `bot:write` and `bot:issues`, plus an `Idempotency-Key`. See "Bot issues on phones, revision 42".
-- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 44, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 44".
+- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 45, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 45".
 
 An authorized archived Bot remains readable but read-only until restored: list/detail, conversation/history, existing attachment and managed-home file reads, access views, and the current canonical avatar remain available. Chat open-or-create, new turns, uploads, writes, approval effects, identity/access/avatar mutations, and attempts to add the archived Bot to favorites return `bot_archived`; restore remains allowed. Archiving atomically removes favorite membership. Bot reads without `bot:read`, mutations without the full conjunctive grant, cross-Bot/chat references, corrupt bindings, unavailable records, and unknown IDs retain the same non-inferential unavailable classification. Catalog or policy revision drift returns `revision_conflict` with only the current safe revision; invalid/removed opaque selections fail closed and never fall back to Full. Authoritative Custom views may retain selected catalog tombstones marked `available: false` so drift is visible, but new mutations may select only entries currently marked available.
 
@@ -810,6 +810,17 @@ A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your ba
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botHandoffs`: a session waiting on a hand-off, its frames, the answer, open-on-Mac, pause and unpause shapes, paused session, summary, detail and refusal, and the same moments as a device without `bot:handoffs` sees them (`legacy`). The desktop parser reads the section only when `contractRevision` is 37 or newer.
 
+## Image placement, revision 44
+
+The host keeps the revision in one constant (`AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`). Revision 44 is provisional: it is re-claimed as the next free revision when the change merges.
+
+An assistant message's image attachment may carry `toolCallId`, the public `call-N` id (`^call-[1-9][0-9]*$`) of the timeline tool step that produced it: `display_image`, `share_image` or `generate_image`. It is display-only and needs no capability. User attachments and text attachments never carry it.
+
+- The host sends the placement it stored with the reply. For a reply saved before every image recorded its call, it pairs unplaced images with their completed calls in order, per source: `shared_` ids with `share_image` calls and other images with `display_image` calls. A source pairs only when its images and calls match one for one, and shown images are not paired while any `generate_image` call has no placed image; an unpaired image gets no `toolCallId`.
+- An image whose `toolCallId` names no step on the message's projected timeline, or that has none, trails the reply as before.
+
+**Clients.** The desktop transcript draws each placed image after the activity row that holds its step. Aiden On The Go for iOS and Android split a run of same-offset steps there instead, as they already do for visuals, so the image sits right beneath its own step line. Every client keeps only unplaced images in the strip after the reply. A malformed `toolCallId`, or one of the wrong type, is dropped without dropping the image. Older clients ignore the key. Images still reach phones only when the reply is saved, not while it streams; while it streams, the phones draw a running `generate_image` call's placeholder beneath its step, split the same way, so the image takes the placeholder's spot. With revision 44 the phones' arrival reveal plays on the image a `generate_image` call produced, found by its `toolCallId`.
+
 ## Web page extract recap, revision 38
 
 The host keeps the revision in one constant (`AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`).
@@ -935,9 +946,9 @@ An unknown or malformed `action` is `400 invalid_request`. An action the card ne
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botIssues`: the capability, a session carrying an open card with actions, an open card with no phone action, and a settled card, the `issues` frame that settles one, the act request and receipt, the `not_open` receipt, a summary with `issueCount`, and a phone-feed issue item. The desktop parser reads the section only when `contractRevision` is 41 or newer.
 
-## Spending limits, revision 44 (`spending-limits-v1`, provisional)
+## Spending limits, revision 45 (`spending-limits-v1`, provisional)
 
-Revision 44 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
+Revision 45 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
 
 **Negotiation.** The host lists `spending-limits-v1` in `/server` `features` for phones while its spending ledger is wired. Paired desktops are not offered it. A phone calls the routes only on a host that lists it.
 
@@ -950,4 +961,4 @@ Revision 44 is provisional and is re-claimed at merge, after whatever `main` hol
 
 **Clients.** Aiden On The Go for iOS and Android read the status when a workspace chat or Bot chat opens, after a run settles, when the message count changes and after a send error. They show a quiet line at `nearing` and a card with **Allow $X more** at `reached`, in the same words as the Mac; the limits themselves are changed on the Mac. A tap that gets `409 revision_conflict` re-reads instead of adding twice.
 
-**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 44 or newer.
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 45 or newer.

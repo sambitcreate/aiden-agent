@@ -267,7 +267,7 @@ export interface AidenRemoteRouterDependencies {
   providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   /**
-   * Spending limits (contract revision 44). Absent: the spending routes are
+   * Spending limits (contract revision 45). Absent: the spending routes are
    * `not_found` and phones are not told `spending-limits-v1`.
    */
   spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
@@ -1664,7 +1664,7 @@ export function aidenRemoteServerFeatures(
     ...(support.botActivity ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
     // Bot message attachments (contract revision 33).
     ...(support.botAttachments ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
-    // Spending limits (contract revision 44): the Mac shows its own notices.
+    // Spending limits (contract revision 45): the Mac shows its own notices.
     ...(phone && support.spending ? [AIDEN_REMOTE_SPENDING_LIMITS_FEATURE] : []),
     // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
     ...(phone && support.mobileSimulators ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE] : []),

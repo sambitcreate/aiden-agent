@@ -239,7 +239,7 @@ private fun AidenBotSessionContent(
     // Steer or Queue while the Bot works: Queue by default, and Queue again once the turn ends.
     var busyMode by remember(botId) { mutableStateOf(AidenStreamInputMode.QUEUE) }
     LaunchedEffect(ui.isRunning) { busyMode = aidenBotBusyMode(busyMode, ui.isRunning) }
-    // Revision 44: the Bot's month, re-read after each reply and send.
+    // Revision 45: the Bot's month, re-read after each reply and send.
     val spending = remember(botId) { AidenSpendingNoticeState() }
     val spendingTransport = cl.takeIf { serverInfo?.supportsSpendingLimits == true }
     LaunchedEffect(botId, spendingTransport, ui.isRunning, ui.entries.size, ui.outgoing.size) {

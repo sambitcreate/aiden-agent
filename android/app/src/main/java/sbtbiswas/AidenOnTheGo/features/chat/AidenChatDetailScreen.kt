@@ -238,7 +238,7 @@ fun AidenChatDetailScreen(
     val follow = rememberAidenTranscriptFollowState(listState)
 
     val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
-    // Revision 44: a Workspace chat's total, or a Bot chat's month, re-read after each reply
+    // Revision 45: a Workspace chat's total, or a Bot chat's month, re-read after each reply
     // settles and after a send the Mac refused.
     val spending = remember(chatId) { AidenSpendingNoticeState() }
     val spendingTransport = readAloudClient.takeIf { serverInfo?.supportsSpendingLimits == true }
@@ -1369,14 +1369,29 @@ private fun AssistantMessageRow(
     val visuals = message.visuals.orEmpty()
     // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
     val rowVisuals = aidenVisualsWithRows(message)
-    val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals)
     val progressText = projection?.progressText ?: ""
     // Visual snapshots render inside their visual rows, never as ordinary attachments.
     val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
-    val imageAttachments = aidenEligibleImageAttachments(attachments, visuals)
-    val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
+    val eligibleImages = aidenEligibleImageAttachments(attachments, visuals)
+    val imageIds = eligibleImages.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+    // Each image sits beneath the step that produced it; the rest trail the reply.
+    val chronologicalRows = if (isBotChat) null else
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals, eligibleImages)
+    val placedImageIds = chronologicalRows?.let(AidenChronologicalProjection::placedImageIds).orEmpty()
+    val imageAttachments = eligibleImages.filterNot { it.id in placedImageIds }
+    val revealAttachmentId = imageArrivalRevealGenerationId?.let {
+        AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
+    }
+    val renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = { images ->
+        AidenMessageImageAttachments(
+            attachments = images,
+            edge = AidenMessageMediaEdge.LEADING,
+            loadData = loadAttachmentImage,
+            revealAttachmentId = revealAttachmentId,
+            onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
+        )
+    }
     val renderVisual: @Composable (AidenChatVisual) -> Unit = { visual ->
         AidenVisualRow(
             visual = visual,
@@ -1402,7 +1417,8 @@ private fun AssistantMessageRow(
                     palette = palette,
                     onCopy = onCopy,
                     onOpenUrl = onOpenUrl,
-                    renderVisual = renderVisual
+                    renderVisual = renderVisual,
+                    renderImages = renderImages
                 )
             }
         } else {
@@ -1502,15 +1518,7 @@ private fun AssistantMessageRow(
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
-            AidenMessageImageAttachments(
-                attachments = imageAttachments,
-                edge = AidenMessageMediaEdge.LEADING,
-                loadData = loadAttachmentImage,
-                revealAttachmentId = imageArrivalRevealGenerationId?.let {
-                    AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
-                },
-                onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
-            )
+            renderImages(imageAttachments)
         }
         fallbackAttachments.forEach { attachment ->
             Spacer(modifier = Modifier.height(8.dp))
@@ -1720,8 +1728,12 @@ internal fun ActiveStreamingCard(
     val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
     val imagePlaceholders = remember(activityTimeline) { AidenImageGenerationPlaceholderState.items(activityTimeline) }
     val chronologicalRows = remember(isBotChat, liveText, reasoning, activityTimeline) {
-        if (isBotChat) null else AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
+        if (isBotChat) null else AidenChronologicalProjection.rows(
+            liveText, reasoning, activityTimeline, imageSlots = imagePlaceholders.map { it.id }
+        )
     }
+    // Placeholders sit beneath their step, like the image each becomes; the rest follow the reply.
+    val placedImageSlots = chronologicalRows?.let(AidenChronologicalProjection::placedImageSlots).orEmpty()
     // Without chronological rows, the timeline still lists the calls and their recaps.
     val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
@@ -1751,9 +1763,12 @@ internal fun ActiveStreamingCard(
                     live = true,
                     onCopy = onCopyMessage,
                     onOpenUrl = onOpenMessageUrl,
+                    renderImageSlot = { call ->
+                        AidenImageGenerationPlaceholderList(imagePlaceholders.filter { it.id == call }, palette)
+                    },
                     enteredRecaps = enteredRecaps
                 )
-                AidenImageGenerationPlaceholderList(imagePlaceholders, palette)
+                AidenImageGenerationPlaceholderList(imagePlaceholders.filterNot { it.id in placedImageSlots }, palette)
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
                         row.steps.any { it.toolName == "render_artifact" && it.isActive }
@@ -1940,6 +1955,10 @@ private fun AidenChronologicalTranscript(
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     renderVisual: @Composable (AidenChatVisual) -> Unit = {},
+    // A settled message's images beneath their step; the live reply has none.
+    renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = {},
+    // A live generate_image placeholder beneath its step.
+    renderImageSlot: @Composable (String) -> Unit = {},
     // Step ids of recaps already shown in this live reply; null for a settled message.
     enteredRecaps: MutableSet<String>? = null
 ) {
@@ -1984,6 +2003,8 @@ private fun AidenChronologicalTranscript(
                         row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
+                    AidenChronologicalRow.Kind.IMAGES -> renderImages(row.images)
+                    AidenChronologicalRow.Kind.IMAGE_SLOT -> row.imageSlot?.let { renderImageSlot(it) }
                 }
             }
         }

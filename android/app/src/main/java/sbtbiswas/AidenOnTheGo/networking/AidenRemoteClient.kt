@@ -633,7 +633,7 @@ class AidenRemoteClient(
             json.decodeFromString(String(bytes, Charsets.UTF_8))
         }
 
-    /** Revision 44: the chat's or Bot's spending limit, or `spending: null` without one. */
+    /** Revision 45: the chat's or Bot's spending limit, or `spending: null` without one. */
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
         executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
 

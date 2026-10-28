@@ -5830,7 +5830,7 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
-    /// Revision 44: a Workspace chat's total, or a Bot chat's month.
+    /// Revision 45: a Workspace chat's total, or a Bot chat's month.
     private var spendingOwner: AidenSpendingOwner {
         model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
     }
@@ -6609,22 +6609,39 @@ struct AidenMessageView: View, Equatable {
 
     }
 
+    /// A committed assistant reply's rows in the order they happened, with each
+    /// visual and image beneath the step that made it; nil without a usable timeline.
+    private var messageChronologicalRows: [AidenChronologicalRow]? {
+        guard message.role == .assistant, presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        )
+    }
+
     private var messageContent: some View {
         VStack(
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
-            if message.role == .assistant,
-               presentationStyle != .botMessages,
-               let rows = AidenChronologicalProjection.rows(
-                   text: message.text,
-                   reasoning: message.reasoning ?? "",
-                   timeline: message.timeline,
-                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
-               ) {
-                AidenChronologicalTranscript(rows: rows, active: false) { visual in
-                    AnyView(visualRow(visual))
-                }
+            if let rows = messageChronologicalRows {
+                AidenChronologicalTranscript(
+                    rows: rows,
+                    active: false,
+                    visualContent: { visual in AnyView(visualRow(visual)) },
+                    imageContent: { images in
+                        AnyView(AidenMessageImageAttachmentsView(
+                            attachments: images,
+                            edge: AidenMessageMediaEdge.forRole(message.role),
+                            loadData: loadAttachmentImage,
+                            revealAttachmentID: imageArrivalRevealAttachmentID,
+                            onArrivalRevealed: onImageArrivalRevealed
+                        ))
+                    }
+                )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
@@ -6661,13 +6678,16 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             }
-            // Snapshots appear once, inline at their visual, never in the strip.
+            // Snapshots appear once, inline at their visual, never in the strip,
+            // and images drawn beneath their step leave it too.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
                 let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
-                if !imageAttachments.isEmpty {
+                let placedImageIDs = messageChronologicalRows.map(AidenChronologicalProjection.placedImageIDs) ?? []
+                let trailingImages = imageAttachments.filter { !placedImageIDs.contains($0.id) }
+                if !trailingImages.isEmpty {
                     AidenMessageImageAttachmentsView(
-                        attachments: imageAttachments,
+                        attachments: trailingImages,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
                         revealAttachmentID: imageArrivalRevealAttachmentID,
@@ -7942,8 +7962,16 @@ private struct AidenLiveResponseView: View {
         return AidenChronologicalProjection.rows(
             text: model.liveText,
             reasoning: model.reasoning,
-            timeline: model.activityTimeline
+            timeline: model.activityTimeline,
+            imageSlots: imageGenerationItems.map(\.id)
         )
+    }
+
+    /// The live reply's image placeholders; each sits beneath its step when the
+    /// transcript is chronological, like the image it becomes.
+    private var imageGenerationItems: [AidenImageGenerationPlaceholderItem] {
+        guard model.isLiveReplyUnsettled else { return [] }
+        return AidenImageGenerationPlaceholderState.items(model.activityTimeline)
     }
 
     private var activity: (label: String, mark: AidenActivityMarkKind) {
@@ -8068,7 +8096,16 @@ private struct AidenLiveResponseView: View {
             }
 
             if let chronologicalRows {
-                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isLiveReplyUnsettled)
+                AidenChronologicalTranscript(
+                    rows: chronologicalRows,
+                    active: model.isLiveReplyUnsettled,
+                    imageSlotContent: { call in
+                        AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in
+                            AidenImageGenerationPlaceholderView(item: item)
+                                .transition(.opacity)
+                        })
+                    }
+                )
                     .contextMenu {
                         if !visibleText.isEmpty {
                             Button {
@@ -8087,11 +8124,10 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isLiveReplyUnsettled {
-                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
-                    AidenImageGenerationPlaceholderView(item: item)
-                        .transition(.opacity)
-                }
+            let placedSlots = chronologicalRows.map(AidenChronologicalProjection.placedImageSlots) ?? []
+            ForEach(imageGenerationItems.filter { !placedSlots.contains($0.id) }) { item in
+                AidenImageGenerationPlaceholderView(item: item)
+                    .transition(.opacity)
             }
 
             if let visualizingLabel,
@@ -8821,6 +8857,10 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
+    /// Draws a committed message's images beneath their step; the live stream has none.
+    var imageContent: (([AidenMessageAttachment]) -> AnyView)? = nil
+    /// Draws a live `generate_image` placeholder beneath its step.
+    var imageSlotContent: ((String) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -8857,6 +8897,10 @@ private struct AidenChronologicalTranscript: View {
                     }
                 case .visual(let visual):
                     visualContent?(visual)
+                case .images(let images):
+                    imageContent?(images)
+                case .imageSlot(let call):
+                    imageSlotContent?(call)
                 }
             }
         }

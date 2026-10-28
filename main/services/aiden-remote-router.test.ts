@@ -112,7 +112,7 @@ async function fixture(options: {
   botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
-  /** The host's spending ledger (contract revision 44). */
+  /** The host's spending ledger (contract revision 45). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
 } = {}) {
   const logs: unknown[] = [];
