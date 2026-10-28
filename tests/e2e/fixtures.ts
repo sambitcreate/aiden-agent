@@ -416,7 +416,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
               }
             : undefined,
         );
-        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
+        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> } | null;
         // pi-ai forwards tool-result images as a follow-up user message; that
         // carrier is not the user's prompt.
         const latestUser = [...(completion?.messages ?? [])]
@@ -485,6 +485,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
           }
           const call = script.calls[next]!;
           if (!completion.tools.some((tool) => tool.function?.name === call.name)) {
+            // A tool held back until loaded: load it first, as a real model
+            // does from the `load_tools` catalog, then make the scripted call.
+            const loadId = `${id}-load-${next}`;
+            const catalog = completion.tools.find((tool) => tool.function?.name === "load_tools")?.function?.description ?? "";
+            const loaded = (completion.messages ?? []).some(({ role, tool_call_id }) => role === "tool" && tool_call_id === loadId);
+            if (!loaded && catalog.includes(`- ${call.name}:`)) {
+              sendCompletion({ id: loadId, name: "load_tools", arguments: { names: [call.name] } });
+              return;
+            }
             state.error = `The real generation did not advertise required tool ${call.name}.`;
             sendCompletion({ text: state.error });
             return;

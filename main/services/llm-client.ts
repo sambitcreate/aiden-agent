@@ -377,6 +377,7 @@ import { createPiCodemodeTool } from "./pi-codemode.js";
 import { createPiToolDiscovery } from "./pi-tool-discovery.js";
 import { NO_LATE_MCP_DISCOVERY, type McpLateDiscovery } from "./mcp-tool-discovery-core.js";
 import { isPiCodemodeCallable, partitionPiCodemodeTools } from "./pi-runtime-tool.js";
+import { createOnDemandTools } from "./on-demand-tools.js";
 import {
   PiAgentRuntimeHarness,
   isPiManagedCancellationError,
@@ -3234,12 +3235,27 @@ export const llmClient = {
       };
       // Freeze only the already-admitted MCP inventory. The provider sees the
       // discovery/script tools; nested calls still use the ordinary host gates.
-      const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
-      const runtimeContributions = {
-        ...modelContributions,
-        tools: declared,
+      const { declared, deferred: deferredMcpTools } = partitionPiCodemodeTools(modelContributions.tools);
+      // Workspace chats with codemode declare rarely used built-in tools only
+      // once the model loads them; scripts can still call the ones they could.
+      const onDemandTools = !preparedBotContext && declared.some((tool) => tool.name === "codemode")
+        ? createOnDemandTools(declared)
+        : undefined;
+      const withOnDemandDeferred = (initial: readonly AgentTool[]) => {
+        if (!onDemandTools) return deferredMcpTools;
+        const declaredNames = new Set(initial.map(({ name }) => name));
+        return [
+          ...deferredMcpTools,
+          ...onDemandTools.onDemand.filter((tool) => !declaredNames.has(tool.name) && isPiCodemodeCallable(tool)),
+        ];
       };
-      const { systemPrompt, tools: runtimeTools } = runtimeContributions;
+      let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([]) : declared;
+      let deferredTools = withOnDemandDeferred(runtimeTools);
+      let runtimeContributions = {
+        ...modelContributions,
+        tools: runtimeTools,
+      };
+      const { systemPrompt } = runtimeContributions;
       // The MCP servers this turn may use, as a bounded section patched into the
       // transcript (never the base prompt), from the final admitted inventory,
       // including servers that finish discovery after the turn started.
@@ -3405,6 +3421,14 @@ export const llmClient = {
           )
         : undefined;
       let initialMessages = (await promptJournal.buildContext()).messages;
+      if (onDemandTools) {
+        // Tools this chat already loaded or called stay declared from the start.
+        runtimeTools = onDemandTools.initialTools(initialMessages);
+        deferredTools = withOnDemandDeferred(runtimeTools);
+        runtimeContributions = { ...runtimeContributions, tools: runtimeTools };
+        generationContextOptions.tools = runtimeTools;
+        generationContextOptions.deferredTools = deferredTools;
+      }
       const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
       if (agentsInstructions) {
@@ -3630,7 +3654,12 @@ export const llmClient = {
           prepareContext: async (context, requestSignal) => {
             let prepared = await prepareCustomModelToolContext(
               context,
-              browserDiscovery?.prepare.bind(browserDiscovery),
+              browserDiscovery || onDemandTools
+                ? async (current) => {
+                    const withBrowser = browserDiscovery ? await browserDiscovery.prepare(current) : current;
+                    return onDemandTools ? onDemandTools.prepare(withBrowser) : withBrowser;
+                  }
+                : undefined,
               runtime.provider.modelMetadata?.[model.id]?.overrides,
             );
             if (agentsInstructions) prepared = await agentsInstructions.apply(prepared, requestSignal);

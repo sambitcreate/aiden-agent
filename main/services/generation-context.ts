@@ -245,6 +245,8 @@ export function estimateContextBreakdown(options: GenerationContextOptions): Con
   for (const tool of options.deferredTools ?? []) {
     if (declared.has(tool.name)) continue;
     const discovery = (tool as PiDiscoverableTool).discovery;
+    // Built-in tools waiting to be loaded are not a connected service.
+    if (!discovery) continue;
     const key = discovery?.namespace ?? "";
     const server = servers.get(key) ?? { name: discovery?.label || "MCP service", count: 0, chars: 0 };
     server.count += 1;
