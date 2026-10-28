@@ -30,6 +30,7 @@ import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
 import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
 import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import type { BotIssue, BotIssueAction } from "../../renderer/shared/bot-issues.js";
 import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
 import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
@@ -1413,7 +1414,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; issues?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -3358,6 +3359,230 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
     await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0015", { outcome: "done" }, HOLDER);
     await asked;
     assert.deepEqual(await notices(), []);
+  } finally {
+    await service.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 42: Bot issues on phones (`bot:issues`)
+// ---------------------------------------------------------------------------
+
+const ISSUES_HOLDER = { issues: true };
+/** The issue the shared `botIssues` fixture carries, as the host stores it. */
+const ISSUE_CARD: BotIssue = {
+  id: "issue_card_1",
+  botId: BOT_ID,
+  kind: "run_stalled",
+  dedupeKey: "run:stalled:1",
+  title: "A reply has been quiet for 10 minutes",
+  body: "The Bot is still working on the invoices.",
+  actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
+  createdAt: Date.parse("2026-10-27T09:06:00.000Z"),
+};
+
+/** A host's issue service: the cards it holds, the actions it ran, and its change listeners. */
+function issueHost(
+  options: {
+    cards?: BotIssue[];
+    /** What `act` answers, in order; the last one repeats. */
+    results?: Array<"done" | "not_open" | "invalid">;
+  } = {},
+) {
+  let cards = [...(options.cards ?? [ISSUE_CARD])];
+  const results = [...(options.results ?? ["done"])];
+  const listeners = new Set<(botId: string) => void>();
+  const calls: Array<{ botId: string; issueId: string; action: BotIssueAction }> = [];
+  const service = {
+    list: async (botId: string) => cards.filter((card) => card.botId === botId),
+    act: async (botId: string, issueId: string, action: BotIssueAction) => {
+      calls.push({ botId, issueId, action });
+      return results.length > 1 ? results.shift()! : results[0]!;
+    },
+    onChange: (listener: (botId: string) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return {
+    service,
+    calls,
+    settle(issueId: string) {
+      cards = cards.map((card) =>
+        card.id === issueId
+          ? { ...card, actions: [], resolvedAt: Date.parse("2026-10-27T09:20:00.000Z"), resolution: "fixed" as const }
+          : card,
+      );
+      for (const listener of listeners) listener(BOT_ID);
+    },
+  };
+}
+
+function issueSession(
+  issues: ReturnType<typeof issueHost>["service"],
+  options: { wired?: boolean } = {},
+) {
+  return new AidenRemoteBotSessionService({
+    bots: botService({ name: "Scout" }),
+    runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
+    ...(options.wired === false ? {} : { issues }),
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+}
+
+test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  const holder = await openAudienceStream(service, ISSUES_HOLDER);
+  const legacy = await openAudienceStream(service, { cards: true, handoffs: true, handoffNotes: true });
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+
+    const fetched = await service.session(BOT_ID, ISSUES_HOLDER);
+    assert.deepEqual(fetched.issues?.map((issue) => [issue.id, issue.kind, issue.resolved]), [
+      ["issue_card_1", "run_stalled", false],
+    ]);
+    assert.deepEqual(fetched.issues?.[0]?.actions, [{ kind: "stop_run" }, { kind: "keep_waiting" }]);
+    // Another device with every other opt-in is still a legacy device here.
+    const other = await service.session(BOT_ID, { cards: true, activity: true, handoffs: true, handoffNotes: true });
+    assert.equal("issues" in other, false);
+    assert.deepEqual(holder.frames[0]?.payload.session.issues, fetched.issues);
+    assert.equal("issues" in legacy.frames[0]!.payload.session, false);
+
+    host.settle("issue_card_1");
+    await holder.until(() => holder.frames.some((frame) => frame.type === "issues"), "the issues frame");
+    await legacy.until(() => legacy.frames.length >= 2, "the legacy state frame");
+    const frame = holder.frames.find((candidate) => candidate.type === "issues")!;
+    assert.deepEqual(
+      frame.payload.issues?.map((issue: { id: string; resolved: boolean }) => [issue.id, issue.resolved]),
+      [["issue_card_1", true]],
+    );
+    const legacyFrame = legacy.frames[1]!;
+    assert.equal(legacyFrame.type, "state", "a device without bot:issues still advances its seq");
+    assert.equal(legacyFrame.seq, frame.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("an unwired host sends no issues even when the device asks for them", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service, { wired: false });
+  try {
+    assert.equal(service.supportsIssues, false);
+    assert.equal("issues" in (await service.session(BOT_ID, ISSUES_HOLDER)), false);
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0009", { action: { kind: "stop_run" } }),
+      isError("not_found", 404),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("act stop_run reaches the issue service once, and an action the card never offered records nothing", async () => {
+  const host = issueHost({ results: ["done", "invalid", "done", "not_open"] });
+  const service = issueSession(host.service);
+  try {
+    const request = { action: { kind: "stop_run" } };
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    // The same request UUID replays its receipt instead of acting twice.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    assert.deepEqual(host.calls, [{ botId: BOT_ID, issueId: ISSUE_CARD.id, action: { kind: "stop_run" } }]);
+
+    // An action the card no longer offers is `409 operation_stale`, and
+    // nothing is recorded: the same key runs once the card offers it again.
+    const keepWaiting = { action: { kind: "keep_waiting" } };
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      isError("operation_stale", 409),
+    );
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      { result: "done" },
+    );
+    assert.equal(host.calls.length, 3);
+
+    // not_open is a success: the card is gone, so the phone drops it.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0003", {
+        action: { kind: "open_chat" },
+      }),
+      { result: "not_open" },
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("unknown and desktop-only issue actions are 400 and run nothing", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  try {
+    for (const action of [
+      { kind: "open_settings", section: "model" },
+      { kind: "stop_run", routineId: "routine_1" },
+      { kind: "resume_routine" },
+      { kind: "surprise" },
+    ]) {
+      await assert.rejects(
+        service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0010", { action }),
+        isError("invalid_request", 400),
+        JSON.stringify(action),
+      );
+    }
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0011", { action: { kind: "stop_run" }, extra: true }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, "not an issue id", "issue-act-request-0012", { action: { kind: "stop_run" } }),
+      isError("invalid_request", 400),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a card's desktop-only settings action never crosses the wire, and a settled card offers nothing", async () => {
+  const host = issueHost({
+    cards: [
+      {
+        ...ISSUE_CARD,
+        id: "issue_settings_1",
+        dedupeKey: "preflight:gmail",
+        kind: "preflight_failed",
+        actions: [{ kind: "open_settings", section: "connections" }],
+      },
+      // The store keeps a settled row's old actions; the wire still offers none.
+      { ...ISSUE_CARD, id: "issue_settled_1", resolvedAt: 1_234, resolution: "fixed" },
+    ],
+  });
+  const service = issueSession(host.service);
+  try {
+    const issues = (await service.session(BOT_ID, ISSUES_HOLDER)).issues ?? [];
+    // The store holds them newest first; the wire carries them oldest first.
+    assert.deepEqual(issues.map((issue) => issue.id), ["issue_settled_1", "issue_settings_1"]);
+    const settings = issues.find((issue) => issue.id === "issue_settings_1");
+    const settled = issues.find((issue) => issue.id === "issue_settled_1");
+    assert.deepEqual(settings?.actions, [], "settings stay on the Mac");
+    assert.equal(settings?.resolved, false);
+    assert.equal(settled?.resolved, true);
+    assert.deepEqual(settled?.actions, [], "a settled card offers nothing");
   } finally {
     await service.close();
   }

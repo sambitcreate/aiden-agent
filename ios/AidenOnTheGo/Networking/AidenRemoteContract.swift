@@ -676,6 +676,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
+        Self(rawValue: "bot:issues"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -705,6 +706,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// (`400`), and one without approvals answers `404`, so the device asks for
     /// it alone, after any other negotiation.
     static let scheduleCards = Self(rawValue: "schedule:cards")
+
+    /// Revision 42: the device receives the Bot session `issues` list and
+    /// `issues` frames, a summary `issueCount`, and issue items in the routine
+    /// notification feed, and may answer a card through
+    /// `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
+    /// It grants no authority. A Mac on an earlier revision refuses the name,
+    /// so the device asks for it alone, after any other negotiation.
+    static let botIssues = Self(rawValue: "bot:issues")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -2714,7 +2723,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs",
+        "botSessionCards", "botHandoffs", "botIssues",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2861,6 +2870,11 @@ private enum AidenBotPrivateResponseValidator {
         }
         if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
             return true
+        }
+        // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
+        if root == "botIssues", key == "result" {
+            return parentPath.isEmpty
+                || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if root == "botDetail" {

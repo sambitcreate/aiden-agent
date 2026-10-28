@@ -186,6 +186,17 @@ data class AidenServer(
         get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
+     * The Mac offers `bot:issues` (revision 42). There is no `/server` feature token: the offer
+     * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
+     */
+    val offersBotIssues: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ISSUES) == true
+
+    /** Offered and held: show the Bot's "Needs you" cards and their actions. */
+    val supportsBotIssues: Boolean
+        get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
+
+    /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
      */

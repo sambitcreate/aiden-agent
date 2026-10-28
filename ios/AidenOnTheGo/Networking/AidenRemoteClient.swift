@@ -355,6 +355,17 @@ struct AidenServer: Codable, Equatable, Sendable {
         offersBotHandoffs && capabilities.contains(.botHandoffs)
     }
 
+    /// The Mac offers `bot:issues` (revision 42): show issue cards and their
+    /// actions. There is no feature token: the support inventory is the signal.
+    var offersBotIssues: Bool {
+        serverCapabilities?.contains(.botIssues) == true
+    }
+
+    /// This device holds `bot:issues`: render the Bot's "Needs you" cards.
+    var supportsBotIssues: Bool {
+        offersBotIssues && capabilities.contains(.botIssues)
+    }
+
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
     var announcesBotActivity: Bool {
         features.contains(Self.botActivityFeature)
@@ -1081,7 +1092,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes,
+            .botHandoffNotes, .botIssues,
             .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
@@ -1856,6 +1867,26 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
         guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
         return receipt
+    }
+
+    /// Contract revision 42 (`bot:issues`): carries out one action a card
+    /// offers. The request UUID is the idempotency key, so a retried action
+    /// replays its receipt instead of running the host action twice.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        try validateBotIdentifier(botId)
+        try AidenRemoteIssueWire.validateID(issueId, field: "issueId")
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "issues", issueId, "act"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
     }
 
     /// Pauses the Bot: a running reply stops, and nothing runs until it is resumed.

@@ -22,6 +22,13 @@ import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
 import {
+  BOT_ISSUE_ID_PATTERN,
+  BOT_ISSUE_LIMITS,
+  botIssueActionOf,
+  botIssueKindOf,
+  type BotIssueAction,
+} from "../../renderer/shared/bot-issues.js";
+import {
   BOT_HANDOFF_ACTION_MAX_CHARS,
   BOT_HANDOFF_NOTE_MAX_CHARS,
   BOT_HANDOFF_URL_MAX_CHARS,
@@ -125,7 +132,18 @@ export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
  * carries no breakdown, prompt cache, tool or server names, paths or text.
  */
 export const AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_CONTRACT_REVISION = 41 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_CONTRACT_REVISION;
+/**
+ * Contract revision 42 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION`): Bot
+ * issues on phones (`bot:issues`). A device that negotiates it receives the
+ * session `issues` list, the `issues` frame, a Bot summary `issueCount`, and may
+ * answer a card through `POST /bots/{botId}/issues/{issueId}/act`. Devices
+ * without it see the earlier shapes: no `issues`, no `issueCount`, and no
+ * issue routes. Bot issue rows also join the routine notification feed as
+ * `kind: "issue"` items, only for holders.
+ */
+export const AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION = 42 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -308,11 +326,23 @@ export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:hando
 
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
+/**
+ * Contract revision 42: a device holding `bot:issues` receives the session
+ * `issues` list and `issues` frame, the Bot summary `issueCount`, issue
+ * notifications and the issue act route. Like `bot:cards` it grants no
+ * authority: the route still needs `bot:read` and `bot:write`. It is an opt-in
+ * any device type may hold.
+ */
+export const AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES = ["bot:issues"] as const;
+
+export type AidenRemoteBotIssueCapability = (typeof AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES)[number];
+
 /** Opt-ins that change what a device is sent, never what it may do. */
 export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
 ] as const;
 
 /**
@@ -338,6 +368,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
 
@@ -354,6 +385,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
 
@@ -955,6 +987,11 @@ export type AidenRemoteBotSummary = AidenRemoteBotSummaryBase & {
    * carries it for those devices.
    */
   paused?: boolean;
+  /**
+   * Contract revision 42, only for `bot:issues` devices: how many open issues
+   * the Bot's card list holds. Sent only while it is above zero.
+   */
+  issueCount?: number;
 };
 
 export interface AidenRemoteBotCustomSelection {
@@ -1155,6 +1192,7 @@ export const AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES = [
   "activity",
   "queued",
   "handoff",
+  "issues",
   "closed",
 ] as const;
 export type AidenRemoteBotSessionEventType = (typeof AIDEN_REMOTE_BOT_SESSION_EVENT_TYPES)[number];
@@ -1309,14 +1347,29 @@ export interface AidenRemoteBotRoutineSuggestionList {
   suggestions: AidenRemoteBotRoutineSuggestion[];
 }
 
+export const AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS = ["routine", "issue"] as const;
+export type AidenRemoteBotNotificationKind = (typeof AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS)[number];
+
+/**
+ * One item the phone feed may announce once. Routine results are the
+ * revision-27 shape (`kind` absent means `"routine"`); contract revision 42
+ * adds `kind: "issue"` for a "Needs you" card a `bot:issues` device receives,
+ * whose `routineName` is the card's title and which carries no `routineId` or
+ * `status`.
+ */
 export interface AidenRemoteBotRoutineNotification {
   /** The routine run id; clients post `aiden.bot-routine.<id>` once. */
   id: string;
+  /** Revision 42: absent means `"routine"`. */
+  kind?: AidenRemoteBotNotificationKind;
   botId: string;
   botName: string;
-  routineId: string;
+  /** Routine results only. */
+  routineId?: string;
+  /** The item's title: the routine's name, or an issue's title. */
   routineName: string;
-  status: "succeeded" | "failed";
+  /** Routine results only: how the run ended. */
+  status?: "succeeded" | "failed";
   finishedAt: string;
   /** First 160 characters of the reply (redacted), or a fixed failure line. */
   preview: string;
@@ -1464,6 +1517,69 @@ export interface AidenRemoteBotHandoffOpenOnMacReceipt {
   opened: boolean;
 }
 
+// --- Contract revision 42: Bot issues on phones (`bot:issues`).
+
+/** The four host issue kinds the Bot issue service stores (`BotIssueKind`). */
+export const AIDEN_REMOTE_BOT_ISSUE_KINDS = [
+  "preflight_failed",
+  "routine_failed",
+  "routine_paused",
+  "run_stalled",
+] as const;
+
+export type AidenRemoteBotIssueKind = (typeof AIDEN_REMOTE_BOT_ISSUE_KINDS)[number];
+
+/**
+ * One action a phone may take on a card. `open_settings` is desktop-only (its
+ * sections are the Bot's Advanced page and Providers settings), so it never
+ * crosses the wire: a card that offered only that shows "Open on your Mac".
+ */
+export type AidenRemoteBotIssueAction = Exclude<BotIssueAction, { kind: "open_settings" }>;
+
+/** Every action kind a phone may send. */
+export const AIDEN_REMOTE_BOT_ISSUE_ACTION_KINDS = [
+  "open_chat",
+  "resume_routine",
+  "stop_run",
+  "keep_waiting",
+] as const;
+
+/** How many issues one session projects (the store keeps up to 8 open and 50 settled). */
+export const AIDEN_REMOTE_BOT_ISSUE_MAX = BOT_ISSUE_LIMITS.openPerBot + BOT_ISSUE_LIMITS.retainedResolved;
+
+/**
+ * Contract revision 42, only for `bot:issues` devices: one host-owned "Needs
+ * you" card. The Bot's model never raises one, and `open_settings` is not sent
+ * as an action. `title` is at most 80 characters and `body` at most 280 (the
+ * same bounds the desktop card uses).
+ */
+export interface AidenRemoteBotIssue {
+  id: string;
+  kind: AidenRemoteBotIssueKind;
+  title: string;
+  body: string;
+  routineId?: string;
+  /** Offered actions in card order, at most two; the last one is primary. */
+  actions: AidenRemoteBotIssueAction[];
+  createdAt: string;
+  /** Settled issues carry `true` and offer no action a phone may take. */
+  resolved: boolean;
+}
+
+/** `POST /bots/{botId}/issues/{issueId}/act`. */
+export interface AidenRemoteBotIssueActRequest {
+  action: AidenRemoteBotIssueAction;
+}
+
+/**
+ * `{ result: "done" }` when the host carried the action out (and settled the
+ * card, unless the action only opens a surface), `{ result: "not_open" }` when
+ * the issue is gone or already settled.
+ */
+export interface AidenRemoteBotIssueActReceipt {
+  result: "done" | "not_open";
+}
+
 /** `GET /bots/{botId}/session`: the newest entries plus the in-flight partial. */
 export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   botId: string;
@@ -1485,6 +1601,8 @@ export interface AidenRemoteBotSession extends AidenRemoteBotSessionStateView {
   queued?: AidenRemoteBotQueuedMessage[];
   /** Revision 37, only for `bot:handoffs` devices: the hand-off the Bot is waiting on, or null. */
   handoff?: AidenRemoteBotHandoff | null;
+  /** Revision 42, only for `bot:issues` devices: the Bot's issue cards, oldest first. */
+  issues?: AidenRemoteBotIssue[];
 }
 
 export type AidenRemoteBotSessionEventPayload =
@@ -1497,6 +1615,7 @@ export type AidenRemoteBotSessionEventPayload =
   | { type: "activity"; payload: { activity: AidenRemoteBotSessionActivity | null } }
   | { type: "queued"; payload: { queued: AidenRemoteBotQueuedMessage[] } }
   | { type: "handoff"; payload: { handoff: AidenRemoteBotHandoff | null } }
+  | { type: "issues"; payload: { issues: AidenRemoteBotIssue[] } }
   | { type: "closed"; payload: Record<string, never> };
 
 /** One frame of `GET /bots/{botId}/session/events`. */
@@ -1770,6 +1889,8 @@ export interface AidenRemoteContractFixture {
   botAttachments?: AidenRemoteBotAttachmentsFixture;
   /** Revision 37 (`bot:handoffs`): hand-offs and pause, for holders and as legacy devices see them. */
   botHandoffs?: AidenRemoteBotHandoffsFixture;
+  /** Revision 42 (`bot:issues`): issue cards, their frames, the act route and the phone notification. */
+  botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
@@ -2129,6 +2250,7 @@ const AIDEN_REMOTE_PRIVATE_BOT_FIXTURE_ROOTS = new Set([
   "deviceCapabilitiesUpdate",
   "chatProgressEvents",
   "botHandoffs",
+  "botIssues",
 ]);
 
 function normalizedPrivateWireKey(key: string): string {
@@ -2171,6 +2293,13 @@ function isPrivateChildProjectionKey(key: string): boolean {
 
 function isAllowedBotIdentityField(root: string, path: readonly string[]): boolean {
   const key = path[path.length - 1];
+  if (root === "botIssues") {
+    // Contract revision 42: the act route's receipt is `{ result: "done" |
+    // "not_open" }`; that word is a receipt, not a tool result.
+    if (key === "result" && path.length === 1) return true;
+    const joined = path.join(".");
+    return key === "result" && (joined === "act.response.result" || joined === "notOpen.result");
+  }
   // `openingGreeting` was retired in revision 27 and is never on the wire.
   if (key !== "instructions") return false;
   if (root === "botDetail") {
@@ -2717,13 +2846,17 @@ function parseBotAvatarView(value: unknown): AidenRemoteBotAvatarView {
 export function parseAidenRemoteBotSummary(value: unknown): AidenRemoteBotSummary {
   const summary = parseBotSummaryFields(value);
   const record = value as Record<string, unknown>;
+  const issueCount = hasOwn(record, "issueCount")
+    ? boundedIntegerValue(record.issueCount, "Bot issueCount", 0, BOT_ISSUE_LIMITS.openPerBot)
+    : undefined;
+  const withIssues = issueCount === undefined ? summary : { ...summary, issueCount };
   if (!hasOwn(record, "paused")) {
     assertBotPausedAgreesWithState(summary.sessionState, false, "Bot summary");
-    return summary;
+    return withIssues;
   }
   if (record.paused !== true) throw new Error("Bot summary paused must be true when present.");
   assertBotPausedAgreesWithState(summary.sessionState, true, "Bot summary");
-  return { ...summary, paused: true };
+  return { ...withIssues, paused: true };
 }
 
 /** Revision 37: a `paused` flag and a `paused` session state always travel together. */
@@ -5649,16 +5782,33 @@ export function parseAidenRemoteBotRoutineNotificationList(value: unknown): Aide
     if (!isRecord(notification)) throw new Error("Bot routine notification must be an object.");
     assertExactKeys(
       notification,
-      ["id", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview"],
+      ["id", "kind", "botId", "botName", "routineId", "routineName", "status", "finishedAt", "preview"],
       "Bot routine notification",
     );
+    const kind = hasOwn(notification, "kind")
+      ? enumMember(notification.kind, AIDEN_REMOTE_BOT_ROUTINE_NOTIFICATION_KINDS, "Bot notification kind")
+      : "routine";
+    // A routine result says which routine ran and how it ended; an issue card
+    // carries neither, and its `routineName` is the card's own title.
+    if (kind === "issue") {
+      if (hasOwn(notification, "routineId") || hasOwn(notification, "status")) {
+        throw new Error("Bot issue notification must not carry routineId or status.");
+      }
+    } else if (!hasOwn(notification, "routineId") || !hasOwn(notification, "status")) {
+      throw new Error("Bot routine notification must carry routineId and status.");
+    }
     return {
       id: boundedText(notification.id, "Bot routine notification id", 160),
+      ...(hasOwn(notification, "kind") ? { kind } : {}),
       botId: boundedBotId(notification.botId, "Bot routine notification botId"),
       botName: boundedText(notification.botName, "Bot routine notification botName", 80),
-      routineId: boundedText(notification.routineId, "Bot routine notification routineId", 160),
+      ...(hasOwn(notification, "routineId")
+        ? { routineId: boundedText(notification.routineId, "Bot routine notification routineId", 160) }
+        : {}),
       routineName: boundedText(notification.routineName, "Bot routine notification routineName", 120),
-      status: enumMember(notification.status, ["succeeded", "failed"] as const, "Bot routine notification status"),
+      ...(hasOwn(notification, "status")
+        ? { status: enumMember(notification.status, ["succeeded", "failed"] as const, "Bot routine notification status") }
+        : {}),
       finishedAt: dateTimeValue(notification.finishedAt, "Bot routine notification finishedAt"),
       preview: boundedText(
         notification.preview,
@@ -5728,7 +5878,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
   if (!isRecord(value)) throw new Error("Bot session must be an object.");
   assertExactKeys(
     value,
-    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued", "handoff"],
+    ["botId", "epoch", "seq", "state", "interrupted", "blocked", "partial", "entries", "hasOlder", "question", "approval", "activity", "queued", "handoff", "issues"],
     "Bot session",
   );
   if (!hasOwn(value, "question")) throw new Error("Bot session question is required.");
@@ -5759,6 +5909,7 @@ export function parseAidenRemoteBotSession(value: unknown): AidenRemoteBotSessio
     ...(hasOwn(value, "handoff")
       ? { handoff: value.handoff === null ? null : parseAidenRemoteBotHandoff(value.handoff) }
       : {}),
+    ...(hasOwn(value, "issues") ? { issues: parseAidenRemoteBotIssueList(value.issues) } : {}),
   };
 }
 
@@ -5831,6 +5982,9 @@ export function parseAidenRemoteBotSessionEvent(value: unknown): AidenRemoteBotS
         type,
         payload: { handoff: payload.handoff === null ? null : parseAidenRemoteBotHandoff(payload.handoff) },
       };
+    case "issues":
+      assertExactKeys(payload, ["issues"], "Bot session issues event");
+      return { ...base, type, payload: { issues: parseAidenRemoteBotIssueList(payload.issues) } };
     case "closed":
       assertExactKeys(payload, [], "Bot session closed event");
       return { ...base, type, payload: {} };
@@ -5980,6 +6134,78 @@ export function parseAidenRemoteBotHandoffOpenOnMacReceipt(value: unknown): Aide
     waitId: parseBotQuestionWaitId(value.waitId, "Bot hand-off open-on-Mac receipt waitId"),
     opened: requiredBooleanValue(value.opened, "Bot hand-off open-on-Mac receipt opened"),
   };
+}
+
+// --- Contract revision 42: Bot issues on phones (`bot:issues`).
+
+/**
+ * One card action a phone may send, read through the shared Bot issue parser.
+ * `open_settings` is the desktop's own surface and never crosses the wire.
+ */
+export function parseAidenRemoteBotIssueAction(value: unknown): AidenRemoteBotIssueAction {
+  const action = botIssueActionOf(value);
+  if (action === null || action.kind === "open_settings") throw new Error("Bot issue action is invalid.");
+  return action;
+}
+
+export function parseAidenRemoteBotIssue(value: unknown): AidenRemoteBotIssue {
+  if (!isRecord(value)) throw new Error("Bot issue must be an object.");
+  assertExactKeys(
+    value,
+    ["id", "kind", "title", "body", "routineId", "actions", "createdAt", "resolved"],
+    "Bot issue",
+  );
+  const id = boundedText(value.id, "Bot issue id", 160);
+  if (!BOT_ISSUE_ID_PATTERN.test(id)) throw new Error("Bot issue id is invalid.");
+  const kind = botIssueKindOf(value.kind);
+  if (kind === null) throw new Error("Bot issue kind is invalid.");
+  if (!Array.isArray(value.actions) || value.actions.length > 2) {
+    throw new Error("Bot issue actions must list at most 2 entries.");
+  }
+  const actions = value.actions.map(parseAidenRemoteBotIssueAction);
+  const resolved = requiredBooleanValue(value.resolved, "Bot issue resolved");
+  // A settled card offers nothing a phone may take: every action acted.
+  if (resolved && actions.length > 0) throw new Error("Bot issue resolved must not offer actions.");
+  let routineId: string | undefined;
+  if (hasOwn(value, "routineId")) {
+    routineId = boundedText(value.routineId, "Bot issue routineId", 160);
+    if (!BOT_ISSUE_ID_PATTERN.test(routineId)) throw new Error("Bot issue routineId is invalid.");
+  }
+  return {
+    id,
+    kind,
+    title: boundedText(value.title, "Bot issue title", BOT_ISSUE_LIMITS.titleChars),
+    body: boundedText(value.body, "Bot issue body", BOT_ISSUE_LIMITS.bodyChars, true),
+    ...(routineId === undefined ? {} : { routineId }),
+    actions,
+    createdAt: dateTimeValue(value.createdAt, "Bot issue createdAt"),
+    resolved,
+  };
+}
+
+/** At most `AIDEN_REMOTE_BOT_ISSUE_MAX` cards, each with its own id. */
+export function parseAidenRemoteBotIssueList(value: unknown): AidenRemoteBotIssue[] {
+  if (!Array.isArray(value)) throw new Error("Bot issues must be an array.");
+  if (value.length > AIDEN_REMOTE_BOT_ISSUE_MAX) {
+    throw new Error(`Bot issues must contain at most ${AIDEN_REMOTE_BOT_ISSUE_MAX} items.`);
+  }
+  const issues = value.map(parseAidenRemoteBotIssue);
+  if (new Set(issues.map((issue) => issue.id)).size !== issues.length) {
+    throw new Error("Bot issue ids must be unique.");
+  }
+  return issues;
+}
+
+export function parseAidenRemoteBotIssueActRequest(value: unknown): AidenRemoteBotIssueActRequest {
+  if (!isRecord(value)) throw new Error("Bot issue act request must be an object.");
+  assertExactKeys(value, ["action"], "Bot issue act request");
+  return { action: parseAidenRemoteBotIssueAction(value.action) };
+}
+
+export function parseAidenRemoteBotIssueActReceipt(value: unknown): AidenRemoteBotIssueActReceipt {
+  if (!isRecord(value)) throw new Error("Bot issue act receipt must be an object.");
+  assertExactKeys(value, ["result"], "Bot issue act receipt");
+  return { result: enumMember(value.result, ["done", "not_open"] as const, "Bot issue act result") };
 }
 
 export function parseAidenRemoteBotMessageReceipt(value: unknown): AidenRemoteBotMessageReceipt {
@@ -6388,6 +6614,70 @@ function parseBotHandoffsFixture(value: unknown): AidenRemoteBotHandoffsFixture 
 export interface AidenRemoteBotAttachmentsFixture {
   send: { request: AidenRemoteBotMessageRequest; response: AidenRemoteBotMessageReceipt };
   attachmentsOnly: AidenRemoteBotMessageRequest;
+}
+
+/**
+ * Revision 42: what a `bot:issues` device receives for a Bot that needs the
+ * person, and the act route it answers a card with.
+ */
+export interface AidenRemoteBotIssuesFixture {
+  capability: AidenRemoteBotIssueCapability;
+  /** A session carrying one open card and one the person already settled. */
+  session: AidenRemoteBotSession;
+  /** The cards opening, settling, and a card that only opens settings on the Mac. */
+  events: AidenRemoteBotSessionEvent[];
+  act: { request: AidenRemoteBotIssueActRequest; response: AidenRemoteBotIssueActReceipt };
+  /** The act route's other success: nothing was open under that id. */
+  notOpen: AidenRemoteBotIssueActReceipt;
+  /** A summary carrying `issueCount`. */
+  summary: AidenRemoteBotSummary;
+  /** A phone-feed item for the same Bot's card. */
+  notification: AidenRemoteBotRoutineNotificationList;
+}
+
+function parseBotIssuesFixture(value: unknown): AidenRemoteBotIssuesFixture {
+  if (!isRecord(value)) throw new Error("Bot issues fixture must be an object.");
+  assertExactKeys(value, ["capability", "session", "events", "act", "notOpen", "summary", "notification"], "Bot issues fixture");
+  const capability = enumMember(value.capability, AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES, "Bot issues fixture capability");
+  const session = parseAidenRemoteBotSession(value.session);
+  if (!session.issues || session.issues.length === 0) {
+    throw new Error("Bot issues fixture session must carry its cards.");
+  }
+  const open = session.issues.filter((issue) => !issue.resolved);
+  const settled = session.issues.filter((issue) => issue.resolved);
+  if (open.length === 0 || settled.length === 0) {
+    throw new Error("Bot issues fixture session must carry an open and a settled card.");
+  }
+  // A card that only the Mac can answer keeps its title and body but no action.
+  if (!open.some((issue) => issue.actions.length === 0)) {
+    throw new Error("Bot issues fixture session must carry a card with no phone action.");
+  }
+  if (!Array.isArray(value.events)) throw new Error("Bot issues fixture events must be an array.");
+  const events = value.events.map(parseAidenRemoteBotSessionEvent);
+  if (!events.some((event) => event.type === "issues")) {
+    throw new Error("Bot issues fixture events must carry an issues frame.");
+  }
+  const act = requestResponseRecord(value.act, "Bot issue act");
+  const summary = parseAidenRemoteBotSummary(value.summary);
+  if (summary.issueCount === undefined || summary.issueCount < 1) {
+    throw new Error("Bot issues fixture summary must carry a positive issueCount.");
+  }
+  const notification = parseAidenRemoteBotRoutineNotificationList(value.notification);
+  if (!notification.notifications.some((item) => item.kind === "issue")) {
+    throw new Error("Bot issues fixture notification must carry an issue item.");
+  }
+  return {
+    capability,
+    session,
+    events,
+    act: {
+      request: parseAidenRemoteBotIssueActRequest(act.request),
+      response: parseAidenRemoteBotIssueActReceipt(act.response),
+    },
+    notOpen: parseAidenRemoteBotIssueActReceipt(value.notOpen),
+    summary,
+    notification,
+  };
 }
 
 function parseBotAttachmentsFixture(value: unknown): AidenRemoteBotAttachmentsFixture {
@@ -7231,6 +7521,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     botHandoffs = parseBotHandoffsFixture(value.botHandoffs);
   }
+  let botIssues: AidenRemoteBotIssuesFixture | undefined;
+  if (value.botIssues !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION) {
+      throw new Error(`Bot issue fixtures require contract revision ${AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION}.`);
+    }
+    botIssues = parseBotIssuesFixture(value.botIssues);
+  }
   let scheduleCards: AidenRemoteScheduleCardsFixture | undefined;
   if (value.scheduleCards !== undefined) {
     if (contractRevision < AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION) {
@@ -7332,6 +7629,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botActivity ? { botActivity } : {}),
     ...(botAttachments ? { botAttachments } : {}),
     ...(botHandoffs ? { botHandoffs } : {}),
+    ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
   };
 }

@@ -52,6 +52,18 @@ import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/te
 import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
+import { checkBotTurnClaims } from "./bot-claim-check.js";
+import { commitmentReviewExtras } from "../bot-commitments/commitments-main.js";
+import { renderBotLessons } from "../bot-lessons/prompt.js";
+import {
+  botLearningBudget,
+  botLessons,
+  howToReviewExtras,
+  maybeTidyMemory,
+  memorySnapshotText,
+  recordMemoryChange,
+} from "../bot-learning/learning-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -74,6 +86,7 @@ import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { renderBotRulesSection } from "../bot-rules/prompt.js";
 import { botRules } from "../bot-rules/store-main.js";
+import { botIssues } from "../bot-issues/service-main.js";
 import { createBotMemoryReview, type BotMemoryAdmission } from "../bot-memory/review.js";
 import { BOT_MEMORY_TOOL_NAME, botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { BOT_RECALL_TOOL_NAME, botRecallToolEntry } from "../bot-memory/recall.js";
@@ -110,6 +123,18 @@ async function canonicalChatId(botId: string): Promise<string> {
 async function admit(botId: string): Promise<BotRuntimeAuthorityAdmission> {
   const chatId = await canonicalChatId(botId);
   return botRuntimeAuthority.admit({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, chatId });
+}
+
+/**
+ * The health check's admission probe: admit the Bot's current authority (which
+ * repairs a model setting that only went stale) and report the model it runs
+ * on. The lease is released at once; nothing runs under it.
+ */
+export async function probeBotAdmission(botId: string): Promise<{ providerId: string; modelId: string }> {
+  return withAdmission(botId, async (admission) => ({
+    providerId: admission.authority.provider.sourceProviderId,
+    modelId: admission.authority.provider.sourceModelId,
+  }));
 }
 
 /** Admit the Bot's current authority for one step and release it right away. */
@@ -172,7 +197,8 @@ async function promptRules(botId: string) {
  * work runs on exactly the grant it holds. Its signal aborts the work when
  * access changes; `revalidate` fences every provider request and memory write.
  */
-async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
+/** Admission for background learning work (memory review, reflection, tidying). */
+export async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission> {
   if ((await botCapabilityStore.getBotModelAuthority(botId)) === undefined) return { ok: false, reason: "no_model" };
   if (!(await botStore.get(botId))) return { ok: false, reason: "not_admitted" };
   let admission: BotRuntimeAuthorityAdmission | undefined;
@@ -207,6 +233,16 @@ const memoryReview = createBotMemoryReview({
   isIdle: async (botId) => (await (await botSessionRuntime()).state(botId)).kind === "idle",
   admit: admitMemoryWork,
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} memory review failed.`, error),
+  extras: (botId) => {
+    const followUps = commitmentReviewExtras(botId);
+    const howTo = howToReviewExtras(botId);
+    return { tools: [...followUps.tools, ...howTo.tools], instructions: [...followUps.instructions, ...howTo.instructions] };
+  },
+  reserve: (botId) => botLearningBudget.reserve(botId, "review", 3_072),
+  snapshot: (botId) => memorySnapshotText(botId),
+  recordChange: (botId, before, result) =>
+    recordMemoryChange(botId, "memory_review", before, `Remembered ${result.added} thing${result.added === 1 ? "" : "s"}`),
+  afterReview: (botId) => void maybeTidyMemory(botId).catch(() => undefined),
 });
 
 const compactionSteering = createBotCompactionSteering({
@@ -244,7 +280,12 @@ const extension: BotExtensionDeps = {
         [withBotManagedWorkspace("", workspace, fileAuthority).trim(), renderBotRulesSection(bot.name, await promptRules(bot.id))]
           .filter((part) => part.length > 0)
           .join("\n\n"),
-        [botRoutineGuidance(toolNames), tools.guidance(bot.id, offered.toolNames)].filter(Boolean).join("\n\n"),
+        [
+          botRoutineGuidance(toolNames),
+          tools.guidance(bot.id, offered.toolNames),
+          // How-to lessons from the person's corrections: below authority, as data.
+          renderBotLessons(await botLessons.list(bot.id, { scope: { kind: "bot" }, status: "active" })),
+        ].filter(Boolean).join("\n\n"),
       ];
     });
   },
@@ -375,6 +416,15 @@ async function deleteRoutines(botId: string): Promise<void> {
   await botRoutineService.deleteRoutinesForBot(botId);
 }
 
+/**
+ * The Bot's delivery rows go with it; the phone feed stops listing a Bot whose
+ * record is gone anyway, and a deleted id never comes back.
+ */
+async function forgetDeliveries(botId: string): Promise<void> {
+  const { botDeliveryLog } = await import("../bot-delivery/funnel-main.js");
+  await botDeliveryLog.forgetBot(botId);
+}
+
 /** Photo, managed home, access, chat rows, then the Bot record last. */
 async function eraseBotData(botId: string): Promise<void> {
   await botApplicationService.deleteBot({ botId });
@@ -448,12 +498,14 @@ botApprovals.onChange((botId) => {
   );
 });
 
-// "Needs you" in the Bots sidebar follows questions, approvals and hand-offs
-// as they appear and settle; the renderer re-reads that Bot's summary.
+// "Needs you" in the Bots sidebar follows questions, approvals, hand-offs and
+// host-raised issues as they appear and settle; the renderer re-reads that
+// Bot's summary, whose open-issue check is the same file the card comes from.
 wireBotAttention({
   questions: botQuestions,
   approvals: botApprovals,
   handoffs: botHandoffs,
+  issues: botIssues,
   broadcast: (channel, payload) => ipcMain.broadcast(channel, payload),
 });
 
@@ -462,6 +514,121 @@ wireBotAttention({
 // back to the work, and "Picking up where it left off". Remote projectors
 // listen to the same emitter (`aiden-remote-service-main.ts`).
 wireBotLiveTurnIntents({ intents: botTurnIntents, projection: botLiveProjection });
+
+// Stuck-run watchdog (spec §5 S4). Progress is any live event for the running
+// turn (a new entry, streamed text, an activity change); the run's start counts
+// as the first. Whether a run is a routine comes from its durable request id.
+interface WatchedRun {
+  submissionId: string;
+  at: number;
+  quiet: boolean | null;
+  /** The person's messages waiting behind this turn; a stop would withdraw them. */
+  queued: number;
+  unsubscribe?: () => void;
+}
+const watchedRuns = new Map<string, WatchedRun>();
+const RUN_STALL_ISSUE_KEY = "run_stalled";
+
+function watchRun(botId: string, state: BotSessionState): void {
+  const current = watchedRuns.get(botId);
+  if (state.kind !== "running") {
+    if (!current) return;
+    current.unsubscribe?.();
+    watchedRuns.delete(botId);
+    void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "fixed").catch(() => undefined);
+    return;
+  }
+  if (current?.submissionId === state.submissionId) return;
+  current?.unsubscribe?.();
+  // A new turn without going idle: an earlier turn's stall card is moot.
+  if (current) void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "fixed").catch(() => undefined);
+  const run: WatchedRun = { submissionId: state.submissionId, at: Date.now(), quiet: null, queued: 0 };
+  watchedRuns.set(botId, run);
+  void botSessionRuntime()
+    .then((service) => service.quietInputs(botId, [run.submissionId]))
+    .then((quiet) => {
+      run.quiet = quiet.get(run.submissionId) ?? null;
+    })
+    .catch(() => undefined);
+  void botLiveProjection()
+    .subscribe(botId, {
+      send: (event) => {
+        run.at = Date.now();
+        if (event.type === "queued") run.queued = event.queued.length;
+        if (event.type === "snapshot") run.queued = event.snapshot.queued.length;
+      },
+    })
+    .then((subscription) => {
+      run.queued = subscription.snapshot.queued.length;
+      if (watchedRuns.get(botId) === run) run.unsubscribe = () => subscription.unsubscribe();
+      else subscription.unsubscribe();
+    })
+    .catch((error: unknown) => logger.warn("bots", `Bot ${botId} run watch did not start.`, error));
+}
+stateListeners.add(watchRun);
+
+const runWatchdog = createBotRunWatchdog({
+  running: () => [...watchedRuns.keys()],
+  lastProgressAt: (botId) => watchedRuns.get(botId)?.at,
+  // Unknown until the request id is read; an unknown run is never stopped.
+  runKind: (botId) => {
+    const run = watchedRuns.get(botId);
+    // A routine with the person's messages waiting is asked about, never stopped.
+    if (run?.quiet === true) return run.queued > 0 ? "attended" : "routine";
+    return run?.quiet === false ? "attended" : null;
+  },
+  isWaitingOnPerson: (botId) =>
+    botHandoffs.pending(botId).length > 0 ||
+    botApprovals.pending(botId).length > 0 ||
+    botQuestions.pending(botId).length > 0,
+  stopForStall: async (botId) => {
+    botRunStalls.mark(botId);
+    try {
+      await (await botSessionRuntime()).stop(botId);
+    } catch (error) {
+      botRunStalls.consume(botId);
+      throw error;
+    }
+  },
+  raiseStall: async (botId) => {
+    await botIssues.raise({
+      botId,
+      kind: "run_stalled",
+      dedupeKey: RUN_STALL_ISSUE_KEY,
+      title: "Still working?",
+      body: "This reply hasn't moved in 10 minutes.",
+      actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
+    });
+  },
+  now: Date.now,
+  setInterval: (fn, ms) => {
+    const timer = setInterval(fn, ms);
+    timer.unref?.();
+    return { cancel: () => clearInterval(timer) };
+  },
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} stuck-run check failed.`, error),
+});
+
+/**
+ * The claim check on a Bot's newest turn, read from its projected transcript.
+ * Connector tools are told by the Bot's real MCP tool names.
+ */
+export async function botTurnClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined> {
+  const subscription = await botLiveProjection().subscribe(botId, { send: () => undefined });
+  try {
+    const connectors = toolSources.mcpToolNames(botId);
+    const result = checkBotTurnClaims(subscription.snapshot.entries, { isConnectorTool: (name) => connectors.has(name) });
+    return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
+  } finally {
+    subscription.unsubscribe();
+  }
+}
+
+/** Keep waiting on a stuck-run card: another full window before asking again. */
+export function snoozeBotRunWatchdog(botId: string): void {
+  // The card's own action settles it; this only waits another window.
+  runWatchdog.snooze(botId);
+}
 
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
@@ -472,6 +639,7 @@ export function botLiveProjection(): BotLiveProjection {
     question: (botId) => botQuestions.pending(botId)[0] ?? null,
     handoff: (botId) => botHandoffs.pending(botId)[0] ?? null,
     approvalPending: (botId) => botApprovals.pending(botId).length > 0,
+    issuePending: async (botId) => (await botIssues.list(botId, { open: true })).length > 0,
     connectCardStatus,
     runStarts: botRunStarts,
     onRunSettled: broadcastState,
@@ -511,11 +679,14 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
         memory.forgetBot(botId);
       },
       (botId) => toolSources.forgetBot(botId),
+      async (botId) => (await import("../bot-routine-events/sources-main.js")).forgetBotEventRoutines(botId),
       async (botId) => {
         runtimeModels.forget(botId);
         resolvedModels.delete(botId);
       },
       deleteRoutines,
+      forgetDeliveries,
+      (botId) => botIssues.forgetBot(botId),
       (botId) => botPauses.forgetBot(botId),
       // Its rules file goes, and no later edit can bring its directory back.
       (botId) => botRules.forgetBot(botId),
@@ -555,6 +726,10 @@ export function initializeBotSessionRuntime(): Promise<void> {
       const { removedOrphans, interrupted } = await service.initialize();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
+      // Pre-fire checks arm only once Bots are open, never during onboarding.
+      void import("../bot-health/health-main.js")
+        .then(({ startBotHealth }) => startBotHealth())
+        .catch((error: unknown) => logger.warn("bots", "Bot health checks did not start.", error));
     })
     .catch((error) => {
       initialized = undefined;
@@ -570,6 +745,8 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   initialized = undefined;
   await liveProjection?.close();
   memoryReview.shutdown();
+  runWatchdog.dispose();
+  await import("../bot-health/health-main.js").then(({ stopBotHealth }) => stopBotHealth()).catch(() => undefined);
   await service?.shutdown();
   await toolSources.shutdown();
 }

@@ -1,5 +1,5 @@
 {
-  "contractRevision": 41,
+  "contractRevision": 42,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 41,
+    "contractRevision": 42,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3077,5 +3077,173 @@
         }
       }
     ]
+  },
+  "botIssues": {
+    "capability": "bot:issues",
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 12,
+      "state": "idle",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "issues": [
+        {
+          "id": "issue_fixture_preflight_01",
+          "kind": "preflight_failed",
+          "title": "Gmail needs reconnecting",
+          "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+          "actions": [],
+          "createdAt": "2026-10-27T08:58:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_routine_01",
+          "kind": "routine_paused",
+          "title": "Paused \"Morning brief\" after 3 failed tries",
+          "body": "Gmail needs signing in again.",
+          "routineId": "task_fixture_routine_01",
+          "actions": [
+            {
+              "kind": "open_chat"
+            },
+            {
+              "kind": "resume_routine",
+              "routineId": "task_fixture_routine_01"
+            }
+          ],
+          "createdAt": "2026-10-27T09:01:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_stall_01",
+          "kind": "run_stalled",
+          "title": "A reply has been quiet for 10 minutes",
+          "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+          "actions": [
+            {
+              "kind": "stop_run"
+            },
+            {
+              "kind": "keep_waiting"
+            }
+          ],
+          "createdAt": "2026-10-27T09:06:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_fixed_01",
+          "kind": "routine_failed",
+          "title": "The evening round-up failed",
+          "body": "The model was unavailable.",
+          "actions": [],
+          "createdAt": "2026-10-26T19:00:00.000Z",
+          "resolved": true
+        }
+      ]
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_01",
+        "seq": 13,
+        "type": "issues",
+        "payload": {
+          "issues": [
+            {
+              "id": "issue_fixture_preflight_01",
+              "kind": "preflight_failed",
+              "title": "Gmail needs reconnecting",
+              "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+              "actions": [],
+              "createdAt": "2026-10-27T08:58:00.000Z",
+              "resolved": false
+            },
+            {
+              "id": "issue_fixture_routine_01",
+              "kind": "routine_paused",
+              "title": "Paused \"Morning brief\" after 3 failed tries",
+              "body": "Gmail needs signing in again.",
+              "routineId": "task_fixture_routine_01",
+              "actions": [],
+              "createdAt": "2026-10-27T09:01:00.000Z",
+              "resolved": true
+            },
+            {
+              "id": "issue_fixture_stall_01",
+              "kind": "run_stalled",
+              "title": "A reply has been quiet for 10 minutes",
+              "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+              "actions": [
+                {
+                  "kind": "stop_run"
+                },
+                {
+                  "kind": "keep_waiting"
+                }
+              ],
+              "createdAt": "2026-10-27T09:06:00.000Z",
+              "resolved": false
+            }
+          ]
+        }
+      }
+    ],
+    "act": {
+      "request": {
+        "action": {
+          "kind": "stop_run"
+        }
+      },
+      "response": {
+        "result": "done"
+      }
+    },
+    "notOpen": {
+      "result": "not_open"
+    },
+    "summary": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        },
+        "asset": {
+          "assetRevision": "avatar_revision_3",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512,
+          "byteSize": 1024
+        }
+      },
+      "health": "ready",
+      "sessionState": "interrupted",
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T18:45:00.000Z",
+      "revision": "bot_revision_7",
+      "issueCount": 2
+    },
+    "notification": {
+      "notifications": [
+        {
+          "id": "delivery_fixture_issue_01",
+          "kind": "issue",
+          "botId": "bot_fixture_01",
+          "botName": "Scout",
+          "routineName": "Gmail needs reconnecting",
+          "finishedAt": "2026-10-27T08:58:00.000Z",
+          "preview": "The morning check couldn't reach Gmail."
+        }
+      ],
+      "now": "2026-10-27T09:10:00.000Z"
+    }
   }
 }
