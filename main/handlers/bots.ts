@@ -28,6 +28,8 @@ import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
+import { registerBotHealthHandlers } from "./bot-health.js";
+import { botHealthReports } from "../services/bot-health/health-main.js";
 import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
 import { botRules } from "../services/bot-rules/store-main.js";
@@ -218,6 +220,12 @@ export function registerBotHandlers(): void {
   registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     issues: botIssues,
+  });
+  // Profile → Health: the newest check, and Check now.
+  registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    report: (botId) => botHealthReports.get(botId),
+    check: async (botId) => (await import("../services/bot-health/health-main.js")).checkBotHealth(botId, "manual"),
   });
   // The Bot store answers null for a Bot it doesn't have.
   const botExists = botExistsIn(botApplicationService);

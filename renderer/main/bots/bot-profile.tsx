@@ -23,6 +23,7 @@ import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
 import { BotComputerSection } from "./bot-computer-section";
+import { BotHealthSection } from "./bot-health-section";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -312,6 +313,7 @@ export function BotProfile({
       </FieldSet>
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
+      <BotHealthSection bot={bot} />
       <BotRules bot={bot} />
       {/* Apple silicon only; renders nothing elsewhere. */}
       <BotComputerSection bot={bot} />

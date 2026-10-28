@@ -734,6 +734,8 @@
       ],
       "files": [
         "main/handlers/bot-issues.test.ts",
+        "main/handlers/bot-health.test.ts",
+        "renderer/main/bots/bot-health-section.test.tsx",
         "renderer/components/bots/bot-issue-card.test.tsx",
         "renderer/components/follow-through-chips.test.tsx",
         "renderer/components/settings/harness-runtime-section.test.tsx",

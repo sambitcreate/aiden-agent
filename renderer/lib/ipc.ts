@@ -1738,6 +1738,13 @@ export const botsApi = {
         input,
       ),
   },
+  /** A Bot's health checks: the newest report, and Check now. */
+  health: {
+    report: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", { botId }),
+    check: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport>("bots:health:check", { botId }),
+  },
   /** "Needs you" issues the host raised for a Bot, and the person's answers. */
   issues: {
     list: (input: { botId: string; open?: boolean }) =>
