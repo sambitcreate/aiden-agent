@@ -981,6 +981,13 @@ export const modelsApi = {
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
   list: () => invoke<Workspace[]>("workspaces:list"),
+  memoryFacts: (workspaceId: string) =>
+    invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
+      "workspaces:memoryFacts",
+      workspaceId,
+    ),
+  deleteMemoryFact: (workspaceId: string, factId: string) =>
+    invoke<boolean>("workspaces:deleteMemoryFact", workspaceId, factId),
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
@@ -1735,6 +1742,9 @@ export const botsApi = {
     read: (botId: string, path: string) =>
       invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
   },
+  /** "Add to this Bot" on a connect card: an app already connected in Aiden joins this Bot's Custom access. */
+  grantConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:grant", botId, pluginId),
   /** Not now on a connect card: this Bot won't suggest that connection again. */
   dismissConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:dismiss", botId, pluginId),

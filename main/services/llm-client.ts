@@ -1,3 +1,4 @@
+import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched.js";
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
@@ -757,6 +758,12 @@ async function prepareBotSkillAuthority(
   };
 }
 
+const notifyWorkspaceFilesTouched = createWorkspaceFilesTouchedNotifier({
+  // A skill the agent just wrote must not be hidden by the registry's short-lived snapshot.
+  invalidate: (workspaceId) => skillRegistry.invalidate(workspaceId),
+  broadcast: (workspaceId) => ipcMain.broadcast("workspace:files-touched", { workspaceId }),
+});
+
 function broadcastChatSettled(
   streamId: string,
   chatId: string,
@@ -1076,7 +1083,6 @@ async function prepareGeneration(
       botContext: undefined,
       botApprovedRoots: [] as string[],
       botMutatingToolNames: new Set<string>(),
-      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
     };
   }
   const botBound = botContext !== undefined;
@@ -2211,10 +2217,6 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
-    // The Aiden system prompt reads its approval posture from settings, which
-    // are already loaded here; re-reading them at the prompt site would be a
-    // second disk round trip inside the generation's hot path.
-    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -2586,7 +2588,6 @@ export const llmClient = {
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
-      assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
@@ -3196,7 +3197,6 @@ export const llmClient = {
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
               }),
-              settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
@@ -4394,6 +4394,8 @@ export const llmClient = {
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
             });
+            // A failed command may still have written files, so only a denied call is skipped.
+            if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             break;
           }
           default:
@@ -5266,14 +5268,6 @@ export const llmClient = {
   },
 
   /** Discard active snapshots when the user disables skills across the app. */
-  cancelForSkillsDisabled(): void {
-    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
-      this.cancel(streamId, "user_stop");
-    }
-    // Detached children may retain skill instructions in their forked context.
-    subagentRuntimeRegistry.abortAll();
-  },
-
   /** Closing the global gate cancels every snapshot that could race the setting change. */
   cancelComputerUseGenerations(): void {
     computerUseGenerationGate.close();

@@ -99,12 +99,6 @@ export class ContextLifecycleService {
     return true;
   }
 
-  cancelForSkillsDisabled(): void {
-    for (const operation of this.activeCompactions.values()) {
-      operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
-    }
-  }
-
   async compactChat(
     chatId: string,
     audience: ContextLifecycleAudience,
