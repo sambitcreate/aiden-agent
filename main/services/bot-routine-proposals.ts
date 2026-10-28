@@ -73,6 +73,8 @@ export type BotRoutineProposalRecord = BotRoutineProposalEntryData & {
    * quit) still finishes: the old card can't be accepted and holds no slot.
    */
   revises?: string;
+  /** The replacement's card was appended; until then a saved revision replaces nothing. */
+  revisionShown?: true;
 };
 
 export type BotRoutineProposeResult =
@@ -206,6 +208,7 @@ function isRecord(value: unknown): value is BotRoutineProposalRecord {
     typeof record.createdAt === "number" &&
     (record.status === "pending" || record.status === "accepted" || record.status === "dismissed") &&
     (record.revises === undefined || typeof record.revises === "string") &&
+    (record.revisionShown === undefined || record.revisionShown === true) &&
     (isObject(record.trigger)
       ? record.schedule === undefined && record.timezone === undefined
       : isObject(record.schedule) && typeof record.timezone === "string")
@@ -217,8 +220,12 @@ function isRecord(value: unknown): value is BotRoutineProposalRecord {
  * saved is not one of them, even before its revision finishes settling it.
  */
 function waiting(records: readonly BotRoutineProposalRecord[]): BotRoutineProposalRecord[] {
-  const replaced = new Set(records.flatMap((record) => (record.status === "pending" && record.revises ? [record.revises] : [])));
-  return records.filter((record) => record.status === "pending" && !replaced.has(record.proposalId));
+  const replaced = new Set(records.flatMap((record) =>
+    (record.status === "pending" && record.revises && record.revisionShown ? [record.revises] : [])));
+  return records.filter((record) =>
+    record.status === "pending" &&
+    !replaced.has(record.proposalId) &&
+    !(record.revises !== undefined && !record.revisionShown));
 }
 
 function isObject(value: unknown): value is object {
@@ -427,17 +434,23 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
   }
 
   /**
-   * Settle every card whose replacement is saved but which is still open: a
-   * revision cut short after saving the new card. Must run inside
-   * `serial(botId)`.
+   * Finish revisions cut short. A replacement whose card was shown settles
+   * the card it replaces; one saved but never shown (a quit before its card
+   * was appended) is dropped, so the original card stays the one to answer.
+   * Must run inside `serial(botId)`.
    */
   async function finishRevisions(
     botId: string,
     records: BotRoutineProposalRecord[],
     append: Append = sessionAppend(botId),
   ): Promise<void> {
+    const unshown = records.filter((record) => record.revises !== undefined && !record.revisionShown && record.status === "pending");
+    if (unshown.length > 0) {
+      records.splice(0, records.length, ...records.filter((record) => !unshown.includes(record)));
+      await save(botId, records);
+    }
     for (const replacement of [...records]) {
-      if (replacement.revises === undefined) continue;
+      if (replacement.revises === undefined || !replacement.revisionShown) continue;
       const index = records.findIndex((record) => record.proposalId === replacement.revises);
       if (index < 0 || records[index]!.status !== "pending") continue;
       await settle(botId, records, index, "dismissed", { append, supersededBy: replacement.proposalId });
@@ -614,6 +627,9 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           await save(botId, records.filter((entry) => entry !== record));
           throw error;
         }
+        // Only now does the saved link replace the old card on recovery.
+        record.revisionShown = true;
+        await save(botId, records);
         await settle(botId, records, index, "dismissed", { append, supersededBy: record.proposalId });
         revised(botId, current.proposalId, record);
         return { ok: true, proposal, replaced: current.proposalId };
