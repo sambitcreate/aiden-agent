@@ -574,6 +574,34 @@ test("a revision cut short after its new card is shown still replaces the old ca
   assert.equal(accepted.status, "accepted");
 });
 
+test("a revision saved but never shown leaves the original card the one to answer", async () => {
+  const { proposals, start, proposalsFile, cards } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // Aiden quit after saving the replacement and before appending its card.
+  const file = JSON.parse(await readFile(proposalsFile, "utf8")) as { proposals: Array<Record<string, unknown>> };
+  const original = file.proposals.find((record) => record.proposalId === first.proposal.proposalId)!;
+  const unshownId = "00000000-0000-4000-8000-000000000999";
+  file.proposals.push({ ...original, proposalId: unshownId, schedule: { kind: "daily", time: "10:00" }, revises: original.proposalId });
+  await writeFile(proposalsFile, JSON.stringify(file));
+  const restarted = start();
+
+  assert.deepEqual(
+    (await restarted.pending("bot-a")).map((entry) => entry.proposalId),
+    [first.proposal.proposalId, second.proposal.proposalId],
+  );
+  await assert.rejects(
+    restarted.respond({ botId: "bot-a", proposalId: unshownId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+  );
+  const accepted = await restarted.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" });
+  assert.equal(accepted.status, "accepted");
+  assert.deepEqual(cards().map((card) => card.status), ["accepted", "pending"]);
+  assert.equal(await restarted.pendingCount("bot-a"), 1);
+});
+
 test("the routines tool lists and pauses event routines, shows waiting cards, and never shows a link", async () => {
   const { proposals, events, routines, appended } = harness();
   const changed: string[] = [];
