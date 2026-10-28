@@ -81,7 +81,7 @@ object AidenRemoteProtocol {
     /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
-    /** Contract revision 45: `GET /chats/{chatId}/recordings/{recordingId}`, the video a
+    /** Contract revision 46: `GET /chats/{chatId}/recordings/{recordingId}`, the video a
      * completed `browser_recording_stop` step names, read with `chat:read`. */
     const val CHAT_BROWSER_RECORDINGS_FEATURE = "chat-browser-recordings-v1"
     const val MAX_QUESTION_COUNT = 4
@@ -578,7 +578,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val SCHEDULE_CARDS = AidenRemoteCapability("schedule:cards")
         /**
-         * Contract revision 44: this phone receives `shared_image` Bot session entries (an image
+         * Contract revision 45: this phone receives `shared_image` Bot session entries (an image
          * the Bot shared, without its bytes) and may read them from
          * `GET /bots/{botId}/session/images/{entryId}`. It grants no other authority. There is no
          * `/server` feature token: the Mac offers it only in `serverCapabilities`, and it is
@@ -624,7 +624,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)
 
-        /** Revision 44: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        /** Revision 45: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_IMAGES = listOf(BOT_IMAGES)
 
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */

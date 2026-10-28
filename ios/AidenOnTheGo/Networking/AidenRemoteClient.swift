@@ -138,7 +138,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 45: a completed `browser_recording_stop` step's video
+    /// Contract revision 46: a completed `browser_recording_stop` step's video
     /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
     /// step's `recording` recap is additive; the token alone gates Play.
     static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
@@ -325,7 +325,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The Mac serves the agent's browser recordings (revision 45).
+    /// The Mac serves the agent's browser recordings (revision 46).
     var supportsChatBrowserRecordings: Bool {
         features.contains(Self.chatBrowserRecordingsFeature)
     }
@@ -1584,7 +1584,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return html
     }
 
-    /// Revision 45 (`chat-browser-recordings-v1`): the video a completed
+    /// Revision 46 (`chat-browser-recordings-v1`): the video a completed
     /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
     /// most the recorder's 128 MiB limit, with the no-store and nosniff
     /// headers, is accepted.
@@ -2243,7 +2243,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
 
-    /// Revision 44 (`bot:images`): the bytes of an image the Bot shared, read
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared, read
     /// while it is in the Bot's current conversation. Only PNG and JPEG, at
     /// most the Mac's inline image limit, are accepted.
     func botSessionImage(botId: String, entryId: String) async throws -> Data {

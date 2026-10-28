@@ -21,7 +21,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 
 /**
  * The video the agent recorded of a browser tab, carried on its completed
- * `browser_recording_stop` timeline step (contract revision 45). Display-only:
+ * `browser_recording_stop` timeline step (contract revision 46). Display-only:
  * the recording's id, type, length and size, never the video, its path or the
  * page. The bytes are read from the Mac by id, for the chat that holds the step.
  * Mirrors the desktop's `BrowserRecordingRecapV1` and `parseBrowserRecordingRecap`.

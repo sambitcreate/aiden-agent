@@ -583,7 +583,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
-            // Revision 45: phones play the agent's browser recordings their chats name.
+            // Revision 46: phones play the agent's browser recordings their chats name.
             browserRecordings: {
               read: async (recordingId: string) =>
                 (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),

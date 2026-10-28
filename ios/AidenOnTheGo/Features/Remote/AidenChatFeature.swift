@@ -3529,7 +3529,7 @@ final class AidenChatViewModel {
         }
     }
 
-    // MARK: - Browser recordings (contract revision 45)
+    // MARK: - Browser recordings (contract revision 46)
 
     /// The paired Mac announces `chat-browser-recordings-v1`, so an MP4
     /// browser recording can be read and played on the phone.
@@ -6364,7 +6364,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     var visualViewerAvailable = false
     /// Adds a follow-up confirmed in the visual viewer to the composer.
     var onVisualPrompt: ((String) -> Void)? = nil
-    /// The Mac announces `chat-browser-recordings-v1` (revision 45).
+    /// The Mac announces `chat-browser-recordings-v1` (revision 46).
     var browserRecordingsAvailable = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6490,7 +6490,7 @@ struct AidenMessageView: View, Equatable {
     /// Present while the Mac announces `chat-visual-viewer-v1` (revision 35).
     var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
     var onVisualPrompt: ((String) -> Void)? = nil
-    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 45).
+    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 46).
     var loadBrowserRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
@@ -6626,24 +6626,39 @@ struct AidenMessageView: View, Equatable {
 
     }
 
+    /// A committed assistant reply's rows in the order they happened, with each
+    /// visual and image beneath the step that made it; nil without a usable timeline.
+    private var messageChronologicalRows: [AidenChronologicalRow]? {
+        guard message.role == .assistant, presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        )
+    }
+
     private var messageContent: some View {
         VStack(
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
-            if message.role == .assistant,
-               presentationStyle != .botMessages,
-               let rows = AidenChronologicalProjection.rows(
-                   text: message.text,
-                   reasoning: message.reasoning ?? "",
-                   timeline: message.timeline,
-                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
-               ) {
+            if let rows = messageChronologicalRows {
                 AidenChronologicalTranscript(
                     rows: rows,
                     active: false,
                     visualContent: { visual in AnyView(visualRow(visual)) },
-                    loadRecording: loadBrowserRecording
+                    loadRecording: loadBrowserRecording,
+                    imageContent: { images in
+                        AnyView(AidenMessageImageAttachmentsView(
+                            attachments: images,
+                            edge: AidenMessageMediaEdge.forRole(message.role),
+                            loadData: loadAttachmentImage,
+                            revealAttachmentID: imageArrivalRevealAttachmentID,
+                            onArrivalRevealed: onImageArrivalRevealed
+                        ))
+                    }
                 )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
@@ -6686,13 +6701,16 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             }
-            // Snapshots appear once, inline at their visual, never in the strip.
+            // Snapshots appear once, inline at their visual, never in the strip,
+            // and images drawn beneath their step leave it too.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
                 let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
-                if !imageAttachments.isEmpty {
+                let placedImageIDs = messageChronologicalRows.map(AidenChronologicalProjection.placedImageIDs) ?? []
+                let trailingImages = imageAttachments.filter { !placedImageIDs.contains($0.id) }
+                if !trailingImages.isEmpty {
                     AidenMessageImageAttachmentsView(
-                        attachments: imageAttachments,
+                        attachments: trailingImages,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
                         revealAttachmentID: imageArrivalRevealAttachmentID,
@@ -7934,7 +7952,7 @@ private struct AidenLiveResponseView: View {
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
-    /// Plays a browser recording while the Mac serves them (revision 45).
+    /// Plays a browser recording while the Mac serves them (revision 46).
     private var liveRecordingLoader: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? {
         guard model.supportsBrowserRecordings else { return nil }
         let model = model
@@ -7976,8 +7994,16 @@ private struct AidenLiveResponseView: View {
         return AidenChronologicalProjection.rows(
             text: model.liveText,
             reasoning: model.reasoning,
-            timeline: model.activityTimeline
+            timeline: model.activityTimeline,
+            imageSlots: imageGenerationItems.map(\.id)
         )
+    }
+
+    /// The live reply's image placeholders; each sits beneath its step when the
+    /// transcript is chronological, like the image it becomes.
+    private var imageGenerationItems: [AidenImageGenerationPlaceholderItem] {
+        guard model.isLiveReplyUnsettled else { return [] }
+        return AidenImageGenerationPlaceholderState.items(model.activityTimeline)
     }
 
     private var activity: (label: String, mark: AidenActivityMarkKind) {
@@ -8110,7 +8136,13 @@ private struct AidenLiveResponseView: View {
                 AidenChronologicalTranscript(
                     rows: chronologicalRows,
                     active: model.isLiveReplyUnsettled,
-                    loadRecording: liveRecordingLoader
+                    loadRecording: liveRecordingLoader,
+                    imageSlotContent: { call in
+                        AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in
+                            AidenImageGenerationPlaceholderView(item: item)
+                                .transition(.opacity)
+                        })
+                    }
                 )
                     .contextMenu {
                         if !visibleText.isEmpty {
@@ -8130,11 +8162,10 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isLiveReplyUnsettled {
-                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
-                    AidenImageGenerationPlaceholderView(item: item)
-                        .transition(.opacity)
-                }
+            let placedSlots = chronologicalRows.map(AidenChronologicalProjection.placedImageSlots) ?? []
+            ForEach(imageGenerationItems.filter { !placedSlots.contains($0.id) }) { item in
+                AidenImageGenerationPlaceholderView(item: item)
+                    .transition(.opacity)
             }
 
             if let visualizingLabel,
@@ -8864,8 +8895,12 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
-    /// Present while the Mac serves browser recordings (revision 45).
+    /// Present while the Mac serves browser recordings (revision 46).
     var loadRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
+    /// Draws a committed message's images beneath their step; the live stream has none.
+    var imageContent: (([AidenMessageAttachment]) -> AnyView)? = nil
+    /// Draws a live `generate_image` placeholder beneath its step.
+    var imageSlotContent: ((String) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -8906,6 +8941,10 @@ private struct AidenChronologicalTranscript: View {
                     }
                 case .visual(let visual):
                     visualContent?(visual)
+                case .images(let images):
+                    imageContent?(images)
+                case .imageSlot(let call):
+                    imageSlotContent?(call)
                 }
             }
         }
@@ -9072,7 +9111,7 @@ struct AidenWebExtractRecapView: View {
 }
 
 /// The video the agent recorded of a browser tab, under its activity line
-/// (contract revision 45). The bytes stay on the Mac until Play is pressed;
+/// (contract revision 46). The bytes stay on the Mac until Play is pressed;
 /// a WebM fallback, or a Mac that does not serve recordings, is watched on
 /// the Mac instead.
 struct AidenBrowserRecordingCardView: View {

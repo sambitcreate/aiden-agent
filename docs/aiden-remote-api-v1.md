@@ -52,7 +52,7 @@ Initial capability IDs:
 | `bot:issues` | Opt-in, no authority of its own (contract revision 42). Delivers the Bot session `issues` list and `issues` frame, the summary `issueCount`, and issue items in the routine notification feed, and opens `POST /bots/{botId}/issues/{issueId}/act`, which still needs `bot:read` and `bot:write`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without the issue route), never issued by pairing. There is no `/server` feature token for it. See "Bot issues on phones, revision 42". |
 | `bot:handoff-on-mac` | Opt-in, no authority of its own (contract revision 43, provisional). Delivers `onMac: true` on an `action` card whose step is on the Bot's own browser or computer, to a device that also holds `bot:handoffs`. Offered, negotiated and refused by earlier hosts exactly like `bot:handoff-notes`. |
 | `schedule:cards` | Opt-in, no authority (contract revision 39). Delivers the display-only `schedule` card on scheduled-task approvals, on `GET /streams/{streamId}/approval` and on a phone's run `approval_required` events and gap snapshots. The card is sent only to a device that also holds `schedule:read`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without stream or run approvals), never issued by pairing. There is no `/server` feature token for it. See "Scheduled-task approval cards, revision 39". |
-| `bot:images` | Opt-in, no authority of its own (contract revision 44). Delivers `shared_image` Bot session entries (an image a Bot shared with `share_image`, without its bytes) and lets the device read their bytes from `GET /bots/{botId}/session/images/{entryId}`, which also needs `bot:read` and `chat:read`. Every other device gets the same entry as an assistant line. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities`, never issued by pairing. A host before revision 44 refuses the name, so devices ask for it in a call of its own. See "Bot shared images, revision 44". |
+| `bot:images` | Opt-in, no authority of its own (contract revision 45). Delivers `shared_image` Bot session entries (an image a Bot shared with `share_image`, without its bytes) and lets the device read their bytes from `GET /bots/{botId}/session/images/{entryId}`, which also needs `bot:read` and `chat:read`. Every other device gets the same entry as an assistant line. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities`, never issued by pairing. A host before revision 45 refuses the name, so devices ask for it in a call of its own. See "Bot shared images, revision 45". |
 | `tasks:read` | Read the bounded chat task-progress projection and receive `task_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `agents:read` | Read the bounded delegated-agent roster projection and receive `agents_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `questions:respond` | Resolve `ask_user_question` prompts owned by this device/stream and receive `question_required` events. Granted only after explicit client negotiation at pairing or post-pairing. |
@@ -234,7 +234,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `POST /chats/{chatId}/attachments`: validate and stage one bounded image or UTF-8 text attachment.
 - `DELETE /chats/{chatId}/attachments/{attachmentId}`: discard an unused staged attachment.
 - `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
-- `GET /chats/{chatId}/recordings/{recordingId}` (contract revision 45, announced by `chat-browser-recordings-v1`): the video a `browser_recording_stop` step in this chat saved. Needs `chat:read` and read access to the chat. See "Browser recordings, revision 45".
+- `GET /chats/{chatId}/recordings/{recordingId}` (contract revision 46, announced by `chat-browser-recordings-v1`): the video a `browser_recording_stop` step in this chat saved. Needs `chat:read` and read access to the chat. See "Browser recordings, revision 46".
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
@@ -312,7 +312,7 @@ These routes were frozen as contract in Phase 1 and implemented in Phase 4 throu
 - `GET /bots/{botId}/avatar/{assetRevision}`: authenticated canonical 512 × 512 PNG only, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Bot ID and asset revision must match the current main-owned record.
 - `POST /bots/{botId}/handoffs/{waitId}/answer`, `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`, and `POST` / `DELETE /bots/{botId}/pause` (contract revision 37): need `bot:read`, `bot:write` and `bot:handoffs`, plus an `Idempotency-Key`. See "Bot hand-offs and pause, revision 37".
 - `POST /bots/{botId}/issues/{issueId}/act` (contract revision 42): needs `bot:read`, `bot:write` and `bot:issues`, plus an `Idempotency-Key`. See "Bot issues on phones, revision 42".
-- `GET /bots/{botId}/session/images/{entryId}` (contract revision 44): the bytes of an image the Bot shared, while it is in the Bot's current conversation. Needs `bot:read`, `chat:read` and `bot:images`. See "Bot shared images, revision 44".
+- `GET /bots/{botId}/session/images/{entryId}` (contract revision 45): the bytes of an image the Bot shared, while it is in the Bot's current conversation. Needs `bot:read`, `chat:read` and `bot:images`. See "Bot shared images, revision 45".
 
 An authorized archived Bot remains readable but read-only until restored: list/detail, conversation/history, existing attachment and managed-home file reads, access views, and the current canonical avatar remain available. Chat open-or-create, new turns, uploads, writes, approval effects, identity/access/avatar mutations, and attempts to add the archived Bot to favorites return `bot_archived`; restore remains allowed. Archiving atomically removes favorite membership. Bot reads without `bot:read`, mutations without the full conjunctive grant, cross-Bot/chat references, corrupt bindings, unavailable records, and unknown IDs retain the same non-inferential unavailable classification. Catalog or policy revision drift returns `revision_conflict` with only the current safe revision; invalid/removed opaque selections fail closed and never fall back to Full. Authoritative Custom views may retain selected catalog tombstones marked `available: false` so drift is visible, but new mutations may select only entries currently marked available.
 
@@ -812,6 +812,17 @@ A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your ba
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botHandoffs`: a session waiting on a hand-off, its frames, the answer, open-on-Mac, pause and unpause shapes, paused session, summary, detail and refusal, and the same moments as a device without `bot:handoffs` sees them (`legacy`). The desktop parser reads the section only when `contractRevision` is 37 or newer.
 
+## Image placement, revision 44
+
+The host keeps the revision in one constant (`AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`). Revision 44 is provisional: it is re-claimed as the next free revision when the change merges.
+
+An assistant message's image attachment may carry `toolCallId`, the public `call-N` id (`^call-[1-9][0-9]*$`) of the timeline tool step that produced it: `display_image`, `share_image` or `generate_image`. It is display-only and needs no capability. User attachments and text attachments never carry it.
+
+- The host sends the placement it stored with the reply. For a reply saved before every image recorded its call, it pairs unplaced images with their completed calls in order, per source: `shared_` ids with `share_image` calls and other images with `display_image` calls. A source pairs only when its images and calls match one for one, and shown images are not paired while any `generate_image` call has no placed image; an unpaired image gets no `toolCallId`.
+- An image whose `toolCallId` names no step on the message's projected timeline, or that has none, trails the reply as before.
+
+**Clients.** The desktop transcript draws each placed image after the activity row that holds its step. Aiden On The Go for iOS and Android split a run of same-offset steps there instead, as they already do for visuals, so the image sits right beneath its own step line. Every client keeps only unplaced images in the strip after the reply. A malformed `toolCallId`, or one of the wrong type, is dropped without dropping the image. Older clients ignore the key. Images still reach phones only when the reply is saved, not while it streams; while it streams, the phones draw a running `generate_image` call's placeholder beneath its step, split the same way, so the image takes the placeholder's spot. With revision 44 the phones' arrival reveal plays on the image a `generate_image` call produced, found by its `toolCallId`.
+
 ## Web page extract recap, revision 38
 
 The host keeps the revision in one constant (`AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`).
@@ -937,13 +948,13 @@ An unknown or malformed `action` is `400 invalid_request`. An action the card ne
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botIssues`: the capability, a session carrying an open card with actions, an open card with no phone action, and a settled card, the `issues` frame that settles one, the act request and receipt, the `not_open` receipt, a summary with `issueCount`, and a phone-feed issue item. The desktop parser reads the section only when `contractRevision` is 41 or newer.
 
-## Bot shared images, revision 44 (`bot:images`)
+## Bot shared images, revision 45 (`bot:images`)
 
 The host keeps it in one constant (`AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`; provisional, re-claimed at merge after whatever `main` holds then).
 
 When a Bot shares an image with its `share_image` tool, the Mac shows the picture in the Bot's chat. Before this revision a paired device saw nothing for it. Now a device that holds `bot:images` gets the image, and every other device gets a line saying where to see it.
 
-**Negotiation.** The host lists `bot:images` in `serverCapabilities` while it serves the image route; there is no `/server` feature token. A device sends `POST /device/capabilities {accepts: ["bot:images"]}` in its **own** call, after its other negotiations, so a host that refuses it (`404 not_found` when the route is not wired, `400 invalid_request` from a host older than revision 44) never costs the device its other grants. Pairing never issues it. Because the host fixes a session stream's audience when the stream opens, a Bot chat opened while the device is still negotiating reopens its stream once it holds the grant.
+**Negotiation.** The host lists `bot:images` in `serverCapabilities` while it serves the image route; there is no `/server` feature token. A device sends `POST /device/capabilities {accepts: ["bot:images"]}` in its **own** call, after its other negotiations, so a host that refuses it (`404 not_found` when the route is not wired, `400 invalid_request` from a host older than revision 45) never costs the device its other grants. Pairing never issues it. Because the host fixes a session stream's audience when the stream opens, a Bot chat opened while the device is still negotiating reopens its stream once it holds the grant.
 
 **The entry.** In `GET /bots/{botId}/session`, `entry` events and snapshots, a holder gets `{ type: "shared_image", id, name, mimeType, size }` with exact keys:
 
@@ -954,15 +965,15 @@ When a Bot shares an image with its `share_image` tool, the Mac shows the pictur
 | `mimeType` | `image/png` or `image/jpeg` |
 | `size` | Bytes, 1 to 8 MiB (the Mac's inline image limit) |
 
-The bytes never travel in the session. A device without `bot:images` gets, under the same `id` and at the same place, an assistant message: "I shared an image: NAME. Open this chat on your Mac to see it." Clients before revision 44 skip an entry type they do not know, so the line is what keeps them from losing the moment.
+The bytes never travel in the session. A device without `bot:images` gets, under the same `id` and at the same place, an assistant message: "I shared an image: NAME. Open this chat on your Mac to see it." Clients before revision 45 skip an entry type they do not know, so the line is what keeps them from losing the moment.
 
 **Bytes.** `GET /bots/{botId}/session/images/{entryId}` answers the image with its own `Content-Type` (`image/png` or `image/jpeg`), `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It needs `bot:read`, `chat:read` and `bot:images` (`403 capability_denied` otherwise), and answers `404 not_found` with "This image is no longer in the Bot's chat." when the entry is gone from the Bot's current conversation (a new conversation, or an image the Mac could not verify). The host checks the stored bytes against their size and type before it sends them.
 
 **Clients.** Aiden On The Go for iOS and Android ask for `bot:images` only when the host lists it, in a call of its own, and treat a `400` or `404` as a host that does not offer it. They draw the image on the Bot's side of the chat, read its bytes when it is drawn, keep them in memory while the chat is open (never on disk) within a 32 MiB budget, least recently drawn first out, and only while the transcript still shows them, and read a dropped image or a failed read again the next time the image is drawn. Android's picture cache is app-wide and entry ids repeat across Bots and Macs, so its viewer id for a shared image also names the Mac and Bot (`bot-image:<scope>:<entryId>`); the image route still takes the entry id. Tapping it opens the same full-screen viewer as chat photos. A paired Mac opening another Mac's Bot does not take the grant and shows the line.
 
-**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botImages`: the capability, a holder's `entry`, the `legacyEntry` other devices get, and the `imagePath`. The desktop parser reads the section only when `contractRevision` is 44 or newer.
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botImages`: the capability, a holder's `entry`, the `legacyEntry` other devices get, and the `imagePath`. The desktop parser reads the section only when `contractRevision` is 45 or newer.
 
-## Browser recordings, revision 45 (`chat-browser-recordings-v1`)
+## Browser recordings, revision 46 (`chat-browser-recordings-v1`)
 
 The host keeps it in one constant (`AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`; provisional, re-claimed at merge after whatever `main` holds then).
 
@@ -977,10 +988,10 @@ The agent can record a browser tab with `browser_recording_start` and `browser_r
 | `durationMs` | Integer, 0 to 360000 (the recorder stops itself at five minutes) |
 | `sizeBytes` | Integer, 1 to 128 MiB (the recorder stops itself at that size) |
 
-The recap is display-only. It never holds the video, the file's path, the page or its address. Any other tool, a step that is not completed, or a recap with another key or value is dropped by every client while the step still shows as an activity line. Clients before revision 45 ignore the field.
+The recap is display-only. It never holds the video, the file's path, the page or its address. Any other tool, a step that is not completed, or a recap with another key or value is dropped by every client while the step still shows as an activity line. Clients before revision 46 ignore the field.
 
 **Bytes.** `GET /chats/{chatId}/recordings/{recordingId}` answers the video with its own `Content-Type` (`video/mp4` or `video/webm`), `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It needs `chat:read` and read access to the chat (`403 capability_denied` otherwise). The host serves only a recording that one of this chat's own timeline steps names, in a saved reply or in a turn of this chat that is still running (its reply is saved only when the whole turn ends, and the phones show Play as soon as the recording stops), and only a regular file in its recordings folder whose bytes match its type: a malformed id is `400 invalid_request`, and a recording the chat does not name or that is gone is `404 not_found` with "This recording is no longer on the Mac." A host without the in-app browser (the CLI) does not wire the route, does not announce `chat-browser-recordings-v1`, and answers `404 not_found`.
 
 **Clients.** The desktop chat shows a card with the length and size, **Play**, and **Show in Finder** (**Show in folder** on Linux); the video loads only when Play is pressed. Aiden On The Go for iOS and Android show the same card when the host announces the feature, download the video when Play is tapped and play it full screen. iOS cannot play WebM, so a WebM recording there says to watch it on the Mac.
 
-**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `browserRecordings`: a completed recording `step` and the `recordingPath` that names it. The desktop parser reads the section only when `contractRevision` is 45 or newer.
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `browserRecordings`: a completed recording `step` and the `recordingPath` that names it. The desktop parser reads the section only when `contractRevision` is 46 or newer.

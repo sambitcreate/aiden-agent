@@ -224,7 +224,7 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
         const signal = callSignal ? AbortSignal.any([context.signal, callSignal]) : context.signal;
         const ensureLive = () => { if (signal.aborted) throw signal.reason ?? new Error("Browser generation was cancelled."); };
         const admittedRevision = queueRevision;
-        // Only a recording stop carries details: the recap its step shows (revision 45).
+        // Only a recording stop carries details: the recap its step shows (revision 46).
         const operation = async (): Promise<AgentToolResult<null | { recording: BrowserRecordingRecapV1 }>> => {
           ensureLive();
           if (admittedRevision !== queueRevision) throw new Error("A previous browser action failed or was interrupted. Inspect a fresh snapshot before retrying queued actions.");
@@ -344,7 +344,7 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
           if (name === "browser_recording_start") return text({ tabId: selected, recording: updated?.recording ?? false });
           if (name === "browser_recording_stop") {
             // The model gets the saved file; the step carries a display-only recap so the
-            // transcript, here and on paired phones, can play the video (Remote revision 45).
+            // transcript, here and on paired phones, can play the video (Remote revision 46).
             const response = text({ tabId: selected, ...result.recording });
             const recap = parseBrowserRecordingRecap(result.recording && {
               id: result.recording.id,

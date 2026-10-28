@@ -691,7 +691,7 @@ struct AidenWebExtractRecap: Codable, Equatable, Sendable {
 }
 
 /// The video the agent recorded of a browser tab, carried on its completed
-/// `browser_recording_stop` timeline step (contract revision 45).
+/// `browser_recording_stop` timeline step (contract revision 46).
 /// Display-only: the recording's id, type, length and size, never the video,
 /// its path or the page. Decoding throws for any recap the desktop parser
 /// (`parseBrowserRecordingRecap`) rejects, including one with other keys;
@@ -904,7 +904,7 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
     let questionnaire: AidenQuestionnaireRecap?
     /// Present only on a completed `web_fetch` step that ran in extract mode.
     let extraction: AidenWebExtractRecap?
-    /// Present only on a completed `browser_recording_stop` step (revision 45).
+    /// Present only on a completed `browser_recording_stop` step (revision 46).
     let recording: AidenBrowserRecordingRecap?
 
     init(
@@ -1034,7 +1034,14 @@ struct AidenAgentStep: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct AidenChronologicalRow: Identifiable, Equatable {
-    enum Kind: Equatable { case text, reasoning, tool, questionnaire, extraction, recording, visual(AidenChatVisual) }
+    enum Kind: Equatable {
+        case text, reasoning, tool, questionnaire, extraction, recording, visual(AidenChatVisual)
+        /// Images a step produced (contract revision 44), drawn beneath it.
+        case images([AidenMessageAttachment])
+        /// A live `generate_image` call's placeholder, beneath its step; the
+        /// value is the call's `toolCallId`.
+        case imageSlot(String)
+    }
     let id: String
     let kind: Kind
     let text: String
@@ -1045,11 +1052,18 @@ enum AidenChronologicalProjection {
     /// `visuals` come only from a committed message: each follows the tool row
     /// whose step drew it, and any whose step is missing trail the reply. The
     /// live stream passes none, since snapshots exist only after commit.
+    /// `images` likewise follow the tool row of the step that produced them;
+    /// an image whose step is missing gets no row (the attachment strip after
+    /// the reply keeps it; see `placedImageIDs`). `imageSlots` are the live
+    /// stream's placeholder calls: each gets an `imageSlot` row beneath its
+    /// step, split the same way its image will be once the reply commits.
     static func rows(
         text: String,
         reasoning: String,
         timeline: AidenGenerationTimeline?,
-        visuals: [AidenChatVisual] = []
+        visuals: [AidenChatVisual] = [],
+        images: [AidenMessageAttachment] = [],
+        imageSlots: [String] = []
     ) -> [AidenChronologicalRow]? {
         guard let timeline, timeline.version == 3,
               timeline.steps.allSatisfy({ $0.contentOffset != nil }),
@@ -1072,8 +1086,13 @@ enum AidenChronologicalProjection {
               reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         let steps = timeline.steps
+        let slotCalls = Set(imageSlots)
         let visualToolCalls = Set(visuals.compactMap(\.toolCallId))
+            .union(images.compactMap(\.toolCallId))
+            .union(slotCalls)
         var placedVisuals = Set<Int>()
+        var placedImages = Set<String>()
+        var placedSlots = Set<String>()
         var result: [AidenChronologicalRow] = []
         var cursor = 0
         var index = 0
@@ -1102,8 +1121,8 @@ enum AidenChronologicalProjection {
                     let groupedStep = steps[index]
                     group.append(groupedStep)
                     index += 1
-                    // A step that drew a visual closes its group so the visual
-                    // sits directly beneath it.
+                    // A step that drew a visual or produced an image closes its
+                    // group so the visual or image sits directly beneath it.
                     if let toolCallId = groupedStep.toolCallId, visualToolCalls.contains(toolCallId) { break }
                 }
                 result.append(.init(id: "tool-\(group.first?.id ?? "")", kind: .tool, text: "", steps: group))
@@ -1123,6 +1142,17 @@ enum AidenChronologicalProjection {
                     placedVisuals.insert(visualIndex)
                     result.append(visualRow(visual, at: visualIndex))
                 }
+                for call in group.compactMap(\.toolCallId) where slotCalls.contains(call) && !placedSlots.contains(call) {
+                    placedSlots.insert(call)
+                    result.append(.init(id: "image-slot-\(call)", kind: .imageSlot(call), text: "", steps: []))
+                }
+                let groupImages = images.filter {
+                    !placedImages.contains($0.id) && $0.toolCallId.map(groupCalls.contains) == true
+                }
+                if !groupImages.isEmpty {
+                    placedImages.formUnion(groupImages.map(\.id))
+                    result.append(.init(id: "images-\(group.first?.id ?? "")", kind: .images(groupImages), text: "", steps: []))
+                }
             }
             cursor = offset
         }
@@ -1136,6 +1166,22 @@ enum AidenChronologicalProjection {
             result.append(visualRow(visual, at: visualIndex))
         }
         return result
+    }
+
+    /// Placeholder calls `rows` drew beneath their steps; the rest stay after the reply.
+    static func placedImageSlots(in rows: [AidenChronologicalRow]) -> Set<String> {
+        Set(rows.compactMap { row -> String? in
+            if case .imageSlot(let call) = row.kind { return call }
+            return nil
+        })
+    }
+
+    /// Ids of the images `rows` drew beneath their steps; the attachment strip leaves them out.
+    static func placedImageIDs(in rows: [AidenChronologicalRow]) -> Set<String> {
+        Set(rows.flatMap { row -> [String] in
+            if case .images(let images) = row.kind { return images.map(\.id) }
+            return []
+        })
     }
 
     private static func visualRow(_ visual: AidenChatVisual, at index: Int) -> AidenChronologicalRow {
@@ -1632,13 +1678,17 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
     let mimeType: String
     let kind: AidenAttachmentKind
     let size: Int
+    /// Contract revision 44: on an assistant image, the timeline tool step that
+    /// produced it, so the image sits at that step. A malformed value is dropped.
+    let toolCallId: String?
 
-    init(id: String, name: String, mimeType: String, kind: AidenAttachmentKind, size: Int) {
+    init(id: String, name: String, mimeType: String, kind: AidenAttachmentKind, size: Int, toolCallId: String? = nil) {
         self.id = id
         self.name = name
         self.mimeType = mimeType
         self.kind = kind
         self.size = size
+        self.toolCallId = toolCallId.flatMap(Self.validToolCallId)
     }
 
     init(from decoder: Decoder) throws {
@@ -1648,6 +1698,7 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
         mimeType = try values.decode(String.self, forKey: .mimeType)
         kind = try values.decode(AidenAttachmentKind.self, forKey: .kind)
         size = try values.decode(Int.self, forKey: .size)
+        toolCallId = (try? values.decodeIfPresent(String.self, forKey: .toolCallId)).flatMap { $0 }.flatMap(Self.validToolCallId)
         guard isWireSafe else {
             throw DecodingError.dataCorruptedError(
                 forKey: .id,
@@ -1655,6 +1706,11 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
                 debugDescription: "Message attachment contains an unsafe identity, name, MIME type, or size."
             )
         }
+    }
+
+    /// The timeline's public `call-N` ids only.
+    private static func validToolCallId(_ value: String) -> String? {
+        value.range(of: #"^call-[1-9][0-9]{0,15}$"#, options: .regularExpression) == nil ? nil : value
     }
 
     var isWireSafe: Bool {
@@ -1680,7 +1736,7 @@ struct AidenMessageAttachment: Codable, Identifiable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, mimeType, kind, size
+        case id, name, mimeType, kind, size, toolCallId
     }
 }
 

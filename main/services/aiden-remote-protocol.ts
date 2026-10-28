@@ -155,7 +155,17 @@ export const AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION = 42 as const;
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
 /**
- * Contract revision 44 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 44 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only
+ * `AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`): an assistant message's
+ * image attachment may carry `toolCallId`, the timeline tool step that
+ * produced it (`display_image`, `share_image` or `generate_image`), so a phone
+ * draws the image at that step as the desktop does instead of after the
+ * reply. Older clients ignore the key; an image without it trails the reply.
+ */
+export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
+/**
+ * Contract revision 45 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`):
  * images a Bot shares (`share_image`) reach phones. A device that negotiates
  * `bot:images` receives `shared_image` session entries (name, type and size,
@@ -163,16 +173,16 @@ export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
  * `GET /bots/{botId}/session/images/{entryId}`. Every other device gets an
  * assistant line naming the image and pointing to the Mac instead.
  */
-export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 44 as const;
+export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 45 as const;
 /**
- * Contract revision 45 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 46 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`):
  * a completed `browser_recording_stop` step on a version 3 generation timeline
  * may carry a display-only `recording` recap (id, type, length, size), and a
  * device that may read the chat reads the video from
  * `GET /chats/{chatId}/recordings/{recordingId}`. Older clients ignore it.
  */
-export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 45 as const;
+export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -358,7 +368,7 @@ export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:hando
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
 /**
- * Contract revision 44: a device holding `bot:images` receives `shared_image`
+ * Contract revision 45: a device holding `bot:images` receives `shared_image`
  * session entries and may read their bytes from the session image route
  * (which still needs `bot:read` and `chat:read`). It grants no other authority.
  */
@@ -547,7 +557,7 @@ export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
  */
 export const AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1" as const;
 /**
- * Server feature token for browser recordings (contract revision 45):
+ * Server feature token for browser recordings (contract revision 46):
  * `GET /chats/{chatId}/recordings/{recordingId}` serves a video the agent
  * recorded of a browser tab, for a chat whose timeline names it. Announced
  * only while the route is wired.
@@ -1305,7 +1315,7 @@ export type AidenRemoteBotSessionEntry =
       createdAt?: string;
     }
   /**
-   * Contract revision 44, only for devices holding `bot:images`: an image the
+   * Contract revision 45, only for devices holding `bot:images`: an image the
    * Bot shared. The bytes are read from
    * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
    */
@@ -1318,12 +1328,12 @@ export type AidenRemoteBotSessionEntry =
       size: number;
     };
 
-/** Revision 44: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
+/** Revision 45: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
 export type AidenRemoteBotSharedImageMimeType = (typeof AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES)[number];
-/** Revision 44: the largest image a session image read returns (the desktop's inline image limit). */
+/** Revision 45: the largest image a session image read returns (the desktop's inline image limit). */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
-/** Revision 44: the longest image name on the wire. */
+/** Revision 45: the longest image name on the wire. */
 export const AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS = 255;
 /** Session entry types that only `bot:images` devices receive. */
 export const AIDEN_REMOTE_BOT_IMAGE_ENTRY_TYPES = ["shared_image"] as const;
@@ -1971,7 +1981,7 @@ export interface AidenRemoteContractFixture {
   botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
-  /** Revision 44 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
+  /** Revision 45 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
   botImages?: AidenRemoteBotImagesFixture;
   browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
@@ -6569,7 +6579,7 @@ export interface AidenRemoteScheduleCardsFixture {
   rejected: Array<{ label: string; schedule: unknown }>;
 }
 
-/** Revision 44: one image a Bot shared, as each kind of device reads it. */
+/** Revision 45: one image a Bot shared, as each kind of device reads it. */
 export interface AidenRemoteBotImagesFixture {
   capability: (typeof AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES)[number];
   /** What a `bot:images` device is sent. */
@@ -6580,7 +6590,7 @@ export interface AidenRemoteBotImagesFixture {
   imagePath: string;
 }
 
-/** Revision 45: a recording stop step as the timeline carries it, and where its video is read. */
+/** Revision 46: a recording stop step as the timeline carries it, and where its video is read. */
 export interface AidenRemoteBrowserRecordingsFixture {
   /** A completed `browser_recording_stop` tool step with its `recording` recap. */
   step: Record<string, unknown>;

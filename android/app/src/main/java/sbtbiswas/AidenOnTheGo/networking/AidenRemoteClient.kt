@@ -1131,7 +1131,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 45 (`chat-browser-recordings-v1`): the video a completed
+     * Revision 46 (`chat-browser-recordings-v1`): the video a completed
      * `browser_recording_stop` step in [chatId] names, streamed to
      * `<recordingId>.mp4` or `.webm` in [directory] rather than held in memory.
      * Only MP4 or WebM with `no-store` and `nosniff`, non-empty and at most
@@ -2168,7 +2168,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 44 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
      * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
      * Mac's inline image limit, is accepted.
      */

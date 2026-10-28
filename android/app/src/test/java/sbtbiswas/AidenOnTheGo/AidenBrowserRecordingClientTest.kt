@@ -26,7 +26,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 
-/** `GET /chats/{chatId}/recordings/{recordingId}` and its feature gate (contract revision 45). */
+/** `GET /chats/{chatId}/recordings/{recordingId}` and its feature gate (contract revision 46). */
 class AidenBrowserRecordingClientTest {
     private lateinit var server: MockWebServer
     private lateinit var client: AidenRemoteClient

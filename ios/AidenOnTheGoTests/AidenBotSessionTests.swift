@@ -354,7 +354,7 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
 
     private var _images: [String: Data] = [:]
     private var _imageRequests: [String] = []
-    /// Revision 44: the bytes the Mac holds for each shared image; any other id fails as offline.
+    /// Revision 45: the bytes the Mac holds for each shared image; any other id fails as offline.
     func holdImage(_ data: Data, entryId: String) { locked { _images[entryId] = data } }
     var imageRequests: [String] { locked { _imageRequests } }
 
@@ -583,7 +583,7 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(transport.sessionRequests, 1, "A snapshot frame never needs a refetch.")
     }
 
-    /// Revision 44: an image the Bot shared is read from the Mac when it is
+    /// Revision 45: an image the Bot shared is read from the Mac when it is
     /// drawn, once while the chat is open; a failed read is tried again, and an
     /// id the transcript doesn't hold is never asked for.
     func testSharedImageIsReadOnceAndAFailedReadIsTriedAgain() async throws {
@@ -609,7 +609,7 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(transport.imageRequests.count, 2, "an id the transcript doesn't hold never reaches the Mac")
     }
 
-    /// Revision 44: shared images stay within a byte budget. The least
+    /// Revision 45: shared images stay within a byte budget. The least
     /// recently drawn image is dropped and read again when it is drawn next;
     /// images the transcript no longer shows are dropped; closing the chat
     /// lets every image go.

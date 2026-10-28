@@ -1690,7 +1690,7 @@ class AidenChatTest {
     @Test
     fun canonicalFixtureBrowserRecordingStepCarriesItsRecap() {
         val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
-        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 45)
+        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 46)
         val section = root.getValue("browserRecordings").jsonObject
         val step = wireJson.decodeFromJsonElement(AidenAgentStep.serializer(), section.getValue("step"))
         val recap = step.recordingRecap
@@ -1944,6 +1944,73 @@ class AidenChatTest {
         assertNull(visuals[1].layout)
         assertEquals("Plan options\nSolo: \$12.00\nTeam: \$60.00", visuals[1].fallbackText)
         assertTrue(message.isWireSafe)
+    }
+
+    @Test
+    fun eachImageSitsBeneathTheStepThatProducedIt() {
+        // Revision 44: an assistant image names the step that made it.
+        val wire = """
+            {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+             "attachments":[
+               {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+               {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+               {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+               {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"},
+               {"id":"typed","name":"Typed.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":7}],
+             "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+               {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+               {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """.trimIndent()
+        val message = json.decodeFromString<AidenChatMessage>(wire)
+        val images = message.attachments.orEmpty()
+        assertEquals(listOf("call-2", "call-1", null, null, null), images.map { it.placedToolCallId })
+        assertTrue("a malformed step id never drops the image", message.isWireSafe)
+
+        val rows = AidenChronologicalProjection.rows(message.text, "", message.timeline, images = images)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "IMAGES:shown", "TEXT:Middle.", "TOOL:call-2", "IMAGES:shared_a", "TEXT:After."),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TEXT -> "TEXT:" + row.text
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.IMAGES -> "IMAGES:" + row.images.joinToString(",") { it.id }
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+        // Only images without a step are left for the strip after the reply.
+        assertEquals(setOf("shown", "shared_a"), AidenChronologicalProjection.placedImageIds(rows))
+
+        // While the reply streams, a generate_image placeholder sits beneath its step,
+        // split from the next step exactly as its image will be once the reply commits,
+        // so nothing moves at the hand-off.
+        val live = json.decodeFromString<AidenGenerationTimeline>(
+            """{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Generate image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_search","label":"Search","status":"running","startedAt":1100,"updatedAt":1200,"contentOffset":7}]}"""
+        )
+        fun describe(rows: List<AidenChronologicalRow>) = rows.map { row ->
+            when (row.kind) {
+                AidenChronologicalRow.Kind.TEXT -> "TEXT:" + row.text
+                AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                AidenChronologicalRow.Kind.IMAGES -> "IMAGES:" + row.images.joinToString(",") { it.id }
+                AidenChronologicalRow.Kind.IMAGE_SLOT -> "SLOT:" + row.imageSlot
+                else -> "${row.kind}:"
+            }
+        }
+        val liveRows = AidenChronologicalProjection.rows("Before.Here it is.", "", live, imageSlots = listOf("call-1", "call-7"))!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "SLOT:call-1", "TOOL:call-2", "TEXT:Here it is."),
+            describe(liveRows)
+        )
+        assertEquals(setOf("call-1"), AidenChronologicalProjection.placedImageSlots(liveRows))
+        val generated = AidenMessageAttachment(
+            id = "generated", name = "Image.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10,
+            toolCallId = "call-1"
+        )
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "IMAGES:generated", "TOOL:call-2", "TEXT:Here it is."),
+            describe(AidenChronologicalProjection.rows("Before.Here it is.", "", live, images = listOf(generated))!!)
+        )
     }
 
     @Test

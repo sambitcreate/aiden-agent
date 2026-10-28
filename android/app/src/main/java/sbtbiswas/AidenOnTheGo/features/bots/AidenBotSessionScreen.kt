@@ -454,7 +454,7 @@ private fun AidenBotSessionContent(
                             phase = ui.proposalResponses[entry.proposalId],
                             onAnswer = { decision -> scope.launch { controller.respondToProposal(entry.proposalId, decision) } }
                         )
-                        // Revision 44: the image the Bot shared, read from the Mac when it is drawn.
+                        // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
                         is AidenBotSessionEntry.SharedImage -> AidenMessageImageAttachments(
                             attachments = listOf(controller.sharedImageAttachment(entry)),
                             edge = AidenMessageMediaEdge.LEADING

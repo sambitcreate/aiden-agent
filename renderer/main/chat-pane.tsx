@@ -1463,7 +1463,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
             if (event.toolCallId) {
               const toolCallId = event.toolCallId;
-              // Visuals key by mediaId, generated images by attachment id. Both
+              // Visuals key by mediaId, images by attachment id. Both
               // are unique per generation, so this map only grows; entries for
               // artifacts no longer shown are never looked up.
               const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;

@@ -117,7 +117,7 @@ internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: 
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
 
 /**
- * Revision 44: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
+ * Revision 45: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
  * of its own after `schedule:cards`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestBotImages(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -175,7 +175,7 @@ internal suspend fun aidenRequestScheduleCards(
     )
 
 /**
- * Revision 44: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
+ * Revision 45: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
  * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its Bots'
  * shared images then read as a line that says to open the chat on the Mac.
  */
@@ -264,7 +264,7 @@ class AidenRemoteCoordinator(
     botOutboxIo: java.util.concurrent.Executor? = null,
     /** Saved visual viewer documents; the app passes a directory under `cacheDir`. */
     visualDocumentDir: File = File(storageDir, "visual_documents"),
-    /** Where a browser recording waits while it plays (revision 45); the app passes a directory under `cacheDir`. */
+    /** Where a browser recording waits while it plays (revision 46); the app passes a directory under `cacheDir`. */
     val browserRecordingDir: File = File(storageDir, "browser_recordings")
 ) {
     /** Visual viewer documents (revision 35), purged whenever a pairing is removed or revoked. */
@@ -537,7 +537,7 @@ class AidenRemoteCoordinator(
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
                 )
-                // Revision 44: `bot:images` goes alone too, after the schedule card.
+                // Revision 45: `bot:images` goes alone too, after the schedule card.
                 val imagesServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
@@ -636,7 +636,7 @@ class AidenRemoteCoordinator(
 
     /**
      * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
-     * `schedule:cards`, revision 44 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
+     * `schedule:cards`, revision 45 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
      * only that the Mac can't grant it; the pairing carries on with what it has.
      */
     private suspend fun negotiateSoloCapability(
