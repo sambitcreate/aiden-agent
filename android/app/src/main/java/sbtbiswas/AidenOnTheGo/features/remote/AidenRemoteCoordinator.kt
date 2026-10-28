@@ -94,7 +94,7 @@ internal fun aidenProgressCapabilitiesToRequest(
  * call of its own after the progress grants, unless [installation] already holds it. Revision 40:
  * `bot:handoff-notes` joins that call only when the Mac offers it too, so a Mac on an earlier
  * revision still grants hand-offs, and a phone that holds them asks for the notes alone once its Mac updates.
- * Revision 42's `bot:handoff-on-mac` joins the same way.
+ * Revision 43's `bot:handoff-on-mac` joins the same way.
  */
 internal fun aidenBotHandoffGrantsToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> {
     if (!server.offersBotHandoffs) return emptyList()
@@ -115,6 +115,13 @@ internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: Ai
  */
 internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
+
+/**
+ * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
+ * in a call of its own after every other negotiation, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
@@ -156,6 +163,23 @@ internal suspend fun aidenRequestScheduleCards(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestScheduleCards(server, installation)) listOf(AidenRemoteCapability.SCHEDULE_CARDS) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 42: asks [server] for `bot:issues` alone, exactly as
+ * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; the Bot chat then shows no issue cards.
+ */
+internal suspend fun aidenRequestBotIssues(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotIssues(server, installation)) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList(),
         client,
         stillCurrent
     )
@@ -480,12 +504,21 @@ class AidenRemoteCoordinator(
                 )
                 // Revision 39: `schedule:cards` likewise goes alone, last. A Mac that refuses it
                 // leaves every other grant in place; its approvals show the plain summary card.
-                val negotiatedServer = negotiateSoloCapability(
+                val schedulesServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
+                )
+                // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
+                // name never costs this phone its other grants.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = schedulesServer,
+                    request = ::aidenRequestBotIssues
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(

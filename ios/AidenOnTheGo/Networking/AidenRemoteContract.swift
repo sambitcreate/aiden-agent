@@ -671,12 +671,13 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// Contract revision 39 adds `schedule:cards`, also asked for alone, after
     /// any other negotiation.
     /// Contract revision 40 adds `bot:handoff-notes`, asked for with `bot:handoffs`.
-    /// Contract revision 42 adds `bot:handoff-on-mac`, asked for the same way.
+    /// Contract revision 43 adds `bot:handoff-on-mac`, asked for the same way.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
         Self(rawValue: "bot:activity"), Self(rawValue: "bot:handoffs"),
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
+        Self(rawValue: "bot:issues"),
         Self(rawValue: "bot:handoff-on-mac"),
     ]
 
@@ -700,7 +701,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// device asks for it only from a Mac that offers it.
     static let botHandoffNotes = Self(rawValue: "bot:handoff-notes")
 
-    /// Revision 42: a step on the Bot's own browser or computer says so
+    /// Revision 43: a step on the Bot's own browser or computer says so
     /// (`onMac`), and the device offers Finish on your Mac for it. It grants no
     /// authority, and is asked for like `bot:handoff-notes`.
     static let botHandoffOnMac = Self(rawValue: "bot:handoff-on-mac")
@@ -712,6 +713,14 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// (`400`), and one without approvals answers `404`, so the device asks for
     /// it alone, after any other negotiation.
     static let scheduleCards = Self(rawValue: "schedule:cards")
+
+    /// Revision 42: the device receives the Bot session `issues` list and
+    /// `issues` frames, a summary `issueCount`, and issue items in the routine
+    /// notification feed, and may answer a card through
+    /// `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
+    /// It grants no authority. A Mac on an earlier revision refuses the name,
+    /// so the device asks for it alone, after any other negotiation.
+    static let botIssues = Self(rawValue: "bot:issues")
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
@@ -2721,7 +2730,7 @@ private enum AidenBotPrivateResponseValidator {
         "botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionSend",
         "botSessionResume", "botSessionDismiss", "botRoutines", "botRoutineCreate",
         "botRoutineUpdate", "botConnectionRequest", "botPresets", "botPresetCreate",
-        "botSessionCards", "botHandoffs",
+        "botSessionCards", "botHandoffs", "botIssues",
     ]
 
     static func validate(_ data: Data, scope: AidenBotPrivateResponseScope) throws {
@@ -2868,6 +2877,11 @@ private enum AidenBotPrivateResponseValidator {
         }
         if key == "reasoning", root == "regularChat", parentPath == ["messages", "[]"] {
             return true
+        }
+        // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
+        if root == "botIssues", key == "result" {
+            return parentPath.isEmpty
+                || ["act.response.result", "notOpen.result"].contains((parentPath + [key]).joined(separator: "."))
         }
         guard key == "instructions" || key == "openingGreeting" else { return false }
         if root == "botDetail" {

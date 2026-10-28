@@ -2,6 +2,7 @@
 // conversation rather than in a closure. Each reuses the legacy factory: the
 // adapter builds the factory's tool per call from the conversation entries.
 
+import { createProposeSkillTool } from "../bot-skills/propose-tool.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/chord";
 import type { EntryRecord } from "@earendil-works/pi-durable";
@@ -208,18 +209,42 @@ export function routinesCandidate(
       botId: string,
       input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
       append: (kind: string, data: Record<string, unknown>) => Promise<void>,
-    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string; until?: number }>;
   },
 ): BotToolCandidate {
   const build = (append: (kind: string, data: Record<string, unknown>) => Promise<void>) =>
     createBotRoutinesTool(botId, {
       list: dependencies.list,
       pause: dependencies.pause,
+      ...(dependencies.recentDecisions ? { recentDecisions: dependencies.recentDecisions } : {}),
       propose: (id, input) => dependencies.propose(id, input, append),
     });
   return {
     tool: build(async () => {
       throw new Error("Suggesting a routine needs a Bot conversation.");
+    }),
+    replay: "unsafe",
+    bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),
+  };
+}
+
+/**
+ * The Bot's `propose_skill` tool. The card is appended to the calling
+ * conversation, like a routine proposal.
+ */
+export function proposeSkillCandidate(
+  botId: string,
+  propose: (
+    botId: string,
+    input: { name: string; description: string; instructions: string; reason?: string },
+    append: (kind: string, data: Record<string, unknown>) => Promise<void>,
+  ) => Promise<{ ok: true; proposalId: string } | { ok: false; code: string; errors: string[] }>,
+): BotToolCandidate {
+  const build = (append: (kind: string, data: Record<string, unknown>) => Promise<void>) =>
+    createProposeSkillTool(botId, { propose: (id, input) => propose(id, input, append) });
+  return {
+    tool: build(async () => {
+      throw new Error("Proposing a skill needs a Bot conversation.");
     }),
     replay: "unsafe",
     bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),

@@ -4443,7 +4443,7 @@ final class AidenRemoteClientTests: XCTestCase {
     /// Contract revision 40: a Mac that offers `bot:handoff-notes` is asked
     /// for it with `bot:handoffs`; a Mac on revision 37 is never asked for it,
     /// and once that Mac updates, the device asks for the notes alone.
-    /// Revision 42's `bot:handoff-on-mac` rides the same way.
+    /// Revision 43's `bot:handoff-on-mac` rides the same way.
     @MainActor
     func testCoordinatorAsksForHandoffNotesOnlyFromAMacThatOffersThem() async throws {
         for macUpdates in [false, true] {

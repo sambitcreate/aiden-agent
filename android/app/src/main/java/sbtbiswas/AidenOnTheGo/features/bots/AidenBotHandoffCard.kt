@@ -50,7 +50,7 @@ fun aidenBotHandoffOpenHost(url: String): String? {
  * shown beside the question and approval cards. Done and Skip answer it once, by its wait id; Open
  * opens the page it names in the phone's browser. A sign-in is finished in the Bot's own browser
  * on the Mac, so it offers Finish on your Mac and Skip instead (iOS and desktop parity). A step on
- * the Bot's own browser or computer ([AidenBotHandoff.onMac], revision 42) offers Finish on your
+ * the Bot's own browser or computer ([AidenBotHandoff.onMac], revision 43) offers Finish on your
  * Mac, Skip and Done.
  */
 @OptIn(ExperimentalLayoutApi::class)

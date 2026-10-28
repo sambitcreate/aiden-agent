@@ -16,7 +16,11 @@ import type {
 export type ScheduledRunTrigger =
   | { kind: "automatic"; fireTime: number }
   | { kind: "manual"; key: string }
-  | { kind: "catch_up"; missedRunId: string; missedAt: number };
+  | { kind: "catch_up"; missedRunId: string; missedAt: number }
+  /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  /** An event routine's run: what happened, as untrusted data for the Bot. */
+  | { kind: "event"; eventId: string; source: "file_change" | "webhook"; payload: string };
 
 interface ScheduleExecutionLike {
   run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
@@ -354,6 +358,15 @@ export function createScheduleServiceCore(
           : undefined;
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
+        // A retry replayed after the routine's next regular fire came due (the
+        // Mac slept, Aiden was closed) is stale: that fire replaces it.
+        if (
+          pendingFire?.retry &&
+          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
+        ) {
+          await store.settleRoutineFire(task.id, pendingFire.requestId);
+          throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
+        }
         const claimed = options.automatic && !options.recovery
           ? await advanceBeforeRun(task, fireTime!, isCurrent)
           : task;
@@ -364,7 +377,9 @@ export function createScheduleServiceCore(
           dependencies.broadcast({ taskId: task.id });
         }
         state.executionStarted = true;
-        const trigger: ScheduledRunTrigger = options.automatic
+        const trigger: ScheduledRunTrigger = pendingFire?.retry
+          ? { kind: "retry", requestId: pendingFire.requestId, ...pendingFire.retry }
+          : options.automatic
           ? { kind: "automatic", fireTime: fireTime! }
           : options.catchUp ?? { kind: "manual", key: options.runId ?? `${Date.now()}-${++manualRunSequence}` };
         const executionTask = pendingFire
@@ -517,8 +532,15 @@ export function createScheduleServiceCore(
         if (pendingRecoveryQueued.get(taskId) === recoveryToken) pendingRecoveryQueued.delete(taskId);
         if (isCurrent()) {
           try {
-            const remaining = (await store.get(taskId))?.pendingRoutineFires?.length ?? 0;
-            if (!remaining) pendingRetryAt.delete(taskId);
+            const pending = (await store.get(taskId))?.pendingRoutineFires ?? [];
+            const nowMs = Date.now();
+            const nextRetry = pending.every((fire) => fire.retry && fire.fireTime > nowMs)
+              ? Math.min(...pending.map((fire) => fire.fireTime))
+              : undefined;
+            if (!pending.length) pendingRetryAt.delete(taskId);
+            // Only delayed retries remain: wait for the first one to come due
+            // instead of backing off as if recovery had failed.
+            else if (nextRetry !== undefined) pendingRetryAt.set(taskId, { at: nextRetry, failures: 0 });
             else {
               const failures = Math.min((pendingRetryAt.get(taskId)?.failures ?? 0) + 1, 4);
               pendingRetryAt.set(taskId, {

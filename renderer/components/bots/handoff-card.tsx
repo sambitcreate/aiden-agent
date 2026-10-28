@@ -20,7 +20,7 @@
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
 // sign-in happens in its own browser over there, so that card offers
 // "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in. A
-// step on its screen over there (`onMac`, Remote contract revision 42) offers
+// step on its screen over there (`onMac`, Remote contract revision 43) offers
 // "Finish on <Mac>", Skip and Done.
 
 import { ExternalLink, Globe, Laptop, LogIn, Monitor } from "lucide-react";
@@ -43,7 +43,7 @@ type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" |
   Pick<Partial<BotPendingHandoff>, "origin" | "target"> & {
     /** A paired Mac's card that takes no note (Remote contract revision 40). */
     takesNote?: boolean;
-    /** A paired Mac’s step on the Bot’s own screen there (Remote contract revision 42). */
+    /** A paired Mac’s step on the Bot’s own screen there (Remote contract revision 43). */
     onMac?: boolean;
   };
 

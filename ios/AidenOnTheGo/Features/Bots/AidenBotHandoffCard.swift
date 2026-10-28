@@ -7,7 +7,7 @@ import SwiftUI
 /// in the phone's browser. A sign-in is finished in the Bot's own browser on
 /// the Mac, so it offers Finish on your Mac and Skip instead (desktop and
 /// Android parity). A step on the Bot's own browser or computer (`onMac`,
-/// revision 42) offers Finish on your Mac, Skip and Done.
+/// revision 43) offers Finish on your Mac, Skip and Done.
 struct AidenBotHandoffCard: View {
     let handoff: AidenRemoteBotHandoff
     /// This phone may answer: it is connected and may change Bots.

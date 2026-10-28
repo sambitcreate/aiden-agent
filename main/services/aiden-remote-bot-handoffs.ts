@@ -56,7 +56,7 @@ function cardPage(url: string): string | undefined {
  * Bot's own browser or computer (a rule card's, or one the Bot said is
  * there): it is the Bot's own screen on the Mac, and in the device's browser
  * the step would act on the person's own session. Such a step says so
- * instead (`onMac`, revision 42), so the device offers Finish on your Mac. A
+ * instead (`onMac`, revision 43), so the device offers Finish on your Mac. A
  * card that takes no note says so (revision 40), so the device hides its note
  * box.
  */
