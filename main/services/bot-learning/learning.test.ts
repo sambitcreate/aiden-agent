@@ -13,6 +13,8 @@ import { createBotLearningBudget } from "./budget.js";
 import { botBehaviorFingerprint } from "./fingerprint.js";
 import { createBotLearningHistory } from "./history.js";
 import { restoreSkillFile } from "./restore-skill.js";
+import { botSkillContentFingerprint, createBotSkillApprovals } from "../bot-skill-approvals.js";
+import { botSkillFile } from "../bot-skills/validate.js";
 import { createRoutineReflection, reflectionMessage, reflectionRunView } from "./routine-reflection.js";
 
 const roots: string[] = [];
@@ -92,6 +94,20 @@ test("undoing an added skill removes only its SKILL.md, keeping files the person
   writeFileSync(file, "# Edited by hand");
   assert.equal(await restoreSkillFile(file, null, "# Weekly report"), false);
   assert.equal(readFileSync(file, "utf8"), "# Edited by hand");
+});
+
+test("undoing an added skill revokes the approval of exactly that content", async () => {
+  const root = fixedRoot()();
+  const approvals = createBotSkillApprovals({ profileDir: () => root });
+  const draft = { name: "meal-plan", description: "Use when planning meals.", instructions: "List seven dinners." };
+  const fingerprint = botSkillContentFingerprint(draft);
+  await approvals.approve("bot-a", fingerprint, fingerprint);
+  const file = path.join(root, "home", "meal-plan", "SKILL.md");
+  mkdirSync(path.dirname(file), { recursive: true });
+  const text = botSkillFile(draft);
+  writeFileSync(file, text);
+  assert.equal(await restoreSkillFile(file, null, text, (approved) => approvals.revoke("bot-a", approved)), true);
+  assert.equal(await approvals.isApproved("bot-a", fingerprint, fingerprint), false);
 });
 
 test("the 13th learning request of a local day is refused; a new day resets it", async () => {

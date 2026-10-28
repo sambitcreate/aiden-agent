@@ -160,6 +160,13 @@ const folders = createBotFolderWatches({
       actions: [],
     })).catch((error: unknown) => logger.warn("bots", "Could not report a Bot folder problem.", error));
   },
+  accepted: (routine) => {
+    // Also after a restart, when the card outlived this process's memory.
+    refusedOnce.delete(routine.id);
+    void import("../bot-issues/service-main.js")
+      .then(({ botIssues }) => botIssues.resolve(routine.botId, `event_folder:${routine.id}`, "fixed"))
+      .catch((error: unknown) => logger.warn("bots", "Could not clear a Bot folder problem.", error));
+  },
   now: Date.now,
   setTimer: (fn, ms) => {
     const timer = setTimeout(fn, ms);

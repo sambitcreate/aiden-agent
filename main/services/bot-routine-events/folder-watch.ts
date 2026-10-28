@@ -19,6 +19,8 @@ export interface BotFolderWatchDependencies {
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
   /** A routine whose folder is outside the Bot's home: tell the person once. */
   refused(routine: BotEventRoutine): void;
+  /** Its folder is watched now: a "can't watch" card for it is fixed. */
+  accepted?(routine: BotEventRoutine): void;
   now(): number;
   setTimer(fn: () => void, ms: number): { cancel(): void };
   realpath?(target: string): Promise<string>;
@@ -104,6 +106,7 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
           handle.close();
         });
         watches.set(id, { key, close: () => handle.close() });
+        dependencies.accepted?.(routine);
       }
   }
 

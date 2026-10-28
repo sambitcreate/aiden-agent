@@ -121,7 +121,8 @@ export const botLearningHistory = createBotLearningHistory({
     }
     const file = await skillFile(botId, target.name);
     const { invalidateBotSkills } = await import("../bot-capability-services-main.js");
-    if (!(await restoreSkillFile(file, content, expected))) return false;
+    const { botSkillApprovals } = await import("../bot-capability-services-main.js");
+    if (!(await restoreSkillFile(file, content, expected, (fingerprint) => botSkillApprovals.revoke(botId, fingerprint)))) return false;
     invalidateBotSkills();
     return true;
   },

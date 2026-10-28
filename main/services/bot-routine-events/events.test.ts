@@ -144,11 +144,12 @@ test("the 25th event of the day is refused, and a disabled routine refuses event
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e26", payload: "x" }), "disabled");
 });
 
-function folderHarness(routines: BotEventRoutine[], options: { home: string; resolve?: Record<string, string> }) {
+function folderHarness(routines: BotEventRoutine[], options: { home: string; resolve?: Record<string, string>; missing?: Set<string> }) {
   const listeners = new Map<string, (file: string | null) => void>();
   const errors = new Map<string, () => void>();
   const emitted: Array<{ routineId: string; eventId: string; payload: string }> = [];
   const refused: string[] = [];
+  const accepted: string[] = [];
   const timers: Array<() => void> = [];
   const watches = createBotFolderWatches({
     routines: async () => routines,
@@ -160,14 +161,18 @@ function folderHarness(routines: BotEventRoutine[], options: { home: string; res
     },
     dispatcher: { emit: async (_botId, routineId, event) => { emitted.push({ routineId, ...event }); return "queued"; } },
     refused: (routine) => refused.push(routine.id),
+    accepted: (routine) => accepted.push(routine.id),
     now: () => 1,
     setTimer: (fn) => {
       timers.push(fn);
       return { cancel: () => undefined };
     },
-    realpath: async (target) => options.resolve?.[target] ?? target,
+    realpath: async (target) => {
+      if (options.missing?.has(target)) throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      return options.resolve?.[target] ?? target;
+    },
   });
-  return { watches, listeners, errors, emitted, refused, fireTimers: () => timers.splice(0).forEach((fn) => fn()) };
+  return { watches, listeners, errors, emitted, refused, accepted, fireTimers: () => timers.splice(0).forEach((fn) => fn()) };
 }
 
 function routineOf(id: string, folder: string): BotEventRoutine {
@@ -198,6 +203,18 @@ test("a folder that resolves outside the home is refused; changes under .aiden a
   listener(".aiden/skills/x/SKILL.md");
   h.fireTimers();
   assert.equal(h.emitted.length, 0);
+});
+
+test("a folder that was missing is reported, then cleared once it exists and is watched", async () => {
+  const missing = new Set([path.join("/home/bot", "Inbox")]);
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", missing });
+  await h.watches.rearm();
+  assert.deepEqual([h.refused, h.accepted], [["r1"], []]);
+  missing.clear();
+  await h.watches.rearm();
+  assert.deepEqual(h.accepted, ["r1"]);
+  await h.watches.rearm();
+  assert.deepEqual(h.accepted, ["r1"], "an existing watch doesn't report again");
 });
 
 test("webhooks: a valid token queues, repeats in a minute dedupe and always answer 202; bad requests are refused", async () => {
