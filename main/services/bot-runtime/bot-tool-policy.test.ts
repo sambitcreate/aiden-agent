@@ -111,3 +111,21 @@ test("a Bot with its own computer and no browser can ask for a sign-in on the co
   // A computer without the capability is not the Bot's to use.
   assert.equal((await botToolVerdict(SIGN_IN, { ...bareFacts(), hasComputer: true }, {})).allowed, false);
 });
+
+test("the skill tool is offered when any skill is granted, and a call runs only for a skill still granted", async () => {
+  const keys: Record<string, string> = { "meal notes": "skill_meal_notes", "mail helper": "skill_mail_helper" };
+  const facts = (granted: string[]): BotToolFacts => ({
+    ...bareFacts(),
+    skillToolNames: async () => new Set(granted),
+    skillToolKeyFor: async (name) => keys[name.trim().toLowerCase()],
+  });
+  assert.deepEqual(await botToolVerdict("skill", facts([])), { allowed: false, reason: "No skills are enabled for this Bot." });
+  assert.deepEqual(await botToolVerdict("skill", facts(["skill_meal_notes"])), { allowed: true });
+  assert.deepEqual(await botToolVerdict("skill", facts(["skill_meal_notes"]), {}, { name: "Meal Notes" }), { allowed: true });
+  // Granted at offer time, then the person removed it: the call is refused.
+  assert.deepEqual(
+    await botToolVerdict("skill", facts(["skill_meal_notes"]), {}, { name: "Mail helper" }),
+    { allowed: false, reason: "This skill is not enabled for this Bot." },
+  );
+  assert.equal((await botToolVerdict("skill", facts(["skill_meal_notes"]), {}, { name: "Unknown" })).allowed, false);
+});

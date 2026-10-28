@@ -18,6 +18,7 @@ import type { BotOrdinaryCapabilityKind } from "../bot-capability-catalog-core.j
 import type { SubagentMcpRemoteTool } from "../subagents/subagent-mcp-read.js";
 import { summarizeToolCall } from "../coding-tools.js";
 import { SHARE_IMAGE_TOOL_NAME } from "../share-image-tool.js";
+import { SKILL_TOOL_NAME } from "../skill-registry-core.js";
 import { INSPECT_IMAGE_TOOL_NAME } from "../vision-analysis-tool-core.js";
 import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-connection.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
@@ -46,6 +47,11 @@ export interface BotToolFacts {
   mcpTools(): Promise<ReadonlyMap<string, BotRuntimeMcpToolAuthority>>;
   /** Model-facing skill tool names, joined against the current catalog and registry. Throws on drift. */
   skillToolNames(): Promise<ReadonlySet<string>>;
+  /**
+   * The internal skill identity (one of `skillToolNames`) that the `skill`
+   * tool's `name` argument loads, or `undefined` when no granted skill matches.
+   */
+  skillToolKeyFor?(name: string): Promise<string | undefined>;
   /**
    * The live tools/list entry of a granted MCP tool (its title, description
    * and annotations), for the rules classifier. `undefined` when `name` is not
@@ -118,7 +124,12 @@ function verdict(allowed: boolean, reason: string): BotToolVerdict {
 }
 
 /** Whether the Bot may use `name` now. */
-export async function botToolVerdict(name: string, facts: BotToolFacts, turn: BotToolTurn = {}): Promise<BotToolVerdict> {
+export async function botToolVerdict(
+  name: string,
+  facts: BotToolFacts,
+  turn: BotToolTurn = {},
+  args?: unknown,
+): Promise<BotToolVerdict> {
   const { authority } = facts;
   if (name === INSPECT_IMAGE_TOOL_NAME) {
     return verdict(!facts.supportsImages && authority.visionProvider !== undefined, "Image understanding is off for this Bot.");
@@ -174,7 +185,16 @@ export async function botToolVerdict(name: string, facts: BotToolFacts, turn: Bo
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
   if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
-  if ((await facts.skillToolNames()).has(name)) return { allowed: true };
+  // The one `skill` tool loads only the granted skills it was built from.
+  if (name === SKILL_TOOL_NAME) {
+    const granted = await facts.skillToolNames();
+    if (granted.size === 0) return { allowed: false, reason: "No skills are enabled for this Bot." };
+    // At call time the named skill itself must still be granted.
+    const requested = (args as { name?: unknown } | undefined)?.name;
+    if (args === undefined || typeof requested !== "string") return { allowed: true };
+    const key = await facts.skillToolKeyFor?.(requested);
+    return verdict(key !== undefined && granted.has(key), "This skill is not enabled for this Bot.");
+  }
   if ((await facts.mcpTools()).has(name)) return { allowed: true };
   return { allowed: false, reason: "This tool is not available to this Bot." };
 }

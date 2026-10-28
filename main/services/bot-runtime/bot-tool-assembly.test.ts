@@ -11,7 +11,7 @@ import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@ear
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { buildSkillTools } from "../skill-tools.js";
+import { buildSkillTools, SKILL_TOOL_NAME } from "../skill-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
@@ -30,7 +30,6 @@ import {
   CUSTOM_NONE,
   FULL_GRANTS,
   MAIL_SERVER,
-  NOTES_SKILL_TOOL,
   PNG_1X1,
   READ_INBOX_TOOL,
   SEND_EMAIL_TOOL,
@@ -132,7 +131,7 @@ interface Group {
 
 const GROUPS: Group[] = [
   { label: "an MCP connection tool", tool: SEND_EMAIL_TOOL, args: { text: "hi" } },
-  { label: "a skill", tool: NOTES_SKILL_TOOL, args: {} },
+  { label: "a skill", tool: SKILL_TOOL_NAME, args: { name: "Meal Notes" } },
   { label: "web search", tool: "web_search", args: { text: "news" } },
   { label: "subagents", tool: "subagent", args: { text: "delegate" } },
   { label: "Computer Use", tool: "computer_use", args: { text: "click" } },
@@ -302,7 +301,7 @@ test("a skill whose content fingerprint changed after the offer is refused at ca
   const fauxModels = createFauxModels([
     () => {
       state.catalog.skills[0] = { ...state.catalog.skills[0]!, contentFingerprint: "edited" };
-      return fauxAssistantMessage([fauxToolCall(NOTES_SKILL_TOOL, {})], { stopReason: "toolUse" });
+      return fauxAssistantMessage([fauxToolCall(SKILL_TOOL_NAME, { name: "Meal Notes" })], { stopReason: "toolUse" });
     },
     fauxAssistantMessage("ok"),
   ]);
