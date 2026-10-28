@@ -1,5 +1,6 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
@@ -23,6 +24,7 @@ import type { ChatForkLineageV1 } from "../../renderer/shared/chat-copy-contract
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import type { WebSearchSettingsV2 } from "./web-search-provider-registry-core.js";
+import type { WebFetchSettingsV1 } from "../../renderer/shared/web-fetch-settings.js";
 import type { HiddenModelsByProvider } from "../../renderer/shared/model-visibility.js";
 import type { ModelPadMetric, ModelPadPlacements } from "../../renderer/shared/model-pad-preferences.js";
 
@@ -526,7 +528,14 @@ export interface ScheduledTask {
     requestId: string;
     prompt: string;
     name: string;
+    /**
+     * Set when this entry is a delayed retry of a failed fire rather than a
+     * scheduled fire. `fireTime` is when the retry becomes due.
+     */
+    retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
+  /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
+  enabledAt?: number;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;
@@ -576,6 +585,12 @@ export interface ScheduledRun {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why an otherwise indistinguishable failure happened. Bot routines only. */
+  failure?: BotRoutineFailure;
+  /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
+  /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
+  fingerprint?: string;
   chatId?: string;
 }
 
@@ -775,6 +790,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   voiceProvider?: VoiceProvider;
   voiceModel?: string;
   /** Whether Google is exposed for voice only or for both chat models and voice. */

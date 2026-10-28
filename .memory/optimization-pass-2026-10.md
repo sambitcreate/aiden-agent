@@ -6,7 +6,7 @@ The audit is `docs/performance/optimization-audit-2026-10-03.md`. §13 maps each
 - Each branch carries its own `.memory/<topic>.md` with per-finding rationale.
 
 Open owner decisions:
-- UI-54: a per-chat model.
+- UI-54: a per-chat model. Done 2026-10-27 (owner reported the leak as a bug); see mobile-model-preference-remediation.md.
 - UI-26: onboarding provider skip.
 - UI-68: a microphone-settings IPC.
 - UI-49: approval shortcuts.

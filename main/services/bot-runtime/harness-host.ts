@@ -26,15 +26,20 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { acquireBotProfileLock, BOT_PROFILE_LOCK_FILE, BOT_PROFILE_GUARD_FILE } from "./profile-lock.js";
 import { AIDEN_PI_CLIENT_IDENTITY } from "../pi-client-identity.js";
+import { MODEL_CALL_RETRY_POLICY } from "../model-call-retry.js";
 
 export const BOT_SESSION_FILE = "session.sqlite";
 /**
  * Recovered work never runs until the person chooses Resume, so the person
  * already decides whether a task a crash cut off runs again. Pi Durable's
  * crash-loop guard (default 5, counted at each open) would instead park the
- * task, and nothing in Aiden runs a parked task again.
+ * task, and nothing in Aiden runs a parked task again. A failed model request
+ * retries as a chat's does (Pi Durable's own default is three retries).
  */
-export const BOT_HARNESS_SETTINGS: HarnessSettings = Object.freeze({ restartLimit: Infinity });
+export const BOT_HARNESS_SETTINGS: HarnessSettings = Object.freeze({
+  restartLimit: Infinity,
+  retry: { ...MODEL_CALL_RETRY_POLICY },
+});
 export const DEFAULT_BOT_IDLE_CLOSE_MS = 600_000;
 const DESTROY_ABORT_TIMEOUT_MS = 10_000;
 /** How long `suspend` waits for a harness to close: the same budget as quit. */

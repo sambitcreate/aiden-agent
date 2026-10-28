@@ -150,7 +150,7 @@ fun aidenBotCreateReplayable(createdAtMs: Long, nowMs: Long): Boolean {
 
 /** How the chat draws an outgoing message (R14). */
 sealed class AidenBotOutgoingLook {
-    /** Faded, "Sending…". */
+    /** On its way: drawn as sent, with "Sending…" once it has waited a moment. */
     object Sending : AidenBotOutgoingLook()
     /** The Mac took it; its own entry replaces it shortly. */
     object Sent : AidenBotOutgoingLook()

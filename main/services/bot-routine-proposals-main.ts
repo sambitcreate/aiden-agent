@@ -25,4 +25,9 @@ export const botRoutineProposals = createBotRoutineProposalService({
     const conversation = await (await botSessionRuntime()).conversation(botId);
     return (await conversation.context(BACKGROUND_CONTEXT)).entries;
   },
+  // An answered follow-up frees a slot for the next noted promise.
+  onSettled(botId, proposalId, status) {
+    void import("./bot-commitments/commitments-main.js").then(({ commitmentProposalSettled }) =>
+      commitmentProposalSettled(botId, proposalId, status));
+  },
 });

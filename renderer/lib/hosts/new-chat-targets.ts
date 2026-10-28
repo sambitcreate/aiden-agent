@@ -118,6 +118,12 @@ export interface RemoteBotChoice {
   purpose?: string;
   /** The host says a turn is running. */
   working?: true;
+  /**
+   * The person paused the Bot (only a host that sends this Mac the
+   * `bot:handoffs` rows says so), or a turn stopped part-way and waits to be
+   * resumed.
+   */
+  status?: "paused" | "interrupted";
 }
 
 export interface RemoteBotGroup {
@@ -146,6 +152,9 @@ export function remoteBotGroups(
           name: text(row, "name") ?? "Untitled Bot",
           ...(purpose ? { purpose } : {}),
           ...(row.sessionState === "running" ? { working: true as const } : {}),
+          ...(row.sessionState === "paused" || row.sessionState === "interrupted"
+            ? { status: row.sessionState as "paused" | "interrupted" }
+            : {}),
         };
       });
     if (bots.length === 0) continue;

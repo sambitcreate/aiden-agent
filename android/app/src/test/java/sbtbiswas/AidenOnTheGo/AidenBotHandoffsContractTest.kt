@@ -34,6 +34,7 @@ import sbtbiswas.AidenOnTheGo.features.bots.aidenApplyBotSessionEvent
 import sbtbiswas.AidenOnTheGo.features.bots.aidenBotSessionFeedGrants
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
+import sbtbiswas.AidenOnTheGo.features.remote.aidenBotHandoffGrantsToRequest
 import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestBotHandoffs
 import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestBotHandoffs
 import sbtbiswas.AidenOnTheGo.models.*
@@ -202,6 +203,15 @@ class AidenBotHandoffsContractTest {
         )) {
             refuses(handoff.with("open" to JsonObject(mapOf("url" to JsonPrimitive(url)))))
         }
+        refuses(handoff.with("takesNote" to JsonPrimitive(true)))
+        refuses(handoff.with("takesNote" to JsonPrimitive("false")))
+        refuses(handoff.with("takesNote" to JsonNull))
+        // Revision 40: a password-or-code card says it takes no note, only ever as false.
+        val noNote = handoffs.getValue("noNoteHandoff").jsonObject
+        val decodedNoNote = AidenBotHandoff.parse(noNote)
+        assertEquals(false, decodedNoNote.takesNote)
+        assertEquals(noNote, decodedNoNote.toJson())
+        assertEquals(true, AidenBotHandoff.parse(handoff).takesNote)
         // Both optional fields may be left out.
         val bare = wire.decodeFromString(AidenBotSession.serializer(), session.with("handoff" to handoff.without("why").without("open")).toString())
         assertEquals(AidenBotHandoff(waitId, AidenBotHandoffKind.ACTION, "Enter the 2FA code your bank sent you"), bare.handoff)
@@ -293,6 +303,36 @@ class AidenBotHandoffsContractTest {
         val holding = mac(held, emptyList())
         assertTrue(holding.supportsBotHandoffs)
         assertFalse("already held", aidenShouldRequestBotHandoffs(holding, installationHolding(held)))
+    }
+
+    @Test
+    fun handoffNotesAreAskedForWithHandoffsOnlyFromAMacThatOffersThem() = runBlocking {
+        val notes = AidenRemoteCapability.BOT_HANDOFF_NOTES
+        val handoffs = AidenRemoteCapability.BOT_HANDOFFS
+        // A Mac on revision 37 offers hand-offs only: it is never asked for the notes.
+        assertEquals(listOf(handoffs), aidenBotHandoffGrantsToRequest(mac(base, listOf(handoffs)), installationHolding(base)))
+        // A Mac that offers both is asked for both in the one call; a phone that already holds
+        // hand-offs (its Mac just updated) asks for the notes alone; one that holds both asks nothing.
+        val both = listOf(handoffs, notes)
+        assertEquals(both, aidenBotHandoffGrantsToRequest(mac(base, both), installationHolding(base)))
+        assertEquals(listOf(notes), aidenBotHandoffGrantsToRequest(mac(base + handoffs, listOf(notes)), installationHolding(base + handoffs)))
+        assertFalse(aidenShouldRequestBotHandoffs(mac(base + both, emptyList()), installationHolding(base + both)))
+        // Notes without hand-offs are not an offer.
+        assertTrue(aidenBotHandoffGrantsToRequest(mac(base, listOf(notes)), installationHolding(base)).isEmpty())
+
+        val names = base.map { it.rawValue }
+        val granted = names + "bot:handoffs" + "bot:handoff-notes"
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":${JsonArray(granted.map(::JsonPrimitive))}}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(serverBody(granted, granted)))
+        val outcome = requireNotNull(aidenRequestBotHandoffs(client, mac(base, both), installationHolding(base)))
+        assertEquals(
+            listOf("bot:handoffs", "bot:handoff-notes"),
+            Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+        assertEquals(base + both, outcome.granted)
+        val held = installationHolding(base + both)
+        assertTrue("a Bot chat reopens its feed once the notes are granted", aidenBotSessionFeedGrants(held).contains(notes))
+        assertFalse(aidenBotSessionFeedGrants(installationHolding(base + handoffs)).contains(notes))
     }
 
     private fun serverBody(capabilities: List<String>, serverCapabilities: List<String>) = """

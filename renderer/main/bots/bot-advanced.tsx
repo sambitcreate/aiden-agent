@@ -54,6 +54,7 @@ import {
   sameBotModelChoice,
 } from "./bot-model-choice";
 import { botChatActivitySummary } from "./bot-chat-activity-page";
+import { botInterruptionsSummary } from "./bot-interruptions-page";
 import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
@@ -449,10 +450,12 @@ export function BotAdvanced({
   bot,
   onClose,
   onOpenChatActivity,
+  onOpenInterruptions,
 }: {
   bot: BotDefinition;
   onClose(): void;
   onOpenChatActivity(): void;
+  onOpenInterruptions(): void;
 }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -477,6 +480,11 @@ export function BotAdvanced({
   const chatActivityGuard = useDiscardChangesGuard({
     dirty,
     onLeave: onOpenChatActivity,
+    description: discardDescription,
+  });
+  const interruptionsGuard = useDiscardChangesGuard({
+    dirty,
+    onLeave: onOpenInterruptions,
     description: discardDescription,
   });
 
@@ -600,10 +608,26 @@ export function BotAdvanced({
           <span className="shrink-0 text-small text-secondary">{botChatActivitySummary(bot.chatActivity)}</span>
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
+        <button
+          type="button"
+          aria-label="Interruptions"
+          className="settings-field relative flex w-full min-w-0 items-center gap-3 p-4 text-left outline-none transition-colors duration-150 hover:bg-list-hover focus-visible:bg-list-hover focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring motion-reduce:transition-none"
+          onClick={() => {
+            if (!saving) interruptionsGuard.requestLeave();
+          }}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-strong text-primary">Interruptions</span>
+            <span className="mt-0.5 block text-small text-secondary">When {bot.name} may send you messages on its own.</span>
+          </span>
+          <span className="shrink-0 text-small text-secondary">{botInterruptionsSummary(bot.interruptions)}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+        </button>
       </FieldSet>
       <TelegramSection bot={bot} />
       {guard.dialog}
       {chatActivityGuard.dialog}
+      {interruptionsGuard.dialog}
     </BotPageShell>
   );
 }

@@ -60,6 +60,8 @@ import {
 } from "./devices/device-tools.js";
 import { devicesEnabled } from "./devices/feature-flag.js";
 import { webSearchService } from "./web-search-main.js";
+import { WEB_FETCH_TOOL_NAME } from "../../renderer/shared/web-extract.js";
+import { webFetchService } from "./web-fetch-main.js";
 import { createVisionAnalysisTool, INSPECT_IMAGE_TOOL_NAME } from "./vision-analysis-tool.js";
 import {
   APPROVAL_TOOL_NAMES,
@@ -178,6 +180,7 @@ import type { UsageRequestSource } from "./usage-store-core.js";
 import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
+import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -198,6 +201,7 @@ import {
   type FormFillApprovalDescriptor,
 } from "./form-fill/service.js";
 import { FORM_FILL_MUTATION_AVAILABLE } from "../../renderer/shared/form-fill-availability.js";
+import { toolApprovalPreview } from "../../renderer/shared/tool-approval-preview.js";
 import { formFillArtifacts, formFillRuntime } from "./form-fill/artifacts.js";
 import {
   EDIT_AUTOMATION_TOOL_NAME,
@@ -1730,6 +1734,19 @@ async function prepareGeneration(
           : undefined,
     })
   ).filter((tool) => !options.excludeToolNames?.has(tool.name));
+  // Reading web pages follows the Web Search switch in attended chats on the
+  // desktop and paired phones. Bots, schedules, helper agents, the Assistant
+  // and Telegram do not get it yet.
+  if (
+    !botContext &&
+    !assistantMode &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    !options.excludeToolNames?.has(WEB_FETCH_TOOL_NAME)
+  ) {
+    const webFetchTool = await webFetchService.toolForGeneration();
+    if (webFetchTool) tools.push(webFetchTool);
+  }
   // Background jobs and pull request follows: workspace chats with folder
   // access, on the Mac and Linux desktop. Their news reaches the chat later.
   if (
@@ -2867,6 +2884,12 @@ export const llmClient = {
     let currentAssistantTurnHadVisibleText = false;
     let currentAssistantTurnHadReasoningDelta = false;
     let currentAssistantTurnStart = { full: 0, reasoning: 0, steps: 0 };
+    // Set while the model is asked to continue a cut-off reply; its text then
+    // joins the kept text directly, without a paragraph break.
+    let continuingCutOffReply = false;
+    let currentAssistantTurnContinuesCutOff = false;
+    // Where the latest failed turn's text started; a retry drops only that turn.
+    let failedAssistantTurnStart: { full: number; reasoning: number } | undefined;
     const requestUsage = new AssistantRequestUsageTracker();
     let turnUsage: AssistantTurnUsageV1 | undefined;
     let activeCompactionStepId: string | undefined;
@@ -3991,6 +4014,10 @@ export const llmClient = {
                 toolName: context.toolCall.name,
                 summary,
                 details: approvalDetails,
+                ...(() => {
+                  const preview = approvalDetails ? undefined : toolApprovalPreview(context.toolCall.name, context.args);
+                  return preview ? { preview } : {};
+                })(),
                 ...(scopedRuleTarget ? { scopes: SCOPED_APPROVAL_OFFER } : {}),
               };
             })(),
@@ -4103,6 +4130,7 @@ export const llmClient = {
               requestUsage.started();
               currentAssistantTurnHadVisibleText = false;
               currentAssistantTurnHadReasoningDelta = false;
+              currentAssistantTurnContinuesCutOff = continuingCutOffReply;
               currentAssistantTurnStart = {
                 full: full.length,
                 reasoning: reasoning.length,
@@ -4149,7 +4177,7 @@ export const llmClient = {
               }
             }
             if (e.type === "text_delta") {
-              const separator = !currentAssistantTurnHadVisibleText
+              const separator = !currentAssistantTurnHadVisibleText && !currentAssistantTurnContinuesCutOff
                 ? assistantTurnTextSeparator(full, e.delta)
                 : "";
               const delta = `${separator}${e.delta}`;
@@ -4199,12 +4227,23 @@ export const llmClient = {
                 );
               }
             }
+            if (event.message.role === "assistant") {
+              if (event.message.stopReason === "error") {
+                failedAssistantTurnStart = {
+                  full: currentAssistantTurnStart.full,
+                  reasoning: currentAssistantTurnStart.reasoning,
+                };
+              } else if (event.message.stopReason !== "aborted") {
+                continuingCutOffReply = false;
+              }
+            }
             const streamedTurn = full.slice(currentAssistantTurnStart.full);
             const projection = reconcileTerminalAssistantProjection(
               { full, reasoning },
               currentAssistantTurnStart,
               event.message,
               exposeReasoning,
+              currentAssistantTurnContinuesCutOff,
             );
             if (projection.changed) {
               full = projection.full;
@@ -4697,16 +4736,42 @@ export const llmClient = {
                 throw new Error("The Pi visible-turn transaction did not start.");
               }
             },
-            onRetry: () => {
-              full = full.slice(0, fullLengthBeforeAttempt);
-              reasoning = reasoning.slice(0, reasoningLengthBeforeAttempt);
-              timeline.rewindContentOffset(full.length);
-              timeline.rewindReasoningOffset(reasoning.length);
-              sendGeneration(streamId, "chat:delta", {
-                streamId,
-                delta: "",
-                reset: true,
-              });
+            onRetry: (retry) => {
+              // A dropped stream's text stays when the next try continues it.
+              // Otherwise only the failed turn's text goes: earlier turns of
+              // this run stay in the model's context, so they stay visible too.
+              if (!retry.keepsPartial) {
+                full = full.slice(0, Math.max(fullLengthBeforeAttempt, failedAssistantTurnStart?.full ?? 0));
+                reasoning = reasoning.slice(
+                  0,
+                  Math.max(reasoningLengthBeforeAttempt, failedAssistantTurnStart?.reasoning ?? 0),
+                );
+                timeline.rewindContentOffset(full.length);
+                timeline.rewindReasoningOffset(reasoning.length);
+                sendGeneration(streamId, "chat:delta", {
+                  streamId,
+                  delta: "",
+                  reset: true,
+                });
+                if (full) sendGeneration(streamId, "chat:delta", { streamId, delta: full });
+                if (reasoning) sendGeneration(streamId, "chat:reasoning-delta", { streamId, delta: reasoning });
+              }
+              // The working row counts down to the next try; Stop cancels the wait.
+              if (retry.reason === "provider") {
+                sendGeneration(streamId, "chat:status", {
+                  streamId,
+                  phase: "retrying",
+                  retry: {
+                    attempt: retry.attempt,
+                    maxAttempts: retry.maxAttempts,
+                    retryAt: Date.now() + retry.delayMs,
+                  },
+                });
+              }
+            },
+            maxCutOffContinuations: MAX_CUT_OFF_CONTINUATIONS,
+            onContinue: () => {
+              continuingCutOffReply = true;
             },
           },
         );
@@ -4993,7 +5058,9 @@ export const llmClient = {
       generation.cancelRequested = true;
       generation.cancellationOrigin = origin;
       generation.stopCacheWarming?.();
-      generation.agent.abort();
+      // A quit leaves the reply resumable on the next launch; Stop does not.
+      if (origin === "application_shutdown") generation.agent.abortForShutdown();
+      else generation.agent.abort();
       endLoadMonitor(generation, streamId, false);
       generation.formFill?.revoke();
       void generation.computerUse?.close();

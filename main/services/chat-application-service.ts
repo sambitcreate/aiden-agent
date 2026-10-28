@@ -44,7 +44,14 @@ export interface ChatApplicationDependencies {
   toolOutputStore?: Pick<ToolOutputStore, "deleteByChat">;
   chatStore: Pick<
     typeof chatStore,
-    "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
+    | "list"
+    | "listRegular"
+    | "get"
+    | "create"
+    | "rename"
+    | "setChatModelSelection"
+    | "moveEmptyChatToWorkspace"
+    | "remove"
   > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
@@ -207,6 +214,30 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         assertRenameAllowedFromChat(chat, options);
         await options.assertCurrent?.(chat);
       });
+    },
+
+    /**
+     * The model picker in an open chat changes that chat only. Refused while a
+     * reply runs, because the running turn records its own model when it ends.
+     */
+    async setModelSelection(
+      chatId: string,
+      providerId: string,
+      model: string,
+      options: ChatApplicationMutationOptions = {},
+    ) {
+      if (deps.llmClient.isChatBusy(chatId)) {
+        throw new Error("Finish or stop the current response before changing this chat's model.");
+      }
+      return chatForRenderer(
+        await deps.chatStore.setChatModelSelection(chatId, providerId, model, async (chat) => {
+          assertRenameAllowedFromChat(chat, options);
+          await options.assertCurrent?.(chat);
+          if (deps.llmClient.isChatBusy(chatId)) {
+            throw new Error("Finish or stop the current response before changing this chat's model.");
+          }
+        }),
+      );
     },
 
     async moveEmptyToWorkspace(

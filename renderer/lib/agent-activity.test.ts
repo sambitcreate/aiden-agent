@@ -235,3 +235,23 @@ test("phase smoothing keeps first feedback and approval immediate", () => {
   assert.equal(activityPresentationDelay(working, null), 0);
   assert.equal(activityPresentationDelay(thinking, working, true), 0);
 });
+
+test("a retry wait counts down to the next try and yields to Stop and approvals", () => {
+  const modelCallRetry = { attempt: 2, maxAttempts: 6, retryAt: 10_000 };
+  assert.deepEqual(
+    resolveAgentActivity({ ...idle, streamingText: "", modelCallRetry, now: 2_500 }),
+    { phase: "retrying", label: "Trying again in 8s (2 of 6)", mark: "glance" },
+  );
+  assert.equal(
+    resolveAgentActivity({ ...idle, streamingText: "", modelCallRetry, now: 10_000 })?.label,
+    "Trying again (2 of 6)…",
+  );
+  assert.equal(
+    resolveAgentActivity({ ...idle, isStopping: true, modelCallRetry, now: 2_500 })?.phase,
+    "stopping",
+  );
+  assert.equal(
+    resolveAgentActivity({ ...idle, pendingApproval: true, modelCallRetry, now: 2_500 })?.phase,
+    "waiting",
+  );
+});

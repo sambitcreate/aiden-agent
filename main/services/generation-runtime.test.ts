@@ -811,6 +811,17 @@ test("terminal reconciliation preserves paragraph boundaries across tool-separat
   );
 });
 
+test("terminal reconciliation joins a continued cut-off reply without a paragraph break", () => {
+  const projection = reconcileTerminalAssistantProjection(
+    { full: "The answer was cut of", reasoning: "" },
+    { full: "The answer was cut of".length, reasoning: 0 },
+    { role: "assistant", content: [{ type: "text", text: "f mid-word." }] },
+    false,
+    true,
+  );
+  assert.equal(projection.full, "The answer was cut off mid-word.");
+});
+
 test("reconciles interleaved streamed blocks to Pi terminal content order", () => {
   const projection = reconcileTerminalAssistantProjection(
     {

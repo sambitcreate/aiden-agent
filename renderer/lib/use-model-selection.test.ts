@@ -116,3 +116,32 @@ test("same-window model writes notify every mounted consumer", async () => {
   unsubscribeFirst();
   unsubscribeSecond();
 });
+
+test("a chat with messages answers with its own model; an empty chat follows the app's", async () => {
+  const { chatModelSelection } = await import("./use-model-selection");
+  const app = { providerId: "google", model: "gemini-flash" };
+  const chat = { providerId: "anthropic", model: "claude-sonnet" };
+  assert.deepEqual(chatModelSelection(chat, true, app), chat);
+  assert.deepEqual(chatModelSelection(chat, false, app), app, "an empty chat uses the new-chat model");
+  assert.deepEqual(
+    chatModelSelection({ providerId: "anthropic" }, true, app),
+    app,
+    "a chat that never recorded a whole pair falls back to the new-chat model",
+  );
+  assert.deepEqual(chatModelSelection(undefined, true, app), app);
+});
+
+test("leaving a chat cannot clear the model target of the chat opened after it", async () => {
+  const { readActiveChatModelTarget, setActiveChatModelTarget } = await import("./use-model-selection");
+  const target = (chatId: string) => ({
+    chatId,
+    selection: { providerId: "google", model: "gemini-pro" },
+    select: () => undefined,
+  });
+  const leaveA = setActiveChatModelTarget(target("chat-a"));
+  const leaveB = setActiveChatModelTarget(target("chat-b"));
+  leaveA();
+  assert.equal(readActiveChatModelTarget()?.chatId, "chat-b");
+  leaveB();
+  assert.equal(readActiveChatModelTarget(), null, "with no chat open, a model change sets the new-chat model");
+});

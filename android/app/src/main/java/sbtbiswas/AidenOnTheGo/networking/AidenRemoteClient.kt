@@ -56,6 +56,22 @@ import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * A request query value as the Mac reads it back. Macs before contract revision
+ * 41 refuse any `%` in a URL, so what they could read stays literal: a space
+ * travels as `+`, which every Mac decodes, and the separators ids, dates and
+ * cursors use stay as they are. Only a character that can't travel literally
+ * (`& + # %`, quotes, accents, emoji) is percent-encoded, which revision 41
+ * Macs accept.
+ */
+object AidenHostQuery {
+    private val literalEscapes = Regex("%(3A|40|2F|24|2C|3B|3D|21|28|29|7E)", RegexOption.IGNORE_CASE)
+
+    fun value(raw: String): String =
+        URLEncoder.encode(raw, Charsets.UTF_8.name())
+            .replace(literalEscapes) { match -> match.value.substring(1).toInt(16).toChar().toString() }
+}
+
 data class AidenPreferredChatSummaryPage(
     val summaries: List<AidenChatSummary>,
     val nextCursor: String?,
@@ -1699,6 +1715,28 @@ class AidenRemoteClient(
         }
     }
 
+    /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
+    suspend fun actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ): AidenBotIssueActReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenRemoteIssueWire.validateId(issueId, "issueId")
+        return executeRequest(
+            "/bots/$botId/issues/$issueId/act",
+            method = "POST",
+            bodyJson = json.encodeToString(AidenBotIssueActRequest.serializer(), request),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botIssues")
+        ) { bytes ->
+            decodeBotWire(AidenBotIssueActReceipt.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
     private suspend fun botSessionControl(botId: String, action: String, idempotencyKey: UUID): AidenBotSessionStateView {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(
@@ -1903,7 +1941,8 @@ class AidenRemoteClient(
     /** Finished Bot routine runs to post as local notifications; pass the previous `now` as [since]. */
     suspend fun botRoutineNotifications(since: Instant? = null): AidenBotRoutineNotificationList {
         val query = since?.let {
-            "?since=" + java.net.URLEncoder.encode(InstantIso8601Serializer.millisecondFormat.format(it), "UTF-8")
+            // Its `:` stays literal, so Macs before revision 41 read it too.
+            "?since=" + AidenHostQuery.value(InstantIso8601Serializer.millisecondFormat.format(it))
         } ?: ""
         return executeRequest(
             "/bots/routine-notifications$query",
@@ -1917,9 +1956,9 @@ class AidenRemoteClient(
         spec: AidenBotConversationQuery
     ): AidenBotConversationPage {
         val params = mutableListOf<String>()
-        if (spec.cursor != null) params.add("cursor=${spec.cursor}")
-        if (spec.query != null) params.add("query=${spec.query}")
-        if (spec.botId != null) params.add("botId=${spec.botId}")
+        if (spec.cursor != null) params.add("cursor=${AidenHostQuery.value(spec.cursor)}")
+        if (spec.query != null) params.add("query=${AidenHostQuery.value(spec.query)}")
+        if (spec.botId != null) params.add("botId=${AidenHostQuery.value(spec.botId)}")
         if (spec.limit != null) params.add("limit=${spec.limit}")
         val queryString = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
 

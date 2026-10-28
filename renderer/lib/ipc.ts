@@ -79,6 +79,7 @@ import type {
   McpStatus,
   McpToolSummary,
   McpPendingLaunchApproval,
+  McpMacAppStatus,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -118,8 +119,9 @@ import type {
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
 import type {
-  WebSearchKeyPoolProviderId,
+  WebKeyPoolId,
   WebSearchKeyPoolRendererState,
   WebSearchKeyPoolStrategy,
 } from "../shared/web-search-key-pool";
@@ -163,6 +165,7 @@ import type {
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
 import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
@@ -201,6 +204,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import type {
   ImageGenerationActionResult,
   ImageGenerationAddCustomModelRequest,
@@ -638,6 +642,10 @@ export const mcpApi = {
   liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
   /** The server's tools from its last discovery (never connects); null when none yet. */
   toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  /** Whether a Mac app connector's app (iMCP) is installed and open. Read-only. */
+  macAppStatus: (presetId: string) => invoke<McpMacAppStatus>("mcp:macAppStatus", presetId),
+  /** Open a Mac app connector's installed app. Only when the person chooses Open. */
+  openMacApp: (presetId: string) => invoke<{ opened: true }>("mcp:openMacApp", presetId),
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
@@ -693,19 +701,30 @@ export const webSearchApi = {
   removeCredential: (providerId: WebSearchProviderId) =>
     invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
   keyPool: {
-    get: (providerId: WebSearchKeyPoolProviderId) =>
+    get: (providerId: WebKeyPoolId) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:get", providerId),
-    add: (providerId: WebSearchKeyPoolProviderId, key: string, label?: string) =>
+    add: (providerId: WebKeyPoolId, key: string, label?: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:add", providerId, key, label),
-    remove: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    remove: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:remove", providerId, entryId),
-    reorder: (providerId: WebSearchKeyPoolProviderId, entryIds: string[]) =>
+    reorder: (providerId: WebKeyPoolId, entryIds: string[]) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:reorder", providerId, entryIds),
-    setStrategy: (providerId: WebSearchKeyPoolProviderId, strategy: WebSearchKeyPoolStrategy) =>
+    setStrategy: (providerId: WebKeyPoolId, strategy: WebSearchKeyPoolStrategy) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:setStrategy", providerId, strategy),
-    resetCooldown: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    resetCooldown: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:resetCooldown", providerId, entryId),
   },
+};
+
+// ── Web pages (web_fetch) and extract mode ───────────────────────────
+export const webFetchApi = {
+  get: () => invoke<WebFetchRendererSnapshot>("webSearch:pages:get"),
+  setEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setEnabled", enabled),
+  setExtractEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractEnabled", enabled),
+  setExtractAccountId: (accountId: string | null) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────
@@ -870,7 +889,7 @@ export const shortcutApi = {
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const res = await window.aidenAPI.dialog.showOpenDialog({
-    properties: ["openDirectory"],
+    properties: ["openDirectory", "createDirectory"],
   });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];
@@ -1461,6 +1480,9 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
+  /** Change the model this chat answers with; other chats and new chats keep theirs. */
+  setModel: (id: string, providerId: string, model: string) =>
+    invoke<Chat | null>("chats:setModel", id, providerId, model),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -1493,6 +1515,8 @@ export const chatsApi = {
     invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
+  /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
+  replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -1714,6 +1738,47 @@ export const botsApi = {
         input,
       ),
   },
+  /** Routines that run when something happens: a file change or the routine's link. */
+  eventRoutines: {
+    list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
+    create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string }) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
+    remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
+    rotateLink: (input: { botId: string; id: string }) =>
+      invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+  },
+  /** What a Bot learned: the page's overview, Undo, and lesson answers. */
+  learning: {
+    get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
+    undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
+    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string } }) =>
+      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
+    respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
+      invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),
+    removeLesson: (input: { botId: string; lessonId: string }) => invoke<void>("bots:lessons:remove", input),
+  },
+  /** Skills a Bot proposed (or found in its folder) and the person's answer. */
+  skillProposals: {
+    respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
+      invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
+  },
+  /** A Bot's health checks: the newest report, and Check now. */
+  health: {
+    report: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", { botId }),
+    check: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport>("bots:health:check", { botId }),
+  },
+  /** "Needs you" issues the host raised for a Bot, and the person's answers. */
+  issues: {
+    list: (input: { botId: string; open?: boolean }) =>
+      invoke<import("../shared/bot-issues").BotIssue[]>("bots:issues:list", input),
+    /** One of the card's actions; a settled issue answers `not_open`. */
+    act: (input: { botId: string; issueId: string; action: import("../shared/bot-issues").BotIssueAction }) =>
+      invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
+  },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
   listTelegramTargets: () =>
@@ -1772,6 +1837,8 @@ export interface ApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /** The exact command or file change, sent only to the desktop that owns the chat. */
+  preview?: ToolApprovalPreview;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
@@ -1842,6 +1909,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** A failed model request waits before it is sent again. */
+  onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
