@@ -79,9 +79,11 @@ export function useBotHandoffActions(botId: string, waitId: string | undefined):
     adjustInFlight(key, 1);
     try {
       const { opened } = await botsApi.openHandoff(botId, pending.waitId);
+      // A sign-in, or a step on the Bot's own screen, shows that screen in the panel.
+      const onBotScreen = signIn || pending.target !== undefined;
       if (opened === "none") toast.error(failed);
-      else if (signIn && opened === "browser") panel.show("browser");
-      else if (signIn && opened === "computer") panel.show("computer");
+      else if (onBotScreen && opened === "browser") panel.show("browser");
+      else if (onBotScreen && opened === "computer") panel.show("computer");
     } catch (error) {
       toast.error(userFacingErrorMessage(error, failed));
     } finally {

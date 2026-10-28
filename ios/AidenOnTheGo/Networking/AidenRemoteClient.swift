@@ -1101,7 +1101,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botImages, .botIssues,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
             .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,

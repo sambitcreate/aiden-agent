@@ -22,6 +22,7 @@ import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
 import { guardHistoryTraversal } from "../lib/guarded-history";
+import { reopenClosedChatDraft } from "../lib/chat-draft";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
 // chunk. Every other route loads its own chunk; the router awaits the chunk
@@ -96,6 +97,10 @@ const chatRoute = createRoute({
   // No `key={chatId}`: ChatPane resets its own per-chat state (see the chatId
   // layout effects there), so remounting only throws away the measured chrome
   // and scroll position, which reads as a blank-then-snap on every switch.
+  // Going Back to a new agent that was left empty opens it blank again.
+  beforeLoad: ({ params }) => {
+    reopenClosedChatDraft(params.chatId);
+  },
   component: function ChatRoute() {
     const { chatId } = chatRoute.useParams();
     return <ChatPane chatId={chatId} />;

@@ -64,6 +64,28 @@ test("a card the password-or-code rule opened tells a holder it takes no note; t
   assert.equal("takesNote" in toRemoteBotHandoff(prompt()), false);
 });
 
+test("a step on the Bot's own browser or computer reaches a phone with no page, as one to finish on the Mac", async () => {
+  const fixture = await section();
+  const onScreen = (overrides: Partial<BotPendingHandoff>) =>
+    toRemoteBotHandoff(prompt({
+      waitId: fixture.onMacHandoff.waitId,
+      action: fixture.onMacHandoff.action,
+      why: fixture.onMacHandoff.why,
+      open: { url: "https://shop.example.com/checkout" },
+      ...overrides,
+    }));
+  assert.deepEqual(onScreen({ target: "browser" }), fixture.onMacHandoff);
+  assert.deepEqual(onScreen({ target: "computer", open: undefined }), fixture.onMacHandoff);
+  // A rule that stopped a call in the Bot's browser hands over the same kind of step.
+  const ruled = onScreen({ target: "browser", source: "rule", rule: { id: "rule-buy", label: "Ask before buying" } });
+  assert.equal(ruled.onMac, true);
+  assert.equal("open" in ruled, false);
+  // A sign-in keeps its own Finish on your Mac, and a step anywhere else keeps its page.
+  assert.equal("onMac" in toRemoteBotHandoff(prompt({ kind: "sign_in", action: "Sign in to github.com", target: "computer" })), false);
+  assert.equal("onMac" in toRemoteBotHandoff(prompt()), false);
+  assert.equal(toRemoteBotHandoff(prompt()).open?.url, "https://bank.example.com/verify");
+});
+
 test("a hand-off link that is not a plain https page, and a blank reason, never reach a phone", () => {
   for (const url of [
     "http://bank.example.com/verify",

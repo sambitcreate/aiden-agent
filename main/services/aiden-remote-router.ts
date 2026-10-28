@@ -1810,6 +1810,14 @@ function holdsBotHandoffNotes(
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
 }
 
+/** Whether this device is also told when a hand-off step is on the Bot's own screen (revision 43). */
+function holdsBotHandoffOnMac(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
+}
+
 /** Revision 44: shared-image entries and their byte route ship together, or not at all. */
 function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
@@ -2655,6 +2663,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             images: holdsBotImages(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           }),
@@ -2679,6 +2688,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             images: holdsBotImages(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           },
