@@ -84,6 +84,9 @@ function fixture(
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
     inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
     visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
+    contextPressure?: ConstructorParameters<typeof AidenRemoteChatService>[0]["contextPressure"];
+    /** The host's configured models; anything else is refused as `resolve` refuses it. */
+    configuredModels?: readonly string[];
   } = {},
 ) {
   let current: Chat | null = structuredClone(initial);
@@ -238,12 +241,24 @@ function fixture(
     },
     streams,
     models: {
-      resolve: async (providerId, modelId) => ({
+      resolve: async (providerId, modelId) => {
+        if (
+          fixtureOptions.configuredModels &&
+          !fixtureOptions.configuredModels.includes(`${providerId}/${modelId}`)
+        ) {
+          throw new AidenRemoteServiceError(
+            "invalid_request",
+            "Choose a configured Aiden provider and model before starting this turn.",
+            400,
+          );
+        }
+        return {
         providerId: providerId ?? "provider-1",
         modelId: modelId ?? "model-1",
         thinkingLevels: ["low", "high"],
         supportsImages: fixtureOptions.modelSupportsImages?.() ?? true,
-      }),
+        };
+      },
     },
     bots: {
       get: async (id) =>
@@ -286,6 +301,7 @@ function fixture(
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
     ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
     ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
+    ...(fixtureOptions.contextPressure ? { contextPressure: fixtureOptions.contextPressure } : {}),
   });
   return {
     service,
@@ -2751,4 +2767,90 @@ test("Remote classification refuses feature-owned chats before any payload read"
       (error as { status?: number }).status === 404,
   );
   assert.equal(payloadReads, 0);
+});
+
+test("context pressure sends the host's own projection as counts, priced with a configured model", async () => {
+  const projections: string[] = [];
+  const desktopProjection = {
+    contextTokens: 9_000,
+    contextWindow: 128_000,
+    inputBudgetTokens: 100_000,
+    reservedTokens: 28_000,
+    percentOfWindow: 7.03,
+    percentOfUsableInput: 9,
+    shouldCompact: false,
+    messageTokens: 3_000,
+    staticTokens: 6_000,
+    providerUsageTokens: 8_500,
+    addedAfterUsageAnchorTokens: 500,
+    compressibleHistoryMessages: 2,
+    source: "provider-anchored" as const,
+    computedAt: 1_787_166_120_000,
+    breakdown: {
+      categories: [{ id: "mcp-tools" as const, tokens: 6_000 }],
+      deferred: [{ id: "mcp-tools" as const, tokens: 400, count: 1, servers: [{ name: "Acme internal tracker", count: 1, tokens: 400 }] }],
+    },
+    promptCache: { ttlMs: 300_000, lastRequestAt: 1_787_166_000_000 },
+  };
+  const app = fixture(chat(), {
+    configuredModels: ["provider-1/model-1", "custom:local/org/model-large"],
+    contextPressure: async (chatId, selection) => {
+      projections.push(`${chatId}:${selection ? `${selection.providerId}/${selection.modelId}` : "chat-model"}`);
+      return desktopProjection;
+    },
+  });
+  assert.equal(app.service.supportsContextPressure, true);
+
+  const own = await app.service.contextPressure("chat-1");
+  assert.deepEqual(own, {
+    chatId: "chat-1",
+    pressure: {
+      contextTokens: 9_000,
+      contextWindow: 128_000,
+      inputBudgetTokens: 100_000,
+      reservedTokens: 28_000,
+      percentOfWindow: 7.03,
+      percentOfUsableInput: 9,
+      shouldCompact: false,
+      messageTokens: 3_000,
+      staticTokens: 6_000,
+      source: "provider-anchored",
+      computedAt: 1_787_166_120_000,
+    },
+  });
+  // Nothing about the host's tools, servers or cache reaches the device.
+  assert.equal(/Acme|breakdown|promptCache|compressible/u.test(JSON.stringify(own)), false);
+
+  await app.service.contextPressure("chat-1", { providerId: "custom:local", modelId: "org/model-large" });
+  await assert.rejects(
+    app.service.contextPressure("chat-1", { providerId: "custom:local", modelId: "retired-model" }),
+    hasCode("invalid_request", 400),
+  );
+  await assert.rejects(app.service.contextPressure("chat-missing"), hasCode("not_found", 404));
+  assert.deepEqual(projections, ["chat-1:chat-model", "chat-1:custom:local/org/model-large"]);
+});
+
+test("context pressure is null when the host cannot project, and Bot chats and unwired hosts have none", async () => {
+  const nothing = fixture(chat(), { contextPressure: async () => null });
+  assert.deepEqual(await nothing.service.contextPressure("chat-1"), { chatId: "chat-1", pressure: null });
+
+  // A projection the allowlist cannot describe is dropped, as the desktop meter drops it.
+  const broken = fixture(chat(), {
+    contextPressure: async () => ({ contextTokens: 1, contextWindow: 0, source: "estimated" }),
+  });
+  assert.deepEqual(await broken.service.contextPressure("chat-1"), { chatId: "chat-1", pressure: null });
+
+  let botProjections = 0;
+  const bot = fixture(chat({ botId: "bot-1" }), {
+    contextPressure: async () => {
+      botProjections += 1;
+      return null;
+    },
+  });
+  await assert.rejects(bot.service.contextPressure("chat-1"), hasCode("not_found", 404));
+  assert.equal(botProjections, 0);
+
+  const unwired = fixture(chat());
+  assert.equal(unwired.service.supportsContextPressure, false);
+  await assert.rejects(unwired.service.contextPressure("chat-1"), hasCode("not_found", 404));
 });

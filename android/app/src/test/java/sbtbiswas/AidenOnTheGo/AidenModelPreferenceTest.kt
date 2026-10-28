@@ -74,6 +74,11 @@ class AidenModelPreferenceTest {
         messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
     )
 
+    /** A chat that has already been talked in, so it owns its model. */
+    private fun existingChat(providerId: String, modelId: String) = workspaceChat(providerId, modelId).copy(
+        messages = listOf(AidenChatMessage("reply-one", AidenChatRole.ASSISTANT, "Hi", createdAt = Instant.EPOCH))
+    )
+
     @Test
     fun desktopStartedAgentChatSaysWhichModelRepliesFromThisPhone() {
         // The Mac omits agent-backed providers from the phone's catalog.
@@ -101,17 +106,109 @@ class AidenModelPreferenceTest {
     }
 
     @Test
-    fun rememberedHostChoiceWinsOverChatPairWhileTheHostStillOffersIt() {
+    fun rememberedHostChoiceSeedsAChatWithoutItsOwnModel() {
         val resolved = AidenChatModelAuthority.resolvedSelection(
-            chat = workspaceChat("google", "gemini-flash"),
+            chat = workspaceChat(),
             catalog = catalog(fullCatalog),
-            selectedProviderId = "google",
-            selectedModelId = "gemini-flash",
+            selectedProviderId = null,
+            selectedModelId = null,
             selectedThinkingLevel = null,
             remembered = AidenChatModelSelection("openai", "gpt-5.6", "max")
         )
 
         assertEquals(AidenChatModelSelection("openai", "gpt-5.6", "max"), resolved)
+    }
+
+    @Test
+    fun aChatKeepsItsOwnModelOverTheRememberedHostChoice() {
+        val remembered = AidenChatModelSelection("openai", "gpt-5.6", "max")
+        val resolved = AidenChatModelAuthority.resolvedSelection(
+            chat = existingChat("google", "gemini-flash"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = "google",
+            selectedModelId = "gemini-flash",
+            selectedThinkingLevel = null,
+            remembered = remembered
+        )
+        assertEquals(AidenChatModelSelection("google", "gemini-flash", null), resolved)
+
+        // Opened before its transcript arrived, the selection was seeded from
+        // the remembered choice; the chat's own pair takes over once known.
+        val afterTranscript = AidenChatModelAuthority.resolvedSelection(
+            chat = existingChat("google", "gemini-flash"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = "openai",
+            selectedModelId = "gpt-5.6",
+            selectedThinkingLevel = "max",
+            remembered = remembered
+        )
+        assertEquals(AidenChatModelSelection("google", "gemini-flash", null), afterTranscript)
+
+        // A hidden model the chat already uses stays its model.
+        val hidden = AidenChatModelAuthority.resolvedSelection(
+            chat = existingChat("openai", "gpt-hidden"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = "openai",
+            selectedModelId = "gpt-hidden",
+            selectedThinkingLevel = null,
+            remembered = AidenChatModelSelection("google", "gemini-flash", null)
+        )
+        assertEquals(AidenChatModelSelection("openai", "gpt-hidden", null), hidden)
+
+        // A new chat the host gave its default pair still takes the remembered choice.
+        val newChat = AidenChatModelAuthority.resolvedSelection(
+            chat = workspaceChat("google", "gemini-flash"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = "google",
+            selectedModelId = "gemini-flash",
+            selectedThinkingLevel = null,
+            remembered = remembered
+        )
+        assertEquals(remembered, newChat)
+
+        // A pick in this chat (no remembered value passed) still wins.
+        val picked = AidenChatModelAuthority.resolvedSelection(
+            chat = existingChat("google", "gemini-flash"),
+            catalog = catalog(fullCatalog),
+            selectedProviderId = "openai",
+            selectedModelId = "gpt-5.6",
+            selectedThinkingLevel = "low"
+        )
+        assertEquals(AidenChatModelSelection("openai", "gpt-5.6", "low"), picked)
+    }
+
+    @Test
+    fun unsentChatPicksLastUntilSentOrUnpaired() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        val pick = AidenChatModelSelection("openai", "gpt-5.6", "max")
+        store.rememberChat("mac-a", "chat-a", pick)
+        store.rememberChat("mac-a", "chat-b", AidenChatModelSelection("google", "gemini-flash", null))
+
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(pick, relaunched.chatSelection("mac-a", "chat-a"))
+        assertNull("chat picks are not the new-chat default", relaunched.selection("mac-a"))
+        assertNull(relaunched.chatSelection("mac-b", "chat-a"))
+
+        // The Mac accepted a send made with an older pick: the newer pick stays.
+        relaunched.forgetChat("mac-a", "chat-a", matching = AidenChatModelSelection("openai", "gpt-5.6", "low"))
+        assertEquals(pick, AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-a"))
+        relaunched.forgetChat("mac-a", "chat-a", matching = pick)
+        assertNull(AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-a"))
+        assertEquals("gemini-flash", AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-b")?.modelId)
+
+        relaunched.purge("mac-a")
+        assertNull(AidenModelPreferenceStore(tempFolder.root).chatSelection("mac-a", "chat-b"))
+    }
+
+    @Test
+    fun aPickInAnExistingChatJoinsRecentsWithoutChangingTheNewChatDefault() {
+        val store = AidenModelPreferenceStore(tempFolder.root)
+        store.remember("mac-a", AidenChatModelSelection("google", "gemini-flash", null))
+        store.remember("mac-a", AidenChatModelSelection("openai", "gpt-5.6", "max"), asDefault = false)
+
+        val relaunched = AidenModelPreferenceStore(tempFolder.root)
+        assertEquals(AidenChatModelSelection("google", "gemini-flash", null), relaunched.selection("mac-a"))
+        assertEquals(listOf("gpt-5.6", "gemini-flash"), relaunched.recentRoutes("mac-a").map { it.modelId })
     }
 
     @Test
@@ -309,6 +406,98 @@ class AidenModelPreferenceTest {
         } finally {
             runBlocking(main) {
                 // Chat persistence hops to IO; join so no continuation resumes after resetMain.
+                val jobs = viewModels.keys().mapNotNull { viewModels.get(it)?.viewModelScope?.coroutineContext?.get(Job) }
+                viewModels.clear()
+                jobs.forEach { it.join() }
+            }
+            Dispatchers.resetMain()
+            main.close()
+            server.shutdown()
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aPickInOneExistingChatLeavesOtherChatsAndNewChatsAlone() {
+        val directory = tempFolder.newFolder("per-chat")
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val wireJson = Json(json) { explicitNulls = false }
+        val chatA = existingChat("google", "gemini-flash").copy(id = "chat-a")
+        val chatB = existingChat("google", "gemini-flash").copy(id = "chat-b")
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.requestUrl!!.encodedPath
+                return when {
+                    path.endsWith("/models") -> MockResponse().setBody(fullCatalog)
+                    path.endsWith("/chats/${chatA.id}") -> MockResponse().setBody(wireJson.encodeToString(chatA))
+                    path.endsWith("/chats/${chatB.id}") -> MockResponse().setBody(wireJson.encodeToString(chatB))
+                    path.endsWith("/chats/${chatA.id}/turns") -> MockResponse().setResponseCode(429).setBody(
+                        """{"error":{"code":"rate_limited","message":"Slow down","requestId":"r","retryable":false}}"""
+                    )
+                    else -> MockResponse().setResponseCode(404).setBody(
+                        """{"error":{"code":"not_found","message":"Not found","requestId":"r","retryable":false}}"""
+                    )
+                }
+            }
+        }
+        server.start()
+        Dispatchers.setMain(main)
+        val viewModels = ViewModelStore()
+        try {
+            runBlocking(main) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-models", deviceId = "device-models",
+                    endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                    credential = "synthetic", capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts,
+                    scope = CoroutineScope(main + Job().apply { cancel() }))
+                coordinator.refreshClient()
+                // The model new chats on this Mac start with.
+                coordinator.modelPreferenceStore.remember("instance-models", AidenChatModelSelection("google", "gemini-flash", null))
+
+                suspend fun open(chat: AidenChat, key: String = chat.id): AidenChatViewModel =
+                    AidenChatViewModel(chat.id, coordinator, cache, drafts, chat).also {
+                        viewModels.put(key, it)
+                        withTimeout(5_000) { it.catalog.first { catalog -> catalog != null } }
+                    }
+
+                val a = open(chatA)
+                a.selectModel("openai", "gpt-5.6", "max")
+                assertEquals("gpt-5.6", a.selectedModelId.value)
+                assertEquals(
+                    AidenChatModelSelection("google", "gemini-flash", null),
+                    coordinator.modelPreferenceStore.selection("instance-models")
+                )
+                assertEquals("gpt-5.6", coordinator.modelPreferenceStore.recentRoutes("instance-models").first().modelId)
+
+                val b = open(chatB)
+                assertEquals("google", b.selectedProviderId.value)
+                assertEquals("gemini-flash", b.selectedModelId.value)
+
+                // Left without sending, chat A reopens on its pick.
+                val reopened = open(chatA, key = "chat-a-reopened")
+                assertEquals("openai", reopened.selectedProviderId.value)
+                assertEquals("gpt-5.6", reopened.selectedModelId.value)
+                assertEquals("max", reopened.selectedThinkingLevel.value)
+
+                // A send the Mac turns away keeps the pick for the next visit.
+                withTimeout(5_000) { reopened.isLoading.first { !it } }
+                reopened.updateDraft("Hello")
+                assertTrue(reopened.canSend)
+                reopened.send()
+                withTimeout(5_000) { reopened.presentedError.first { it != null } }
+                withTimeout(5_000) { reopened.isStarting.first { !it } }
+                val afterRejection = open(chatA, key = "chat-a-after-rejection")
+                assertEquals("gpt-5.6", afterRejection.selectedModelId.value)
+                assertEquals("max", afterRejection.selectedThinkingLevel.value)
+            }
+        } finally {
+            runBlocking(main) {
                 val jobs = viewModels.keys().mapNotNull { viewModels.get(it)?.viewModelScope?.coroutineContext?.get(Job) }
                 viewModels.clear()
                 jobs.forEach { it.join() }

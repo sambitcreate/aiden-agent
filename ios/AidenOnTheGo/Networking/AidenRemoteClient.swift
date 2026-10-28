@@ -3,6 +3,31 @@ import Foundation
 import ImageIO
 import zlib
 
+/// A request query as the Mac reads it back. Macs before contract revision 41
+/// refuse any `%` in a URL, so what they could read stays literal: a space
+/// travels as `+`, which every Mac decodes, and the separators ids, dates and
+/// cursors use stay as they are. Only a character that can't travel literally
+/// (`& + # %`, accents, emoji) is percent-encoded, which revision 41 Macs
+/// accept. `URLQueryItem` alone sends a space as `%20` and `+` as itself.
+enum AidenHostQuery {
+    private static let literal: CharacterSet = {
+        var set = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        // `=` is safe in a value (the Mac splits each pair at its first `=`),
+        // and base64 cursors carry it, so it stays literal for older Macs.
+        set.insert(charactersIn: "-._~!*'():@/$,;?= ")
+        return set
+    }()
+
+    static func value(_ raw: String) -> String {
+        (raw.addingPercentEncoding(withAllowedCharacters: literal) ?? "")
+            .replacingOccurrences(of: " ", with: "+")
+    }
+
+    static func encode(_ items: [URLQueryItem]) -> String {
+        items.map { "\(value($0.name))=\(value($0.value ?? ""))" }.joined(separator: "&")
+    }
+}
+
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
     case ipad
@@ -113,7 +138,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 40: a chat's or Bot's spending limit, and Allow more
+    /// Contract revision 43: a chat's or Bot's spending limit, and Allow more
     /// once it is reached.
     static let spendingLimitsFeature = "spending-limits-v1"
 
@@ -299,7 +324,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The chat and Bot screens show the spending notice with Allow more (revision 40).
+    /// The chat and Bot screens show the spending notice with Allow more (revision 43).
     var supportsSpendingLimits: Bool {
         features.contains(Self.spendingLimitsFeature)
     }
@@ -336,6 +361,17 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// state, and offer Pause and Resume.
     var supportsBotHandoffs: Bool {
         offersBotHandoffs && capabilities.contains(.botHandoffs)
+    }
+
+    /// The Mac offers `bot:issues` (revision 42): show issue cards and their
+    /// actions. There is no feature token: the support inventory is the signal.
+    var offersBotIssues: Bool {
+        serverCapabilities?.contains(.botIssues) == true
+    }
+
+    /// This device holds `bot:issues`: render the Bot's "Needs you" cards.
+    var supportsBotIssues: Bool {
+        offersBotIssues && capabilities.contains(.botIssues)
     }
 
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
@@ -569,7 +605,7 @@ enum AidenSpendingOwner: Equatable, Hashable, Sendable {
     case bot(String)
 }
 
-/// Revision 40 (`spending-limits-v1`). Amounts are US dollars.
+/// Revision 43 (`spending-limits-v1`). Amounts are US dollars.
 struct AidenSpending: Codable, Equatable, Sendable {
     enum Period: String, Codable, Sendable { case chat, month }
     enum State: String, Codable, Sendable { case under, nearing, reached }
@@ -1144,7 +1180,8 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .appControlsRead, .appControlsRespond,
+            .botHandoffNotes, .botIssues,
+            .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1282,7 +1319,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                        headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
     }
 
-    /// Revision 40: the chat's or Bot's spending limit, or `spending: nil` without one.
+    /// Revision 43: the chat's or Bot's spending limit, or `spending: nil` without one.
     func spending(owner: AidenSpendingOwner) async throws -> AidenSpendingStatus {
         try await send(method: "GET", path: try spendingPath(owner))
     }
@@ -1946,6 +1983,26 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
         guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
         return receipt
+    }
+
+    /// Contract revision 42 (`bot:issues`): carries out one action a card
+    /// offers. The request UUID is the idempotency key, so a retried action
+    /// replays its receipt instead of running the host action twice.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        try validateBotIdentifier(botId)
+        try AidenRemoteIssueWire.validateID(issueId, field: "issueId")
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "issues", issueId, "act"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
     }
 
     /// Pauses the Bot: a running reply stops, and nothing runs until it is resumed.
@@ -3128,7 +3185,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 throw AidenRemoteClientError.invalidEndpoint
             }
-            components.queryItems = query
+            components.percentEncodedQuery = AidenHostQuery.encode(query)
             guard let queryURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
             url = queryURL
         }

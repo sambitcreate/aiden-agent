@@ -8,7 +8,10 @@ import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  delete document.documentElement.dataset.reduceMotion;
+});
 
 const HOST: PeerHostView = {
   id: "host_a",
@@ -145,6 +148,8 @@ test("Retry on a failed reply from another Mac resends the person's words there,
 });
 
 test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
+  // The streaming reveal holds an unfinished line for a second, as long as findByText waits; Reduce Motion shows it at once.
+  document.documentElement.dataset.reduceMotion = "true";
   const { peerCalls } = await mount();
   await screen.findByText("Two meetings and a dentist.");
   await act(async () => {
@@ -398,6 +403,24 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there a
     assert.ok(typeof finish?.idempotencyKey === "string");
   });
   assert.equal(handoffAnswers().length, 0);
+});
+
+test("a password-or-code card from another Mac takes no note: no note box, and Done answers it bare", async () => {
+  const { calls, handoffAnswers } = await mountHandoff({
+    ...RUNNING_WITH_HANDOFF,
+    handoff: { ...BANK_HANDOFF, takesNote: false },
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(screen.queryByText(/Planner reads any note you send/u), null);
+  assert.ok(
+    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done" });
+  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
 });
 
 test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {

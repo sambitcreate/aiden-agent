@@ -579,6 +579,22 @@ export function usageLimitRefusedMessage(input: {
   return `${input.providerLabel} is still at its usage limit, and Aiden stopped waiting for it a few minutes ago.${at}`;
 }
 
+const USAGE_LIMIT_FAILURE = "aidenUsageLimitFailure";
+
+/**
+ * Marks a reply's error as a usage limit's final word: the wait gave up, the
+ * limit outlasts it, or a recent give-up turned the request away. The chat's
+ * own retries then leave it alone, so the reply fails once with the reset time
+ * instead of sending again into the same limit.
+ */
+export function markUsageLimitFailure<T extends object>(message: T): T {
+  return Object.assign(message, { [USAGE_LIMIT_FAILURE]: true });
+}
+
+export function isUsageLimitFailure(message: object): boolean {
+  return (message as Record<string, unknown>)[USAGE_LIMIT_FAILURE] === true;
+}
+
 export interface UsageLimitGateClock {
   now(): number;
   setTimer(callback: () => void, ms: number): unknown;

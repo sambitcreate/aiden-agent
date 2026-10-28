@@ -1,6 +1,7 @@
 import type { ActivityMark } from "../shared/activity-marks";
 import { RENDER_ARTIFACT_TOOL_NAME, RENDER_UI_TOOL_NAME } from "../shared/generative-ui";
 import { usageLimitWaitLabel, type UsageLimitWaitView } from "../shared/usage-limits";
+import { modelCallRetryLabel, type ModelCallRetryView } from "../shared/model-call-retry";
 
 export interface ToolActivity {
   state: "running" | "finished" | "failed" | "blocked";
@@ -19,6 +20,8 @@ export type AgentActivityPhase =
   | "waiting"
   /** A provider usage limit turned the request away; it sends again when the limit clears. */
   | "limited"
+  /** A failed model request waits before it is sent again. */
+  | "retrying"
   | "stopping";
 
 export interface AgentActivity {
@@ -63,6 +66,9 @@ interface AgentActivityInput {
   /** This chat's reply waiting for a provider usage limit, if it is. */
   usageLimitWait?: UsageLimitWaitView | null;
   /** Epoch ms, for the wait's next-try time. */
+  /** The failed request this reply is about to send again, if it is. */
+  modelCallRetry?: ModelCallRetryView | null;
+  /** Epoch ms, for the retry countdown. */
   now?: number;
 }
 
@@ -85,6 +91,7 @@ export function resolveAgentActivity({
   pendingApproval,
   toolActivity,
   usageLimitWait = null,
+  modelCallRetry = null,
   now = Date.now(),
 }: AgentActivityInput): AgentActivity | null {
   if (isStopping) {
@@ -98,6 +105,10 @@ export function resolveAgentActivity({
   if (usageLimitWait && (isStarting || streamingText !== null)) {
     const trying = usageLimitWait.trying || usageLimitWait.nextTryAt <= now;
     return { phase: "limited", label: usageLimitWaitLabel(usageLimitWait, now), mark: "glance", canRetryNow: !trying };
+  }
+
+  if (modelCallRetry) {
+    return { phase: "retrying", label: modelCallRetryLabel(modelCallRetry, now), mark: "glance" };
   }
 
   if (toolActivity?.state === "running") {

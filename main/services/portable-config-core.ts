@@ -60,6 +60,7 @@ import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
 import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
 import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
@@ -704,6 +705,10 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     // this raw document.
     normalized.webSearch = webSearch ?? structuredClone(settings.webSearch);
   }
+  if (Object.prototype.hasOwnProperty.call(settings, "webFetch")) {
+    // Like Web Search: a future document stays on disk for the build that wrote it.
+    normalized.webFetch = parseWebFetchSettings(settings.webFetch) ?? structuredClone(settings.webFetch);
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) normalized.onboarding = onboarding;
   else delete normalized.onboarding;
@@ -747,6 +752,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     if (webSearch) runtime.webSearch = webSearch;
     else delete runtime.webSearch;
+  }
+  if (settings.webFetch !== undefined) {
+    const webFetch = parseWebFetchSettings(settings.webFetch);
+    if (webFetch) runtime.webFetch = webFetch;
+    else delete runtime.webFetch;
   }
   if (settings.tts !== undefined) {
     const tts = parseTtsSettingsDocument(settings.tts);

@@ -20,6 +20,16 @@ export function isQuestionnaireStep(step: AgentStep): step is QuestionnaireStep 
   return isToolStep(step) && step.questionnaire !== undefined;
 }
 
+/** A completed `web_fetch` step that carries the values it read. */
+export type ExtractionStep = AgentToolStep & {
+  extraction: NonNullable<AgentToolStep["extraction"]>;
+};
+
+/** Extract results show as a card under their activity line, which stays in the tally. */
+export function isExtractionStep(step: AgentStep): step is ExtractionStep {
+  return isToolStep(step) && step.extraction !== undefined;
+}
+
 export type AssistantPresentationRow =
   | {
       key: string;
@@ -44,6 +54,11 @@ export type AssistantPresentationRow =
       key: string;
       kind: "questionnaire";
       step: QuestionnaireStep;
+    }
+  | {
+      key: string;
+      kind: "extraction";
+      step: ExtractionStep;
     };
 
 function textRow(
@@ -168,6 +183,9 @@ export function assistantPresentationRows(
       contentOffset: offset,
       steps,
     });
+    for (const grouped of steps) {
+      if (isExtractionStep(grouped)) rows.push({ key: `extraction-${grouped.id}`, kind: "extraction", step: grouped });
+    }
     cursor = offset;
   }
 

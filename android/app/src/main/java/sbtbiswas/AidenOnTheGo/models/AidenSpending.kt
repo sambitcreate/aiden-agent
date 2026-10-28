@@ -11,13 +11,13 @@ import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
 
-/** Whose spending a request reads: a Workspace chat's total, or a Bot's month (revision 40). */
+/** Whose spending a request reads: a Workspace chat's total, or a Bot's month (revision 43). */
 sealed interface AidenSpendingOwner {
     data class Chat(val chatId: String) : AidenSpendingOwner
     data class Bot(val botId: String) : AidenSpendingOwner
 }
 
-/** Revision 40 (`spending-limits-v1`). Amounts are US dollars. */
+/** Revision 43 (`spending-limits-v1`). Amounts are US dollars. */
 @Serializable
 data class AidenSpending(
     val period: Period,

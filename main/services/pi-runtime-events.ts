@@ -97,14 +97,15 @@ export type PiRuntimeEventPayload =
   | { type: "agent_event"; event: PiRuntimeAgentEvent; durable: boolean }
   | {
       type: "retry";
-      attempt: 2;
+      attempt: number;
+      maxAttempts: number;
       reason: "provider" | "overflow";
       delayMs: number;
     }
   | {
       type: "run_end";
       outcome: "completed" | "app_cancelled" | "provider_failed" | "host_failed";
-      attempts: 0 | 1 | 2;
+      attempts: number;
       reason?: string;
     };
 
@@ -112,7 +113,7 @@ export interface PiRuntimeEventEnvelope {
   version: typeof PI_RUNTIME_EVENT_VERSION;
   identity: PiRuntimeIdentity;
   sequence: number;
-  attempt: 0 | 1 | 2;
+  attempt: number;
   turn: { id: string; index: number } | null;
   timestamp: number;
   payload: PiRuntimeEventPayload;
@@ -121,7 +122,7 @@ export interface PiRuntimeEventEnvelope {
 export interface PiRuntimeEventState {
   lastSequence: number;
   phase: "idle" | "running" | "settled";
-  attempt: 0 | 1 | 2;
+  attempt: number;
   turnIndex: number;
   durableMessageCount: number;
   activeToolCalls: ReadonlySet<string>;
@@ -201,7 +202,7 @@ export class PiRuntimeEventChannel {
   private static readonly MAX_PENDING_OBSERVER_EVENTS = 256;
   private state = initialPiRuntimeEventState();
   private sequence = 0;
-  private attempt: 0 | 1 | 2 = 0;
+  private attempt = 0;
   private turnIndex = -1;
   private readonly observers = new Set<PiRuntimeEventObserver>();
   private readonly observerQueue: Array<{
@@ -226,7 +227,7 @@ export class PiRuntimeEventChannel {
     return () => this.observers.delete(observer);
   }
 
-  setAttempt(attempt: 0 | 1 | 2): void {
+  setAttempt(attempt: number): void {
     this.attempt = attempt;
   }
 

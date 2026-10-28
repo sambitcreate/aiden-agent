@@ -9,6 +9,8 @@ export interface HostPlatformCapabilities {
   dictationHoldToTalk: boolean;
   dockIcon: boolean;
   nativeShare: boolean;
+  /** Connectors served by a separate Mac app, such as iMCP (`renderer/shared/connector-catalog.ts`). */
+  macAppConnectors: boolean;
   /** The agent's background jobs follow process groups, which macOS and Linux both offer. */
   backgroundJobs: boolean;
 }
@@ -32,6 +34,7 @@ export function hostPlatformCapabilities(
     dictationHoldToTalk: darwin,
     dockIcon: darwin,
     nativeShare: darwin,
+    macAppConnectors: darwin,
     backgroundJobs: darwin || platform === "linux",
   };
 }

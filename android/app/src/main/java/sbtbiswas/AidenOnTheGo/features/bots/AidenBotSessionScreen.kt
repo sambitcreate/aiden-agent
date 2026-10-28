@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.TaskAlt
 import androidx.compose.material.icons.outlined.EventRepeat
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.SdStorage
 import androidx.compose.material3.*
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,6 +97,8 @@ object AidenBotSessionTags {
     const val COMPOSER = "bot_session_composer"
     const val MEMORY_CAPTION = "bot_session_memory_caption"
     const val PROPOSAL_CARD = "bot_session_proposal_card"
+    /** Revision 42: one "Needs you" card. */
+    const val ISSUE_CARD = "bot_session_issue_card"
 }
 
 /** Neutral squircle tile with a connection glyph; no coloured border. */
@@ -236,7 +239,7 @@ private fun AidenBotSessionContent(
     // Steer or Queue while the Bot works: Queue by default, and Queue again once the turn ends.
     var busyMode by remember(botId) { mutableStateOf(AidenStreamInputMode.QUEUE) }
     LaunchedEffect(ui.isRunning) { busyMode = aidenBotBusyMode(busyMode, ui.isRunning) }
-    // Revision 40: the Bot's month, re-read after each reply and send.
+    // Revision 43: the Bot's month, re-read after each reply and send.
     val spending = remember(botId) { AidenSpendingNoticeState() }
     val spendingTransport = cl.takeIf { serverInfo?.supportsSpendingLimits == true }
     LaunchedEffect(botId, spendingTransport, ui.isRunning, ui.entries.size, ui.outgoing.size) {
@@ -299,6 +302,8 @@ private fun AidenBotSessionContent(
     val canRequestConnections = serverInfo?.supportsBotConnectionRequests == true
     val canAnswerProposals = serverInfo?.supportsBotProactive == true
     val canOpenMemory = serverInfo?.supportsBotMemory == true
+    // Revision 42: issue cards come only from a Mac offering `bot:issues`; actions also need write.
+    val canWriteBots = coordinator.installationStore.activeInstallation?.canWriteBots == true
     val listState = rememberLazyListState()
     // The Mac's transcript, or the cached one while connecting (R14).
     val entries = ui.entries
@@ -472,6 +477,15 @@ private fun AidenBotSessionContent(
                         onRemove = { controller.discardSend(message.id) }
                     )
                 }
+                // Revision 42 (`bot:issues`): the host's "Needs you" cards.
+                items(ui.openIssues, key = { "issue-${it.id}" }) { issue ->
+                    AidenBotIssueCard(
+                        issue = issue,
+                        canAct = canWriteBots,
+                        busy = ui.isActingOn(issue),
+                        onAct = { action -> scope.launch { controller.actOnIssue(issue, action) } }
+                    )
+                }
                 item(key = "status") { AidenBotStatusLine(ui) }
                 // Revision 37: a Bot the person paused. Resume lifts it; a reply it cut short then
                 // shows the interrupted card below.
@@ -566,6 +580,7 @@ private fun AidenBotSessionContent(
                     AidenBotComposerMode.MESSAGE -> aidenBotChatPlaceholder(identity.name)
                     AidenBotComposerMode.HANDOFF_NOTE -> stringResource(R.string.bot_handoff_note_placeholder)
                     AidenBotComposerMode.HELD_FOR_SIGN_IN -> stringResource(R.string.bot_handoff_sign_in_placeholder)
+                    AidenBotComposerMode.HELD_FOR_NO_NOTE -> stringResource(R.string.bot_handoff_no_note_placeholder)
                     AidenBotComposerMode.PAUSED -> stringResource(R.string.bot_paused_placeholder, identity.name)
                 },
                 enabled = ui.composerEnabled,
@@ -880,6 +895,87 @@ fun AidenBotRoutineProposalCard(
             }
         }
     }
+}
+
+/**
+ * Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to two actions. A card
+ * that offers nothing a phone can do (the Mac's own settings opened it) says "Open on your Mac".
+ */
+@Composable
+fun AidenBotIssueCard(
+    issue: AidenBotIssue,
+    canAct: Boolean,
+    busy: Boolean,
+    onAct: (AidenBotIssueAction) -> Unit
+) {
+    val palette = AidenTheme.palette
+    Surface(
+        color = palette.raised,
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth().testTag(AidenBotSessionTags.ISSUE_CARD)
+    ) {
+        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Box(
+                Modifier.size(36.dp).clip(AidenShape.Button).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Outlined.ErrorOutline,
+                    contentDescription = null,
+                    tint = palette.foreground,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    stringResource(R.string.bot_issue_needs_you),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.secondary
+                )
+                Text(
+                    issue.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.foreground
+                )
+                if (issue.body.isNotEmpty()) {
+                    Text(issue.body, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                }
+                when {
+                    issue.actions.isEmpty() -> Text(
+                        stringResource(R.string.bot_issue_open_on_mac),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.secondary
+                    )
+                    canAct -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        issue.actions.forEachIndexed { index, action ->
+                            val primary = index == issue.actions.lastIndex
+                            val text = aidenBotIssueActionLabel(action)
+                            if (primary) {
+                                AidenPrimaryButton(text = text, enabled = !busy, onClick = { onAct(action) })
+                            } else {
+                                AidenTonalButton(text = text, enabled = !busy, onClick = { onAct(action) })
+                            }
+                        }
+                    }
+                    else -> Text(
+                        stringResource(R.string.bot_session_finish_on_mac),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.secondary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The label for one card action, shared with iOS. */
+@Composable
+fun aidenBotIssueActionLabel(action: AidenBotIssueAction): String = when (action.kind) {
+    AidenBotIssueActionKind.OPEN_CHAT -> stringResource(R.string.bot_issue_open_chat)
+    AidenBotIssueActionKind.RESUME_ROUTINE -> stringResource(R.string.bot_issue_resume_routine)
+    AidenBotIssueActionKind.STOP_RUN -> stringResource(R.string.bot_issue_stop)
+    AidenBotIssueActionKind.KEEP_WAITING -> stringResource(R.string.bot_issue_keep_waiting)
 }
 
 @Composable

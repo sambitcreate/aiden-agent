@@ -34,7 +34,10 @@ function linkHost(url: string): string | undefined {
 }
 
 type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule"> &
-  Pick<Partial<BotPendingHandoff>, "origin" | "target">;
+  Pick<Partial<BotPendingHandoff>, "origin" | "target"> & {
+    /** A paired Mac's card that takes no note (Remote contract revision 40). */
+    takesNote?: boolean;
+  };
 
 function onComputer(handoff: Pick<ShownHandoff, "kind" | "target">): boolean {
   return handoff.kind === "sign_in" && handoff.target === "computer";

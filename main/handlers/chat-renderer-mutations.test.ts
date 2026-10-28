@@ -44,19 +44,20 @@ function lease(chatId: string, turnId: string, ownerId: string): ChatTurnLease {
   };
 }
 
-/** The four renderer channels, registered the way chats.ts registers them, over a real chat store. */
-async function fixture(t: TestContext) {
+/** The renderer channels, registered the way chats.ts registers them, over a real chat store. */
+async function fixture(t: TestContext, options: { busyChats?: ReadonlySet<string> } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-renderer-chat-mutations-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const chatStore = createChatStore(async () => root);
   await chatStore.create({ id: "design-chat", owner: { kind: "design-project", projectId: "project-1" } });
   await chatStore.create({ id: "regular-chat", title: "Regular" });
+  const busyChats = options.busyChats ?? new Set<string>();
   const chatApplicationService = createChatApplicationService({
     chatStore,
     configStore: { getWorkspace: async () => null },
     llmClient: {
       isChatOwnedByInactiveRenderer: () => false,
-      isChatBusy: () => false,
+      isChatBusy: (chatId: string) => busyChats.has(chatId),
       waitForChatIdle: async () => true,
       requiresAppendReconciliation: () => false,
       markAppendReconciliationRequired: () => undefined,
@@ -117,6 +118,7 @@ async function fixture(t: TestContext) {
   const handlers = new Map<string, Handler>([
     ["chats:rename", rendererChats.rename as Handler],
     ["chats:renameWithFoundationModels", rendererChats.renameWithFoundationModels as Handler],
+    ["chats:setModel", rendererChats.setModel as Handler],
     ["chats:remove", rendererChats.remove as Handler],
     ["chats:appendMessage", rendererChats.appendMessage as Handler],
     ["chats:dismissComputerUseContinue", rendererChats.dismissComputerUseContinue as Handler],
@@ -134,6 +136,7 @@ test("renderer chat channels refuse a Design project's hidden chat and leave it 
   const attempts: Array<[string, readonly unknown[]]> = [
     ["chats:rename", ["design-chat", "Renamed"]],
     ["chats:renameWithFoundationModels", ["design-chat"]],
+    ["chats:setModel", ["design-chat", "openrouter", "model-b"]],
     ["chats:appendMessage", append("design-chat", "turn-1")],
     ["chats:remove", ["design-chat"]],
   ];
@@ -156,6 +159,53 @@ test("the same channels still rename, append to and delete an ordinary chat", as
   );
   await f.invoke("chats:remove", "regular-chat");
   assert.equal(await f.chatStore.get("regular-chat"), null);
+});
+
+test("picking a model in one chat changes only that chat", async (t) => {
+  const f = await fixture(t);
+  await f.chatStore.create({ id: "other-chat", title: "Other" });
+  await f.invoke("chats:appendMessage", ...append("regular-chat", "turn-a"));
+  await f.invoke("chats:appendMessage", ...append("other-chat", "turn-b"));
+  const before = await f.chatStore.get("regular-chat");
+  const otherBefore = await f.chatStore.get("other-chat");
+
+  const updated = (await f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b")) as {
+    providerId?: string;
+    model?: string;
+  };
+
+  assert.deepEqual([updated.providerId, updated.model], ["anthropic", "model-b"]);
+  const stored = await f.chatStore.get("regular-chat");
+  assert.deepEqual([stored?.providerId, stored?.model], ["anthropic", "model-b"]);
+  assert.equal(stored?.updatedAt, before?.updatedAt, "a model pick does not move the chat in the sidebar");
+  assert.deepEqual(stored?.messages, before?.messages, "the history is untouched");
+  assert.deepEqual(await f.chatStore.get("other-chat"), otherBefore, "the other chat keeps its own model");
+  const listed = await f.chatStore.list();
+  assert.deepEqual(
+    listed.filter((meta) => meta.id !== "design-chat").map((meta) => [meta.id, meta.providerId, meta.model]).sort(),
+    [
+      ["other-chat", "openrouter", "model-a"],
+      ["regular-chat", "anthropic", "model-b"],
+    ],
+  );
+});
+
+test("a chat's model cannot change mid-reply, for a Bot chat, or with an empty pick", async (t) => {
+  const f = await fixture(t, { busyChats: new Set(["regular-chat"]) });
+  await assert.rejects(
+    f.invoke("chats:setModel", "regular-chat", "anthropic", "model-b"),
+    /current response/u,
+  );
+  await f.chatStore.create({ id: "bot-chat", botId: "bot-1", providerId: "openrouter", model: "model-a" });
+  await assert.rejects(f.invoke("chats:setModel", "bot-chat", "anthropic", "model-b"), /Bot's settings/u);
+  assert.deepEqual(
+    [(await f.chatStore.get("bot-chat"))?.providerId, (await f.chatStore.get("bot-chat"))?.model],
+    ["openrouter", "model-a"],
+  );
+  await f.chatStore.create({ id: "idle-chat" });
+  await assert.rejects(f.invoke("chats:setModel", "idle-chat", "anthropic", "   "), /Invalid model/u);
+  await assert.rejects(f.invoke("chats:setModel", "idle-chat", "", "model-b"), /non-empty string/u);
+  await assert.rejects(f.invoke("chats:setModel", "missing-chat", "anthropic", "model-b"), /not found/u);
 });
 
 test("dismissing the Computer Use continue callout clears only that chat's marker", async (t) => {

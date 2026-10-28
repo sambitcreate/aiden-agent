@@ -19,6 +19,7 @@ import {
 import {
   classifyUsageLimit,
   decideUsageLimitWait,
+  markUsageLimitFailure,
   usageLimitGiveUpNote,
   usageLimitKeys,
   usageLimitRefusedMessage,
@@ -224,11 +225,13 @@ export async function streamWaitingOutUsageLimits(
       const waited = previous !== undefined || ticket.waited;
       limits.onGiveUp?.({ owner, model, decision, providerLabel, waited, maxWaitMs: ticket.maxWaitMs });
       const note = usageLimitGiveUpNote(decision, { maxWaitMs: ticket.maxWaitMs, now: now() });
-      return terminalStream(terminalMessage(model, "error", `${providerLabel} is at its usage limit.\n\n${note}`));
+      return terminalStream(markUsageLimitFailure(terminalMessage(model, "error", `${providerLabel} is at its usage limit.\n\n${note}`)));
     }
     if (ticket.kind === "refused") {
       return terminalStream(
-        terminalMessage(model, "error", usageLimitRefusedMessage({ providerLabel, ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}), now: now() })),
+        markUsageLimitFailure(
+          terminalMessage(model, "error", usageLimitRefusedMessage({ providerLabel, ...(ticket.resetAt ? { resetAt: ticket.resetAt } : {}), now: now() })),
+        ),
       );
     }
     let observation: ProviderResponseObservation | undefined;
@@ -296,7 +299,7 @@ export async function streamWaitingOutUsageLimits(
       limits.onGiveUp?.({ owner, model, decision, providerLabel, waited: previous !== undefined, maxWaitMs });
       const note = usageLimitGiveUpNote(decision, { maxWaitMs, now: at });
       const base = error.errorMessage?.trim() || `${providerLabel} rejected the request because of a usage limit.`;
-      return replay(stream, peeked, note ? { ...error, errorMessage: `${base}\n\n${note}` } : undefined);
+      return replay(stream, peeked, markUsageLimitFailure(note ? { ...error, errorMessage: `${base}\n\n${note}` } : { ...error }));
     }
     gate.hold(decision.entry);
     limits.onWait?.({ owner, model, entry: decision.entry });

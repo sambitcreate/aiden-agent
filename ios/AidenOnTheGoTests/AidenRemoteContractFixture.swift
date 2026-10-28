@@ -261,6 +261,37 @@ struct AidenBotHandoffsContractFixture: Decodable {
     let legacy: Legacy
 }
 
+/// Revision 42 (`bot:issues`): "Needs you" cards on the session, their frame,
+/// the act route and the phone-feed item.
+struct AidenBotIssuesContractFixture: Decodable {
+    struct Act: Decodable {
+        let request: AidenBotIssueActRequest
+        let response: AidenBotIssueActReceipt
+    }
+
+    let capability: AidenRemoteCapability
+    let session: AidenBotSession
+    let events: [AidenBotSessionEvent]
+    let act: Act
+    let notOpen: AidenBotIssueActReceipt
+    let summary: AidenBotSummary
+    let notification: AidenBotRoutineNotificationFeed
+}
+
+/// Revision 39 (`schedule:cards`): scheduled-task approvals with their card.
+/// The fixture's `rejected` cards stay raw JSON; tests wrap each in a valid approval.
+struct AidenScheduleCardsContractFixture: Decodable {
+    struct Card: Decodable {
+        let label: String
+        let schedule: AidenApprovalSchedule
+    }
+
+    let capability: AidenRemoteCapability
+    let streamApproval: AidenStreamApprovalSnapshot
+    let phoneRunEvents: [AidenRemoteRunEvent]
+    let cards: [Card]
+}
+
 extension AidenBotCreateContractFixture: AidenBotPrivateResponseScoped {
     static var aidenBotPrivateResponseScope: AidenBotPrivateResponseScope { .root("botCreate") }
 }
@@ -447,6 +478,10 @@ struct AidenRemoteContractFixture: Decodable {
     let botSessionCards: AidenBotSession
     /// Revision 37: present from a revision-37 fixture.
     let botHandoffs: AidenBotHandoffsContractFixture?
+    /// Revision 42: present from a revision-42 fixture.
+    let botIssues: AidenBotIssuesContractFixture?
+    /// Revision 39: present from a revision-39 fixture.
+    let scheduleCards: AidenScheduleCardsContractFixture?
     let taskProgress: AidenRemoteChatTaskProgress?
     let agentRoster: AidenRemoteChatAgentRoster?
     let agentInterrupt: AgentInterruptFixture?
@@ -523,6 +558,8 @@ struct AidenRemoteContractFixture: Decodable {
         )
         botSessionCards = try values.decode(AidenBotSession.self, forKey: .botSessionCards)
         botHandoffs = try values.decodeIfPresent(AidenBotHandoffsContractFixture.self, forKey: .botHandoffs)
+        botIssues = try values.decodeIfPresent(AidenBotIssuesContractFixture.self, forKey: .botIssues)
+        scheduleCards = try values.decodeIfPresent(AidenScheduleCardsContractFixture.self, forKey: .scheduleCards)
         taskProgress = try values.decodeIfPresent(AidenRemoteChatTaskProgress.self, forKey: .taskProgress)
         agentRoster = try values.decodeIfPresent(AidenRemoteChatAgentRoster.self, forKey: .agentRoster)
         agentInterrupt = try values.decodeIfPresent(AgentInterruptFixture.self, forKey: .agentInterrupt)
@@ -626,6 +663,7 @@ struct AidenRemoteContractFixture: Decodable {
               botSession.botId == botID,
               botSessionCards.botId == botID,
               botHandoffs.map({ $0.session.botId == botID && $0.pausedDetail.id == botID }) ?? true,
+              botIssues.map({ $0.session.botId == botID && $0.summary.id == botID && $0.summary.issueCount != nil }) ?? true,
               botMemory.botId == botID,
               botMemoryEdit.response.view.botId == botID,
               botRoutineNotifications.notifications.allSatisfy({ $0.botId == botID }),
@@ -648,7 +686,7 @@ struct AidenRemoteContractFixture: Decodable {
         case botConnectionRequest, botPresets, botPresetCreate
         case legacyNonNegotiating
         case botMemory, botMemoryEdit, botRoutineProposalRespond, botRoutineSuggestions
-        case botRoutineNotifications, botSessionCards, botHandoffs
+        case botRoutineNotifications, botSessionCards, botHandoffs, botIssues, scheduleCards
         case taskProgress, agentRoster, agentInterrupt, deviceCapabilitiesUpdate, chatProgressEvents
         case streamStatus, streamApproval, streamInput, question, chatSkills, events, speechStatus, speechTranscription
         case scheduleRunNotification, error, runControlError, phoneRunEvents

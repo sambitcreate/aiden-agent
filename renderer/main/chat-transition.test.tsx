@@ -8,7 +8,7 @@ import { emitBotTestNotification, installBotTestIpc } from "./bots/test-dom";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Outlet, RouterProvider } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { installAppendedChatSnapshot, queryKeys } from "../lib/queries.js";
@@ -121,6 +121,81 @@ async function mountRoutedChatPane(
   return { router, queryClient };
 }
 
+test("question countdown stays singular across chat updates and is removed after answering", async () => {
+  let prompt = {
+    version: 1 as const,
+    promptId: "question-1",
+    streamId: "stream-question-1",
+    toolCallId: "call-question-1",
+    source: "remote" as const,
+    expiresAt: new Date(Date.now() + 180_000).toISOString(),
+    questions: [{
+      header: "URL",
+      question: "Where should the monitor connect?",
+      multiSelect: false,
+      options: [{ label: "Set later", description: "Use a placeholder for now." }],
+    }],
+  };
+  let answers = 0;
+  const { queryClient } = await mountRoutedChatPane("chat-a", {
+    "remote:getPendingQuestion": () => ({ ...prompt }),
+    "remote:respondQuestionFromHost": () => {
+      answers += 1;
+      return { status: "answered" };
+    },
+  });
+  const countdowns = () => screen.queryAllByText(/Aiden continues on its own in /u);
+  const refreshQuestion = async () => {
+    await act(async () => {
+      emitBotTestNotification("remote:approval-changed", { chatId: "chat-a" });
+    });
+  };
+  try {
+    await waitFor(() => assert.equal(countdowns().length, 1));
+    const answer = screen.getByRole("button", { name: /Set later/u });
+    await act(async () => { fireEvent.click(answer); });
+    for (let update = 0; update < 6; update += 1) {
+      await refreshQuestion();
+      assert.equal(countdowns().length, 1, "A chat update must not append another countdown");
+      assert.ok(screen.getByRole("button", { name: /Set later/u }) === answer);
+      assert.equal(answer.getAttribute("aria-pressed"), "true", "Updates preserve the selected answer");
+    }
+    await act(async () => { fireEvent.keyDown(answer, { key: "Enter", metaKey: true }); });
+    await waitFor(() => assert.equal(answers, 1));
+    assert.equal(countdowns().length, 0, "Answering removes every countdown");
+    assert.ok(screen.queryByRole("button", { name: "Close questionnaire" }) === null);
+
+    prompt = { ...prompt, promptId: "question-2", toolCallId: "call-question-2" };
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1, "A later question starts with one countdown");
+    const nextAnswer = screen.getByRole("button", { name: /Set later/u });
+    assert.equal(nextAnswer.getAttribute("aria-pressed"), "false", "A new prompt resets the selection");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Type your own answer/u }));
+    });
+    const customAnswer = screen.getByRole("textbox", { name: /Custom answer for/u }) as HTMLTextAreaElement;
+    await act(async () => { fireEvent.change(customAnswer, { target: { value: "https://monitor.local" } }); });
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1);
+    assert.ok(screen.getByRole("textbox", { name: /Custom answer for/u }) === customAnswer);
+    assert.equal(customAnswer.value, "https://monitor.local", "Updates preserve a typed custom answer");
+
+    prompt = { ...prompt, promptId: "question-3", toolCallId: "call-question-3" };
+    await refreshQuestion();
+    assert.equal(countdowns().length, 1, "Replacing an open prompt removes the old countdown");
+    assert.ok(!customAnswer.isConnected, "A replacement prompt does not inherit the custom draft");
+    assert.equal(screen.getByRole("button", { name: /Set later/u }).getAttribute("aria-pressed"), "false");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Close questionnaire" }));
+    });
+    await waitFor(() => assert.equal(answers, 2));
+    assert.equal(countdowns().length, 0, "Dismissing the question removes its countdown");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
 test("switching chats keeps the routed ChatPane mounted and shows the new chat", async () => {
   const { router, queryClient } = await mountRoutedChatPane("chat-a");
   try {
@@ -149,6 +224,86 @@ test("switching chats keeps the routed ChatPane mounted and shows the new chat",
   } finally {
     cleanup();
     queryClient.clear();
+  }
+});
+
+test("picking a model in one chat leaves other chats and the new-chat model alone", async () => {
+  const provider = {
+    id: "acme",
+    kind: "openai-compatible",
+    label: "Acme Cloud",
+    baseUrl: "https://acme.invalid/v1",
+    models: ["app-model", "model-a", "model-b"],
+    needsKey: false,
+    hasKey: true,
+  };
+  const chatModels: Record<string, string> = { "chat-a": "model-a", "chat-b": "model-a" };
+  const setModelCalls: unknown[][] = [];
+  // When set, the next chat read answers with what was stored when it started,
+  // but only once released.
+  let holdNextRead = false;
+  let releaseHeldRead: (() => void) | undefined;
+  localStorage.setItem("aiden-agent.providerId", "acme");
+  localStorage.setItem("aiden-agent.model", "app-model");
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => {
+      const response = chatReadResponse(String(id));
+      const snapshot = {
+        ...response,
+        chat: { ...response.chat, providerId: "acme", model: chatModels[String(id)] },
+      };
+      if (!holdNextRead) return snapshot;
+      holdNextRead = false;
+      return new Promise((resolve) => {
+        releaseHeldRead = () => resolve(snapshot);
+      });
+    },
+    "chats:setModel": (...args) => {
+      setModelCalls.push(args);
+      const [id, , model] = args as [string, string, string];
+      chatModels[id] = model;
+      return { ...chatReadResponse(id).chat, providerId: "acme", model };
+    },
+    "providers:list": () => [provider],
+    "settings:get": () => ({}),
+    "models:info": () => ({}),
+    "modelPace:summaries": () => ({}),
+  });
+  const trigger = () => screen.getByRole("button", { name: /^Selected model: .*Choose a model\.$/u });
+  try {
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
+
+    await act(async () => { fireEvent.click(trigger()); });
+    const optionB = await waitFor(() => {
+      const option = screen.queryAllByRole("option").find((row) => row.textContent?.includes("Model B"));
+      assert.ok(option);
+      return option;
+    });
+    // A read of chat A that started before the pick answers after it is saved.
+    holdNextRead = true;
+    void queryClient.refetchQueries({ queryKey: queryKeys.chat("chat-a"), exact: true });
+    await waitFor(() => assert.ok(releaseHeldRead));
+    await act(async () => { fireEvent.click(optionB); });
+    await waitFor(() => assert.deepEqual(setModelCalls, [["chat-a", "acme", "model-b"]]));
+    await act(async () => {
+      releaseHeldRead?.();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model B/iu));
+    assert.equal(queryClient.getQueryData<Chat>(queryKeys.chat("chat-a"))?.model, "model-b");
+    assert.equal(localStorage.getItem("aiden-agent.model"), "app-model", "new chats keep their model");
+
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+    });
+    await waitFor(() => screen.getByText("Hello from chat chat-b"));
+    await waitFor(() => assert.match(trigger().getAttribute("aria-label") ?? "", /Model A/iu));
+    assert.equal(setModelCalls.length, 1, "opening another chat changes no model");
+  } finally {
+    cleanup();
+    queryClient.clear();
+    localStorage.removeItem("aiden-agent.providerId");
+    localStorage.removeItem("aiden-agent.model");
   }
 });
 
@@ -646,4 +801,121 @@ test("ordinary sends retain their generation-intent guard while draft promotion 
   const send = between(pane, "const handleSend = React.useCallback(", "const handleStop = React.useCallback");
   assert.match(send, /if \(\s*generationIntentRef\.current !== generationIntent \|\|\s*\(firstDraft && \(!mountedRef\.current \|\| chatIdRef\.current !== chatId\)\)\s*\) \{/u);
   assert.doesNotMatch(send, /if \(!mountedRef\.current \|\| chatIdRef\.current !== chatId \|\| generationIntentRef\.current/u);
+});
+
+function failedChatResponse(id: string, category: string) {
+  const response = chatReadResponse(id);
+  response.chat.messages.push({
+    id: `failure-${id}`,
+    role: "assistant",
+    content: "",
+    createdAt: 2,
+    providerFailure: { version: 1, category, attempts: 1, retryExhausted: false },
+  } as (typeof response.chat.messages)[number]);
+  return response;
+}
+
+for (const compacted of [false, true]) {
+  test(`a failure-card compaction that settles (${compacted ? "compacted" : "not compacted"}) after leaving the chat leaves the next chat alone`, async () => {
+    let settleCompaction!: (result: unknown) => void;
+    const appended: string[] = [];
+    const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+      "chats:get": (id) => failedChatResponse(String(id), id === "chat-a" ? "context_window" : "network"),
+      "chats:compact": () => new Promise((resolve) => { settleCompaction = resolve; }),
+      "chats:appendMessage": (chatId) => {
+        appended.push(String(chatId));
+        throw new Error("The follow-up could not be saved.");
+      },
+    });
+    try {
+      await act(async () => {
+        fireEvent.click(await screen.findByRole("button", { name: "Compact and try again" }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      await act(async () => {
+        await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      const tryAgain = await screen.findByRole("button", { name: "Try again" });
+      assert.equal((tryAgain as HTMLButtonElement).disabled, false, "Chat B must not inherit chat A's pending action");
+
+      await act(async () => {
+        settleCompaction(compacted ? { compacted: true } : { compacted: false, reason: "already_compact" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      assert.deepEqual(appended, [], "Chat A's follow-up must not be sent from chat B's pane");
+      assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+      const after = screen.getByRole("button", { name: "Try again" }) as HTMLButtonElement;
+      assert.equal(after.disabled, false);
+    } finally {
+      cleanup();
+      queryClient.clear();
+    }
+  });
+}
+
+test("a pending failure-card compaction keeps its chat busy while another chat starts one", async () => {
+  const compactions: string[] = [];
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:get": (id) => failedChatResponse(String(id), "context_window"),
+    "chats:compact": (chatId) => {
+      compactions.push(String(chatId));
+      return new Promise(() => undefined);
+    },
+  });
+  const visit = async (chatId: string) => {
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  };
+  const compactButton = async () =>
+    (await screen.findByRole("button", { name: "Compact and try again" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-b");
+    assert.equal((await compactButton()).disabled, false);
+    await act(async () => {
+      fireEvent.click(await compactButton());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-a");
+    assert.equal((await compactButton()).disabled, true, "Chat A's compaction is still running");
+    assert.deepEqual(compactions, ["chat-a", "chat-b"]);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("a pending Resume in one chat leaves another interrupted chat's Resume usable", async () => {
+  let rejectAppend!: (error: Error) => void;
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:replyInterrupted": () => true,
+    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+  });
+  const resume = async () => (await screen.findByRole("button", { name: "Resume" })) as HTMLButtonElement;
+  try {
+    await act(async () => {
+      fireEvent.click(await resume());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId: "chat-b" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal((await resume()).disabled, false, "Chat B must not inherit chat A's pending Resume");
+    await act(async () => {
+      rejectAppend(new Error("The follow-up could not be saved."));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.equal(screen.getByRole("heading", { level: 1 }).textContent, "Chat chat-b");
+    assert.equal((await resume()).disabled, false);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
 });

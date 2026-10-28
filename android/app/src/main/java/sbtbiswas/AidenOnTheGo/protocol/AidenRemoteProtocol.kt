@@ -81,7 +81,7 @@ object AidenRemoteProtocol {
     /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
-    /** Contract revision 40: a chat's or Bot's spending limit, and Allow more once it is reached. */
+    /** Contract revision 43: a chat's or Bot's spending limit, and Allow more once it is reached. */
     const val SPENDING_LIMITS_FEATURE = "spending-limits-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
@@ -276,7 +276,8 @@ object AidenBotPrivateResponseValidator {
         "botMemory", "botMemoryEdit", "botRoutineProposalRespond", "botRoutineSuggestions",
         "botRoutineNotifications", "botSessionCards",
         // Contract revision 37.
-        "botHandoffs"
+        "botHandoffs",
+        "botIssues"
     )
     private val botSessionRoots = setOf("botSession", "botSessionNeedsModel", "botSessionEvents", "botSessionCards")
     private val privateChildBases = listOf("children", "subagents", "subagent", "child")
@@ -472,6 +473,11 @@ object AidenBotPrivateResponseValidator {
         if (key == "reasoning" && root in listOf("chat", "chatProjection") &&
             (parentPath == listOf("messages", "[]") ||
                 parentPath == listOf("chats", "[]", "messages", "[]")) && regularChat) return true
+        // Revision 42: the issue act route's receipt is `{ result: ... }`, not a tool result.
+        if (root == "botIssues" && key == "result") {
+            return parentPath.isEmpty() ||
+                (parentPath + key).joinToString(".") in listOf("act.response.result", "notOpen.result")
+        }
         if (key != "instructions" && key != "openingGreeting") return false
         if (root == "botDetail") {
             return parentPath.isEmpty()
@@ -551,6 +557,27 @@ data class AidenRemoteCapability(val rawValue: String) {
          * `serverCapabilities`, and it is asked for in a call of its own.
          */
         val BOT_HANDOFFS = AidenRemoteCapability("bot:handoffs")
+        /**
+         * Contract revision 40: a hand-off card that takes no note says so (`takesNote`). It
+         * grants no authority. A Mac on an earlier revision refuses the name, so this phone asks
+         * for it only from a Mac that offers it, in the hand-offs call.
+         */
+        val BOT_HANDOFF_NOTES = AidenRemoteCapability("bot:handoff-notes")
+        /**
+         * Contract revision 39: this phone renders the structured `schedule` card
+         * on scheduled-task approvals. It grants no authority: the Mac attaches the card only
+         * when the device also holds `schedule:read`. There is no `/server` feature token: the
+         * Mac offers it only in `serverCapabilities`, and it is asked for in a call of its own.
+         */
+        val SCHEDULE_CARDS = AidenRemoteCapability("schedule:cards")
+        /**
+         * Contract revision 42: this phone receives the Bot session `issues` list and frame, the
+         * summary `issueCount` and issue items in the routine notification feed, and may answer a
+         * card through `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
+         * It grants no authority. The Mac offers it only in `serverCapabilities`, and it is asked
+         * for in a call of its own.
+         */
+        val BOT_ISSUES = AidenRemoteCapability("bot:issues")
 
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
@@ -575,16 +602,22 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Negotiable behind `bot-activity-v1`. */
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
-        /** Negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
-        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS)
+        /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
+        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS, BOT_HANDOFF_NOTES)
+
+        /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)
+
+        /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_ISSUES
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_ISSUES
     }
 }
 

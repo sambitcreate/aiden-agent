@@ -12,8 +12,9 @@ import { snapshotMcpServerInstructions } from "./mcp-server-instructions.js";
 
 import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, readMcpResource } from "./mcp-resources.js";
 import type { McpClient, McpTransport } from "@earendil-works/pi-mcp";
-import { connectMcpClient, createMcpClient } from "./mcp-client.js";
+import { AIDEN_MCP_CLIENT_NAME, connectMcpClient, createMcpClient } from "./mcp-client.js";
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
+import { isMcpMacAppOpen } from "./mcp-mac-apps.js";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
@@ -97,6 +98,7 @@ async function resolveAuth(
 ): Promise<McpServer> {
   return resolveMcpConnectionCredentials(server, {
     isLaunchApproved: (configured) => mcpStdioApprovals.isApproved(configured),
+    isMacAppOpen: (preset) => isMcpMacAppOpen(preset),
     resolveFieldSecrets: async (configured) => {
       await reconcilePendingMcpCredentialCleanup();
       return resolveStoredMcpFieldSecrets(configured);
@@ -198,7 +200,7 @@ export async function withIsolatedSubagentMcpClient<T>(
     operation,
     dependencies: {
       createClient: () => {
-        const client = createMcpClient("aiden-subagent-mcp-read");
+        const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
         return {
           connect: (transport, options) => connectMcpClient(client, transport as McpTransport, options),
           close: () => client.close(),
@@ -266,7 +268,7 @@ export async function inspectConfiguredMcpToolsForBotCatalog(
     server.id,
     mcpRuntimeConnectionSnapshot(server),
     async () => {
-      const client = createMcpClient("aiden-bot-mcp-catalog");
+      const client = createMcpClient(AIDEN_MCP_CLIENT_NAME);
       try {
         // Bound the whole attempt (credential resolution and transport start
         // included), not only initialize.
@@ -348,7 +350,7 @@ class McpManager {
   ): Promise<McpClient> {
     const client = await this.clients.getOrConnect(
       server.id,
-      () => createMcpClient("aiden-agent"),
+      () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
       async (client, connectionIsCurrent, onClosed) => {
         // A closed client's inventory is never reused, even by a waiter that
         // still holds the client.
@@ -544,7 +546,7 @@ class McpManager {
       return await this.statusClients.run(
         server.id,
         expectedGeneration,
-        () => createMcpClient("aiden-agent-test"),
+        () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
         async (client, connectionIsCurrent) => {
           const active = () => isCurrent() && connectionIsCurrent();
           await connectMcpClient(
@@ -584,7 +586,7 @@ class McpManager {
         signal: AbortSignal.any([providerScope!.signal, lease.signal, ...(callerSignal ? [callerSignal] : [])]),
         isCurrent: () => { lease.assertCurrent(); return providerScope!.isCurrent(); },
       },
-      create: () => createMcpClient("aiden-agent-attended"),
+      create: () => createMcpClient(AIDEN_MCP_CLIENT_NAME),
       connect: async (client, signal, isCurrent) => {
         // The operation's own 60 s bound is far past the discovery budget.
         await connectMcpWithinDeadline(

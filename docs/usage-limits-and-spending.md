@@ -35,9 +35,13 @@ A limit can cover one model (a 429 or an overload) or the whole sign-in or key (
 - Waits are saved in `userData/usage-limits.json` (provider ids, model ids and times only), so a reply that was waiting when Aiden quit or the Mac restarted still knows when to try again. Entries older than 25 hours are dropped.
 - Aiden sends a notification only when it **gives up** on a wait, not when a wait starts. After a give-up, new requests on that limit fail at once with "<provider> is still at its usage limit, and Aiden stopped waiting for it a few minutes ago." for 5 minutes, or until the reset time.
 
-### Pi's own retries
+### Automatic retries
 
-Pi 1.4.0 retries some transient provider errors itself (and Pi Durable keeps those retry waits across restarts). Aiden's wait sits underneath Pi's retry loop, in the stream function, so a usage limit is waited out before Pi sees it. When Aiden gives up, the error goes up to Pi, which may retry it a few times; those retries are refused at once by the give-up rule above, so the run still ends promptly.
+A workspace chat retries a failed request up to five times, waiting 2 to 32 seconds (see the [agent loop resilience plan](plans/agent-loop-resilience-plan.md)), and a Bot does the same through Pi Durable's retry setting. Aiden's wait sits underneath those retries, in the stream function, so a usage limit is waited out before they see it.
+
+- A chat never retries a usage limit Aiden gave up on, one that outlasts the longest wait, or one turned away by the give-up rule above. The error carries a marker the chat's retry check reads, so the reply fails once with the reset time instead of showing "Trying again".
+- A Bot's retries are Pi Durable's own and do not read the marker. The give-up rule refuses each of them at once without sending, so the run still ends promptly.
+- With waiting off (**Don't wait**), a usage limit is an ordinary failure and is retried like any other.
 
 ## Spending limits
 
@@ -68,9 +72,9 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 
 The ledger is saved in `userData/spending.json` (chat ids, Bot ids, recent routine run ids and dollar amounts only), so a routine run resumed after a restart keeps what it already spent.
 
-### On a phone (Remote revision 40)
+### On a phone (Remote revision 43)
 
-Aiden On The Go for iPhone and Android shows the same 80% line and reached notice in a workspace chat and a Bot chat, with **Allow $X more**, when the Mac announces `spending-limits-v1`. The phone reads the status when the chat opens, after a reply settles and after a refused send. Allow more uses the status's revision, so a tap that crossed one on another device (or on the Mac) adds nothing and the phone shows what the Mac has now. Changing the limits themselves happens on the Mac. Older phones need nothing new: a send over the limit is refused with the same line. See [Spending limits, revision 40](aiden-remote-api-v1.md#spending-limits-revision-40-spending-limits-v1-provisional).
+Aiden On The Go for iPhone and Android shows the same 80% line and reached notice in a workspace chat and a Bot chat, with **Allow $X more**, when the Mac announces `spending-limits-v1`. The phone reads the status when the chat opens, after a reply settles and after a refused send. Allow more uses the status's revision, so a tap that crossed one on another device (or on the Mac) adds nothing and the phone shows what the Mac has now. Changing the limits themselves happens on the Mac. Older phones need nothing new: a send over the limit is refused with the same line. See [Spending limits, revision 43](aiden-remote-api-v1.md#spending-limits-revision-43-spending-limits-v1-provisional).
 
 ## Code map
 

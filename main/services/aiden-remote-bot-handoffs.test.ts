@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
 import {
   LEGACY_AUDIENCE,
   legacyHandoffNotice,
@@ -44,6 +45,23 @@ function prompt(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
 test("a holder receives the waiting card exactly as the shared fixture shows it", async () => {
   const fixture = await section();
   assert.deepEqual(toRemoteBotHandoff(prompt()), fixture.session.handoff);
+});
+
+test("a card the password-or-code rule opened tells a holder it takes no note; the Bot's own cards and other rules' do not", async () => {
+  const fixture = await section();
+  const [credentials, money] = BOT_LOCKED_RULES;
+  const ruled = (id: string) =>
+    toRemoteBotHandoff(prompt({
+      waitId: fixture.noNoteHandoff.waitId,
+      action: fixture.noNoteHandoff.action,
+      why: undefined,
+      open: undefined,
+      source: "rule",
+      rule: { id, label: "Enter passwords or codes" },
+    }));
+  assert.deepEqual(ruled(credentials!.id), fixture.noNoteHandoff);
+  assert.equal("takesNote" in ruled(money!.id), false);
+  assert.equal("takesNote" in toRemoteBotHandoff(prompt()), false);
 });
 
 test("a hand-off link that is not a plain https page, and a blank reason, never reach a phone", () => {

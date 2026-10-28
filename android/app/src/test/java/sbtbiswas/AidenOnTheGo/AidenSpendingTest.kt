@@ -26,7 +26,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.util.concurrent.TimeUnit
 
-/** Contract revision 40 (`spending-limits-v1`), read from the fixture every client shares. */
+/** Contract revision 43 (`spending-limits-v1`), read from the fixture every client shares. */
 class AidenSpendingTest {
     private val fixture: JsonObject by lazy {
         val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json" }

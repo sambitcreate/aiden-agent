@@ -14,8 +14,10 @@ Guide: `docs/usage-limits-and-spending.md`. Plan and the owner's 14 decisions: `
 
 ## Remote
 
-Revision 40 `spending-limits-v1` is PROVISIONAL (main held 37, others claimed 38/39): re-claim at merge in `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`, the fixture's two `contractRevision` fields, iOS `AidenRemotePhase0Tests` and Android fixture tests. Phones only (feature token count was at 30 of the 32 cap; now 31). Allow more is compare-and-set on a status revision (`sp_` + hash of period, start, limit and extra cents) through `SpendingService.allowMoreIf`.
+Revision 43 `spending-limits-v1` is PROVISIONAL (first written as 40; moved to 43 on 2026-10-28 when main held 42): re-claim at merge in `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`, the fixture's two `contractRevision` fields, iOS `AidenRemotePhase0Tests` and Android fixture tests. Phones only (feature token count was at 30 of the 32 cap; now 31). Allow more is compare-and-set on a status revision (`sp_` + hash of period, start, limit and extra cents) through `SpendingService.allowMoreIf`.
 
 ## Gaps
 
 Not counted: Bot compaction summaries, the Bot memory review, chat titles. CLI has neither feature. No subscription usage meter (only source is Claude's unofficial `/api/oauth/usage`).
+
+Retries (#595, merged first): a give-up, a too-long hold and a refusal carry `markUsageLimitFailure` (`aidenUsageLimitFailure: true` on the AssistantMessage, kept by pi-agent-core's `Object.assign`), and `PiCompactionCoordinator.check` skips provider retries for it. Bots use Pi Durable's own retry, which the marker does not reach; the 5-minute refusal keeps those quick.

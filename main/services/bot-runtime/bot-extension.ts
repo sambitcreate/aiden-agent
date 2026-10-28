@@ -12,6 +12,14 @@
 //   never replay-safe; the caller declares replay for the rest.
 // - Policy: `beforeTool` re-checks the Bot's current policy at every call and
 //   blocks a disallowed tool without running it.
+// - Codemode: when the Bot has connection, file, shell or lookup tools, Pi
+//   Durable's `codemode` tool lets the model script them (batch calls, filter
+//   results). Each call a script makes is a durable nested tool call: it passes
+//   the same `beforeTool` ingress, policy and approval checks as a direct call,
+//   and its approval wait survives a restart like a direct one. A call a rule
+//   hands to the person is refused, so the model makes it directly and the
+//   person gets the card. Scripts never reach cards, the Bot's own computer or
+//   browser, routines or subagents (those tools are `callers: ["model"]`).
 // - Ingress: the installed tools are the attended set. Each request and each
 //   call reads which inputs its run serves (`pi.live.run`, durable, so a
 //   queued or restarted input keeps its own sender) and withholds what those
@@ -40,6 +48,8 @@ import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { CodemodeSandbox, type CodemodeSandboxBase } from "@earendil-works/pi-codemode";
+import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import {
   CompactionTask,
   createRegistry,
@@ -76,6 +86,7 @@ import {
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
+import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
 
 export const BOT_EXTENSION_NAME = "aiden-bot";
 /** Section keys, in render order. */
@@ -85,6 +96,24 @@ const MEMORY_TOOL_NAME = "bot_memory";
 const APPROVAL_MEMO = "aiden.approval";
 /** The person's answer to a rule hand-off, kept until the call's block is recorded. */
 const HANDOFF_ANSWER_MEMO = "aiden.handoff.answer";
+export const BOT_CODEMODE_TOOL_NAME = "codemode";
+/** Lookups a script may call besides workspace, connection and codemode-marked tools. */
+const BOT_SCRIPT_LOOKUPS: ReadonlySet<string> = new Set(["web_search", "bot_recall"]);
+/** VM heap per script; the worker shares the app's process. */
+const BOT_SCRIPT_MEMORY_BYTES = 64 * 1024 * 1024;
+/** Estimated tokens of tool declarations the `codemode` section lists; the tools are declared directly too. */
+const BOT_SCRIPT_INLINE_BUDGET = 1_000;
+
+/** Whether a Bot script may call this tool. Cards, computers, browsers, routines and subagents are direct only. */
+function scriptCallable(entry: BotToolEntry): boolean {
+  if (entry.tool.name === BOT_CODEMODE_TOOL_NAME) return false;
+  return entry.mcp === true || isPiCodemodeCallable(entry.tool) || BOT_SCRIPT_LOOKUPS.has(entry.tool.name);
+}
+
+/** A rule hand-off can't open from inside a script: the model makes the call itself. */
+export function scriptHandoffBlock(toolName: string): string {
+  return `A rule hands ${toolName} to the person. Call ${toolName} directly, not from codemode, so they get the card.`;
+}
 
 export interface BotApprovalRequirement {
   summary: string;
@@ -254,6 +283,12 @@ export interface BotExtensionDeps {
     refusal(botId: string, requestIds: readonly (string | undefined)[]): Promise<string | undefined>;
     record(botId: string, requestIds: readonly (string | undefined)[], message: AssistantMessage): void | Promise<void>;
   };
+  /**
+   * The sandbox Bot scripts run in, made once per Bot. Absent: a worker
+   * sandbox from the installed pi-codemode package (the desktop). A bundled
+   * host passes its own worker and wasm.
+   */
+  codemodeSandbox?(): CodemodeSandboxBase;
 }
 
 export class BotAccessChangedError extends Error {
@@ -498,6 +533,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         if (deps.turnAllows !== undefined && !deps.turnAllows(call.name, requestIds)) {
           return { block: "This tool is not available on this turn." };
         }
+        // Codemode itself does nothing; every call its script makes is checked on its own.
+        if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
         const decision = await deps.checkPolicy(botId, call.name, {
           callId: call.id,
           args: call.arguments,
@@ -505,6 +542,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           requestIds,
         });
         if (!decision.allowed) return { block: decision.reason };
+        // A hand-off card belongs to a call in the transcript, which a script's call is not.
+        if (decision.handoff !== undefined && call.parent !== undefined) return { block: scriptHandoffBlock(call.name) };
         if (decision.handoff !== undefined) {
           const handoff = decision.handoff;
           // Nobody can answer a card here: block with what is needed.
@@ -573,6 +612,18 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
     }),
   ];
 
+  /* Codemode: the tools installed by the latest refresh that scripts may call. */
+  let scriptable: readonly BotToolEntry[] = [];
+  let sandbox: CodemodeSandboxBase | undefined;
+  let codemode: Extension | undefined;
+
+  /** Pi Durable's codemode over the Bot's tools: replay-safe, each call a nested tool call. */
+  function codemodeExtension(): Extension {
+    sandbox ??= deps.codemodeSandbox?.() ?? new CodemodeSandbox({ memoryLimitBytes: BOT_SCRIPT_MEMORY_BYTES });
+    codemode ??= createCodemodeExtension({ sandbox, models: false, inlineBudget: BOT_SCRIPT_INLINE_BUDGET });
+    return codemode;
+  }
+
   function build(tools: readonly DurableTool[]): Extension {
     return defineExtension({
       name: BOT_EXTENSION_NAME,
@@ -606,15 +657,25 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   return Object.assign(registry, {
     async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
-      const entries = await deps.currentTools(bot, turn);
-      const nextSections = await deps.systemSections(bot, { toolNames: entries.map(({ tool }) => tool.name) });
+      const offered = await deps.currentTools(bot, turn);
+      // The sections describe the Bot's own tools; connection tools stay declared, so their guidance stays in the prompt.
+      const nextSections = await deps.systemSections(bot, { toolNames: offered.map(({ tool }) => tool.name) });
       // The memory section renders per request; the rest are fixed per refresh.
       sections = nextSections.slice(0, BOT_SECTION_KEYS.length - 1);
-      installedToolNames = new Set(entries.map(({ tool }) => tool.name));
-      const tools = entries.map(({ tool, replay, mcp, bind }) =>
-        adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) }),
-      );
+      scriptable = offered.some(({ tool }) => tool.name === BOT_CODEMODE_TOOL_NAME) ? [] : offered.filter(scriptCallable);
+      installedToolNames = new Set([
+        ...offered.map(({ tool }) => tool.name),
+        ...(scriptable.length > 0 ? [BOT_CODEMODE_TOOL_NAME] : []),
+      ]);
+      const tools = offered.map((entry): DurableTool => {
+        const { tool, replay, mcp, bind } = entry;
+        const adapted = adaptAidenTool(tool, { replay: mcp ? "unsafe" : replay, ...(bind === undefined ? {} : { bind, runRequestIds }) });
+        // Only the scriptable tools resolve for a script's calls.
+        return scriptable.includes(entry) ? adapted : { ...adapted, callers: ["model"] };
+      });
       registry.install(build(tools));
+      if (scriptable.length > 0) registry.install(codemodeExtension());
+      else if (codemode !== undefined) registry.uninstall(codemode);
     },
     admissionFailure() {
       return failure;

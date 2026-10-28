@@ -167,7 +167,9 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("workspaces:createFromFolder", async (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
-    const options: OpenDialogOptions = { properties: ["openDirectory"] };
+    // createDirectory adds Finder's New Folder button on macOS, so a workspace
+    // can start in a folder that doesn't exist yet.
+    const options: OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] };
     const result = parent
       ? await dialog.showOpenDialog(parent, options)
       : await dialog.showOpenDialog(options);

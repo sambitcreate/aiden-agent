@@ -26,10 +26,12 @@ import { turnFooterItems } from "../shared/assistant-turn-stats";
 import {
   activityTimelineFragment,
   assistantPresentationRows,
+  isExtractionStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
+import { WebExtractRecap } from "./web-extract-recap";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -61,7 +63,13 @@ import {
   type GenerationTimeline,
 } from "../shared/generation-timeline";
 import type { SubagentRunSnapshot } from "../shared/subagent-runs";
-import { providerFailurePresentation, type ProviderFailureV1 } from "../shared/provider-failure";
+import {
+  PROVIDER_FAILURE_ACTION_LABELS,
+  providerFailureAction,
+  providerFailurePresentation,
+  type ProviderFailureAction,
+  type ProviderFailureV1,
+} from "../shared/provider-failure";
 import {
   htmlArtifactSlots,
   reuseUnchangedArtifactLists,
@@ -112,6 +120,10 @@ interface MessageListProps {
   error: string | null;
   /** Message id whose whole response may host the read-aloud action. */
   readAloudMessageId?: string;
+  /** The latest failed reply's next steps; older failure cards show none. */
+  failureActions?: ProviderFailureActions & { messageId: string };
+  /** Offers Resume after the last message; set only while the transcript is idle. */
+  interruptedReply?: InterruptedReplyActions;
   readAloud?: ReadAloudActionProps;
   /** Fork the chat at a settled message; absent where forking is unsupported. */
   onFork?: (messageId: string, position: ChatForkPosition) => void;
@@ -278,6 +290,9 @@ function AssistantResponse({
         {null /* the chronological layout's leading subagent slot */}
         {[
           <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
+          ...(timeline?.steps.filter(isExtractionStep).map((step) => (
+            <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+          )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
           )) ?? []),
@@ -341,6 +356,9 @@ function AssistantResponse({
         }
         if (row.kind === "questionnaire") {
           return <AskUserQuestionRecap key={row.key} recap={row.step.questionnaire} />;
+        }
+        if (row.kind === "extraction") {
+          return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
         }
         if (row.kind === "activity") {
           return (
@@ -416,6 +434,8 @@ interface SettledMessageRowProps {
    */
   live?: AssistantResponseProps;
   readAloud?: ReadAloudActionProps;
+  /** Present only on the latest failed reply. */
+  failureActions?: ProviderFailureActions;
   subagentsEnabled: boolean;
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Stable across renders so settled rows stay memoized. */
@@ -444,6 +464,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   message,
   live,
   readAloud,
+  failureActions,
   subagentsEnabled,
   onOpenSubagent,
   onFork,
@@ -519,7 +540,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
           />
           {message.appPanels?.map((panel) => <AppControlsPanel key={panel.id} panel={panel} chatId={chatId} />)}
           {message.providerFailure ? (
-            <ProviderFailureCallout failure={message.providerFailure} />
+            <ProviderFailureCallout failure={message.providerFailure} actions={failureActions} />
           ) : null}
         </>
       ) : message.notice ? (
@@ -544,8 +565,51 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   );
 });
 
-export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1 }) {
+export interface ProviderFailureActions {
+  onAction: (action: ProviderFailureAction) => void;
+  onSwitchModel?: () => void;
+  /**
+   * Which actions this chat can take. A chat on a paired Mac can try again or
+   * continue, but compaction and provider settings live on that Mac. Omitted
+   * means every action.
+   */
+  supports?: (action: ProviderFailureAction) => boolean;
+  /** An action is already running; the buttons wait for it. */
+  busy?: boolean;
+}
+
+export type InterruptedReplyActions = {
+  onResume: () => void;
+  /** True while Resume is sending. */
+  busy?: boolean;
+};
+
+/** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
+export function InterruptedReplyCallout({ actions }: { actions: InterruptedReplyActions }) {
+  return (
+    <Callout role="status" data-interrupted-reply="true">
+      <Text variant="small-strong">This reply was interrupted</Text>
+      <Text variant="small" color="secondary" className="mt-0.5 block">
+        Aiden closed before it finished. Resume to pick up where it stopped.
+      </Text>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
+          Resume
+        </Button>
+      </div>
+    </Callout>
+  );
+}
+
+export function ProviderFailureCallout({
+  failure,
+  actions,
+}: {
+  failure: ProviderFailureV1;
+  actions?: ProviderFailureActions;
+}) {
   const presentation = providerFailurePresentation(failure);
+  const action = providerFailureAction(failure);
   return (
     <Callout color="red" role="alert" aria-atomic="true" data-provider-failure={failure.category}>
       <Text variant="small-strong" color="red">
@@ -554,6 +618,25 @@ export function ProviderFailureCallout({ failure }: { failure: ProviderFailureV1
       <Text variant="small" color="secondary" className="mt-0.5 block">
         {presentation.description}
       </Text>
+      {actions && (actions.supports?.(action) !== false || actions.onSwitchModel) ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {actions.supports?.(action) !== false ? (
+            <Button
+              size="small"
+              disabled={actions.busy}
+              data-provider-failure-action={action}
+              onClick={() => actions.onAction(action)}
+            >
+              {PROVIDER_FAILURE_ACTION_LABELS[action]}
+            </Button>
+          ) : null}
+          {actions.onSwitchModel ? (
+            <Button variant="transparent" size="small" disabled={actions.busy} onClick={actions.onSwitchModel}>
+              Switch model
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </Callout>
   );
 }
@@ -621,6 +704,8 @@ export function MessageList({
   onRetryUsageLimit,
   error,
   readAloudMessageId,
+  failureActions,
+  interruptedReply,
   readAloud,
   onFork,
   forkDisabledReason = null,
@@ -954,6 +1039,7 @@ export function MessageList({
         deferOffscreenLayout={messageIndex < messages.length - 32}
         message={message}
         readAloud={readAloudMessageId === message.id ? readAloud : undefined}
+        failureActions={failureActions?.messageId === message.id ? failureActions : undefined}
         subagentsEnabled={subagentsEnabled}
         onOpenSubagent={onOpenSubagent}
         onFork={forkEnabled && message.id !== unforkablePromptId ? stableOnFork : undefined}
@@ -971,6 +1057,9 @@ export function MessageList({
   }
 
   if (streamingRowVisible && settlingIndex < 0) transcriptRows.push(liveRow);
+  if (interruptedReply && !streamingRowVisible) {
+    transcriptRows.push(<InterruptedReplyCallout key="interrupted-reply" actions={interruptedReply} />);
+  }
   React.useLayoutEffect(() => {
     settledReplyKeysRef.current = settledReplyKeys;
   });

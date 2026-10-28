@@ -1,6 +1,7 @@
 // Brand logomarks for connector cards, configured connector rows and Bot suggestions.
-// Paths are adapted from Simple Icons (CC0) and the Composio Brand Hub
-// logomark, rendered with currentColor so they follow theme tokens.
+// Paths are adapted from Simple Icons (CC0), the Composio Brand Hub logomark
+// and iMCP's menu bar mark (MIT), rendered with currentColor so they follow
+// theme tokens.
 
 import * as React from "react";
 
@@ -83,6 +84,18 @@ function ComposioIcon({ className, ...props }: IconProps) {
   );
 }
 
+/** iMCP's menu bar mark (Assets/icon.svg, 20×16), centered on the 24-unit grid. */
+const IMCP_ICON_PATH =
+  "M6,10h2v1.9h-2s0-1.9,0-1.9ZM12,10h2v1.9h-2s0-1.9,0-1.9ZM6,3.9h2v2.1h-2v-2.1ZM12,3.9h2v2.1h-2v-2.1ZM3.2,1.2h13.6v4.8h-1.6v-3.3h-4.5v4.5h3.2v1.5h-3.2v4.3h4.5v-3.1h1.6v4.8H3.2v-4.8h1.5v3.1h4.5v-4.3h-3.2v-1.5h3.2V2.7H4.8v3.3h-1.5V1.2ZM2,0v7.2h2.8v1.5H2v7.2h16v-7.2h-2.8v-1.5h2.8V0H2Z";
+
+function ImcpIcon({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="1 -1 18 18" fill="currentColor" aria-hidden className={className} {...props}>
+      <path d={IMCP_ICON_PATH} />
+    </svg>
+  );
+}
+
 function BrandIcon({ path, className, ...props }: IconProps & { path: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden className={className} {...props}>
@@ -113,6 +126,9 @@ export function McpPresetIcon({
   if (presetId === "composio") {
     return <ComposioIcon className={className} />;
   }
+  if (presetId === "imcp") {
+    return <ImcpIcon className={className} />;
+  }
   const slug = PLUGIN_ICON_SLUGS[presetId];
   const path = slug ? SIMPLE_ICON_PATHS[slug] : undefined;
   if (path) {
@@ -131,4 +147,4 @@ export function McpPresetIcon({
 }
 
 export { PLUGIN_ICON_SLUGS };
-export const PLUGIN_ICON_CATALOG_IDS = ["composio", ...Object.keys(PLUGIN_ICON_SLUGS)] as const;
+export const PLUGIN_ICON_CATALOG_IDS = ["composio", "imcp", ...Object.keys(PLUGIN_ICON_SLUGS)] as const;

@@ -23,6 +23,8 @@ import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
 import { BotComputerSection } from "./bot-computer-section";
+import { BotHealthSection } from "./bot-health-section";
+import { BotEventRoutines } from "./bot-event-routines";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
 import { setBotPaused } from "./bot-menu";
@@ -156,6 +158,7 @@ export function BotProfile({
   onOpenInstructions,
   onOpenAdvanced,
   onOpenMemory,
+  onOpenLearning,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -164,6 +167,7 @@ export function BotProfile({
   onOpenInstructions(): void;
   onOpenAdvanced(): void;
   onOpenMemory(): void;
+  onOpenLearning?(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
@@ -310,9 +314,20 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
+        {onOpenLearning ? (
+          <button type="button" aria-label="What I've learned" className={PROFILE_ROW_CLASS} onClick={onOpenLearning}>
+            <span className="min-w-0 flex-1">
+              <span className="block text-strong text-primary">What I’ve learned</span>
+              <span className="mt-0.5 block truncate text-small text-secondary">Lessons, skills and follow-ups, with Undo</span>
+            </span>
+            <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+          </button>
+        ) : null}
       </FieldSet>
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
+      <BotEventRoutines bot={bot} />
+      <BotHealthSection bot={bot} />
       <BotSpendingSection bot={bot} />
       <BotRules bot={bot} />
       {/* Apple silicon only; renders nothing elsewhere. */}
