@@ -41,7 +41,8 @@ import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
+import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
+import { botServiceProtectedRoot } from "../bot-protected-settings.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
 import type { BotPauseRecord } from "../bot-pause-store.js";
@@ -95,10 +96,13 @@ const MODEL_CACHE_MS = 30_000;
 const profileDir = () => app.getPath("userData");
 // Every Bot's session database and memory files live under `<profile>/bots/`;
 // only Aiden writes them, never a Bot's file tools (whatever location they use).
-// Aiden's settings files are fenced the same way, so a Bot cannot change app
+// Aiden's settings files and Bot storage (definitions, access state, pauses;
+// not the Bots' own homes) are fenced the same way, so a Bot cannot change app
 // settings or its own access by editing them.
 setBotFileToolProtectedRoots(() => [
   path.join(profileDir(), "bots"),
+  path.join(profileDir(), "bots.json"),
+  botServiceProtectedRoot(botServiceRoot()),
   path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
   path.join(profileDir(), SETTINGS_FILENAME),
   path.join(profileDir(), LOCAL_CONFIG_FILENAME),

@@ -37,7 +37,7 @@ export interface BotFileToolRouterOptions {
    * Absolute directories no write may land in, whatever location is used.
    * Defaults to the process-wide roots (`setBotFileToolProtectedRoots`).
    */
-  readonly protectedRoots?: () => readonly string[];
+  readonly protectedRoots?: () => readonly BotFileToolProtectedRoot[];
   /** Installation-owned native helper used for edit_file. */
   readonly fileMutatorBinary?: string;
 }
@@ -45,7 +45,13 @@ export interface BotFileToolRouterOptions {
 /** File tools that change a file; only these are fenced from protected roots. */
 const WRITING_TOOLS = new Set<string>(["write_file", "edit_file"]);
 
-let processProtectedRoots: () => readonly string[] = () => [];
+/**
+ * A directory or file no write may land in; a directory may leave out
+ * subdirectories that stay writable (a Bot's own home inside Aiden's Bot storage).
+ */
+export type BotFileToolProtectedRoot = string | { readonly root: string; readonly except: readonly string[] };
+
+let processProtectedRoots: () => readonly BotFileToolProtectedRoot[] = () => [];
 
 /**
  * Directories (or single files) no Bot file tool may write, resolved at each
@@ -54,7 +60,7 @@ let processProtectedRoots: () => readonly string[] = () => [];
  * files, so a Bot cannot change app settings or its own access by editing
  * them (owner decision 2026-10-27).
  */
-export function setBotFileToolProtectedRoots(roots: () => readonly string[]): void {
+export function setBotFileToolProtectedRoots(roots: () => readonly BotFileToolProtectedRoot[]): void {
   processProtectedRoots = roots;
 }
 
@@ -84,12 +90,18 @@ function isWithin(child: string, root: string): boolean {
 async function writesIntoProtectedRoot(
   locationRoot: string,
   params: Record<string, unknown>,
-  roots: readonly string[],
+  roots: readonly BotFileToolProtectedRoot[],
 ): Promise<boolean> {
   if (roots.length === 0 || typeof params.path !== "string") return false;
   const target = await realTarget(path.resolve(locationRoot, params.path));
-  for (const root of roots) {
-    if (isWithin(target, await realTarget(root))) return true;
+  for (const entry of roots) {
+    const { root, except } = typeof entry === "string" ? { root: entry, except: [] } : entry;
+    if (!isWithin(target, await realTarget(root))) continue;
+    let excepted = false;
+    for (const open of except) {
+      if (isWithin(target, await realTarget(open))) excepted = true;
+    }
+    if (!excepted) return true;
   }
   return false;
 }
