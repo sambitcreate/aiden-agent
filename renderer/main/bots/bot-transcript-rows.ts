@@ -51,6 +51,7 @@ export type BotTranscriptRow =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      supersededBy?: string;
     }
   | {
       kind: "skill_proposal";
@@ -159,6 +160,7 @@ export function botTranscriptRows(
             proposal: entry.proposal,
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
+            ...(entry.supersededBy ? { supersededBy: entry.supersededBy } : {}),
           });
           break;
         case "lesson_proposal":

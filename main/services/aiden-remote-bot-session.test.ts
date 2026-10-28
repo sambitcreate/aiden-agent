@@ -1160,6 +1160,35 @@ test("only a device holding bot:cards sees memory and routine proposal cards, as
   }
 });
 
+test("phones see only the newest card of a revised suggestion, and a trigger card's label names what starts it", async () => {
+  const driven = drivenConversation([
+    user(1, "Tell me when the report lands."),
+    proposal(2, "11111111-1111-4111-8111-111111111111", "Morning check-in", "Check in.", "Every day at 8:00 AM"),
+    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "11111111-1111-4111-8111-111111111111", status: "dismissed", supersededBy: "22222222-2222-4222-8222-222222222222" } },
+    proposal(4, "22222222-2222-4222-8222-222222222222", "Morning check-in", "Check in.", "Every day at 9:00 AM"),
+    {
+      id: 5,
+      kind: "aiden.routine-proposal",
+      data: { proposalId: "33333333-3333-4333-8333-333333333333", name: "Report landed", prompt: "Summarize the report.", trigger: { kind: "webhook" }, label: "When this routine's link is called" },
+    },
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const session = await service.session(BOT_ID, { cards: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session);
+    const cards = session.entries.flatMap((entry) =>
+      entry.type === "routine_proposal" ? [{ proposalId: entry.proposalId, label: entry.label, status: entry.status }] : [],
+    );
+    assert.deepEqual(cards, [
+      { proposalId: "22222222-2222-4222-8222-222222222222", label: "Every day at 9:00 AM · UTC", status: "pending" },
+      { proposalId: "33333333-3333-4333-8333-333333333333", label: "When this routine's link is called", status: "pending" },
+    ]);
+  } finally {
+    await service.close();
+  }
+});
+
 /** Serve one Bot's SSE stream for a device with or without `bot:cards`. */
 async function openCardStream(service: AidenRemoteBotSessionService, cards: boolean) {
   const server = createServer((_request, response) => {
