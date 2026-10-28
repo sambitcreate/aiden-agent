@@ -1236,7 +1236,7 @@ class AidenChatViewModel(
     }
 
     /**
-     * The Mac announced `chat-browser-recordings-v1` (revision 44), so a browser
+     * The Mac announced `chat-browser-recordings-v1` (revision 45), so a browser
      * recording's Play reads the video from it. Without it the card says to watch
      * the recording on the Mac.
      */

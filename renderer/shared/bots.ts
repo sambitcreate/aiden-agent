@@ -126,6 +126,55 @@ export function resolveBotChatActivity(value: BotChatActivity | undefined): BotC
   return value ? { level: value.level, wording: value.wording } : { ...DEFAULT_BOT_CHAT_ACTIVITY };
 }
 
+/**
+ * How much a Bot may interrupt the person (spec §6 P4): quiet hours, in the
+ * Mac's time zone, and a cap on proactive notifications per local day.
+ */
+export interface BotInterruptions {
+  quietHours: { enabled: boolean; start: string; end: string };
+  dailyLimit: number;
+}
+
+export const BOT_INTERRUPTIONS_MAX_DAILY_LIMIT = 20;
+
+export const DEFAULT_BOT_INTERRUPTIONS: BotInterruptions = {
+  quietHours: { enabled: true, start: "22:00", end: "07:00" },
+  dailyLimit: 5,
+};
+
+const CLOCK_TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
+
+/** Strict: exact keys, HH:MM times (00:00–23:59), a whole limit 0–20. */
+export function parseBotInterruptions(value: unknown): BotInterruptions {
+  const fail = (): never => {
+    throw new Error("Invalid interruption settings.");
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 2 || !keys.every((key) => key === "quietHours" || key === "dailyLimit")) return fail();
+  const quiet = record.quietHours;
+  if (!quiet || typeof quiet !== "object" || Array.isArray(quiet)) return fail();
+  const hours = quiet as Record<string, unknown>;
+  const hourKeys = Object.keys(hours);
+  if (hourKeys.length !== 3 || !hourKeys.every((key) => key === "enabled" || key === "start" || key === "end")) return fail();
+  if (typeof hours.enabled !== "boolean") return fail();
+  if (typeof hours.start !== "string" || !CLOCK_TIME.test(hours.start)) return fail();
+  if (typeof hours.end !== "string" || !CLOCK_TIME.test(hours.end)) return fail();
+  const limit = record.dailyLimit;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0 || limit > BOT_INTERRUPTIONS_MAX_DAILY_LIMIT) return fail();
+  return { quietHours: { enabled: hours.enabled, start: hours.start, end: hours.end }, dailyLimit: limit };
+}
+
+/** The stored setting, or the defaults when none (or an unreadable one) is stored. */
+export function resolveBotInterruptions(value: unknown): BotInterruptions {
+  try {
+    return value === undefined ? structuredClone(DEFAULT_BOT_INTERRUPTIONS) : parseBotInterruptions(value);
+  } catch {
+    return structuredClone(DEFAULT_BOT_INTERRUPTIONS);
+  }
+}
+
 export interface BotDefinition {
   id: string;
   /** Main-owned optimistic concurrency token for identity/archive mutations. */
@@ -137,6 +186,8 @@ export interface BotDefinition {
   avatar: BotAvatar;
   /** Absent: Quiet, Follows the work. */
   chatActivity?: BotChatActivity;
+  /** Absent: the defaults (quiet hours 22:00–07:00, 5 a day). */
+  interruptions?: BotInterruptions;
   createdAt: number;
   updatedAt: number;
 }
@@ -159,6 +210,8 @@ export interface BotUpdateInput extends BotCreateInput {
   expectedRevision: string;
   /** Absent keeps the stored choice, so identity edits never reset it. */
   chatActivity?: BotChatActivity;
+  /** Absent keeps the stored setting. */
+  interruptions?: BotInterruptions;
 }
 
 export interface TelegramBotBindingView {

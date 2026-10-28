@@ -873,11 +873,12 @@ test("Not now dismisses a routine proposal, and the card reads Not added", async
     "bots:live:subscribe": () => snapshot({ entries: [proposalEntry("pending")] }),
     "bots:routineProposals:respond": () => ({ status: "dismissed" }),
   });
-  const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
-  fireEvent.click(within(card).getByRole("button", { name: "Not now" }));
-  assert.ok(await within(card).findByText("Not added"));
+  fireEvent.click(within(await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" })).getByRole("button", { name: "Not now" }));
+  // Not now asks why, once and optionally; the reason travels with the answer.
+  fireEvent.click(within(screen.getByRole("group", { name: "Routine suggestion: Daily check-in" })).getByRole("button", { name: "Already have this" }));
+  assert.ok(await within(screen.getByRole("group", { name: "Routine suggestion: Daily check-in" })).findByText("Not added"));
   const respond = calls.find((call) => call.channel === "bots:routineProposals:respond")!;
-  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss" });
+  assert.deepEqual(respond.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "dismiss", reason: "already_have" });
 });
 
 test("a failed answer keeps the proposal answerable, and one answered elsewhere arrives settled", async () => {

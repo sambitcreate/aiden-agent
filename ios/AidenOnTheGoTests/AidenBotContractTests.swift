@@ -2271,7 +2271,7 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(try decoded(offered: true, grant: true).supportsBotHandoffs)
     }
 
-    /// Revision 43 (`bot:images`): a shared image decodes as the Mac sends it
+    /// Revision 44 (`bot:images`): a shared image decodes as the Mac sends it
     /// to holders, every other device reads the same entry as an assistant
     /// line, and the bytes never ride the session.
     func testRevision41SharedImagesDecodeLikeTheHostParser() throws {

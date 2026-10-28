@@ -138,7 +138,7 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 44: a completed `browser_recording_stop` step's video
+    /// Contract revision 45: a completed `browser_recording_stop` step's video
     /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
     /// step's `recording` recap is additive; the token alone gates Play.
     static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
@@ -325,7 +325,7 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The Mac serves the agent's browser recordings (revision 44).
+    /// The Mac serves the agent's browser recordings (revision 45).
     var supportsChatBrowserRecordings: Bool {
         features.contains(Self.chatBrowserRecordingsFeature)
     }
@@ -362,6 +362,17 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// state, and offer Pause and Resume.
     var supportsBotHandoffs: Bool {
         offersBotHandoffs && capabilities.contains(.botHandoffs)
+    }
+
+    /// The Mac offers `bot:issues` (revision 42): show issue cards and their
+    /// actions. There is no feature token: the support inventory is the signal.
+    var offersBotIssues: Bool {
+        serverCapabilities?.contains(.botIssues) == true
+    }
+
+    /// This device holds `bot:issues`: render the Bot's "Needs you" cards.
+    var supportsBotIssues: Bool {
+        offersBotIssues && capabilities.contains(.botIssues)
     }
 
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
@@ -1090,7 +1101,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
-            .botHandoffNotes, .botImages,
+            .botHandoffNotes, .botImages, .botIssues,
             .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
@@ -1573,7 +1584,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return html
     }
 
-    /// Revision 44 (`chat-browser-recordings-v1`): the video a completed
+    /// Revision 45 (`chat-browser-recordings-v1`): the video a completed
     /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
     /// most the recorder's 128 MiB limit, with the no-store and nosniff
     /// headers, is accepted.
@@ -1904,6 +1915,26 @@ final class AidenRemoteClient: @unchecked Sendable {
         return receipt
     }
 
+    /// Contract revision 42 (`bot:issues`): carries out one action a card
+    /// offers. The request UUID is the idempotency key, so a retried action
+    /// replays its receipt instead of running the host action twice.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        try validateBotIdentifier(botId)
+        try AidenRemoteIssueWire.validateID(issueId, field: "issueId")
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "issues", issueId, "act"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+    }
+
     /// Pauses the Bot: a running reply stops, and nothing runs until it is resumed.
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         try await botSessionAction("pause", botId: botId, idempotencyKey: idempotencyKey)
@@ -2212,7 +2243,7 @@ final class AidenRemoteClient: @unchecked Sendable {
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
     }
 
-    /// Revision 43 (`bot:images`): the bytes of an image the Bot shared, read
+    /// Revision 44 (`bot:images`): the bytes of an image the Bot shared, read
     /// while it is in the Bot's current conversation. Only PNG and JPEG, at
     /// most the Mac's inline image limit, are accepted.
     func botSessionImage(botId: String, entryId: String) async throws -> Data {

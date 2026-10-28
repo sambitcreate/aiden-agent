@@ -3,8 +3,8 @@
 // only that Bot's live summary: its definition, the list and its Telegram
 // binding can't have changed. Any other change naming a Bot (a photo, an edit
 // from a phone, a routine) re-reads that Bot and the list; one naming no Bot
-// re-reads everything, as before. `bots:attention` (a question or approval
-// appeared or settled) re-reads that one Bot's summary.
+// re-reads everything, as before. `bots:attention` (a question, approval,
+// hand-off or issue appeared or settled) re-reads that one Bot's summary.
 
 import * as React from "react";
 import type { QueryClient } from "@tanstack/react-query";

@@ -370,6 +370,16 @@ struct AidenBotSessionChatView: View {
                         ForEach(model.outgoing) { message in
                             outgoingBubble(message, model: model)
                         }
+                        ForEach(model.openIssues) { issue in
+                            // Revision 42: a "Needs you" card from the host.
+                            AidenBotIssueCardView(
+                                issue: issue,
+                                canAct: canWrite && model.canActOnIssue,
+                                isBusy: model.actingIssue?.id == issue.id,
+                                onAct: { action in Task { await model.actOnIssue(issue, action: action) } }
+                            )
+                            .id("issue:\(issue.id)")
+                        }
                         AidenBotStatusLineView(model: model)
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -527,7 +537,7 @@ struct AidenBotSessionChatView: View {
                 }
             )
         case let .sharedImage(image):
-            // Revision 43: the image the Bot shared, read from the Mac when it is drawn.
+            // Revision 44: the image the Bot shared, read from the Mac when it is drawn.
             AidenMessageImageAttachmentsView(
                 attachments: [image.attachment],
                 edge: .leading,
@@ -1378,6 +1388,98 @@ struct AidenBotRoutineProposalCardView: View {
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
             }
+        }
+    }
+}
+
+/// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
+/// two actions. A card that offers nothing a phone can do (the Mac's own
+/// settings opened it) says "Open on your Mac".
+struct AidenBotIssueCardView: View {
+    let issue: AidenRemoteBotIssue
+    let canAct: Bool
+    let isBusy: Bool
+    let onAct: (AidenBotIssueAction) -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var symbol: String {
+        switch issue.kind {
+        case .preflightFailed: "wrench.and.screwdriver"
+        case .routineFailed: "clock.badge.exclamationmark"
+        case .routinePaused: "pause.circle"
+        case .runStalled: "hourglass"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(palette.foreground)
+                .frame(width: 40, height: 40)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(AidenBotSessionCopy.issueNeedsYou)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                Text(issue.title)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                if !issue.body.isEmpty {
+                    Text(issue.body)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                actions
+                    .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if issue.actions.isEmpty {
+            // `open_settings` never crosses the wire: the rest is on the Mac.
+            Text(AidenBotSessionCopy.issueOpenOnMac)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+        } else if canAct {
+            HStack(spacing: 10) {
+                ForEach(Array(issue.actions.enumerated()), id: \.offset) { index, action in
+                    Button(AidenBotSessionModel.issueActionTitle(action)) { onAct(action) }
+                        .modifier(AidenBotIssueButtonStyle(isPrimary: index == issue.actions.count - 1))
+                }
+            }
+            .disabled(isBusy)
+        } else {
+            Text(AidenBotSessionCopy.finishOnMacReadOnly)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+        }
+    }
+}
+
+/// The last action is primary: it carries the solid fill; the other stays bordered.
+private struct AidenBotIssueButtonStyle: ViewModifier {
+    let isPrimary: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isPrimary {
+            content
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
         }
     }
 }

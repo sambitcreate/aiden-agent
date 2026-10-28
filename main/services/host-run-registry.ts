@@ -120,7 +120,7 @@ interface RunRecord {
   /** The newest delta event while no `read` has returned it. */
   openDelta?: { sequence: number; openedAt: number };
   /**
-   * Browser recordings this run's live timeline has named (revision 44), kept
+   * Browser recordings this run's live timeline has named (revision 45), kept
    * outside the trimmable journal: a phone may play one before the reply is saved.
    */
   recordingIds?: Set<string>;

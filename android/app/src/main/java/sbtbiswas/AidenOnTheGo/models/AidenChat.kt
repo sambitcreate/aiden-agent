@@ -254,7 +254,7 @@ data class AidenAgentStep(
     /** Decoded leniently: a malformed recap is dropped, never the step. */
     @Serializable(with = AidenWebExtractRecapSerializer::class)
     val extraction: AidenWebExtractRecap? = null,
-    /** Decoded leniently: a malformed recap is dropped, never the step (revision 44). */
+    /** Decoded leniently: a malformed recap is dropped, never the step (revision 45). */
     @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
     val recording: AidenBrowserRecordingRecap? = null
 ) {

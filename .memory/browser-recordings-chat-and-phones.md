@@ -1,6 +1,6 @@
-# Browser recordings in chat and on the phones (Remote revision 44)
+# Browser recordings in chat and on the phones (Remote revision 45)
 
-Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-browser-recordings`, stacked on the revision 43 `bot:images` branch (tool audit item 7a). Revision 44 is provisional; re-claim it at merge after whatever `main` holds then (constant `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`).
+Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-browser-recordings`, stacked on the revision 44 `bot:images` branch (tool audit item 7a). Revision 45 is provisional; re-claim it at merge after whatever `main` holds then (constant `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`).
 
 - Recorder (`main/services/browser/service.ts`) now prefers `video/mp4;codecs=avc1.42E01E` (Electron 43's OpenH264), WebM only as a fallback. Trap: Chromium's MP4 muxer writes nothing until a keyframe, so without `videoKeyFrameIntervalDuration: 1000` the first-frame readiness check (bytes > 0) times out and the size limit never fires mid-recording. Files: `userData/browser/recordings/<recording-uuid>.(mp4|webm)`; lookup/read in `main/services/browser/recordings.ts` (id pattern, lstat isFile, magic bytes).
 - A completed `browser_recording_stop` timeline step carries `recording {id, mimeType, durationMs, sizeBytes}` (exact keys; `renderer/shared/browser-recording.ts`). Desktop card `renderer/components/browser-recording-card.tsx` (Play loads bytes over IPC `browser:recording`, Show in Finder via `browser:reveal-recording`).

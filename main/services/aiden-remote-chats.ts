@@ -1182,7 +1182,7 @@ export class AidenRemoteChatService {
         render(source: VisualViewerSource, appearance: VisualViewerAppearance): Promise<string>;
       };
       /**
-       * Revision 44: reads a browser recording the agent saved, by its id. Absent
+       * Revision 45: reads a browser recording the agent saved, by its id. Absent
        * on hosts without the in-app browser (the CLI).
        */
       browserRecordings?: {
@@ -1870,7 +1870,7 @@ export class AidenRemoteChatService {
     throw unavailable();
   }
 
-  /** Whether this host serves the agent's browser recordings (revision 44). */
+  /** Whether this host serves the agent's browser recordings (revision 45). */
   get supportsBrowserRecordings(): boolean {
     return this.options.browserRecordings !== undefined;
   }

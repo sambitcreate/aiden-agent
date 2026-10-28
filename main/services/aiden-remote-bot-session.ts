@@ -33,7 +33,7 @@
 //   which drops the old line from their transcript. The person's answer is
 //   their message for everyone. Idempotent results are stored in the holder
 //   view and projected per device after the ledger returns.
-// - Contract revision 43 (`bot:images`): an image the Bot shared is a
+// - Contract revision 44 (`bot:images`): an image the Bot shared is a
 //   `shared_image` entry (name, type, size) for devices holding it, which read
 //   the bytes from the session image route. Every other device gets an
 //   assistant line under the same id that names the image and points to the Mac.
@@ -50,6 +50,7 @@ import {
 } from "../../renderer/shared/bot-connections.js";
 import type { BotPreset } from "../../renderer/shared/bot-presets.js";
 import { botHandoffResultLine } from "../../renderer/shared/bot-handoffs.js";
+import { BOT_ISSUE_ID_PATTERN } from "../../renderer/shared/bot-issues.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
@@ -64,6 +65,8 @@ import {
   type BotRoutineProposalRespondResult,
 } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotMemoryService } from "./bot-memory/bot-memory-main.js";
+import type { BotIssueService } from "./bot-issues/service.js";
+import { toRemoteBotIssues } from "./aiden-remote-bot-issues.js";
 import {
   AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS,
   AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES,
@@ -101,12 +104,15 @@ import {
   parseAidenRemoteBotQuestionAnswerRequest,
   parseAidenRemoteBotHandoffAnswerRequest,
   parseAidenRemoteBotHandoffWaitId,
+  parseAidenRemoteBotIssueActRequest,
   parseAidenRemoteBotSession,
   parseAidenRemoteEmptyRequest,
   type AidenRemoteBotApproval,
   type AidenRemoteBotHandoff,
   type AidenRemoteBotHandoffAnswerReceipt,
   type AidenRemoteBotHandoffOpenOnMacReceipt,
+  type AidenRemoteBotIssue,
+  type AidenRemoteBotIssueActReceipt,
   type AidenRemoteBotConnectionRequestReceipt,
   type AidenRemoteBotMessageReceipt,
   type AidenRemoteBotPresetCreateResult,
@@ -245,6 +251,12 @@ export interface AidenRemoteBotSessionServiceOptions {
   /** Revision 37: bring the hand-off forward on the Mac (`openBotHandoffById(botId, waitId, "phone")`). */
   openHandoffOnMac?(botId: string, waitId: string): Promise<BotHandoffOpened>;
   /**
+   * Revision 42: the Bot's host-owned "Needs you" cards (the same service the
+   * desktop chat and sidebar read). With it the host announces `bot:issues`
+   * and serves the issue act route.
+   */
+  issues?: Pick<BotIssueService, "list" | "act" | "onChange">;
+  /**
    * Hear a Bot's session state change on any surface (`onBotSessionStateChange`);
    * returns the unsubscribe. A pause or unpause on the Mac commits nothing to the
    * conversation, so without it an open stream reads the change only at its next
@@ -301,8 +313,13 @@ export interface AidenRemoteBotSessionServiceOptions {
   memory?: Pick<BotMemoryService, "view" | "edit">;
   /** Answers to routine proposals (`bot-proactive-v1`); the desktop answers through the same service. */
   proposals?: { respond(input: BotRoutineProposalRespondInput): Promise<BotRoutineProposalRespondResult> };
-  /** The Bot routine notification feed (`bot-proactive-v1`). */
-  routineNotifications?: { list(since: number | undefined): Promise<AidenRemoteBotRoutineNotificationList> };
+  /** The Bot routine notification feed (`bot-proactive-v1`). Issue items need `bot:issues` (revision 42). */
+  routineNotifications?: {
+    list(
+      since: number | undefined,
+      options?: { issues?: boolean },
+    ): Promise<AidenRemoteBotRoutineNotificationList>;
+  };
   now?(): number;
   projectorIdleMs?: number;
 }
@@ -500,7 +517,7 @@ export function projectBotSessionEntries(
         break;
       }
       case "shared_image": {
-        // Revision 43: name, type and size only; the bytes have their own route.
+        // Revision 44: name, type and size only; the bytes have their own route.
         const image = sharedImageWireOf(entry);
         if (image) output.push({ type: "shared_image", id, ...image });
         break;
@@ -527,7 +544,7 @@ function sharedImageWireOf(image: {
   return { name: wireText(image.name, AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS).trim() || "image", mimeType, size: image.size };
 }
 
-/** What a device without `bot:images` reads for a shared image (revision 43). */
+/** What a device without `bot:images` reads for a shared image (revision 44). */
 export function botSharedImageLegacyText(name: string): string {
   return `I shared an image: ${name}. Open this chat on your Mac to see it.`;
 }
@@ -707,8 +724,10 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
-  /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 43). */
+  /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 44). */
   images: boolean;
+  /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
+  issues: boolean;
 }
 
 /**
@@ -762,6 +781,8 @@ class BotLiveProjector {
   approval: AidenRemoteBotApproval | null = null;
   /** The waiting hand-off (revision 37), with the line devices without `bot:handoffs` show for it. */
   handoff: ProjectedHandoff | null = null;
+  /** The Bot's issue cards (revision 42), oldest first; only `bot:issues` devices are sent them. */
+  issues: AidenRemoteBotIssue[] = [];
   /** What the running turn is doing, in the §11 shape; null while no turn runs. */
   activity: AidenRemoteBotSessionActivity | null = null;
   /** The person's messages waiting for the running turn. */
@@ -813,6 +834,8 @@ class BotLiveProjector {
     private readonly activityDeps?: ProjectorActivity,
     /** Revision 37; without it no hand-off is ever projected. */
     private readonly readHandoff: () => Promise<ProjectedHandoff | null> = async () => null,
+    /** Revision 42; without it no issue card is ever projected. */
+    private readonly readIssues?: () => Promise<AidenRemoteBotIssue[]>,
   ) {
     this.classifier = activityDeps
       ? createQueuedInputClassifier({
@@ -843,6 +866,7 @@ class BotLiveProjector {
     this.question = this.readQuestion();
     this.approval = this.readApproval();
     this.handoff = await this.readHandoff();
+    this.issues = (await this.readIssues?.()) ?? [];
     if (this.activityDeps) {
       this.trackRun({ state: "idle", interrupted: false }, this.state, watch.value.docs);
       this.activity = this.deriveActivity(
@@ -876,6 +900,7 @@ class BotLiveProjector {
     for (const [key, value] of Object.entries(state)) used += memberBytes(key, value);
     used += memberBytes("question", this.question) + memberBytes("approval", this.approval);
     if (audience.handoffs) used += memberBytes("handoff", handoff);
+    if (audience.issues) used += memberBytes("issues", this.issues);
     if (showActivity) used += memberBytes("activity", this.activity);
 
     let partial: string | undefined;
@@ -911,6 +936,7 @@ class BotLiveProjector {
       approval: this.approval,
       ...(showActivity ? { activity: this.activity, queued } : {}),
       ...(audience.handoffs ? { handoff } : {}),
+      ...(audience.issues ? { issues: this.issues } : {}),
     });
   }
 
@@ -935,7 +961,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.images}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.images}:${subscriber.issues}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -977,6 +1003,7 @@ class BotLiveProjector {
       );
     const activityOnly = ACTIVITY_FRAME_TYPES.has(event.type);
     const handoffOnly = event.type === "handoff";
+    const issuesOnly = event.type === "issues";
     // A frame a device can't parse (a card entry before revision 27, an
     // activity or queued frame without `bot:activity`, a hand-off without
     // `bot:handoffs`) must still reach it as its seq: clients refetch on any
@@ -988,12 +1015,13 @@ class BotLiveProjector {
     const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
     const bare = entry && withoutSubmissionId(entry);
     const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
-    // Revision 43: a shared image reaches a device without `bot:images` as its line.
+    // Revision 44: a shared image reaches a device without `bot:images` as its line.
     const imageLine = entry?.type === "shared_image"
       ? sseFrame(id, "entry", { ...data, payload: { entry: withoutSharedImage(entry) } })
       : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
+      if (issuesOnly && !audience.issues) return noOp(audience);
       if (imageLine && !audience.images) return imageLine;
       if (handoffOnly && !audience.handoffs) {
         if (legacy === "snapshot") return this.snapshotFrame(audience);
@@ -1159,7 +1187,7 @@ class BotLiveProjector {
   }
 
   /**
-   * Revision 43: the bytes of a shared image in the current conversation, by
+   * Revision 44: the bytes of a shared image in the current conversation, by
    * its wire entry id, or null when no shown entry has that id. Bytes that do
    * not match their type or the size bound are refused like a missing image.
    */
@@ -1203,6 +1231,7 @@ class BotLiveProjector {
     const question = this.readQuestion();
     const approval = this.readApproval();
     const handoff = await this.readHandoff();
+    const issues = this.readIssues ? await this.readIssues().catch(() => this.issues) : [];
     const queued = this.activityDeps ? await this.queuedFor(view.docs) : [];
     if (this.closed) return;
     let activity: AidenRemoteBotSessionActivity | null = null;
@@ -1233,6 +1262,7 @@ class BotLiveProjector {
       this.handoff = handoff;
       this.activity = activity;
       this.queued = queued;
+      this.issues = issues;
       this.seq += 1;
       this.broadcast((audience) => this.snapshotFrame(audience));
       return;
@@ -1273,6 +1303,10 @@ class BotLiveProjector {
     if (JSON.stringify(queued) !== JSON.stringify(this.queued)) {
       this.queued = queued;
       this.frame({ type: "queued", payload: { queued } });
+    }
+    if (JSON.stringify(issues) !== JSON.stringify(this.issues)) {
+      this.issues = issues;
+      this.frame({ type: "issues", payload: { issues } });
     }
   }
 
@@ -1496,7 +1530,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1537,6 +1571,8 @@ export class AidenRemoteBotSessionService {
     options.questions?.onChange(refresh);
     options.approvals?.onChange(refresh);
     options.handoffs?.onChange(refresh);
+    // Revision 42: a card raised, settled or superseded reaches open streams.
+    options.issues?.onChange(refresh);
     // A pause or unpause on the Mac changes only the state; open streams hear it here.
     this.stopStateChanges = options.stateChanges?.(refresh);
     // A Stop or Resume from the Mac or any phone reaches every open session stream.
@@ -1583,7 +1619,7 @@ export class AidenRemoteBotSessionService {
   }
 
   /**
-   * Shared images on phones (revision 43, `bot:images`). The bytes come from
+   * Shared images on phones (revision 44, `bot:images`). The bytes come from
    * the conversation itself, so every host that serves Bot sessions serves them.
    */
   get supportsSharedImages(): boolean {
@@ -1610,6 +1646,15 @@ export class AidenRemoteBotSessionService {
   /** Staged image and text uploads for Bot messages (revision 33, `bot-attachments-v1`). */
   get supportsAttachments(): boolean {
     return Boolean(this.options.attachments);
+  }
+
+  /**
+   * Bot issues on phones (revision 42, `bot:issues`): the issue service is
+   * wired. Without it the host never offers the capability, sends no `issues`
+   * key, and refuses the act route.
+   */
+  get supportsIssues(): boolean {
+    return Boolean(this.options.issues);
   }
 
   /** Proposal answers, suggestions and the notification feed are one feature (`bot-proactive-v1`). */
@@ -1736,7 +1781,10 @@ export class AidenRemoteBotSessionService {
   }
 
   /** Finished Bot routine runs a phone should announce, after `since` (ISO). */
-  async routineNotificationFeed(since: string | undefined): Promise<AidenRemoteBotRoutineNotificationList> {
+  async routineNotificationFeed(
+    since: string | undefined,
+    options: { issues?: boolean } = {},
+  ): Promise<AidenRemoteBotRoutineNotificationList> {
     const { routineNotifications } = this.proactive();
     let sinceMs: number | undefined;
     if (since !== undefined) {
@@ -1745,7 +1793,7 @@ export class AidenRemoteBotSessionService {
         throw new AidenRemoteServiceError("invalid_request", "since must be an ISO-8601 time.", 400);
       }
     }
-    return routineNotifications.list(sinceMs);
+    return routineNotifications.list(sinceMs, { issues: options.issues === true && this.supportsIssues });
   }
 
   /** The state as a `bot:handoffs` device sees it; `stateViewForAudience` projects it for the others. */
@@ -1768,6 +1816,22 @@ export class AidenRemoteBotSessionService {
     }
     const name = await this.options.bots.bot(botId).then((bot) => bot.name, () => "");
     return { handoff, notice: legacyHandoffNotice(name, prompt) };
+  }
+
+  /**
+   * The Bot's issue cards as a `bot:issues` device reads them, oldest first.
+   * The store's own rows are the truth here; a card the wire can't carry is
+   * dropped by the projection and never fails the rest.
+   */
+  private async issuesOf(botId: string): Promise<AidenRemoteBotIssue[]> {
+    const service = this.options.issues;
+    if (!service) return [];
+    try {
+      return toRemoteBotIssues(await service.list(botId));
+    } catch {
+      // An unreadable issue file must never take the transcript down with it.
+      return [];
+    }
   }
 
   /** The Bot's one waiting question, in the wire shape. */
@@ -1886,6 +1950,14 @@ export class AidenRemoteBotSessionService {
     return this.options.handoffs!;
   }
 
+  /** Revision 42: the Bot issue service, or the route is unavailable. */
+  private issueService() {
+    if (!this.supportsIssues) {
+      throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    }
+    return this.options.issues!;
+  }
+
   /**
    * Revision 37: Done or Skip on the Bot's waiting hand-off. Idempotent per
    * request UUID: a repeat gets the same receipt. A card that is no longer
@@ -1956,6 +2028,47 @@ export class AidenRemoteBotSessionService {
     );
   }
 
+  /**
+   * Revision 42: carry out one action a card offers (`bot:issues`). Idempotent
+   * per request UUID. `not_open` is a success: the card is gone or already
+   * settled. An action the card never offered is `409 operation_stale`, and
+   * records nothing for its key so a retry after a refresh is evaluated afresh.
+   */
+  async actIssue(
+    deviceId: string,
+    botId: string,
+    issueId: string,
+    key: string,
+    input: unknown,
+  ): Promise<AidenRemoteBotIssueActReceipt> {
+    const issues = this.issueService();
+    const parsed = parseOrInvalid(parseAidenRemoteBotIssueActRequest, input, "The issue action is invalid.");
+    if (typeof issueId !== "string" || !BOT_ISSUE_ID_PATTERN.test(issueId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The Bot issue is invalid.", 400);
+    }
+    const id = issueId;
+    const bot = await this.options.bots.bot(botId);
+    return this.options.bots.executeIdempotent(
+      { deviceId, route: "POST /bots/{id}/issues/{issueId}/act", resourceId: `${bot.id}:${id}`, key },
+      parsed,
+      async () => {
+        const result = await issues.act(bot.id, id, parsed.action);
+        if (result === "invalid") {
+          // Nothing ran: the same key is checked again after the card refreshes.
+          throw new AidenOperationNotExecutedError(
+            new AidenRemoteServiceError(
+              "operation_stale",
+              "This card changed. Refresh it before trying again.",
+              409,
+              true,
+            ),
+          );
+        }
+        return { result };
+      },
+    );
+  }
+
   /** Pending connect cards show what is true now (connected, or Not now). */
   private async resolveCards(
     botId: string,
@@ -1999,6 +2112,7 @@ export class AidenRemoteBotSessionService {
             }
           : undefined,
         () => this.handoffOf(botId),
+        this.supportsIssues ? () => this.issuesOf(botId) : undefined,
       );
       await projector.attach(conversation);
       return projector;
@@ -2036,10 +2150,11 @@ export class AidenRemoteBotSessionService {
       handoffs: options.handoffs === true && this.supportsHandoffs,
       notes: options.handoffs === true && options.handoffNotes === true && this.supportsHandoffs,
       images: options.images === true,
+      issues: options.issues === true && this.supportsIssues,
     };
   }
 
-  /** `cards`, `activity`, `handoffs`: the device holds `bot:cards`, `bot:activity`, `bot:handoffs`. */
+  /** `cards`, `activity`, `handoffs`, `issues`: the device holds those opt-ins. */
   async session(botId: string, options: AudienceOptions = {}): Promise<AidenRemoteBotSession> {
     const bot = await this.options.bots.bot(botId);
     const audience = this.audience(options);
@@ -2053,6 +2168,7 @@ export class AidenRemoteBotSessionService {
           botId: bot.id, epoch: "epoch_unavailable", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null,
           ...(audience.activity ? { activity: null, queued: [] } : {}),
           ...(audience.handoffs ? { handoff: null } : {}),
+          ...(audience.issues ? { issues: [] } : {}),
         });
       }
       const projector = await this.liveProjector(bot.id);

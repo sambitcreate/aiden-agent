@@ -121,10 +121,13 @@ import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
-import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { systemTimezone } from "./schedule-store.js";
 import { botMemoryService } from "./bot-memory/bot-memory-main.js";
 import { botRoutineProposals } from "./bot-routine-proposals-main.js";
-import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
+import { createBotNotificationFeed } from "./bot-routine-notifications.js";
+import { botIssues } from "./bot-issues/service-main.js";
+import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
+import { botDeliveryLog } from "./bot-delivery/funnel-main.js";
 import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
@@ -462,6 +465,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
+    botRoutineWebhook: async (request) =>
+      (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
     workspaceApi: async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(
@@ -574,7 +579,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
-            // Revision 44: phones play the agent's browser recordings their chats name.
+            // Revision 45: phones play the agent's browser recordings their chats name.
             browserRecordings: {
               read: async (recordingId: string) =>
                 (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
@@ -772,6 +777,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return new Map(rows);
             },
             health: (botId) => projectBotHealth(botId),
+            // Revision 42: the holder's `issueCount`; the router drops it for
+            // every device that did not negotiate `bot:issues`.
+            issues: {
+              openCount: async (botId) => (await botIssues.list(botId, { open: true })).length,
+            },
             healthBatch: async (botIds) => {
               const snapshot = await botCapabilityCatalog.snapshot({
                 audienceId: instanceId,
@@ -885,6 +895,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 approvals: botApprovals,
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
+                // Revision 42: the desktop's own issue service raises, settles and acts.
+                issues: botIssues,
                 openHandoffOnMac: async (botId, waitId) => {
                   const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
                   return openBotHandoffById(botId, waitId, "phone");
@@ -937,8 +949,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 // Contract revision 27: the desktop's own memory and proposal services.
                 memory: botMemoryService,
                 proposals: botRoutineProposals,
-                routineNotifications: createBotRoutineNotificationFeed({
-                  store: scheduleStore,
+                routineNotifications: createBotNotificationFeed({
+                  log: botDeliveryLog,
                   botName: async (botId) => (await botStore.get(botId))?.name,
                 }),
               })
@@ -1015,11 +1027,19 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   }),
                   // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
                   // Bot reads as unavailable); a holder gets `paused` (revision 37).
+                  // `issueCount` (revision 42) is a phone shape: the host feed keeps
+                  // its revision-40 rows for every desktop.
                   bots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                    projectBotSummaryIssuesForAudience(
+                      projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                      { issues: false },
+                    ),
                   ) as unknown as AidenRemoteHostFeedBot[],
                   handoffBots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryForAudience(bot, { handoffs: true }),
+                    projectBotSummaryIssuesForAudience(
+                      projectBotSummaryForAudience(bot, { handoffs: true }),
+                      { issues: false },
+                    ),
                   ) as unknown as AidenRemoteHostFeedBot[],
                 };
               },

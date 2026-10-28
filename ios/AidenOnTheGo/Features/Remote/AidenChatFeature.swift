@@ -3529,7 +3529,7 @@ final class AidenChatViewModel {
         }
     }
 
-    // MARK: - Browser recordings (contract revision 44)
+    // MARK: - Browser recordings (contract revision 45)
 
     /// The paired Mac announces `chat-browser-recordings-v1`, so an MP4
     /// browser recording can be read and played on the phone.
@@ -6364,7 +6364,7 @@ private struct AidenSettledMessageRows: View, Equatable {
     var visualViewerAvailable = false
     /// Adds a follow-up confirmed in the visual viewer to the composer.
     var onVisualPrompt: ((String) -> Void)? = nil
-    /// The Mac announces `chat-browser-recordings-v1` (revision 44).
+    /// The Mac announces `chat-browser-recordings-v1` (revision 45).
     var browserRecordingsAvailable = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6490,7 +6490,7 @@ struct AidenMessageView: View, Equatable {
     /// Present while the Mac announces `chat-visual-viewer-v1` (revision 35).
     var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
     var onVisualPrompt: ((String) -> Void)? = nil
-    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 44).
+    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 45).
     var loadBrowserRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
@@ -7934,7 +7934,7 @@ private struct AidenLiveResponseView: View {
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
-    /// Plays a browser recording while the Mac serves them (revision 44).
+    /// Plays a browser recording while the Mac serves them (revision 45).
     private var liveRecordingLoader: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? {
         guard model.supportsBrowserRecordings else { return nil }
         let model = model
@@ -8864,7 +8864,7 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
-    /// Present while the Mac serves browser recordings (revision 44).
+    /// Present while the Mac serves browser recordings (revision 45).
     var loadRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
 
     var body: some View {
@@ -9072,7 +9072,7 @@ struct AidenWebExtractRecapView: View {
 }
 
 /// The video the agent recorded of a browser tab, under its activity line
-/// (contract revision 44). The bytes stay on the Mac until Play is pressed;
+/// (contract revision 45). The bytes stay on the Mac until Play is pressed;
 /// a WebM fallback, or a Mac that does not serve recordings, is watched on
 /// the Mac instead.
 struct AidenBrowserRecordingCardView: View {

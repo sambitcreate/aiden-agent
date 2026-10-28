@@ -728,6 +728,15 @@
     <string name="bot_paused_title">%1$s is paused.</string>
     <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
     <string name="bot_paused_placeholder">%1$s is paused</string>
+    <!-- Bots: issues (contract revision 42), copy shared with iOS and desktop -->
+    <string name="bot_issue_needs_you">Needs you</string>
+    <string name="bot_issue_open_on_mac">Open on your Mac</string>
+    <string name="bot_issue_open_chat">Open chat</string>
+    <string name="bot_issue_resume_routine">Resume routine</string>
+    <string name="bot_issue_stop">Stop</string>
+    <string name="bot_issue_keep_waiting">Keep waiting</string>
+    <string name="bot_issue_stale">This card changed. Pull to refresh and try again.</string>
+    <string name="bot_issue_not_sent">That didn’t reach your Mac. Please try again.</string>
     <string name="bot_files_connect">Connect to your Mac to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>
@@ -911,7 +920,7 @@
     <string name="chat_web_extract_error_timeout">the extraction model did not answer in time</string>
     <string name="chat_web_extract_error_unavailable">the extraction model could not be reached</string>
     <string name="chat_web_extract_error_invalid_response">the extraction model sent an answer Aiden could not read</string>
-    <!-- Chat: a browser recording the agent saved (contract revision 44) -->
+    <!-- Chat: a browser recording the agent saved (contract revision 45) -->
     <string name="chat_browser_recording_title">Browser recording</string>
     <string name="chat_browser_recording_cd">Browser recording, %1$s</string>
     <string name="chat_browser_recording_meta">%1$s · %2$s</string>

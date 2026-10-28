@@ -50,6 +50,7 @@ import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.
 import {
   BOT_ROUTINE_PROPOSAL_REASON_LIMIT,
   BOT_ROUTINES_TOOL_NAME,
+  type BotRoutineProposalDecisionSummary,
 } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotRoutine } from "./scheduled-bot-routines.js";
 
@@ -1755,8 +1756,10 @@ export interface BotRoutinesToolDependencies {
   /** Store the proposal and show its card. */
   propose(
     botId: string,
-    input: { name: string; schedule: unknown; prompt: string; reason?: string },
-  ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+    input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
+  ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string; until?: number }>;
+  /** The newest answered suggestions, so the Bot learns what the person declined. */
+  recentDecisions?(botId: string): Promise<BotRoutineProposalDecisionSummary[]>;
 }
 
 const BOT_ROUTINE_TIME = Type.String({
@@ -1822,6 +1825,7 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
       "This Bot's routines: one-time or recurring scheduled turns in this same conversation. " +
       "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card to approve or decline; pause (id from list) turns a routine off. " +
       "When the person asks for a future wake-up, reminder, check-in, or recurring task, propose it directly. Suggest an unrequested routine only when it would clearly help and the person has not declined it. " +
+      "list also returns recentDecisions: what the person accepted or declined, with why when they said. Don't suggest something like a declined routine, and when a reason was wrong_time, a different time may fit. " +
       "A proposal is not scheduled until the person accepts its card. You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
     parameters: Type.Object(
       {
@@ -1833,6 +1837,7 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         reason: Type.Optional(
           Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
         ),
+        requested: Type.Optional(Type.Boolean({ description: "true only when the person asked for this routine in this conversation." })),
       },
       { additionalProperties: false },
     ),
@@ -1851,6 +1856,7 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
             label: routine.label,
             enabled: routine.enabled,
           })),
+          recentDecisions: (await routines.recentDecisions?.(botId)) ?? [],
         });
       }
       if (action === "pause") {
@@ -1860,14 +1866,22 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
       }
       if (action === "propose") {
-        routinesRequest(fields, ["name", "schedule", "prompt", "reason"]);
+        routinesRequest(fields, ["name", "schedule", "prompt", "reason", "requested"]);
         const outcome = await routines.propose(botId, {
           name: typeof fields.name === "string" ? fields.name : "",
           schedule: fields.schedule,
           prompt: typeof fields.prompt === "string" ? fields.prompt : "",
           ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
+          ...(fields.requested === true ? { requested: true } : {}),
         });
-        if (!outcome.ok) return result({ ok: false, code: outcome.code, error: outcome.error });
+        if (!outcome.ok) {
+          return result({
+            ok: false,
+            code: outcome.code,
+            error: outcome.error,
+            ...(outcome.until !== undefined ? { until: new Date(outcome.until).toISOString() } : {}),
+          });
+        }
         return result({
           ok: true,
           proposalId: outcome.proposalId,

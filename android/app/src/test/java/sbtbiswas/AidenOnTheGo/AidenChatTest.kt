@@ -1690,7 +1690,7 @@ class AidenChatTest {
     @Test
     fun canonicalFixtureBrowserRecordingStepCarriesItsRecap() {
         val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
-        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 44)
+        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 45)
         val section = root.getValue("browserRecordings").jsonObject
         val step = wireJson.decodeFromJsonElement(AidenAgentStep.serializer(), section.getValue("step"))
         val recap = step.recordingRecap

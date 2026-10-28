@@ -1,5 +1,6 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
@@ -527,7 +528,14 @@ export interface ScheduledTask {
     requestId: string;
     prompt: string;
     name: string;
+    /**
+     * Set when this entry is a delayed retry of a failed fire rather than a
+     * scheduled fire. `fireTime` is when the retry becomes due.
+     */
+    retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
+  /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
+  enabledAt?: number;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;
@@ -577,6 +585,12 @@ export interface ScheduledRun {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why an otherwise indistinguishable failure happened. Bot routines only. */
+  failure?: BotRoutineFailure;
+  /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
+  /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
+  fingerprint?: string;
   chatId?: string;
 }
 
