@@ -218,3 +218,34 @@ test("at startup the host's new-chat model is brought in line with this window's
   await mirrorNewChatModelToHost(api);
   assert.equal(host.lastModel, "model-a", "a window with no pick yet leaves the host alone");
 });
+
+test("a pick made while the startup read is pending is the one the host keeps", async () => {
+  const values = new Map<string, string>([
+    ["aiden-agent.providerId", "lmstudio"],
+    ["aiden-agent.model", "model-b"],
+  ]);
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    },
+  });
+  const { mirrorNewChatModelToHost } = await import("./use-model-selection");
+  let host = { lastProviderId: "lmstudio", lastModel: "model-a" };
+  let answer!: (value: typeof host) => void;
+  const mirrored = mirrorNewChatModelToHost({
+    get: () => new Promise<typeof host>((resolve) => { answer = resolve; }),
+    set: async (patch) => {
+      host = { ...host, ...(patch as typeof host) };
+    },
+  });
+  const staleRead = structuredClone(host);
+  // The person picks model C; the pick saves locally and reaches the host on its own.
+  values.set("aiden-agent.model", "model-c");
+  host = { lastProviderId: "lmstudio", lastModel: "model-c" };
+  answer(staleRead);
+  await mirrored;
+  assert.deepEqual(host, { lastProviderId: "lmstudio", lastModel: "model-c" });
+  assert.equal(values.get("aiden-agent.model"), "model-c");
+});

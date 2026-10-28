@@ -198,9 +198,11 @@ export async function mirrorNewChatModelToHost(api: {
   get(): Promise<Pick<AppSettings, "lastProviderId" | "lastModel">>;
   set(patch: Pick<AppSettings, "lastProviderId" | "lastModel">): Promise<unknown>;
 }): Promise<void> {
+  const host = await api.get();
+  // Read the pick after the host answers: one made while the read was pending
+  // is newer than anything captured before it.
   const selection = readModelSelection();
   if (!selection.providerId || !selection.model) return;
-  const host = await api.get();
   if (host.lastProviderId === selection.providerId && host.lastModel === selection.model) return;
   await api.set({ lastProviderId: selection.providerId, lastModel: selection.model });
 }
