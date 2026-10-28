@@ -10,7 +10,9 @@ import { BrowserWindow, Notification, app, logger } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { BOT_ROUTINE_FAILED_PREVIEW } from "../scheduled-bot-routines.js";
 import { showScheduledNotification } from "../schedule-notification.js";
-import { ALWAYS_NOW_GATE, BOT_DELIVERY_REQUEST_PREFIX, createBotDeliveryFunnel, type BotDeliveryFunnel } from "./funnel.js";
+import { BOT_DELIVERY_REQUEST_PREFIX, createBotDeliveryFunnel, type BotDeliveryFunnel } from "./funnel.js";
+import { createBotDeliveryGate } from "./gate.js";
+import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
 
 /** Every Bot's delivery rows, beside that Bot's session (`bots/<dir>/deliveries.json`). */
@@ -28,13 +30,29 @@ let liveFunnel: BotDeliveryFunnel | undefined;
 export function botDeliveryFunnel(): BotDeliveryFunnel {
   return (liveFunnel ??= createBotDeliveryFunnel({
     log: botDeliveryLog,
-    gate: ALWAYS_NOW_GATE,
+    gate: createBotDeliveryGate({
+      settings: async (botId) => {
+        const { botStore } = await import("../bot-store.js");
+        return resolveBotInterruptions((await botStore.get(botId))?.interruptions);
+      },
+      // Proactive notifications that reached the person today count; held
+      // rows count once they come due, suppressed ones never do.
+      sentToday: async (botId, dayStart, now) =>
+        (await botDeliveryLog.list(botId)).filter((row) =>
+          (row.class === "routine_result" || row.class === "proposal") &&
+          row.suppressed !== true && row.deliverAfter >= dayStart && row.deliverAfter <= now).length,
+      timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }),
+    botName: async (botId) => {
+      const { botStore } = await import("../bot-store.js");
+      return (await botStore.get(botId))?.name;
+    },
     mac: async (input) => {
-      // An issue is the funnel's own banner, following the hand-off notifier:
-      // only while no Aiden window has focus (the card is in front
-      // otherwise), and clicking it opens the Bot's chat. A throw is reported,
-      // never raised: the issue and its card are already durable.
-      if (input.class === "issue") {
+      // An issue, a digest, or a held routine result sent from the log is the
+      // funnel's own banner, following the hand-off notifier: only while no
+      // Aiden window has focus, and clicking it opens the Bot's chat. A throw
+      // is reported, never raised: the row is already durable.
+      if (input.class !== "routine_result" || input.routineTask === undefined) {
         try {
           if (BrowserWindow.getFocusedWindow() !== null) return;
           if (!Notification.isSupported()) return;
@@ -45,14 +63,12 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
               .catch((error: unknown) => logger.warn("bots", "Bot issue notification navigation failed.", error));
           });
           notification.show();
-        } catch {
-          logger.warn("bots", "Bot issue notification failed.");
+        } catch (error) {
+          logger.warn("bots", "Bot notification failed.", error);
         }
         return;
       }
-      // A routine result keeps the routine's own banner. Other classes bring
-      // their own surface.
-      if (input.routineTask === undefined) return;
+      // A routine result keeps the routine's own banner.
       showScheduledNotification(input.routineTask, input.body, input.botId, {
         isSupported: () => Notification.isSupported(),
         create: (options) => new Notification(options),
@@ -76,4 +92,37 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
     },
     now: Date.now,
   }));
+}
+
+const FLUSH_INTERVAL_MS = 5 * 60_000;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+let flushInterval: ReturnType<typeof setInterval> | undefined;
+
+/** Send what quiet hours held back once it is due; re-arms for the next held row. */
+async function flushHeld(): Promise<void> {
+  const next = await botDeliveryFunnel().flush(Date.now()).catch((error: unknown) => {
+    logger.warn("bots", "Held Bot messages could not be sent.", error);
+    return undefined;
+  });
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = undefined;
+  if (next !== undefined && flushInterval) {
+    flushTimer = setTimeout(() => void flushHeld(), Math.max(1_000, next - Date.now()));
+    flushTimer.unref?.();
+  }
+}
+
+/** Started once Bots are open; reads only the local delivery logs. */
+export function startBotDeliveryFlush(): void {
+  if (flushInterval) return;
+  flushInterval = setInterval(() => void flushHeld(), FLUSH_INTERVAL_MS);
+  flushInterval.unref?.();
+  void flushHeld();
+}
+
+export function stopBotDeliveryFlush(): void {
+  if (flushInterval) clearInterval(flushInterval);
+  if (flushTimer) clearTimeout(flushTimer);
+  flushInterval = undefined;
+  flushTimer = undefined;
 }

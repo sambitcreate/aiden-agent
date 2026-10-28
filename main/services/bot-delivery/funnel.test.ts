@@ -221,3 +221,43 @@ test("a gate that counts calls is asked once across a delivery and its retry", a
   assert.equal(await h.funnel.deliver(input), "duplicate");
   assert.equal(gateCalls, 1, "a duplicate never reaches the gate");
 });
+
+test("three held rows produce one digest banner and stay three rows for phones", async (t) => {
+  const h = await harness({ decide: async () => ({ kind: "defer", until: NOW + HOUR }) });
+  t.after(h.cleanup);
+  for (const key of ["a", "b", "c"]) {
+    assert.equal(await h.funnel.deliver(routineResult({ dedupeKey: key, requestId: key })), "deferred");
+  }
+  assert.equal(await h.funnel.flush(NOW), NOW + HOUR, "nothing is due yet; the next held row is");
+  assert.equal(h.calls.mac.length, 0);
+  assert.equal(await h.funnel.flush(NOW + HOUR), undefined);
+  assert.equal(h.calls.mac.length, 1);
+  assert.equal(h.calls.mac[0]?.class, "digest");
+  assert.equal(h.calls.mac[0]?.body, "While you were away: 3 updates.");
+  assert.equal(h.calls.telegram.length, 1);
+  assert.equal((await h.log.due(undefined, NOW + HOUR)).length, 3);
+  assert.ok((await h.log.list("bot:scout")).every((row) => row.sentAt !== undefined));
+  await h.funnel.flush(NOW + 2 * HOUR);
+  assert.equal(h.calls.mac.length, 1, "a flushed row is never sent again");
+});
+
+test("a held issue is sent on its own, from the stored row", async (t) => {
+  const h = await harness({ decide: async () => ({ kind: "defer", until: NOW + HOUR }) });
+  t.after(h.cleanup);
+  await h.funnel.deliver({ botId: "bot:scout", class: "issue", dedupeKey: "issue:1", title: "Briefing needs you", body: "Sign in again.", status: "info" });
+  await h.funnel.deliver(routineResult());
+  await h.funnel.flush(NOW + HOUR);
+  assert.deepEqual(h.calls.mac.map((input) => [input.class, input.title]), [
+    ["issue", "Briefing needs you"],
+    ["routine_result", "Morning brief"],
+  ]);
+});
+
+test("the first row over the daily limit leaves one note that more is in the chat", async (t) => {
+  const h = await harness({ decide: async () => ({ kind: "suppress", reason: "daily_limit", digestKey: "digest:limit:2026-10-27" }) });
+  t.after(h.cleanup);
+  assert.equal(await h.funnel.deliver(routineResult({ dedupeKey: "a" })), "suppressed");
+  assert.equal(await h.funnel.deliver(routineResult({ dedupeKey: "b" })), "suppressed");
+  assert.deepEqual(h.calls.mac.map((input) => input.body), ["More updates are in the chat."]);
+  assert.deepEqual((await h.log.due(undefined, NOW)).map((row) => row.class), ["digest"]);
+});

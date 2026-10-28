@@ -56,7 +56,7 @@ export interface BotIssueServiceDependencies {
   store: BotIssueStore;
   /** `runtime.appendEntry`; no submission, so a paused Bot still shows the card. */
   appendEntry(botId: string, kind: string, data: unknown): Promise<void>;
-  funnel: BotDeliveryFunnel;
+  funnel: Pick<BotDeliveryFunnel, "deliver">;
   actions: BotIssueServiceActions;
   now(): number;
 }

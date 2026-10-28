@@ -64,6 +64,10 @@ export interface BotDeliveryLog {
   /** Records that every channel went out; keeps the first time. */
   markSent(botId: string, id: string, at: number): Promise<void>;
   forgetBot(botId: string): Promise<void>;
+  /** Every row this Bot kept, newest first. */
+  list(botId: string): Promise<BotDeliveryRow[]>;
+  /** Bots that have a delivery log. */
+  botIds(): Promise<string[]>;
 }
 
 const CLASSES: ReadonlySet<string> = new Set<BotDeliveryClass>([
@@ -190,22 +194,8 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
     },
 
     async due(since, at) {
-      const root = path.join(options.profileDir(), "bots");
-      let names: string[];
-      try {
-        names = await fs.readdir(root);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-        throw error;
-      }
       const due: BotDeliveryRow[] = [];
-      for (const name of names) {
-        // Locks and staging names contain a dot; only Bot directories count.
-        if (name.startsWith(".")) continue;
-        const stat = await fs.lstat(path.join(root, name)).catch(() => null);
-        if (!stat?.isDirectory()) continue;
-        const botId = botIdFromDirectoryName(name);
-        if (botId === null) continue;
+      for (const botId of await botIds()) {
         for (const row of await load(botId)) {
           // A suppressed row is kept for the record, never for a person.
           if (row.suppressed === true) continue;
@@ -250,5 +240,29 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
         await fs.rm(fileOf(botId), { force: true });
       });
     },
+
+    list: (botId) => load(botId),
+    botIds,
   };
+
+  async function botIds(): Promise<string[]> {
+    const root = path.join(options.profileDir(), "bots");
+    let names: string[];
+    try {
+      names = await fs.readdir(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const ids: string[] = [];
+    for (const name of names) {
+      // Locks and staging names contain a dot; only Bot directories count.
+      if (name.startsWith(".")) continue;
+      const stat = await fs.lstat(path.join(root, name)).catch(() => null);
+      if (!stat?.isDirectory()) continue;
+      const botId = botIdFromDirectoryName(name);
+      if (botId !== null) ids.push(botId);
+    }
+    return ids;
+  }
 }
