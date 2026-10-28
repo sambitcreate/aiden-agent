@@ -44,3 +44,9 @@ Status: implemented on `feature/bots-memory-soul` (not committed by Track B). Sp
 - `openingGreeting`: never emitted; accepted (still bounded) and ignored in `POST /bots` and `PATCH /bots/{id}`; a greeting-only PATCH is a no-op returning the current detail (If-Match still checked).
 - Fixture: `contractRevision` 27, greeting removed, `botIdentity.request` is now a purpose patch, `"partial": null` removed from `botSessionCards` (host never emits null). OpenAPI gained the routes/schemas; `BotSessionEntry` has the two card variants.
 - `aiden-remote-state.ts` stores the negotiated `bot:cards` grant, `/server` advertises it where Bot sessions are served, and pairing never issues it.
+
+## Bot autonomy Plan B (2026-10-27, feature/bot-autonomy)
+- **Interruptions:** `BotDefinition.interruptions` (`renderer/shared/bots.ts`, default quiet 22:00–07:00, 5 a day, stored last for revision hashing). The gate is `main/services/bot-delivery/gate.ts`. Held rows have `deliverAfter > createdAt`; `funnel.flush(at)` sends them (each issue on its own, the rest as one digest) on a 5-minute interval plus a next-held timer. The over-limit note is the dedupe key `digest:limit:<local date>`. Page: Advanced → Interruptions.
+- **Proposals:** decline reasons, `recentDecisions` and `proposalBackoff` (cooling off after 3 of the last 5 dismissed, or the same name within 30 days) in `bot-routine-proposals.ts`. `onSettled` feeds follow-ups.
+- **Follow-ups:** `main/services/bot-commitments/` (store, proposer, `note_follow_up` tool, commitments-main). The memory review takes extra tools via `deps.extras`.
+- **Event routines:** `main/services/bot-routine-events/` (separate store `event-routines.json`, dispatcher limits, folder watch, webhook). The router route is `POST /hooks/bot-routines/{token}`. A dedicated executor uses the `event` trigger; payloads are escaped blocks. Started with Bot health (`startBotHealth`). Desktop-only; no Remote DTOs yet.
