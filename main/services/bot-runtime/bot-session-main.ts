@@ -39,6 +39,7 @@ import {
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
@@ -191,6 +192,7 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
+  botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
@@ -459,11 +461,16 @@ function broadcastState(botId: string, state: BotSessionState): void {
   ipcMain.broadcast("bots:changed", { botId, session: state });
 }
 
-/** Connect cards show what is true now: connected, or answered with Not now. Shared with Remote. */
+/**
+ * Connect cards show what is true now: connected, connected but left out of
+ * this Bot's access, or answered with Not now. Shared with Remote.
+ */
 export async function connectCardStatus(botId: string, card: ConnectCardEntry) {
-  if (await isConnected(card.pluginId)) return "connected" as const;
-  if (await dismissals.isDismissed(botId, card.pluginId)) return "dismissed" as const;
-  return card.status;
+  return resolveConnectCardStatus(botId, card, {
+    isConnected,
+    botLacksConnection: (id, sourceId) => botApplicationService.botLacksConnection(id, sourceId),
+    isDismissed: (id, pluginId) => dismissals.isDismissed(id, pluginId),
+  });
 }
 
 let liveProjection: BotLiveProjection | undefined;
@@ -667,6 +674,20 @@ export function botLiveProjection(): BotLiveProjection {
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });
   return liveProjection;
+}
+
+/**
+ * "Add to this Bot": the person's tap adds one connection that is already set
+ * up in Aiden to this Bot's Custom access, then open chats re-read the card.
+ */
+export async function grantBotConnection(botId: string, pluginId: string): Promise<void> {
+  const sourceId = connectionSourceIdFor(pluginId);
+  if (sourceId === undefined || !(await isConnected(pluginId))) {
+    throw new Error("Connect this app in Aiden first.");
+  }
+  await botApplicationService.grantBotConnection({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId });
+  ipcMain.broadcast("bots:changed", { botId });
+  await botLiveProjection().refresh(botId);
 }
 
 /** Remember a Not now for this Bot and update its open chats. */
