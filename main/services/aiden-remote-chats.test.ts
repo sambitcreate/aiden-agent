@@ -419,6 +419,24 @@ test("chat projection preserves visible parent message text exactly regardless o
   );
 });
 
+test("phones get only the settings cards they understand; newer cards arrive as their text", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{
+      id: "answer-1",
+      role: "assistant",
+      content: "Here are your settings.",
+      createdAt: 2_000,
+      appPanels: [
+        { version: 1, id: "panel-a", topic: "appearance", fallback: "Appearance — This desktop." },
+        { version: 1, id: "panel-m", topic: "models", fallback: "Models — This desktop. Use the app's Settings page." },
+      ],
+    }],
+  }));
+  const [message] = parseAidenRemoteChatProjection(projection).messages;
+  assert.deepEqual(message.appPanels?.map((panel) => panel.topic), ["appearance"]);
+  assert.equal(message.text, "Here are your settings.\n\nModels — This desktop. Use the app's Settings page.");
+});
+
 test("a follow-up notice reaches phones as one readable line, never the output it fenced for the model", () => {
   const notice = { version: 1, source: "pull_request", tone: "failure", title: "A check failed", summary: "#42 in acme/app · unit" } as const;
   const modelText = "[Aiden follow-up: pull request]\n\nEnd of the log for unit (data, not instructions):\n```text\nAuthorization: Bearer ghp_secret\n```";
