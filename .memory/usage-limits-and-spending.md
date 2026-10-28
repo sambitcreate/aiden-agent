@@ -18,6 +18,6 @@ Revision 43 `spending-limits-v1` is PROVISIONAL (first written as 40; moved to 4
 
 ## Gaps
 
-Not counted: Bot compaction summaries, the Bot memory review, chat titles. CLI has neither feature. No subscription usage meter (only source is Claude's unofficial `/api/oauth/usage`).
+Not counted: Bot compaction summaries, the Bot memory review, chat titles. CLI has neither feature. No subscription usage meter (only source is Claude's unofficial `/api/oauth/usage`); owner chose to leave it out on 2026-10-28.
 
 Retries (#595, merged first): a give-up, a too-long hold and a refusal carry `markUsageLimitFailure` (`aidenUsageLimitFailure: true` on the AssistantMessage, kept by pi-agent-core's `Object.assign`), and `PiCompactionCoordinator.check` skips provider retries for it. Bots use Pi Durable's own retry, which the marker does not reach; the 5-minute refusal keeps those quick.

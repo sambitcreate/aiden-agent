@@ -35,6 +35,6 @@ The model never changes while waiting.
 
 ## Not done
 
-- A subscription usage meter (how much of a Claude or ChatGPT plan window is used). The only source is an unofficial sign-in endpoint; left out for now.
+- A subscription usage meter (how much of a Claude or ChatGPT plan window is used). The only source is an unofficial sign-in endpoint. The owner chose to leave it out (2026-10-28).
 - Counting Bot compaction summaries, the Bot memory review and chat titles toward spending limits.
 - CLI support for either feature.
