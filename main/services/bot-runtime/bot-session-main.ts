@@ -53,6 +53,7 @@ import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
+import { checkBotTurnClaims } from "./bot-claim-check.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -568,6 +569,21 @@ const runWatchdog = createBotRunWatchdog({
   },
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} stuck-run check failed.`, error),
 });
+
+/**
+ * The claim check on a Bot's newest turn, read from its projected transcript.
+ * Connector tools are told by the Bot's real MCP tool names.
+ */
+export async function botTurnClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined> {
+  const subscription = await botLiveProjection().subscribe(botId, { send: () => undefined });
+  try {
+    const connectors = toolSources.mcpToolNames(botId);
+    const result = checkBotTurnClaims(subscription.snapshot.entries, { isConnectorTool: (name) => connectors.has(name) });
+    return result ? { stepIds: result.claimCheck.stepIds, toolNames: result.toolNames } : undefined;
+  } finally {
+    subscription.unsubscribe();
+  }
+}
 
 /** Keep waiting on a stuck-run card: another full window before asking again. */
 export function snoozeBotRunWatchdog(botId: string): void {

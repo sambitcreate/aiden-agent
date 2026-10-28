@@ -113,8 +113,13 @@ function harness() {
   const sends: string[] = [];
   const submissions = new Map<string, string>();
   const stalled = new Set<string>();
-  const session: BotRoutinePorts & { consumeStall(botId: string): boolean } = {
+  const claims: Array<{ stepIds: string[]; toolNames: string[] } | undefined> = [];
+  const session: BotRoutinePorts & {
+    consumeStall(botId: string): boolean;
+    checkClaims(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
+  } = {
     consumeStall: (botId) => stalled.delete(botId),
+    checkClaims: async () => claims.shift(),
     async state() { return { kind: "idle" }; },
     async submissionForRequest(_botId, requestId) { return submissions.get(requestId); },
     async send(_botId, input) {
@@ -166,7 +171,7 @@ function harness() {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled };
+  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -294,4 +299,30 @@ test("a stalled routine records stalled and gets a retry", async () => {
   assert.equal(failed.result, "error");
   assert.deepEqual(failed.failure, { kind: "stalled", code: "no_progress" });
   assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.filter((entry) => entry.retry).length, 1);
+});
+
+test("a flagged routine result stays success, records tool_error and adds the fixed line once", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Inbox", schedule: { kind: "daily", time: "09:00" }, prompt: "Email Sam." });
+  h.replies.push({ kind: "completed", text: "I've sent the email." });
+  h.claims.push({ stepIds: ["r1"], toolNames: ["gmail_send_email"] });
+  const run = await fire(h, routine.id, Date.now() - 1_000);
+  assert.equal(run.result, "success");
+  assert.equal(run.failure?.kind, "tool_error");
+  assert.deepEqual(run.claimCheck, { stepIds: ["r1"], toolNames: ["gmail_send_email"] });
+  assert.equal(run.output, "I've sent the email.\n\nOne step didn't work: gmail_send_email. Check the chat.");
+  assert.deepEqual((await h.store.runById(routine.id, run.id))?.claimCheck, run.claimCheck);
+});
+
+test("three claim-flagged fires in a row pause the routine", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Inbox", schedule: { kind: "daily", time: "09:00" }, prompt: "Email Sam." });
+  const base = Date.now() - 10 * 86_400_000;
+  for (let day = 0; day < 3; day += 1) {
+    h.replies.push({ kind: "completed", text: "I've sent the email." });
+    h.claims.push({ stepIds: ["r1"], toolNames: ["gmail_send_email"] });
+    await fire(h, routine.id, base + day * 86_400_000);
+  }
+  assert.equal((await h.store.get(routine.id))?.enabled, false);
+  assert.equal(h.open.get(`routine_paused:${routine.id}`)?.body, "It failed 3 times in a row. A step it depends on didn't work.");
 });

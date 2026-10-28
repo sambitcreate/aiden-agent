@@ -30,6 +30,7 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
     consumeStall: (botId) => botRunStalls.consume(botId),
+    checkClaims: async (botId) => (await import("./bot-runtime/bot-session-main.js")).botTurnClaims(botId),
   };
 }
 

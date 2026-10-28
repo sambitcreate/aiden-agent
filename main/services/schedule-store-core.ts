@@ -528,6 +528,7 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     return null;
   }
   const failure = parseBotRoutineFailure(run.failure);
+  const claimCheck = parseRunClaimCheck(run.claimCheck);
   return {
     id: run.id,
     taskId: run.taskId,
@@ -538,8 +539,22 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     output: run.output.slice(0, STORED_OUTPUT_LIMIT),
     error: typeof run.error === "string" ? run.error.slice(0, STORED_ERROR_LIMIT) : undefined,
     ...(failure ? { failure } : {}),
+    ...(claimCheck ? { claimCheck } : {}),
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,
   };
+}
+
+/** A run's claim-check summary, bounded; anything malformed is dropped. */
+function parseRunClaimCheck(value: unknown): ScheduledRun["claimCheck"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const check = value as Record<string, unknown>;
+  const strings = (list: unknown) =>
+    Array.isArray(list) && list.every((item) => typeof item === "string" && item.length <= 200)
+      ? (list as string[]).slice(0, 20)
+      : undefined;
+  const stepIds = strings(check.stepIds);
+  const toolNames = strings(check.toolNames);
+  return stepIds?.length && toolNames ? { stepIds, toolNames } : undefined;
 }
 
 export function createScheduleStore(
@@ -880,14 +895,16 @@ export function createScheduleStore(
       // Bounded and fail-closed here too: a run handed in by a caller is not
       // trusted to respect the failure contract's limits. The untrusted value is
       // dropped from the copy, so an invalid one cannot ride along in the spread.
-      const { failure: untrustedFailure, ...rest } = run;
+      const { failure: untrustedFailure, claimCheck: untrustedClaimCheck, ...rest } = run;
       const failure = parseBotRoutineFailure(untrustedFailure);
+      const claimCheck = parseRunClaimCheck(untrustedClaimCheck);
       const stored: ScheduledRun = {
         ...rest,
         id: run.id ?? randomUUID(),
         output: run.output.slice(0, STORED_OUTPUT_LIMIT),
         error: run.error?.slice(0, STORED_ERROR_LIMIT),
         ...(failure ? { failure } : {}),
+        ...(claimCheck ? { claimCheck } : {}),
       };
       await runs.update((draft) => {
         const normalized = draft

@@ -37,7 +37,8 @@ export function fireOutcomes(runs: readonly ScheduledRun[]): FireOutcome[] {
     const fireKey = run.id.replace(RETRY_SUFFIX, "");
     if (seen.has(fireKey)) continue;
     seen.add(fireKey);
-    const failed = run.result === "error";
+    // A reply that claimed a failed step worked counts as a failed fire.
+    const failed = run.result === "error" || run.failure?.kind === "tool_error";
     outcomes.push(failed ? { fireKey, failed, kind: run.failure?.kind ?? "other" } : { fireKey, failed });
   }
   return outcomes;
@@ -122,12 +123,12 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
       const botId = task.botId;
       if (!botId) return;
       const name = task.name?.trim() || "This routine";
-      if (run.result === "success") {
+      if (run.result === "success" && run.failure?.kind !== "tool_error") {
         await dependencies.issues.resolve(botId, routineFailedKey(task.id), "fixed");
         await dependencies.issues.resolve(botId, routinePausedKey(task.id), "fixed");
         return;
       }
-      if (run.result !== "error") return;
+      if (run.result !== "error" && run.failure?.kind !== "tool_error") return;
       const failure: BotRoutineFailure = run.failure ?? { kind: "other", code: "run_failed" };
 
       const plan = retryPlan({

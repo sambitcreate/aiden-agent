@@ -565,6 +565,7 @@
         "renderer/shared/bot-routine-failure.test.ts",
         "main/services/bot-routine-recovery.test.ts",
         "main/services/bot-runtime/bot-run-watchdog.test.ts",
+        "main/services/bot-runtime/bot-claim-check.test.ts",
         "main/services/bot-health/checks.test.ts",
         "main/services/bot-health/preflight.test.ts",
         "main/services/bot-system-prompt.test.ts",

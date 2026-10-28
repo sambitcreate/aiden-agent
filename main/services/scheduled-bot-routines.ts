@@ -1,3 +1,4 @@
+import { unverifiedRoutineLine } from "./bot-runtime/bot-claim-check.js";
 import { randomUUID } from "node:crypto";
 import { classifyBotRoutineFailure, type BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.js";
@@ -96,6 +97,8 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   routineNotes?(botId: string, taskId: string): Promise<string>;
   /** True once when the stuck-run watchdog stopped this Bot's current run. */
   consumeStall?(botId: string): boolean;
+  /** The newest turn's claim check: a reply that says a failed step worked. */
+  checkClaims?(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -130,6 +133,8 @@ interface BotRoutineOutcome {
   error?: string;
   /** Why a failed run failed, in the healing vocabulary. */
   failure?: BotRoutineFailure;
+  /** A visible reply that claims a failed step worked. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
   /** Whether the person should hear about this run. */
   surface: boolean;
   /** The Pi admission or reply may have committed; retry by request id later. */
@@ -325,6 +330,18 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       }
       return { result: "silent", output: "", surface: false };
     }
+    // A reply that says a failed step worked still reaches the person, with
+    // one fixed line naming the step, and counts toward the failure streak.
+    const claim = ports.checkClaims ? await ports.checkClaims(task.botId).catch(() => undefined) : undefined;
+    if (claim?.toolNames.length) {
+      return {
+        result: "success",
+        output: `${outcome.text}\n\n${unverifiedRoutineLine(claim.toolNames)}`,
+        surface: true,
+        claimCheck: claim,
+        failure: { kind: "tool_error", code: "unverified_success", toolName: claim.toolNames[0]! },
+      };
+    }
     return { result: "success", output: outcome.text, surface: true };
   }
 
@@ -441,6 +458,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         output: outcome.output,
         ...(outcome.error !== undefined ? { error: outcome.error } : {}),
         ...(outcome.failure !== undefined ? { failure: outcome.failure } : {}),
+        ...(outcome.claimCheck !== undefined ? { claimCheck: outcome.claimCheck } : {}),
       });
       try {
         await dependencies.afterRun?.(task, run, trigger);

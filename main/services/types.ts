@@ -585,6 +585,8 @@ export interface ScheduledRun {
   error?: string;
   /** Why an otherwise indistinguishable failure happened. Bot routines only. */
   failure?: BotRoutineFailure;
+  /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
   chatId?: string;
 }
 
