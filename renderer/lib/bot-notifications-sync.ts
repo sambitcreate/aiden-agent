@@ -4,8 +4,9 @@
 // binding can't have changed. Any other change naming a Bot (a photo, an edit
 // from a phone, a routine) re-reads that Bot and the list; one naming no Bot
 // re-reads everything, as before. A routine change (a Bot pausing one, a phone
-// accepting or editing one) also re-reads that Bot's Routines panel. `bots:attention` (a question or approval
-// appeared or settled) re-reads that one Bot's summary.
+// accepting or editing one) also re-reads that Bot's Routines panel.
+// `bots:attention` (a question, approval, hand-off or issue appeared or settled)
+// re-reads that one Bot's summary.
 
 import * as React from "react";
 import type { QueryClient } from "@tanstack/react-query";

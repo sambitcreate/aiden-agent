@@ -14,6 +14,7 @@ import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-h
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
 import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
@@ -51,6 +52,21 @@ export type BotTranscriptRow =
       status: BotRoutineProposalStatus;
       routineId?: string;
     }
+  | {
+      kind: "skill_proposal";
+      id: string;
+      proposal: import("../../shared/bot-skill-proposals").BotSkillProposalEntryData;
+      status: import("../../shared/bot-skill-proposals").BotSkillProposalStatus;
+    }
+  | {
+      kind: "lesson_proposal" | "lesson_learned";
+      id: string;
+      lesson: import("../../shared/bot-lessons").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+    }
+  | { kind: "memory_tidy"; id: string; changeId?: string }
+  /** A "Needs you" issue the host raised; settles to one quiet line. */
+  | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
   | {
       kind: "routines_skipped";
@@ -145,8 +161,21 @@ export function botTranscriptRows(
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
           });
           break;
+        case "lesson_proposal":
+        case "lesson_learned":
+          rows.push({ kind: entry.type, id: entry.id, lesson: entry.lesson, status: entry.status });
+          break;
+        case "memory_tidy":
+          rows.push({ kind: "memory_tidy", id: entry.id, ...(entry.changeId ? { changeId: entry.changeId } : {}) });
+          break;
+        case "skill_proposal":
+          rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
+          break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
+          break;
+        case "issue":
+          rows.push({ kind: "issue", id: entry.id, issue: entry.issue, status: entry.status });
           break;
         case "tool_result":
           break;

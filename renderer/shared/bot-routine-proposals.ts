@@ -24,9 +24,31 @@ export interface BotRoutineProposalStatusEntryData {
   routineId?: string;
 }
 export type BotRoutineProposalDecision = "accept" | "dismiss";
+/** Optional chips after Not now; skipping them is fine. */
+export type BotRoutineProposalDeclineReason = "not_useful" | "wrong_time" | "already_have" | "other";
+export const BOT_ROUTINE_PROPOSAL_DECLINE_REASONS: readonly BotRoutineProposalDeclineReason[] = [
+  "not_useful", "wrong_time", "already_have", "other",
+];
+export const BOT_ROUTINE_PROPOSAL_DECLINE_LABELS: Record<BotRoutineProposalDeclineReason, string> = {
+  not_useful: "Not useful",
+  wrong_time: "Wrong time",
+  already_have: "Already have this",
+  other: "Something else",
+};
 export interface BotRoutineProposalRespondInput {
   botId: string; proposalId: string; decision: BotRoutineProposalDecision;
+  /** Only with dismiss. */
+  reason?: BotRoutineProposalDeclineReason;
 }
+/** What the Bot's `routines list` reports about past suggestions. */
+export interface BotRoutineProposalDecisionSummary {
+  name: string; label: string; status: "accepted" | "dismissed";
+  reason?: BotRoutineProposalDeclineReason; decidedAt: number;
+}
+/** Backing off after the person keeps saying Not now (spec §6 P3). */
+export const BOT_ROUTINE_PROPOSAL_COOLING = {
+  window: 5, dismissals: 3, coolMs: 7 * 86_400_000, sameNameMs: 30 * 86_400_000, recent: 10,
+} as const;
 export interface BotRoutineProposalRespondResult {
   status: Exclude<BotRoutineProposalStatus, "pending">; routineId?: string;
 }

@@ -82,6 +82,8 @@ const UNATTENDED_WITHHELD = new Set<string>([
   BOT_SIGN_IN_TOOL_NAME,
   BOT_BROWSER_GATEWAY_TOOL,
   ...BROWSER_TOOL_NAMES,
+  // A skill needs the person's OK on a card (spec 2026-10-27 §7 L2).
+  "propose_skill",
 ]);
 
 /**

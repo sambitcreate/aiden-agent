@@ -14,6 +14,8 @@ export type PeerReadOperation =
   | "messagesWindow"
   | "attachmentContent"
   | "skills"
+  /** Contract revision 41: the chat's next-request context pressure (`GET /chats/{chatId}/context`). */
+  | "contextPressure"
   | "tasks"
   | "agents"
   | "streamQuestion"
@@ -83,6 +85,9 @@ export interface PeerOperation {
   botId?: string;
   /** `agents`: the public turn to read. */
   turnId?: string;
+  /** `contextPressure`: price a host model other than the chat's own; sent only with `modelId`. */
+  providerId?: string;
+  modelId?: string;
   includeArchived?: boolean;
   body?: unknown;
   idempotencyKey?: string;
