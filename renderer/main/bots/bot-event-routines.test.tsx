@@ -11,6 +11,7 @@ function fakeApi(link: string | null = "http://mac.local:4567/hooks/bot-routines
   const routines: BotEventRoutineView[] = [];
   const created: unknown[] = [];
   const updated: unknown[] = [];
+  const listeners = new Set<(botId: string) => void>();
   const api: BotEventRoutinesApi = {
     list: async () => [...routines],
     create: async (input) => {
@@ -29,12 +30,18 @@ function fakeApi(link: string | null = "http://mac.local:4567/hooks/bot-routines
       return routine;
     },
     rotateLink: async () => ({ link: "http://mac.local:4567/hooks/bot-routines/new" }),
+    onChanged: (listener) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
     remove: async (input) => {
       routines.splice(routines.findIndex((entry) => entry.id === input.id), 1);
       return { removed: true };
     },
   };
-  return { api, created, updated, routines };
+  /** Main saved something for `botId` (a watch's check, say). */
+  const changed = (botId: string) => listeners.forEach((listener) => listener(botId));
+  return { api, created, updated, routines, changed, listeners };
 }
 
 const BOT = { id: "bot-a", name: "Scout" };
@@ -165,4 +172,34 @@ test("a failing watch that is still on counts its failed checks", () => {
   assert.equal(line.tone, "error");
   assert.match(line.text, /\(2 in a row\): Aiden couldn't reach ci\.example\.com\.$/u);
   assert.equal(botWatchStatusLine({ failures: 0, lastCheckAt: NOW, lastResult: "changed" }, true, "Scout", NOW).text.endsWith("Changed, so Scout took a look"), true);
+});
+
+test("an open profile shows a watch's background checks and its turning itself off without leaving the page", async () => {
+  const h = fakeApi();
+  const now = Date.UTC(2026, 9, 28, 12);
+  h.routines.push({
+    id: "w1",
+    botId: "bot-a",
+    name: "Status page",
+    prompt: "Tell me what changed.",
+    trigger: { kind: "watch", source: { type: "url", url: "https://status.example.com/" }, everyMinutes: 15 },
+    enabled: true,
+    watch: { failures: 0, nextCheckAt: now },
+  });
+  const view = render(<BotEventRoutines bot={BOT} api={h.api} now={now} />);
+  assert.ok(await screen.findByText("First check soon."));
+  const toggle = screen.getByRole("switch", { name: "Status page on" });
+  assert.equal(toggle.getAttribute("aria-checked"), "true");
+
+  // Three failed checks in the background turn the watch off.
+  h.routines[0] = { ...h.routines[0]!, enabled: false, watch: { failures: 3, lastResult: "error", lastError: "status.example.com answered 503.", lastCheckAt: now - 60_000 } };
+  h.changed("bot-b");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(screen.getByText("First check soon."), "another Bot's change leaves this list alone");
+  h.changed("bot-a");
+  await waitFor(() => assert.ok(screen.getByText(/Turned off after 3 failed checks in a row\. status\.example\.com answered 503\./u)));
+  assert.equal(screen.getByRole("switch", { name: "Status page on" }).getAttribute("aria-checked"), "false");
+
+  view.unmount();
+  assert.equal(h.listeners.size, 0, "leaving the profile stops listening");
 });

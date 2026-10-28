@@ -38,6 +38,7 @@ export async function botRoutineWebhookLink(token: string): Promise<string | nul
 export function botEventRoutinesChanged(botId: string): void {
   void rearmBotEventRoutines();
   ipcMain.broadcast("bots:changed", { botId });
+  ipcMain.broadcast("bots:eventRoutines:changed", { botId });
 }
 
 /** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
@@ -225,6 +226,9 @@ const watches = createBotWatches({
     return checkBotWatchSource(routine.trigger.source, async () => {
       const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
       return (await botManagedWorkspace.resolve(routine.botId)).homePath;
+    }, {
+      // A script runs only under the Bot's current Shell access.
+      authorize: async () => (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
     });
   },
   dispatcher,
@@ -249,6 +253,8 @@ const watches = createBotWatches({
   now: Date.now,
   setTimer: timer,
   onError: (error) => logger.warn("bots", "A Bot watch check did not finish.", error),
+  // The profile's rows show when a watch last checked and whether it's on.
+  checked: (routine) => ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId }),
 });
 
 const webhook = createBotWebhookHandler({ store: botEventRoutines, dispatcher, now: Date.now });

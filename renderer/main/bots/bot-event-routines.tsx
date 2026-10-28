@@ -57,6 +57,8 @@ export interface BotEventRoutinesApi {
   update(input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: BotRoutineTrigger }): Promise<BotEventRoutineView>;
   remove(input: { botId: string; id: string }): Promise<{ removed: boolean }>;
   rotateLink(input: { botId: string; id: string }): Promise<{ link: string | null }>;
+  /** Subscribes to changes made elsewhere (a watch's check, a Bot's own pause); returns the unsubscribe. */
+  onChanged?(listener: (botId: string) => void): () => void;
 }
 
 function draftOf(routine: BotEventRoutineView): Draft {
@@ -143,7 +145,11 @@ export function BotEventRoutines({
   }, [api, bot.id]);
   React.useEffect(() => {
     void reload();
-  }, [reload]);
+    // A watch checks in the background, and can turn itself off.
+    return api.onChanged?.((botId) => {
+      if (botId === bot.id) void reload();
+    });
+  }, [api, bot.id, reload]);
 
   const save = async () => {
     if (!draft) return;

@@ -7,7 +7,9 @@
 // redirects (a 3xx is a failure that names the problem, so the person can
 // paste the final address), 30 seconds, 256 KB.
 // Script: a regular file inside the Bot's folder after following links, run
-// with the Bot's folder as its working directory, 60 seconds, 1 MB.
+// with the Bot's folder as its working directory, 60 seconds, 1 MB. A script
+// runs only under the Bot's current Shell access, checked right before it
+// starts; losing that access while it runs stops it.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -100,8 +102,15 @@ export async function fetchBotWatchUrl(
 
 export type BotWatchScriptRunner = (
   scriptPath: string,
-  options: { cwd: string; timeoutMs: number; outputLimit: number },
+  options: { cwd: string; timeoutMs: number; outputLimit: number; signal: AbortSignal },
 ) => Promise<ScriptProcessResult>;
+
+/**
+ * The Bot's Shell access for one script check: `signal` aborts when that
+ * access changes, and `release` ends the grant. Or why the script can't run.
+ */
+export type BotWatchScriptGrant = { signal: AbortSignal; release(): void } | { error: string };
+export type BotWatchScriptAuthorizer = () => Promise<BotWatchScriptGrant>;
 
 /**
  * The script's real path when it is a regular file inside the Bot's folder
@@ -127,21 +136,33 @@ export async function resolveBotWatchScript(home: string, script: string): Promi
 export async function runBotWatchScript(
   home: string,
   script: string,
-  options: { run?: BotWatchScriptRunner; timeoutMs?: number; maxBytes?: number } = {},
+  options: { authorize: BotWatchScriptAuthorizer; run?: BotWatchScriptRunner; timeoutMs?: number; maxBytes?: number },
 ): Promise<BotWatchCheck> {
   const resolved = await resolveBotWatchScript(home, script);
   if ("error" in resolved) return failed(resolved.error);
   const run = options.run ?? ((scriptPath, runOptions) => runScheduledScript(scriptPath, runOptions));
+  let grant: BotWatchScriptGrant;
+  try {
+    grant = await options.authorize();
+  } catch {
+    return failed(`Aiden couldn't confirm this Bot may run ${script}.`);
+  }
+  if ("error" in grant) return failed(grant.error);
   let result: ScriptProcessResult;
   try {
+    if (grant.signal.aborted) return failed(`${script} was stopped because the Bot's Shell access changed.`);
     result = await run(resolved.path, {
       cwd: await fs.realpath(home),
       timeoutMs: options.timeoutMs ?? BOT_WATCH_LIMITS.scriptTimeoutMs,
       outputLimit: options.maxBytes ?? BOT_WATCH_LIMITS.scriptBytes,
+      signal: grant.signal,
     });
   } catch {
     return failed(`${script} couldn't start.`);
+  } finally {
+    grant.release();
   }
+  if (grant.signal.aborted) return failed(`${script} was stopped because the Bot's Shell access changed.`);
   if (result.timedOut) return failed(`${script} ran longer than 60 seconds.`);
   if (result.outputLimitExceeded) return failed(`${script} printed more than 1 MB.`);
   if (result.aborted) return failed(`${script} was stopped.`);
@@ -155,11 +176,11 @@ export async function runBotWatchScript(
 export function checkBotWatchSource(
   source: BotWatchSource,
   home: () => Promise<string>,
-  options: { fetch?: FetchLike; run?: BotWatchScriptRunner } = {},
+  options: { authorize: BotWatchScriptAuthorizer; fetch?: FetchLike; run?: BotWatchScriptRunner },
 ): Promise<BotWatchCheck> {
   if (source.type === "url") return fetchBotWatchUrl(source.url, { ...(options.fetch ? { fetch: options.fetch } : {}) });
   return home().then(
-    (folder) => runBotWatchScript(folder, source.script, { ...(options.run ? { run: options.run } : {}) }),
+    (folder) => runBotWatchScript(folder, source.script, { authorize: options.authorize, ...(options.run ? { run: options.run } : {}) }),
     () => failed("Aiden couldn't find the Bot's folder."),
   );
 }

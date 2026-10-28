@@ -138,6 +138,8 @@ export interface BotWatchDependencies {
   now(): number;
   setTimer(fn: () => void, ms: number): { cancel(): void };
   onError?(error: unknown): void;
+  /** A check's result was saved: what the Bot's profile shows has changed. */
+  checked?(routine: BotEventRoutine): void;
 }
 
 export type BotWatchOutcome = "baseline" | "no_change" | "changed" | "error" | "paused" | "skipped";
@@ -208,7 +210,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         // Edited, removed or turned off while the check ran: its result is stale.
         if (!fresh.enabled || JSON.stringify(fresh.trigger) !== triggerKey) return { result: undefined };
         const state: BotWatchState = fresh.watch ?? { failures: 0 };
-        const hadFailure = state.failures > 0 || state.lastResult === "error";
+        const hadFailure = state.failures > 0 || state.lastResult === "error" || state.unsettledFailure === true;
         if (!check.ok) {
           const failures = state.failures + 1;
           const pause = failures >= BOT_WATCH_LIMITS.failuresBeforePause;
@@ -219,7 +221,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         const hash = botWatchHash(check.bytes);
         const text = new TextDecoder("utf-8", { fatal: false }).decode(check.bytes);
         const snapshot = text.slice(0, BOT_WATCH_SNAPSHOT_CHARS);
-        const { lastError: _lastError, ...rest } = state;
+        const { lastError: _lastError, unsettledFailure: _unsettled, ...rest } = state;
         const base: BotWatchState = { ...rest, failures: 0, lastCheckAt: checkedAt, nextCheckAt };
         if (!state.hash) {
           const next = { ...fresh, watch: { ...base, hash, snapshot, sameSince: checkedAt, lastResult: "baseline" as const } };
@@ -248,6 +250,7 @@ export function createBotWatches(dependencies: BotWatchDependencies) {
         await dependencies.recovered(decision.routine).catch((error: unknown) => dependencies.onError?.(error));
       }
       if (decision.routine.enabled) arm(decision.routine, nextCheckAt);
+      dependencies.checked?.(decision.routine);
       return decision.outcome;
     } finally {
       inFlight.delete(id);

@@ -1748,6 +1748,11 @@ export const botsApi = {
     remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+    /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
   },
   /** What a Bot learned: the page's overview, Undo, and lesson answers. */
   learning: {

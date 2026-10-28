@@ -55,6 +55,12 @@ export interface BotWatchState {
   lastResult?: BotWatchResult;
   failures: number;
   lastError?: string;
+  /**
+   * A failure (and maybe its "Needs you" card) that no success has settled yet.
+   * Survives a source edit, which otherwise starts over, so the first good
+   * check of the fixed source still settles the card.
+   */
+  unsettledFailure?: true;
 }
 
 export const BOT_WATCH_SNAPSHOT_CHARS = 16_000;
@@ -73,6 +79,7 @@ function parseWatchState(value: unknown): BotWatchState {
     ...(typeof record.lastResult === "string" && WATCH_RESULTS.has(record.lastResult) ? { lastResult: record.lastResult as BotWatchResult } : {}),
     failures: typeof record.failures === "number" && Number.isInteger(record.failures) && record.failures >= 0 ? record.failures : 0,
     ...(typeof record.lastError === "string" ? { lastError: record.lastError.slice(0, 200) } : {}),
+    ...(record.unsettledFailure === true ? { unsettledFailure: true as const } : {}),
   };
 }
 
@@ -100,7 +107,7 @@ export function viewOf(routine: BotEventRoutine): BotEventRoutineView {
 }
 
 function watchView(state: BotWatchState): NonNullable<BotEventRoutineView["watch"]> {
-  const { hash: _hash, snapshot: _snapshot, ...shown } = state;
+  const { hash: _hash, snapshot: _snapshot, unsettledFailure: _unsettled, ...shown } = state;
   return shown;
 }
 
@@ -195,7 +202,10 @@ type WatchTrigger = Extract<BotRoutineTrigger, { kind: "watch" }>;
  * count and checks soon.
  */
 function nextWatchState(state: BotWatchState, before: WatchTrigger, after: WatchTrigger, reenabled: boolean, at: number): BotWatchState {
-  if (JSON.stringify(before.source) !== JSON.stringify(after.source)) return freshWatch(at);
+  if (JSON.stringify(before.source) !== JSON.stringify(after.source)) {
+    const unsettled = state.unsettledFailure || state.failures > 0 || state.lastResult === "error";
+    return { ...freshWatch(at), ...(unsettled ? { unsettledFailure: true as const } : {}) };
+  }
   let next = state;
   if (before.everyMinutes !== after.everyMinutes) {
     next = { ...next, nextCheckAt: (next.lastCheckAt ?? at) + after.everyMinutes * 60_000 };

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as os from "node:os";
@@ -125,6 +125,8 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
   let output: BotWatchCheck = { ok: true, bytes: new TextEncoder().encode("status: green") };
   const checks: number[] = [];
   const issues: Array<{ kind: "paused" | "recovered"; id: string; error?: string }> = [];
+  /** What each saved check told the profile: its result and whether the watch is on. */
+  const announced: Array<{ lastResult: string | undefined; enabled: boolean }> = [];
   const watches = createBotWatches({
     routines: () => store.all(),
     store,
@@ -140,6 +142,7 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
     recovered: async (routine) => {
       issues.push({ kind: "recovered", id: routine.id });
     },
+    checked: (routine) => announced.push({ lastResult: routine.watch?.lastResult, enabled: routine.enabled }),
     now: () => clock.at,
     setTimer,
   });
@@ -166,6 +169,7 @@ function harness(options: { paused?: () => boolean; runFails?: boolean } = {}) {
     modelRuns,
     checks,
     issues,
+    announced,
     clock,
     advance,
     settle,
@@ -255,6 +259,8 @@ test("a failed check is never a change and leaves the hash alone; three in a row
   for (let tick = 0; tick < 3; tick += 1) await h.advance(15 * MIN);
   assert.equal((await h.routine()).enabled, false);
   assert.deepEqual(h.issues, [{ kind: "paused", id: routine.id, error: "status.example.com answered 503." }]);
+  assert.equal(h.announced.length, h.checks.length, "every saved check reaches an open profile");
+  assert.deepEqual(h.announced[h.announced.length - 1], { lastResult: "error", enabled: false }, "including the watch turning itself off");
   const checks = h.checks.length;
   await h.advance(60 * MIN);
   assert.equal(h.checks.length, checks, "a paused watch is not checked");
@@ -268,6 +274,21 @@ test("a failed check is never a change and leaves the hash alone; three in a row
   assert.equal(h.checks.length, checks + 1);
   assert.equal((await h.routine()).watch?.failures, 0);
   assert.deepEqual(h.issues[h.issues.length - 1], { kind: "recovered", id: routine.id });
+
+  // Fixing a turned-off watch by changing its address: the new address's
+  // first good check is a fresh baseline, and it still settles the card.
+  h.issues.length = 0;
+  h.fail();
+  for (let tick = 0; tick < 3; tick += 1) await h.advance(15 * MIN);
+  assert.equal((await h.routine()).enabled, false);
+  assert.equal(h.issues.length, 1);
+  h.set("moved: fine");
+  await h.store.update("bot-a", routine.id, { trigger: urlWatch("https://status.example.com/moved"), enabled: true });
+  await h.watches.rearm();
+  await h.advance(0);
+  assert.equal((await h.routine()).watch?.lastResult, "baseline");
+  assert.deepEqual(h.issues, [h.issues[0], { kind: "recovered", id: routine.id }]);
+  assert.deepEqual(h.modelRuns, [], "a fixed address is a baseline, not a change");
 });
 
 test("a paused Bot's watch is never checked", async () => {
@@ -388,17 +409,32 @@ function botHome() {
   } };
 }
 
+/** The Bot's Shell access, granted; `revoke` takes it away mid-run. */
+function shellAccess() {
+  const controller = new AbortController();
+  const grants = { open: 0, released: 0 };
+  return {
+    grants,
+    revoke: () => controller.abort(new Error("Shell access changed.")),
+    authorize: async () => {
+      grants.open += 1;
+      return { signal: controller.signal, release: () => void (grants.released += 1) };
+    },
+  };
+}
+
 test("a script check runs in the Bot's folder; a non-zero exit or too much output is a failure", { skip: process.platform === "win32" }, async () => {
   const { home, write } = botHome();
   write("scripts/where.sh", "pwd\n");
   write("scripts/fail.sh", "echo broken\nexit 3\n");
   write("scripts/loud.sh", "head -c 2000 /dev/zero | tr '\\0' 'a'\n");
-  const where = await runBotWatchScript(home, "scripts/where.sh");
+  const { authorize } = shellAccess();
+  const where = await runBotWatchScript(home, "scripts/where.sh", { authorize });
   assert.ok(where.ok);
   assert.equal(new TextDecoder().decode((where as { bytes: Uint8Array }).bytes).trim(), realpathSync(home));
-  assert.deepEqual(await runBotWatchScript(home, "scripts/fail.sh"), { ok: false, error: "scripts/fail.sh exited with code 3." });
-  assert.match((await runBotWatchScript(home, "scripts/loud.sh", { maxBytes: 1_000 }) as { error: string }).error, /printed more than/u);
-  assert.match((await runBotWatchScript(home, "scripts/none.sh") as { error: string }).error, /isn't in the Bot's folder/u);
+  assert.deepEqual(await runBotWatchScript(home, "scripts/fail.sh", { authorize }), { ok: false, error: "scripts/fail.sh exited with code 3." });
+  assert.match((await runBotWatchScript(home, "scripts/loud.sh", { authorize, maxBytes: 1_000 }) as { error: string }).error, /printed more than/u);
+  assert.match((await runBotWatchScript(home, "scripts/none.sh", { authorize }) as { error: string }).error, /isn't in the Bot's folder/u);
 });
 
 test("a script that links outside the Bot's folder is never run", { skip: process.platform === "win32" }, async () => {
@@ -409,7 +445,27 @@ test("a script that links outside the Bot's folder is never run", { skip: proces
   chmodSync(target, 0o755);
   symlinkSync(target, path.join(home, "link.sh"));
   let ran = false;
-  const result = await runBotWatchScript(home, "link.sh", { run: async () => { ran = true; throw new Error("unreachable"); } });
+  const result = await runBotWatchScript(home, "link.sh", { authorize: shellAccess().authorize, run: async () => { ran = true; throw new Error("unreachable"); } });
   assert.deepEqual(result, { ok: false, error: "link.sh points outside the Bot's folder." });
   assert.equal(ran, false);
+});
+
+test("a script never runs without the Bot's Shell access, and losing it mid-run stops the script", { skip: process.platform === "win32" }, async () => {
+  const { home, write } = botHome();
+  write("scripts/mark.sh", "echo ran > ran.txt\n");
+  const refused = await runBotWatchScript(home, "scripts/mark.sh", {
+    authorize: async () => ({ error: "Shell access is off for this Bot, so its scripts can't run." }),
+  });
+  assert.deepEqual(refused, { ok: false, error: "Shell access is off for this Bot, so its scripts can't run." });
+  assert.equal(existsSync(path.join(home, "ran.txt")), false, "the script never started");
+
+  write("scripts/slow.sh", "sleep 30\necho done\n");
+  const access = shellAccess();
+  const started = Date.now();
+  const running = runBotWatchScript(home, "scripts/slow.sh", { authorize: access.authorize });
+  setTimeout(access.revoke, 300);
+  const stopped = await running;
+  assert.deepEqual(stopped, { ok: false, error: "scripts/slow.sh was stopped because the Bot's Shell access changed." });
+  assert.ok(Date.now() - started < 10_000, "the process was stopped, not waited out");
+  assert.deepEqual(access.grants, { open: 1, released: 1 }, "the grant is released once the script ends");
 });

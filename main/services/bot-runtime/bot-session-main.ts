@@ -137,6 +137,31 @@ export async function probeBotAdmission(botId: string): Promise<{ providerId: st
   }));
 }
 
+/**
+ * Shell access for one host process started outside a turn (a watch script):
+ * admitted and revalidated right before it starts. `signal` aborts when the
+ * Bot's access changes; the caller releases the grant when the process ends.
+ */
+export async function admitBotShellWork(botId: string): Promise<{ signal: AbortSignal; release(): void } | { error: string }> {
+  let admission: BotRuntimeAuthorityAdmission;
+  try {
+    admission = await admit(botId);
+  } catch {
+    return { error: "Aiden couldn't confirm this Bot's access." };
+  }
+  try {
+    if (!admission.authority.shell.enabled) {
+      admission.release();
+      return { error: "Shell access is off for this Bot, so its scripts can't run." };
+    }
+    await admission.revalidateBeforeEffect();
+  } catch {
+    admission.release();
+    return { error: "Aiden couldn't confirm this Bot's access." };
+  }
+  return { signal: admission.signal, release: () => admission.release() };
+}
+
 /** Admit the Bot's current authority for one step and release it right away. */
 async function withAdmission<T>(botId: string, action: (admission: BotRuntimeAuthorityAdmission) => Promise<T>): Promise<T> {
   const admission = await admit(botId);
