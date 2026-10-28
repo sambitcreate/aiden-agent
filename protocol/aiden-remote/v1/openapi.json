@@ -1225,6 +1225,64 @@
         }
       }
     },
+    "/chats/{chatId}/context": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatContextPressure",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-context-pressure-v1",
+        "description": "Contract revision 41. The next-request context pressure the host's own composer meter shows for one workspace chat, reduced to bounded counts: no breakdown, prompt cache, tool or server names, paths or text. Announced by `chat-context-pressure-v1` to paired desktops only. Without a query the chat's own model prices the request; `providerId` and `modelId` together price a model the host has configured instead (one it has not is invalid_request, and either alone is invalid_request). `pressure` is null when the host cannot project the chat now (no model, or its history is unavailable). The device's unsent draft is not included. Bot chats are not projected (not_found). Bot-chat reads otherwise follow the same bot:read rule as other chat reads.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "providerId",
+            "in": "query",
+            "required": false,
+            "description": "A configured host provider, sent together with modelId. Request URLs carry no percent-encoding, so only characters a query takes literally are allowed.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          },
+          {
+            "name": "modelId",
+            "in": "query",
+            "required": false,
+            "description": "A model of that provider, sent together with providerId.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next-request context pressure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatContextPressure"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/skills": {
       "parameters": [
         {
@@ -2332,7 +2390,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in the Bot's own browser. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
+        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in, or (contract revision 43) a step on the Bot's own browser or computer, that browser or computer. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -2357,6 +2415,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotHandoffOpenOnMacReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/issues/{issueId}/act": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "issueId",
+          "in": "path",
+          "required": true,
+          "description": "The id of the issue card the device is answering (BotSession.issues[].id).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "actOnBotIssue",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:issues"
+        ],
+        "description": "Contract revision 42. Carries out one action a Bot issue card offers. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt and runs the host action once. done means the host carried it out and settled the card (open_chat and open_settings answer done without settling). not_open means the issue is gone or already settled. An unknown action kind, or an action the card never offered (409 operation_stale), records nothing for its key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotIssueActRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The action ran, or nothing was open under that issue id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotIssueActReceipt"
                 }
               }
             }
@@ -7258,6 +7378,8 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:issues",
                 "schedule:cards"
               ]
             },
@@ -7298,6 +7420,8 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:issues",
                 "schedule:cards"
               ]
             },
@@ -7421,9 +7545,9 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
-            "maxItems": 15,
+            "maxItems": 16,
             "items": {
               "enum": [
                 "tasks:read",
@@ -7441,6 +7565,8 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:issues",
                 "schedule:cards"
               ]
             },
@@ -7490,6 +7616,8 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:issues",
                 "schedule:cards"
               ]
             },
@@ -9687,6 +9815,12 @@
           "paused": {
             "description": "Contract revision 37, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
             "const": true
+          },
+          "issueCount": {
+            "description": "Contract revision 42, only for devices holding bot:issues and only while it is above zero: how many open Bot issues the Bot holds.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
           }
         },
         "additionalProperties": false
@@ -11589,6 +11723,115 @@
           "unavailableReason": {
             "type": "string",
             "maxLength": 160
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatContextPressure": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "pressure"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "pressure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextPressure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContextPressure": {
+        "type": "object",
+        "description": "Contract revision 41. Every field the host's projection sends; the host's breakdown and prompt cache never cross the wire.",
+        "required": [
+          "contextTokens",
+          "contextWindow",
+          "inputBudgetTokens",
+          "reservedTokens",
+          "percentOfWindow",
+          "percentOfUsableInput",
+          "shouldCompact",
+          "messageTokens",
+          "staticTokens",
+          "source",
+          "computedAt"
+        ],
+        "properties": {
+          "contextTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Projected total tokens for the next request."
+          },
+          "contextWindow": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "The pricing model's context window."
+          },
+          "inputBudgetTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Usable input budget after response and safety reserves."
+          },
+          "reservedTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Tokens reserved for output and safety margin."
+          },
+          "percentOfWindow": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / contextWindow, in percent."
+          },
+          "percentOfUsableInput": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / inputBudgetTokens, in percent."
+          },
+          "shouldCompact": {
+            "type": "boolean",
+            "description": "The host compacts before the next request."
+          },
+          "messageTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the conversation."
+          },
+          "staticTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the system prompt and tool schemas."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "provider-anchored",
+              "estimated"
+            ]
+          },
+          "computedAt": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Epoch milliseconds when the host computed this projection."
           }
         },
         "additionalProperties": false
@@ -15790,9 +16033,149 @@
                 "type": "null"
               }
             ]
+          },
+          "issues": {
+            "description": "Contract revision 42, present only for devices holding bot:issues: the Bot's issue cards, oldest first. A card that only the Mac can answer carries no actions.",
+            "type": "array",
+            "maxItems": 58,
+            "items": {
+              "$ref": "#/components/schemas/BotIssue"
+            }
           }
         },
         "unevaluatedProperties": false
+      },
+      "BotIssue": {
+        "type": "object",
+        "description": "Contract revision 42 (bot:issues): one host-owned \"Needs you\" card. open_settings is desktop-only and never sent as an action.",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "actions",
+          "createdAt",
+          "resolved"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "kind": {
+            "enum": [
+              "preflight_failed",
+              "routine_failed",
+              "routine_paused",
+              "run_stalled"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "routineId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "actions": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/BotIssueAction"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved": {
+            "type": "boolean",
+            "description": "A settled card offers no action."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "resolved"
+              ],
+              "properties": {
+                "resolved": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BotIssueAction": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "open_chat",
+              "resume_routine",
+              "stop_run",
+              "keep_waiting"
+            ]
+          },
+          "routineId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "description": "Present exactly on resume_routine."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotIssueActRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/BotIssueAction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotIssueActReceipt": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "enum": [
+              "done",
+              "not_open"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "BotSessionActivity": {
         "description": "Contract revision 30 (bot-activity-v1). Exactly these keys: never a step, detail, path, command, query or thinking. Clients render an unknown phase as working.",
@@ -15909,11 +16292,12 @@
               "activity",
               "queued",
               "handoff",
+              "issues",
               "closed"
             ]
           },
           "payload": {
-            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. At the same seq, other devices get an entry frame with the hand-off's notice when it opens, and a snapshot frame (which replaces their transcript, so the notice goes) when it settles or another hand-off takes its place.",
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances.",
             "type": "object"
           }
         },
@@ -16275,9 +16659,7 @@
                 "id",
                 "botId",
                 "botName",
-                "routineId",
                 "routineName",
-                "status",
                 "finishedAt",
                 "preview"
               ],
@@ -16286,6 +16668,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 160
+                },
+                "kind": {
+                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "enum": [
+                    "routine",
+                    "issue"
+                  ]
                 },
                 "botId": {
                   "type": "string",
@@ -16936,6 +17325,10 @@
           "takesNote": {
             "description": "Contract revision 40, only for devices that also hold bot:handoff-notes: present, and false, only on a card whose answer may carry no note (one the Bot's password-or-code rule opened). Clients hide the note box for it; a note with its answer is 400 invalid_request whether or not the device was told.",
             "const": false
+          },
+          "onMac": {
+            "description": "Contract revision 43, only for devices that also hold bot:handoff-on-mac: present, and true, only on an action card whose step is on the Bot's own browser or computer. Such a card never carries open for any device; clients offer Finish on your Mac (POST /bots/{botId}/handoffs/{waitId}/open-on-mac), which brings the Bot's chat and its browser or computer forward on the Mac, beside Skip and Done.",
+            "const": true
           }
         },
         "additionalProperties": false

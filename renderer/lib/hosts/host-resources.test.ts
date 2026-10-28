@@ -6,6 +6,7 @@ import {
   HostResourceShapeError,
   defaultHostModel,
   findHostModel,
+  findOfferedHostModel,
   mapHostBrowserPage,
   mapHostCreatedChat,
   mapHostModelCatalog,
@@ -28,17 +29,36 @@ const catalog = {
   defaults: { providerId: "zen", modelId: "calm" },
 };
 
-test("a host's model catalog offers only models it allows for new chats", () => {
+test("a host's model catalog offers only models it allows for new chats, and keeps hidden ones for chats already on them", () => {
   const mapped = mapHostModelCatalog(catalog);
-  assert.deepEqual(
-    mapped.providers.map((provider) => [provider.id, provider.models.map((model) => model.id)]),
-    [
-      ["acme", ["fast"]],
-      ["zen", ["calm"]],
+  assert.equal(findOfferedHostModel(mapped, { providerId: "acme", modelId: "fast" })?.supportsImages, true);
+  assert.equal(findOfferedHostModel(mapped, { providerId: "acme", modelId: "old" }), undefined, "never a new choice");
+  assert.equal(findOfferedHostModel(mapped, { providerId: "empty", modelId: "x" }), undefined);
+  // An existing chat on a hidden model still names it and runs on it.
+  assert.equal(findHostModel(mapped, { providerId: "acme", modelId: "old" })?.label, "Old");
+});
+
+test("a host model carries the effort levels the host runs it at", () => {
+  const mapped = mapHostModelCatalog({
+    providers: [
+      {
+        id: "acme",
+        label: "Acme",
+        models: [
+          { id: "deep", label: "Deep", supportsImages: false, thinkingLevels: ["low", "high", "bogus"], defaultThinkingLevel: "high", thinkingCanDisable: false },
+          { id: "plain", label: "Plain", supportsImages: false, defaultThinkingLevel: "high" },
+        ],
+      },
     ],
-  );
-  assert.equal(findHostModel(mapped, { providerId: "acme", modelId: "fast" })?.supportsImages, true);
-  assert.equal(findHostModel(mapped, { providerId: "acme", modelId: "old" }), undefined);
+    defaults: {},
+  });
+  const deep = findHostModel(mapped, { providerId: "acme", modelId: "deep" });
+  assert.deepEqual(deep?.thinkingLevels, ["low", "high"], "a level this Mac doesn't know is dropped");
+  assert.equal(deep?.defaultThinkingLevel, "high");
+  assert.equal(deep?.thinkingCanDisable, false);
+  const plain = findHostModel(mapped, { providerId: "acme", modelId: "plain" });
+  assert.deepEqual(plain?.thinkingLevels, []);
+  assert.equal(plain?.defaultThinkingLevel, undefined, "a default the model doesn't list is ignored");
 });
 
 test("the host default is preselected only while the host still offers it", () => {

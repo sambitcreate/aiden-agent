@@ -46,8 +46,8 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
     aidenBotActivitySupported(server: coordinator.server, installation: coordinator.installationStore.activeInstallation)
 }
 
-/// Which of `bot:cards`, `bot:activity`, `bot:handoffs` and `bot:handoff-notes`
-/// the pairing holds.
+/// Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`
+/// and `bot:handoff-on-mac` the pairing holds.
 /// The Mac shapes a Bot session feed by these (its cards, Chat activity,
 /// hand-offs and the paused state) when the feed opens, and keeps that shape
 /// for the feed's life. A Bot chat can open from the pairing's saved features
@@ -55,7 +55,7 @@ func aidenBotActivitySupported(coordinator: AidenRemoteCoordinator) -> Bool {
 /// the chat reopens a feed that opened without one
 /// (`AidenBotSessionModel.reopenFeed()`; Android parity).
 func aidenBotSessionFeedGrants(_ installation: AidenInstallation?) -> Set<AidenRemoteCapability> {
-    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes].filter { installation?.hasNegotiatedAccess(to: $0) == true })
+    Set([AidenRemoteCapability.botCards, .botActivity, .botHandoffs, .botHandoffNotes, .botHandoffOnMac].filter { installation?.hasNegotiatedAccess(to: $0) == true })
 }
 
 /// How a Bot chat is opened. A host advertising `bot-durable-session-v1`
@@ -136,6 +136,13 @@ protocol AidenBotSessionTransport: Sendable {
     func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
     /// Revision 37: `DELETE /bots/{botId}/pause`.
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView
+    /// Revision 42 (`bot:issues`): carry out one action a card offers.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt
 }
 
 extension AidenBotSessionTransport {
@@ -167,6 +174,16 @@ extension AidenBotSessionTransport {
     func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
         throw AidenRemoteClientError.invalidResponse
     }
+
+    /// A transport without issues refuses them, as a Mac without `bot:issues` does.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        throw AidenRemoteClientError.invalidResponse
+    }
 }
 
 extension AidenRemoteClient: AidenBotSessionTransport {}
@@ -176,9 +193,12 @@ struct AidenBotHandoffMacPrompt: Equatable, Sendable {
     let waitId: String
     /// The Mac brought the hand-off forward; otherwise no Aiden window could show it.
     let opened: Bool
+    /// A sign-in, or (revision 43) a step on the Bot's own screen.
+    var signIn: Bool = true
 
     var text: String {
-        opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac
+        if signIn { return opened ? AidenBotSessionCopy.finishSigningInOnMac : AidenBotSessionCopy.openAidenOnMac }
+        return opened ? AidenBotSessionCopy.finishStepOnMac : AidenBotSessionCopy.openAidenOnMacForStep
     }
 }
 
@@ -231,11 +251,26 @@ enum AidenBotSessionCopy {
     static let handoffFilesWait = "Send files after you answer the card."
     static let finishSigningInOnMac = "Finish signing in on your Mac."
     static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
+    /// Revision 43: a step on the Bot's own browser or computer.
+    static let finishStepOnMac = "Finish this step on your Mac."
+    static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
+    static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."
     static let pauseBot = "Pause Bot"
     static let resumeBot = "Resume Bot"
     static func pausedTitle(_ name: String) -> String { "\(name) is paused." }
     static func pausedDetail(_ name: String) -> String { "\(name) won’t reply or run routines until you resume it." }
     static func pausedPlaceholder(_ name: String) -> String { "\(name) is paused" }
+
+    // Revision 42 (`bot:issues`), shared with desktop and Android.
+    static let issueNeedsYou = "Needs you"
+    /// A card whose only action opens the Mac's own settings.
+    static let issueOpenOnMac = "Open on your Mac"
+    static let issueOpenChat = "Open chat"
+    static let issueResumeRoutine = "Resume routine"
+    static let issueStop = "Stop"
+    static let issueKeepWaiting = "Keep waiting"
+    static let issueStale = "This card changed. Pull to refresh and try again."
+    static let issueNotSent = "That didn’t reach your Mac. Please try again."
 
     static let memoryUpdated = "Memory updated"
     static let proposalTitle = "Add a routine?"
@@ -1050,6 +1085,8 @@ final class AidenBotSessionModel {
         /// Revision 37 (`bot:handoffs`). Pausing is the Bot profile's own
         /// call, made without showing a pause the Mac hasn't confirmed.
         case answerHandoff, openHandoffOnMac, unpause
+        /// Revision 42 (`bot:issues`): one action a "Needs you" card offers.
+        case actIssue
     }
 
     let botID: String
@@ -1076,6 +1113,10 @@ final class AidenBotSessionModel {
     private(set) var approval: AidenRemoteBotApproval?
     /// Revision 37 (`bot:handoffs`): the hand-off the Bot is waiting on, or nil.
     private(set) var handoff: AidenRemoteBotHandoff?
+    /// Revision 42 (`bot:issues`): the Bot's "Needs you" cards, oldest first.
+    private(set) var issues: [AidenRemoteBotIssue] = []
+    /// The card an action is on its way for, so its buttons wait.
+    private(set) var actingIssue: AidenRemoteBotIssue?
     /// What the Mac said after Finish on your Mac, for the hand-off it names.
     private(set) var handoffMacPrompt: AidenBotHandoffMacPrompt?
     private(set) var epoch: String?
@@ -1128,6 +1169,9 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var retainedApproval: (waitId: String, decision: AidenApprovalDecision, key: UUID)?
     @ObservationIgnored private var retainedHandoff: (waitId: String, request: AidenBotHandoffAnswerRequest, key: UUID)?
     @ObservationIgnored private var retainedHandoffOpen: (waitId: String, key: UUID)?
+    /// Revision 42: the request UUID of a card action, kept per card and action
+    /// so a retried tap replays the Mac's receipt instead of running twice.
+    @ObservationIgnored private var retainedIssueActions: [String: (request: AidenBotIssueActRequest, key: UUID)] = [:]
     /// Called when a hand-off frame (never a snapshot) names a new wait, so
     /// the chat can alert a person who has left it (G24).
     @ObservationIgnored var onHandoffArrived: ((AidenRemoteBotHandoff) -> Void)?
@@ -1157,6 +1201,7 @@ final class AidenBotSessionModel {
     @ObservationIgnored private var questionWrites = 0
     @ObservationIgnored private var approvalWrites = 0
     @ObservationIgnored private var handoffWrites = 0
+    @ObservationIgnored private var issueWrites = 0
 
     private enum Intent { case none, requested, acknowledged }
 
@@ -1480,6 +1525,9 @@ final class AidenBotSessionModel {
             handoffWrites += 1
             if next?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
             if let next, next.waitId != previous { onHandoffArrived?(next) }
+        case let .issues(next):
+            issues = next
+            issueWrites += 1
         case .closed:
             return .closed
         }
@@ -1560,9 +1608,11 @@ final class AidenBotSessionModel {
         question = session.question
         approval = session.approval
         handoff = session.handoff
+        issues = session.issues
         questionWrites += 1
         approvalWrites += 1
         handoffWrites += 1
+        issueWrites += 1
         if session.handoff?.waitId != handoffMacPrompt?.waitId { handoffMacPrompt = nil }
         activity = session.activity
         queued = session.queued
@@ -2014,6 +2064,95 @@ final class AidenBotSessionModel {
         }
     }
 
+    // MARK: Bot issues (revision 42, `bot:issues`)
+
+    /// The cards the chat shows: the host's open issues. A settled card is
+    /// kept out of the transcript, as the Mac shows it as a quiet line.
+    var openIssues: [AidenRemoteBotIssue] { issues.filter { !$0.resolved } }
+
+    var canActOnIssue: Bool {
+        hasLoaded && !inFlight.contains(.actIssue)
+    }
+
+    /// The button label for one action a card offers.
+    static func issueActionTitle(_ action: AidenBotIssueAction) -> String {
+        switch action.kind {
+        case .openChat: AidenBotSessionCopy.issueOpenChat
+        case .resumeRoutine: AidenBotSessionCopy.issueResumeRoutine
+        case .stopRun: AidenBotSessionCopy.issueStop
+        case .keepWaiting: AidenBotSessionCopy.issueKeepWaiting
+        }
+    }
+
+    /// Carries out one action a card offers (revision 42). The Mac settles the
+    /// card and sends the new list; a settling action drops the card here at
+    /// once and puts it back if the request didn't reach the Mac (R18). The
+    /// request UUID survives an ambiguous failure, so retrying the same tap
+    /// replays the Mac's receipt; another action is a new request.
+    /// `open_chat` opens nothing new on a phone (it is already the Bot's
+    /// chat): the Mac is told so its own view agrees, and the card stays.
+    /// Returns false when the action was refused or not sent.
+    @discardableResult
+    func actOnIssue(_ issue: AidenRemoteBotIssue, action: AidenBotIssueAction) async -> Bool {
+        guard canActOnIssue, !issue.resolved,
+              issues.contains(where: { $0.id == issue.id && !$0.resolved }),
+              issue.actions.contains(where: { $0 == action }),
+              let request = try? AidenBotIssueActRequest(action: action) else { return false }
+        let settles = action.kind != .openChat
+        let actionKey = "\(issue.id):\(action.kind.rawValue):\(action.routineId ?? "")"
+        let key: UUID
+        if let retained = retainedIssueActions[actionKey], retained.request == request {
+            key = retained.key
+        } else {
+            key = UUID()
+            retainedIssueActions[actionKey] = (request, key)
+        }
+        let mark = issueWrites
+        let index = issues.firstIndex { $0.id == issue.id }
+        actingIssue = issue
+        inFlight.insert(.actIssue)
+        defer {
+            inFlight.remove(.actIssue)
+            if actingIssue?.id == issue.id { actingIssue = nil }
+        }
+        if settles { issues.removeAll { $0.id == issue.id } }
+        /// Put the card back where it was when the action did not reach the Mac.
+        func restore() {
+            guard settles, issueWrites == mark, !issues.contains(where: { $0.id == issue.id }) else { return }
+            if let index, index <= issues.count {
+                issues.insert(issue, at: index)
+            } else {
+                issues.append(issue)
+            }
+        }
+        do {
+            let receipt = try await aidenBotWithin(requestLimit) { [transport, botID] in
+                try await transport.actOnBotIssue(
+                    botId: botID,
+                    issueId: issue.id,
+                    request: request,
+                    idempotencyKey: key
+                )
+            }
+            retainedIssueActions[actionKey] = nil
+            // `not_open` means nothing waits any more: the card stays gone.
+            if receipt.result == .notOpen, settles { issueWrites += 1 }
+            return true
+        } catch {
+            if !aidenBotSessionFailureIsAmbiguous(error) { retainedIssueActions[actionKey] = nil }
+            if case let AidenRemoteClientError.server(_, body) = error,
+               ["operation_stale", "invalid_request"].contains(body.code.rawValue) {
+                restore()
+                errorMessage = AidenBotSessionCopy.issueStale
+                return false
+            }
+            restore()
+            if error is CancellationError { return false }
+            errorMessage = AidenBotSessionCopy.issueNotSent
+            return false
+        }
+    }
+
     // MARK: Hand-offs (revision 37, `bot:handoffs`)
 
     var canAnswerHandoff: Bool {
@@ -2117,7 +2256,9 @@ final class AidenBotSessionModel {
                 try await transport.openBotHandoffOnMac(botId: botID, waitId: waitId, idempotencyKey: key)
             }
             retainedHandoffOpen = nil
-            if handoff?.waitId == waitId { handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened) }
+            if handoff?.waitId == waitId {
+                handoffMacPrompt = AidenBotHandoffMacPrompt(waitId: waitId, opened: receipt.opened, signIn: shown.kind == .signIn)
+            }
         } catch {
             if !aidenBotSessionFailureIsAmbiguous(error) { retainedHandoffOpen = nil }
             if error is CancellationError { return }

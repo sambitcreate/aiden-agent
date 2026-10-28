@@ -9,13 +9,6 @@ function seconds(start, end) {
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-// Hosted runners carry an image label such as macos-26; self-hosted ones carry
-// "self-hosted" plus their own labels, so they are totalled separately.
-function platformOf(labels) {
-  if (labels.includes("self-hosted")) return "self-hosted";
-  return labels.find((label) => /^(macos|ubuntu|windows)-/u.test(label)) ?? "unknown";
-}
-
 export function summarizeJobs(jobs, createdAt) {
   const completed = jobs.filter((job) => job.status === "completed" && job.conclusion !== "skipped");
   const rows = completed.map((job) => ({
@@ -24,7 +17,7 @@ export function summarizeJobs(jobs, createdAt) {
     seconds: seconds(job.started_at, job.completed_at),
     // Includes dependency waits; this is not pure runner queue time.
     startOffset: seconds(createdAt, job.started_at),
-    platform: platformOf(job.labels ?? []),
+    platform: (job.labels ?? []).find((label) => /^(macos|ubuntu|windows)-/u.test(label)) ?? "unknown",
     steps: (job.steps ?? []).filter((step) => step.conclusion !== "skipped").map((step) => ({
       name: step.name,
       seconds: seconds(step.started_at, step.completed_at),

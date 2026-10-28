@@ -123,6 +123,48 @@ test("owned help and inert settings cards work with no workspace file access; cl
   expect(JSON.stringify(navigation.results)).not.toContain("unavailable");
 });
 
+test("turning Skills off from chat finishes that reply and applies from the next skill call", async ({ aiden }) => {
+  const { page, lmStudio } = aiden;
+  await finishLmStudioOnboarding(page);
+  const invoke = <T>(channel: string, ...args: unknown[]) =>
+    page.evaluate(
+      ([name, values]) =>
+        (
+          window as unknown as {
+            aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+          }
+        ).aidenAPI.ipc.invoke(name, ...values),
+      [channel, args] as const,
+    ) as Promise<T>;
+  await invoke("settings:set", { appControlPolicy: "safe", skillsEnabled: true });
+  const settings = await invoke<AppSettings>("settings:get");
+  const prompt = "App control test: turn skills off.";
+  const reply = "Skills are off from your next message.";
+  const scenario = lmStudio.enqueueToolScenario!({
+    prompt,
+    calls: [
+      {
+        name: "aiden_set_preference",
+        arguments: {
+          control: "skills.enabled",
+          value: false,
+          expectedRevision: appControlRevision({ settings }, "skills.enabled"),
+          operationId: "e2e-skills-off",
+        },
+      },
+    ],
+    finalText: reply,
+  });
+  await page.locator("textarea").first().fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => scenario.completed).toBe(true);
+  expect(scenario.error).toBeUndefined();
+  expect(JSON.stringify(scenario.results)).toContain("applied");
+  // The reply that made the change is not cut off as if Stop were pressed.
+  await expect(page.getByText(reply)).toBeVisible();
+  expect((await invoke<AppSettings>("settings:get")).skillsEnabled).toBe(false);
+});
+
 test("Aiden changes the color theme and the model for new chats from chat, and the app follows at once", async ({
   aiden,
 }) => {

@@ -11,6 +11,9 @@ import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
+import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
+import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
@@ -42,7 +45,9 @@ import {
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotRoutineProposalDecision,
+  BotRoutineProposalDeclineReason, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -627,12 +632,17 @@ export function TranscriptEntries({
   onRemoveQueued,
   onConnect,
   onDismissConnection,
+  onAddConnection,
   onOpenFile,
   onReply,
   onRetry,
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onRespondToSkill,
+  onRespondToLesson,
+  onUndoLearning,
+  onActOnIssue,
   connectLabel,
   connecting,
 }: {
@@ -647,6 +657,8 @@ export function TranscriptEntries({
   onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection?(pluginId: string): void;
+  /** "Add to this Bot" for an app connected in Aiden but left out of the Bot's access. */
+  onAddConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
@@ -656,7 +668,16 @@ export function TranscriptEntries({
   onRespondToProposal?(
     proposalId: string,
     decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  /** One action on a "Needs you" issue card. */
+  onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Keep or decline a lesson from a routine's runs. */
+  onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
+  /** Undo a correction lesson or the newest memory tidy. */
+  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
+  /** Add or decline a proposed (or found) skill. */
+  onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
   /** Connect cards' button text, e.g. where the connection is finished. */
   connectLabel?: string;
   /** A connection request is being sent. */
@@ -749,6 +770,7 @@ export function TranscriptEntries({
                 card={row.card}
                 onConnect={onConnect}
                 {...(onDismissConnection ? { onDismiss: onDismissConnection } : {})}
+                {...(onAddConnection ? { onAddToBot: onAddConnection } : {})}
                 {...(connectLabel ? { connectLabel } : {})}
                 busy={connecting ?? false}
               />
@@ -774,7 +796,47 @@ export function TranscriptEntries({
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
-                onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
+                onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
+              />
+            ) : null;
+          case "lesson_proposal":
+            return onRespondToLesson ? (
+              <LessonProposalCard
+                key={row.id}
+                lesson={row.lesson}
+                status={row.status}
+                onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
+              />
+            ) : null;
+          case "lesson_learned":
+            return onUndoLearning ? (
+              <LearnedLine
+                key={row.id}
+                text={`Learned: ${row.lesson.lesson}`}
+                undone={row.status === "retired"}
+                onUndo={() => onUndoLearning({ kind: "lesson", lessonId: row.lesson.lessonId })}
+              />
+            ) : null;
+          case "memory_tidy":
+            return onUndoLearning && row.changeId ? (
+              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
+            ) : null;
+          case "skill_proposal":
+            return onRespondToSkill ? (
+              <SkillProposalCard
+                key={row.id}
+                proposal={row.proposal}
+                status={row.status}
+                onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
+              />
+            ) : null;
+          case "issue":
+            return onActOnIssue ? (
+              <BotIssueCard
+                key={row.id}
+                issue={row.issue}
+                status={row.status}
+                onAct={(action) => onActOnIssue(row.issue.id, action)}
               />
             ) : null;
         }
@@ -865,6 +927,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [hiddenInterruptedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
+  const [addingConnection, setAddingConnection] = React.useState(false);
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
@@ -1226,9 +1289,23 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  const respondToProposal = async (proposalId: string, decision: BotRoutineProposalDecision) => {
+  const respondToSkill = async (proposalId: string, decision: "add" | "dismiss") => {
     try {
-      const result = await botsApi.routineProposals.respond({ botId: current.id, proposalId, decision });
+      return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
+      throw error;
+    }
+  };
+  const respondToProposal = async (
+    proposalId: string,
+    decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
+  ) => {
+    try {
+      const result = await botsApi.routineProposals.respond({
+        botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
+      });
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
       return result.status;
     } catch (error) {
@@ -1248,6 +1325,36 @@ export function BotChatPane({ botId }: { botId: string }) {
       await botsApi.routines.runNow(current.id, routineId);
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
+      throw error;
+    }
+  };
+
+  /** "Add to this Bot": only this tap adds the app to the Bot's access. */
+  const addConnection = async (pluginId: string) => {
+    setAddingConnection(true);
+    try {
+      await botsApi.grantConnection(current.id, pluginId);
+      void qc.invalidateQueries({ queryKey: queryKeys.botAccess(current.id) });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t add that app to this Bot."));
+    } finally {
+      setAddingConnection(false);
+    }
+  };
+
+  /**
+   * One action on a "Needs you" issue: the service records the answer, and
+   * the live transcript settles the card. Open chat is this surface already.
+   */
+  const actOnIssue = async (issueId: string, action: BotIssueAction) => {
+    if (action.kind === "open_chat") {
+      void navigate({ to: "/bots/$botId/chat", params: { botId } });
+      return;
+    }
+    try {
+      await botsApi.issues.act({ botId: current.id, issueId, action });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t do that."));
       throw error;
     }
   };
@@ -1390,12 +1497,37 @@ export function BotChatPane({ botId }: { botId: string }) {
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
+          onAddConnection={(pluginId) => void addConnection(pluginId)}
+          connecting={addingConnection}
           onOpenFile={(path) => panel.show("files", { path, botId })}
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
+          onRespondToSkill={respondToSkill}
+          onRespondToLesson={async (lessonId, decision) => {
+            try {
+              return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
+              throw error;
+            }
+          }}
+          onUndoLearning={async (target) => {
+            let result: { ok: true } | { ok: false; code: string };
+            try {
+              result = await botsApi.learning.undoInChat({ botId: current.id, target });
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
+              throw error;
+            }
+            if (!result.ok) {
+              toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
+              throw new Error(result.code);
+            }
+          }}
+          onActOnIssue={actOnIssue}
         />
         {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);

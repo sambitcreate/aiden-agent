@@ -12,12 +12,6 @@ export const appearancePreview = new AppearancePreviewState();
 export const applySettingsEffects = createSettingsApplicationEffects({
   invalidateSkills: () => skillRegistry.invalidate(),
   revokeBotSkills: () => invalidateBotRuntimeInventoryAuthority("skill_configuration"),
-  cancelSkillWork: async () => {
-    const { llmClient } = await import("./llm-client.js");
-    llmClient.cancelForSkillsDisabled();
-    const { contextLifecycleService } = await import("./context-lifecycle-service-main.js");
-    contextLifecycleService.cancelForSkillsDisabled();
-  },
   refreshCommands: async () => {
     const { telegramService } = await import("./telegram/telegram-service.js");
     void telegramService.refreshCommands();

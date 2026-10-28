@@ -371,8 +371,10 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
-  steps, and the rules editor says so. A rule's hand-off card has no Open
-  button in this lane.
+  steps, and the rules editor says so. A rule's hand-off card in this lane
+  offers "Open <Bot>’s computer", which takes the computer over for the person,
+  and the Bot can hand a step over there itself with `hand_off`'s
+  `where: "computer"`.
 - **Routines and Telegram.** Unlike the Bot's browser, which those turns never
   get, the Bot may use its own computer on routine runs and Telegram turns,
   where nobody is watching, and without asking per step as Computer Use on the
@@ -514,8 +516,9 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   from the phone brings the Bot's chat forward on the Mac and opens the page
   on the Bot's computer there, with the person in control. Once the Mac's
   window sees the person holding the computer for that card, its panel shows
-  the Computer tab, once per card and without moving keyboard focus. No new
-  remote fields are involved.
+  the Computer tab, once per card and without moving keyboard focus. A Bot's
+  `hand_off` step on its computer (`where: "computer"`) is revealed the same
+  way. No new remote fields are involved.
 - **Confirming on a Mac.** Open from the card takes the computer over, Safari
   opens at the site (`/usr/bin/open -b com.apple.Safari` over SSH reaching the
   logged-in session), the driver's processes are gone, and answering gives the

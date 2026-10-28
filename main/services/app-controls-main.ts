@@ -64,6 +64,16 @@ export const appControlsService = new AppControlsService({
     await operations.save(value);
   },
   onChanged: publishAppControlsChanged,
+  // Settings → Appearance saves its whole edited look shortly after each
+  // change, so a change made now would be overwritten by that save.
+  admit: async (operation) => {
+    if (!operation.control.startsWith("appearance.")) return;
+    const settings = await configStore.getSettings();
+    if (appearancePreview.snapshot(normalizeAppearanceConfig(settings.appearance)).pending)
+      throw new Error(
+        "Settings → Appearance has changes that are still being saved. Try again in a moment, or change it there.",
+      );
+  },
   commit: async (operation, context) => {
     if (operation.control === "webSearch.enabled")
       assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);

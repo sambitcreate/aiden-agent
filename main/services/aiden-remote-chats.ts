@@ -89,6 +89,10 @@ import {
   parseAidenRemoteChatSummaryPage,
   parseAidenRemoteChatProjection,
   parseAidenRemoteSkillCatalog,
+  parseAidenRemoteChatContextPressure,
+  projectAidenRemoteContextPressure,
+  type AidenRemoteChatContextPressure,
+  type AidenRemoteContextPressure,
 } from "./aiden-remote-protocol.js";
 import {
   beginSurfaceGeneration,
@@ -1224,6 +1228,15 @@ export class AidenRemoteChatService {
           cancel(chatId: string): boolean;
         };
       };
+      /**
+       * Revision 41 (`chat-context-pressure-v1`): the host's own next-request
+       * context projection for a chat (the one its composer meter reads),
+       * priced against `selection` when given. Null when it cannot project.
+       */
+      contextPressure?: (
+        chatId: string,
+        selection?: { providerId: string; modelId: string },
+      ) => Promise<object | null>;
       now?: () => number;
       summaryCursorSecret?: Buffer;
     },
@@ -1848,6 +1861,58 @@ export class AidenRemoteChatService {
       }
     }
     throw unavailable();
+  }
+
+  /** Whether this host projects context pressure (`chat-context-pressure-v1`). */
+  get supportsContextPressure(): boolean {
+    return this.options.contextPressure !== undefined;
+  }
+
+  /**
+   * The next-request context pressure the host's own composer meter shows,
+   * reduced to the wire allowlist. `selection` prices a model the device has
+   * picked but not yet sent with; it must be one the host has configured.
+   * Bot chats are not projected (`not_found`), like forks.
+   */
+  async contextPressure(
+    chatId: string,
+    selection?: { providerId: string; modelId: string },
+  ): Promise<AidenRemoteChatContextPressure> {
+    const project = this.options.contextPressure;
+    if (!project) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const authoritative = await this.chat(chatId);
+    if (authoritative.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    let priced: { providerId: string; modelId: string } | undefined;
+    if (selection) {
+      let resolved: { providerId: string; modelId: string };
+      try {
+        resolved = await this.options.models.resolve(selection.providerId, selection.modelId, {
+          allowExistingPinnedGemini:
+            authoritative.providerId === "google" &&
+            selection.providerId === authoritative.providerId &&
+            selection.modelId === authoritative.model,
+        });
+      } catch (error) {
+        if (error instanceof AidenRemoteServiceError && error.code === "invalid_request") {
+          throw new AidenRemoteServiceError("invalid_request", "That provider and model are not available on this Mac.", 400);
+        }
+        throw error;
+      }
+      priced = { providerId: resolved.providerId, modelId: resolved.modelId };
+    }
+    const pressure = await project(chatId, priced);
+    let projected: AidenRemoteContextPressure | null = null;
+    if (pressure !== null) {
+      try {
+        projected = projectAidenRemoteContextPressure(pressure);
+      } catch {
+        // The desktop meter drops a projection it cannot read; so does the wire.
+        projected = null;
+      }
+    }
+    return parseAidenRemoteChatContextPressure({ chatId, pressure: projected });
   }
 
   /** Whether this host can fork chats (`chat-fork-v1`). */

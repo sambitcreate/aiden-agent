@@ -1,4 +1,5 @@
 import { CompactionBudgetSettings } from "./compaction-budget-settings";
+import { MemoryFactsSection } from "./memory-facts-section";
 import { compactionEngineFrom, type CompactionEngine, type CompactionModelBudget } from "../../shared/compaction";
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -219,6 +220,8 @@ export function MemorySettings() {
         Workspace switches affect regular workspace chats. Bot memory has its own scope and
         follows the global switch.
       </Text>
+
+      <MemoryFactsSection workspaces={workspaces.data ?? []} />
     </div>
   );
 }

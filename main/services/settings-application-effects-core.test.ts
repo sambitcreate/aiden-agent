@@ -15,7 +15,6 @@ function subject() {
   const apply = createSettingsApplicationEffects({
     invalidateSkills: record("invalidateSkills"),
     revokeBotSkills: record("revokeBotSkills"),
-    cancelSkillWork: recordAsync("cancelSkillWork"),
     refreshCommands: recordAsync("refreshCommands"),
     reconfigureIdleUnload: recordAsync("reconfigureIdleUnload"),
     preloadLocalVoice: record("preloadLocalVoice"),

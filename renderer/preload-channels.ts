@@ -92,7 +92,7 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "bots:connections:setup",
   "bots:approval",
   "bots:approval-settled",
-  /** A Bot's question or approval appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
+  /** A Bot's question, approval, hand-off or issue appeared or settled: `{botId}`. The Bots sidebar re-reads its row. */
   "bots:attention",
   "botComputers:changed",
   "browser:event",
@@ -150,6 +150,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "tts:event",
   "voice:stream-text",
   "workspaces:changed",
+  /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */
+  "workspace:files-touched",
   /** A workspace artifact was created, changed, refreshed or deleted: `WorkspaceArtifactsChangedEvent`. */
   "workspaces:artifacts-changed",
   /** Progress for a clone, sent only to the document that started it: `WorkspaceCloneProgress`. */

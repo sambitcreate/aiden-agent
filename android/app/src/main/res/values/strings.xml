@@ -725,9 +725,21 @@
     <string name="bot_handoff_no_note_placeholder">Enter it yourself, then tap Done.</string>
     <string name="bot_handoff_mac_opened">Finish signing in on your Mac.</string>
     <string name="bot_handoff_mac_closed">Open Aiden on your Mac to finish signing in.</string>
+    <string name="bot_handoff_step_mac_opened">Finish this step on your Mac.</string>
+    <string name="bot_handoff_step_mac_closed">Open Aiden on your Mac to finish this step.</string>
+    <string name="bot_handoff_on_mac_detail">This step is on the Bot’s own screen on your Mac.</string>
     <string name="bot_paused_title">%1$s is paused.</string>
     <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
     <string name="bot_paused_placeholder">%1$s is paused</string>
+    <!-- Bots: issues (contract revision 42), copy shared with iOS and desktop -->
+    <string name="bot_issue_needs_you">Needs you</string>
+    <string name="bot_issue_open_on_mac">Open on your Mac</string>
+    <string name="bot_issue_open_chat">Open chat</string>
+    <string name="bot_issue_resume_routine">Resume routine</string>
+    <string name="bot_issue_stop">Stop</string>
+    <string name="bot_issue_keep_waiting">Keep waiting</string>
+    <string name="bot_issue_stale">This card changed. Pull to refresh and try again.</string>
+    <string name="bot_issue_not_sent">That didn’t reach your Mac. Please try again.</string>
     <string name="bot_files_connect">Connect to your Mac to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>
