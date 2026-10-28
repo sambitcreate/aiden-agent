@@ -35,6 +35,7 @@ export const COMMAND_IDS = [
   "terminal.toggle",
   "environment.toggle",
   "quick-view.toggle",
+  "subagents.toggleTray",
   "file.save",
 ] as const;
 
@@ -342,6 +343,21 @@ export const COMMANDS = [
     defaultBinding: null,
     scope: "app",
     global: false,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "subagents.toggleTray",
+    title: "Show running subagents",
+    description: "Open or close the subagent tray above the composer while subagents are shown.",
+    category: "Tools",
+    keywords: ["subagents", "agents", "pill", "tray", "running"],
+    // A chord that types no character, so it can work from the composer. It is
+    // only claimed while the pill is on screen.
+    defaultBinding: "Command+Shift+S",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -906,7 +922,11 @@ export function migrateLegacyKeybindings(
  * defaults wins once: the new command is saved as disabled, as legacy values
  * win over newly introduced defaults in `migrateLegacyKeybindings`.
  */
-const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = ["chat.newIn", "workspace.openFolder"];
+const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
+  "chat.newIn",
+  "workspace.openFolder",
+  "subagents.toggleTray",
+];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
   for (const introduced of INTRODUCED_DEFAULT_COMMANDS) {

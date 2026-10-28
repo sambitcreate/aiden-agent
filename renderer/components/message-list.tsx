@@ -54,6 +54,7 @@ import {
   captureSubagentChipFocus,
   resolveSubagentChipFocusHandoff,
   retainSubagentChipFocusAfterPointerDown,
+  SUBAGENT_CHIP_FOCUS_SELECTOR,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
 import {
@@ -865,7 +866,7 @@ export function MessageList({
     const captureFocusedChip = (target: EventTarget | null) => {
       const chip =
         target instanceof Element
-          ? target.closest<HTMLElement>("[data-subagent-chip-run-id]")
+          ? target.closest<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR)
           : null;
       if (chip && transcriptRef.current?.contains(chip)) {
         chipFocusCaptureRef.current = captureSubagentChipFocus(chip);
@@ -907,7 +908,7 @@ export function MessageList({
       chipFocusCaptureRef.current,
       document.activeElement,
       [document.body, document.documentElement],
-      root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
+      root.querySelectorAll<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR),
     );
     if (handoff.action === "clear") {
       chipFocusCaptureRef.current = null;
