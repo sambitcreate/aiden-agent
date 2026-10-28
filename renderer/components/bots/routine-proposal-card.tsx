@@ -6,10 +6,13 @@ import * as React from "react";
 import { CalendarClock, Check } from "lucide-react";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
-import type {
-  BotRoutineProposalDecision,
-  BotRoutineProposalEntryData,
-  BotRoutineProposalStatus,
+import {
+  BOT_ROUTINE_PROPOSAL_DECLINE_LABELS,
+  BOT_ROUTINE_PROPOSAL_DECLINE_REASONS,
+  type BotRoutineProposalDecision,
+  type BotRoutineProposalDeclineReason,
+  type BotRoutineProposalEntryData,
+  type BotRoutineProposalStatus,
 } from "../../shared/bot-routine-proposals";
 
 export function RoutineProposalCard({
@@ -20,18 +23,23 @@ export function RoutineProposalCard({
   proposal: Pick<BotRoutineProposalEntryData, "name" | "label" | "prompt">;
   status: BotRoutineProposalStatus;
   /** Resolves with the settled status, or rejects so the actions come back. */
-  onRespond(decision: BotRoutineProposalDecision): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  onRespond(
+    decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
+  ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
 }) {
+  // Not now first asks why, in one optional step; Skip answers without a reason.
+  const [askingWhy, setAskingWhy] = React.useState(false);
   // The answer shows at once; the live transcript confirms it moments later.
   const [answered, setAnswered] = React.useState<Exclude<BotRoutineProposalStatus, "pending"> | null>(null);
   const [busy, setBusy] = React.useState<BotRoutineProposalDecision | null>(null);
   const settled = status !== "pending" ? status : answered;
 
-  const respond = async (decision: BotRoutineProposalDecision) => {
+  const respond = async (decision: BotRoutineProposalDecision, reason?: BotRoutineProposalDeclineReason) => {
     if (busy) return;
     setBusy(decision);
     try {
-      const result = await onRespond(decision);
+      const result = await onRespond(decision, reason);
       if (result) setAnswered(result);
     } catch {
       // The caller reports the failure; the card stays answerable.
@@ -52,6 +60,35 @@ export function RoutineProposalCard({
       </BotNoticeCard>
     );
   }
+  if (askingWhy) {
+    return (
+      <BotNoticeCard
+        label={`Routine suggestion: ${proposal.name}`}
+        icon={<CalendarClock />}
+        title="Why not?"
+        actions={
+          <>
+            {BOT_ROUTINE_PROPOSAL_DECLINE_REASONS.map((reason) => (
+              <Button
+                key={reason}
+                variant="filled"
+                size="small"
+                disabled={busy !== null}
+                onClick={() => void respond("dismiss", reason)}
+              >
+                {BOT_ROUTINE_PROPOSAL_DECLINE_LABELS[reason]}
+              </Button>
+            ))}
+            <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => void respond("dismiss")}>
+              Skip
+            </Button>
+          </>
+        }
+      >
+        <p>Optional. It helps the Bot suggest better routines.</p>
+      </BotNoticeCard>
+    );
+  }
   return (
     <BotNoticeCard
       label={`Routine suggestion: ${proposal.name}`}
@@ -59,7 +96,7 @@ export function RoutineProposalCard({
       title="Add a routine?"
       actions={
         <>
-          <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => void respond("dismiss")}>
+          <Button variant="transparent" size="small" disabled={busy !== null} onClick={() => setAskingWhy(true)}>
             Not now
           </Button>
           <Button variant="accent" size="small" disabled={busy !== null} onClick={() => void respond("accept")}>

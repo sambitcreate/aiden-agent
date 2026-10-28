@@ -1,5 +1,6 @@
 import { replayChatRequest, type SavedChatRequest } from "../../shared/chat-intent";
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
+import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
 import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import { mintPeerIdempotencyKey } from "../../shared/peer-host";
 import { chatIntentLedger, type ChatIntent, type ChatIntentKind, type ChatIntentLedger } from "./chat-intent-ledger";
@@ -18,6 +19,7 @@ import {
   type HostChatStatus,
   type HostChatTurnReceipt,
   type HostForkedChat,
+  type HostTurnModel,
 } from "./host-chat-adapter";
 
 /** The chat a session is bound to, fixed for the session's lifetime. */
@@ -92,6 +94,9 @@ export interface ChatSendExtras {
   attachments?: HostChatAttachmentUpload[];
   /** A skill from the host's own catalog. */
   skill?: SkillInvocationV1;
+  /** The host model and effort for this turn; omitted fields keep the chat's own. */
+  model?: HostTurnModel;
+  thinkingLevel?: GenerationThinkingLevel;
 }
 
 /**
@@ -332,6 +337,10 @@ export class ChatSessionControl {
     const { chatId } = this.ref;
     // Recorded before its uploads stage, so a pane reopened meanwhile already sees the text as in flight.
     const key = mintPeerIdempotencyKey();
+    const selection = {
+      ...(extras.model ? { model: extras.model } : {}),
+      ...(extras.thinkingLevel ? { thinkingLevel: extras.thinkingLevel } : {}),
+    };
     let attachmentIds: string[] = [];
     const intent: ChatIntent = {
       kind: "send",
@@ -343,6 +352,7 @@ export class ChatSessionControl {
           idempotencyKey,
           ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
           ...(extras.skill ? { skill: extras.skill } : {}),
+          ...selection,
         }),
     };
     this.ledger.begin(this.ref, intent);
@@ -355,7 +365,7 @@ export class ChatSessionControl {
     }
     if (attachmentIds.length > 0) intent.attachmentIds = attachmentIds;
     intent.request = { kind: "send", input: { text, idempotencyKey: key,
-      ...(attachmentIds.length ? { attachmentIds } : {}), ...(extras.skill ? { skill: extras.skill } : {}) } };
+      ...(attachmentIds.length ? { attachmentIds } : {}), ...(extras.skill ? { skill: extras.skill } : {}), ...selection } };
     try {
       await this.ledger.persist(this.ref, intent);
       const receipt = await replayChatRequest(this.adapter, chatId, intent.request, this.ledger.durable);

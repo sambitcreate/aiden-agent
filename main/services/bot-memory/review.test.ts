@@ -323,3 +323,34 @@ test("cancel stops a running review without a marker", async () => {
     await harness.close(ctx);
   }
 });
+
+test("the review offers an extra add-only tool with its own lines, behind the same fence", async () => {
+  const noted: unknown[] = [];
+  const script = scripted([
+    () => fauxAssistantMessage([fauxToolCall("note_follow_up", { text: "Check the invoice", due_date: "2026-10-30" })], { stopReason: "toolUse" }),
+    nothing,
+  ]);
+  const { harness, review, personTurns } = await setup(script.steps, {
+    extras: () => ({
+      tools: [{
+        name: "note_follow_up",
+        label: "Note follow-up",
+        description: "Record a dated follow-up.",
+        parameters: { type: "object", properties: {} } as never,
+        execute: async (_id: string, params: unknown) => {
+          noted.push(params);
+          return { content: [{ type: "text", text: "{\"ok\":true}" }], details: null };
+        },
+      }],
+      instructions: ["When the Bot promised to follow up, call note_follow_up."],
+    }),
+  });
+  try {
+    await personTurns(10);
+    await review.runNow(BOT);
+    assert.deepEqual(noted, [{ text: "Check the invoice", due_date: "2026-10-30" }]);
+    assert.match(getCurrentSystemPrompt(script.reviewRequests[0]!) ?? "", /call note_follow_up/u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
