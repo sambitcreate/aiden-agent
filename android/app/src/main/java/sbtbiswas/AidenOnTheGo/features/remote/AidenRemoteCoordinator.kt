@@ -112,7 +112,7 @@ internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: 
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
 
 /**
- * Revision 41: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
+ * Revision 43: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
  * of its own after `schedule:cards`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestBotImages(server: AidenServer, installation: AidenInstallation): Boolean =
@@ -163,7 +163,7 @@ internal suspend fun aidenRequestScheduleCards(
     )
 
 /**
- * Revision 41: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
+ * Revision 43: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
  * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its Bots'
  * shared images then read as a line that says to open the chat on the Mac.
  */
@@ -506,7 +506,7 @@ class AidenRemoteCoordinator(
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
                 )
-                // Revision 41: `bot:images` goes alone too, after the schedule card.
+                // Revision 43: `bot:images` goes alone too, after the schedule card.
                 val negotiatedServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
@@ -596,7 +596,7 @@ class AidenRemoteCoordinator(
 
     /**
      * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
-     * `schedule:cards`, revision 41 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
+     * `schedule:cards`, revision 43 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
      * only that the Mac can't grant it; the pairing carries on with what it has.
      */
     private suspend fun negotiateSoloCapability(

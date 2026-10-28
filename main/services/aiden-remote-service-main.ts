@@ -631,6 +631,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             resolveSkillInvocation: (workspaceId, invocationId) =>
               skillRegistry.resolveFresh(workspaceId, invocationId),
+            // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
+            contextPressure: async (chatId, selection) =>
+              (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,

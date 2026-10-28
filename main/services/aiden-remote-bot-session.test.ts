@@ -3363,7 +3363,7 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
   }
 });
 
-// --- Contract revision 41: images a Bot shares reach phones -------------------------
+// --- Contract revision 43: images a Bot shares reach phones -------------------------
 
 /** A 1×1 PNG, as `share_image` stores it. */
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";

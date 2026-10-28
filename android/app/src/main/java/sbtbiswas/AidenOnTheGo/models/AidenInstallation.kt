@@ -186,7 +186,7 @@ data class AidenServer(
         get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
-     * The Mac offers `bot:images` (revision 41). Like `schedule:cards`, the offer in
+     * The Mac offers `bot:images` (revision 43). Like `schedule:cards`, the offer in
      * `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
      */
     val offersBotImages: Boolean

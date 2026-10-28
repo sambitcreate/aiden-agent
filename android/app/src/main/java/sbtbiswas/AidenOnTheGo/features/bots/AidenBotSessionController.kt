@@ -66,7 +66,7 @@ interface AidenBotSessionTransport {
     suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView =
         throw AidenRemoteClientException.InvalidResponse()
 
-    /** Revision 41 (`bot:images`): the bytes of an image the Bot shared. A Mac without it has none to read. */
+    /** Revision 43 (`bot:images`): the bytes of an image the Bot shared. A Mac without it has none to read. */
     suspend fun sharedImage(botId: String, entryId: String): ByteArray =
         throw AidenRemoteClientException.InvalidResponse()
 }
@@ -535,7 +535,7 @@ class AidenBotSessionController(
     private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
     /** How long a taken message that nothing on the Mac shows stays before it goes (FR-m5). */
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
-    /** Revision 41: how many bytes of shared images this chat keeps in memory. */
+    /** Revision 43: how many bytes of shared images this chat keeps in memory. */
     sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
@@ -570,7 +570,7 @@ class AidenBotSessionController(
     private var claimsEpoch: String? = null
     /** The run a Stop was pressed in, by its `startedAt`. */
     private var stopStartedAt: Long? = null
-    /** Revision 41: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
+    /** Revision 43: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
     private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
 
     init {
@@ -651,7 +651,7 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 41 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
+     * Revision 43 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
      * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,
      * within a byte budget and only while the transcript still shows them; one that was dropped, or
      * whose read failed, is read again the next time it is drawn. An id the transcript doesn't show
