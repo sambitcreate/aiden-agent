@@ -352,6 +352,7 @@ async function cancellationHost() {
     "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
+    "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
   };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./llm-client.ts", import.meta.url))],

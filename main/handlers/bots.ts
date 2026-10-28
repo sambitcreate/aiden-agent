@@ -15,6 +15,7 @@ import {
   botLiveProjection,
   botSessionRuntime,
   dismissBotConnection,
+  grantBotConnection,
 } from "../services/bot-runtime/bot-session-main.js";
 import { botStarter } from "../services/bot-runtime/bot-starter-main.js";
 import { stopWithIntents } from "../services/bot-runtime/bot-turn-intents.js";
@@ -169,6 +170,11 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:introduce", async (_event, id: unknown) => {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));
+  });
+  ipcMain.handle("bots:connections:grant", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const pluginId = parseConnectionPluginId(rawPluginId);
+    await grantBotConnection(botId, pluginId);
   });
   ipcMain.handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
     const botId = parseBotId(rawBotId);

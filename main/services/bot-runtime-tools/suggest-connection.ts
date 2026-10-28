@@ -8,6 +8,7 @@ import {
   CONNECT_CARD_REASON_MAX_CHARS,
   connectionSuggestionFor,
   type ConnectCardEntry,
+  type ConnectCardStatus,
 } from "../../../renderer/shared/bot-connections.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
 import {
@@ -63,9 +64,56 @@ export async function isBotConnectionReady(
     : deps.hasOAuthTokens(server, preset);
 }
 
+/**
+ * The Aiden connection (MCP server id) a suggestion stands for, which is what a
+ * Custom-access Bot's selection names. Composio apps have none of their own.
+ */
+export function connectionSourceIdFor(pluginId: string): string | undefined {
+  const suggestion = connectionSuggestionFor(pluginId);
+  return suggestion?.setupEntry.kind === "mcp-preset" ? presetServerId(suggestion.setupEntry.presetId) : undefined;
+}
+
+export interface ConnectCardStatusDeps {
+  isConnected(pluginId: string): MaybePromise<boolean>;
+  /** True when this Bot's own (Custom) access leaves the connection out. */
+  botLacksConnection(botId: string, sourceId: string): MaybePromise<boolean>;
+  isDismissed(botId: string, pluginId: string): MaybePromise<boolean>;
+}
+
+/**
+ * What a pending connect card shows now: connected and usable by this Bot,
+ * connected in Aiden but not part of this Bot's access ("Add to this Bot"),
+ * answered with Not now, or still waiting. Shared with Remote, which shows
+ * `needs_access` as pending.
+ */
+export async function resolveConnectCardStatus(
+  botId: string,
+  card: ConnectCardEntry,
+  deps: ConnectCardStatusDeps,
+): Promise<ConnectCardStatus> {
+  if (await deps.isConnected(card.pluginId)) {
+    const sourceId = connectionSourceIdFor(card.pluginId);
+    if (sourceId === undefined || !(await deps.botLacksConnection(botId, sourceId))) return "connected";
+    // Not now on "Add to this Bot" settles the card without granting anything.
+    return (await deps.isDismissed(botId, card.pluginId)) ? "dismissed" : "needs_access";
+  }
+  if (await deps.isDismissed(botId, card.pluginId)) return "dismissed";
+  return card.status;
+}
+
 export interface SuggestConnectionDeps {
   /** True when the plugin (or the preset that covers it) is already set up. */
   isConnected(pluginId: string): MaybePromise<boolean>;
+  /**
+   * Optional: true when the app is set up in Aiden but this Bot's access
+   * leaves it out. The card then offers "Add to this Bot" instead.
+   */
+  botLacksConnection?(botId: string, pluginId: string): MaybePromise<boolean>;
+  /**
+   * Optional: true when the Bot's own access includes the app but this chat's
+   * narrower access leaves it out. No card can change that, so none is shown.
+   */
+  chatLacksConnection?(botId: string, pluginId: string): MaybePromise<boolean>;
   /** True after the person chose Not now for this plugin on this Bot. */
   isDismissed(botId: string, pluginId: string): MaybePromise<boolean>;
   appendConnectCard(botId: string, card: ConnectCardEntry): MaybePromise<void>;
@@ -76,6 +124,7 @@ export interface SuggestConnectionDeps {
 export type SuggestConnectionStatus =
   | "suggested"
   | "already_connected"
+  | "chat_restricted"
   | "dismissed"
   | "pending"
   | "unknown_plugin";
@@ -145,7 +194,16 @@ export function createSuggestConnectionTool(
           );
         }
         const id = suggestion.pluginId;
-        if (await deps.isConnected(id)) {
+        const connected = await deps.isConnected(id);
+        const needsAccess = connected && (await deps.botLacksConnection?.(botId, id)) === true;
+        if (connected && !needsAccess && (await deps.chatLacksConnection?.(botId, id)) === true) {
+          return result(
+            "chat_restricted",
+            id,
+            `${suggestion.name} is connected and in your Bot access, but this chat's own access was narrowed and leaves it out, so you can't use it here. Tell the person; a card can't change this chat's access.`,
+          );
+        }
+        if (connected && !needsAccess) {
           return result(
             "already_connected",
             id,
@@ -176,7 +234,9 @@ export function createSuggestConnectionTool(
         return result(
           "suggested",
           id,
-          `Showed a card to connect ${suggestion.name}. Wait for the person to connect it or choose Not now.`,
+          needsAccess
+            ? `${suggestion.name} is connected in Aiden, but your access doesn't include it. Showed a card so the person can add it to you. Wait for them to add it or choose Not now.`
+            : `Showed a card to connect ${suggestion.name}. Wait for the person to connect it or choose Not now.`,
         );
       },
     },

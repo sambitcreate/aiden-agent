@@ -460,7 +460,7 @@ test("disabling Skills cancels an operator compaction already at the provider", 
     "operator",
   );
   await atProvider;
-  service.cancelForSkillsDisabled();
+  assert.equal(service.cancelChat(chat.id), true);
 
   assert.deepEqual(await operation, { compacted: false, reason: "cancelled" });
   assert.equal(

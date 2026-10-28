@@ -51,6 +51,11 @@ function fakeBrowser(options: { owner?: RendererDocumentOwner } = {}) {
       assert.equal(workspaceId, WORKSPACE);
       for (const tab of tabs.values()) if (tab.hold?.holdId === holdId) delete tab.hold;
     },
+    // The most recently opened tab is the one on screen.
+    getState(workspaceId) {
+      assert.equal(workspaceId, WORKSPACE);
+      return { activeTabId: [...tabs.keys()].pop() ?? null };
+    },
   };
   return {
     service,
@@ -177,6 +182,26 @@ test("an action card's Open shows the Bot's tab already on that page and holds i
   ]);
   assert.equal(browser.tabs.size, 1);
   assert.deepEqual(browser.heldBy("tab-0"), { holdId: "wait-1", reason: "handoff" });
+});
+
+test("a step that names no page holds the tab the Bot is on, as it is, and opens nothing without one", async () => {
+  const { browser, handoffs, open, ask } = setup({ owner: owner(1) });
+  const card = ask("wait-1", "action");
+  assert.equal(await open(BOT, "wait-1", undefined, "handoff"), false, "no tab yet: nothing to hold");
+  assert.equal(browser.created.length, 0);
+  browser.tabs.set("tab-9", { url: "https://shop.example/checkout" });
+  assert.equal(await open(BOT, "wait-1", undefined, "handoff"), true);
+  assert.deepEqual(browser.created.map(({ command, context }) => [command, context.source]), [
+    [{ action: "select", tabId: "tab-9" }, "user"],
+  ]);
+  assert.equal(browser.tabs.get("tab-9")?.url, "https://shop.example/checkout", "the page stays where the Bot left it");
+  assert.deepEqual(browser.heldBy("tab-9"), { holdId: "wait-1", reason: "handoff" });
+  assert.equal(await open(BOT, "wait-2", undefined, "sign_in"), false, "a sign-in always names its page");
+
+  handoffs.answer(BOT, "wait-1", { outcome: "done" });
+  await card.answer;
+  await settled();
+  assert.equal(browser.heldBy("tab-9"), undefined);
 });
 
 test("Open again on the same card brings back the tab it opened; once the person closed it, the page opens again", async () => {

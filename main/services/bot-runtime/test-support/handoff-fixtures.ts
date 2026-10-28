@@ -2,7 +2,7 @@
 // and the tool entries a Bot turn would offer.
 
 import type { BotToolEntry } from "../bot-extension.js";
-import { botHandoffCandidate } from "../bot-handoff-tool.js";
+import { botHandoffCandidate, type BotHandoffDeps } from "../bot-handoff-tool.js";
 import type { BotHandoffs } from "../bot-handoffs.js";
 import { signInCandidate, type BotSignInDeps } from "../bot-sign-in-tool.js";
 import type { BotToolCandidate } from "../bot-tool-assembly.js";
@@ -26,8 +26,8 @@ function entryOf(candidate: BotToolCandidate): BotToolEntry {
 }
 
 /** The hand-off tool as a Bot turn offers it, answered through `handoffs`. */
-export function handoffEntries(handoffs: BotHandoffs, botId = "bot-h"): BotToolEntry[] {
-  return [entryOf(botHandoffCandidate(botId, handoffs))];
+export function handoffEntries(handoffs: BotHandoffs, botId = "bot-h", deps: BotHandoffDeps = {}): BotToolEntry[] {
+  return [entryOf(botHandoffCandidate(botId, handoffs, deps))];
 }
 
 /** The sign-in tool as a Bot turn offers it, answered through `handoffs`. */

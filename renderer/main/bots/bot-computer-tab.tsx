@@ -113,8 +113,9 @@ export function useBotComputerStart(bot: Pick<ComputerBot, "id" | "name">): BotC
 }
 
 /**
- * A sign-in on the Bot's own computer (plan §8.8) that the person now holds
- * brings the Computer tab forward, once per card, without moving focus. This
+ * A sign-in or a hand-off step on the Bot's own computer (plan §8.8) that the
+ * person now holds brings the Computer tab forward, once per card, without
+ * moving focus. This
  * is how the Mac's window shows the computer after Finish on your Mac on a
  * phone, where nobody pressed Open here; an Open on this Mac shows the tab
  * itself (`use-bot-handoff-actions.ts`). A remembered view shown while the
@@ -133,7 +134,7 @@ export function BotComputerSignInReveal({
 }) {
   const live = useBotLive(botId);
   const handoff = live.stale ? null : (live.snapshot?.handoff ?? null);
-  const waitId = handoff?.kind === "sign_in" && handoff.target === "computer" ? handoff.waitId : null;
+  const waitId = handoff?.target === "computer" ? handoff.waitId : null;
   const revealed = React.useRef<string | null>(null);
   const onRevealRef = React.useRef(onReveal);
   onRevealRef.current = onReveal;

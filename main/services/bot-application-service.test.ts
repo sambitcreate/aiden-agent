@@ -26,7 +26,10 @@ import {
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const CATALOG_REVISION = "catalog:1";
 
-function catalog(): BotCapabilityCatalogSnapshot {
+type FixtureConnection = { id: string; sourceId: string; available: boolean };
+
+function catalog(connections: readonly FixtureConnection[] = []): BotCapabilityCatalogSnapshot {
+  const connectionOptions = connections.map(({ id, available }) => ({ id, label: id, available }));
   const publicCatalog: BotCapabilityCatalog = {
     revision: CATALOG_REVISION,
     providers: [{
@@ -42,7 +45,7 @@ function catalog(): BotCapabilityCatalogSnapshot {
       kind: "bot_home",
     }],
     shellAvailable: true,
-    connections: [],
+    connections: connectionOptions,
     skills: [],
     otherCapabilities: [],
     notice: {
@@ -69,7 +72,14 @@ function catalog(): BotCapabilityCatalogSnapshot {
       }],
       fileScopes: [],
       shell: { available: true, shellFingerprint: "a".repeat(64), exactFingerprint: "b".repeat(64) },
-      connections: [],
+      connections: connections.map(({ sourceId }, index) => ({
+        option: connectionOptions[index]!,
+        sourceId,
+        connectionFingerprint: "c".repeat(64),
+        toolsetFingerprint: "d".repeat(64),
+        exactFingerprint: "e".repeat(64),
+        tools: [],
+      })),
       skills: [],
       otherCapabilities: [],
     },
@@ -102,6 +112,8 @@ function fixture(options: {
   inventoryLeaseInvalidationPlan?: boolean[];
   /** Sequential catalog revisions per snapshot call; last value repeats. */
   catalogRevisionPlan?: string[];
+  /** MCP connections the catalog offers. */
+  connections?: FixtureConnection[];
 } = {}) {
   const events: string[] = [];
   const catalogTargets: Array<string | undefined> = [];
@@ -138,7 +150,7 @@ function fixture(options: {
   let lastPlannedRevision = CATALOG_REVISION;
   const plannedCatalog = (): BotCapabilityCatalogSnapshot => {
     lastPlannedRevision = revisionPlan.shift() ?? lastPlannedRevision;
-    const snapshot = catalog();
+    const snapshot = catalog(options.connections);
     return { ...snapshot, catalog: { ...snapshot.catalog, revision: lastPlannedRevision } };
   };
   const inventoryInvalidationPlan = [...(options.inventoryLeaseInvalidationPlan ?? [])];
@@ -572,6 +584,12 @@ function fixture(options: {
         catalogRetainedProviders.push(input?.retainedProviders);
         return catalog();
       },
+      // A saved binding marked `drifted` stands for approved facts that changed
+      // since; `reconcileStates` answers each reconcile in turn.
+      async reconcile(binding: unknown) {
+        const saved = binding as { drifted?: boolean; reconcileStates?: string[] };
+        return { state: saved.reconcileStates?.shift() ?? (saved.drifted ? "drifted" : "ready") };
+      },
       async bindCustom(input?: {
         botId?: string;
         snapshot?: BotCapabilityCatalogSnapshot;
@@ -870,6 +888,163 @@ test("Bot access updates use a scoped catalog and publish only a validated priva
   );
   assert.equal(app.policies.get(owner.id)?.revision, fullResult.revision);
   assert.equal(app.policies.get(owner.id)?.accessMode, "full");
+});
+
+test("Add to this Bot grants one connected app to Custom access and nothing else", async () => {
+  const owner = bot("bot:add-connection");
+  const app = fixture({
+    bots: [owner],
+    connections: [
+      { id: "connection:notion", sourceId: "mcp-preset-notion", available: true },
+      { id: "connection:github", sourceId: "mcp-preset-github", available: false },
+    ],
+  });
+  await app.service.initialize();
+
+  assert.equal(
+    await app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    "already_allowed",
+    "Full access already uses every enabled connection",
+  );
+  assert.equal(app.policies.get(owner.id)?.accessMode, "full");
+  assert.equal(await app.service.botLacksConnection(owner.id, "mcp-preset-notion"), false);
+
+  const custom = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "custom",
+      catalogRevision: CATALOG_REVISION,
+      custom: {
+        providerId: "provider:opaque",
+        modelId: "model:opaque",
+        fileScopeIds: ["scope:home"],
+        shellEnabled: false,
+        connectionIds: [],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  });
+  app.botBindings.set(owner.id, { version: 1, connections: [] });
+  assert.equal(await app.service.botLacksConnection(owner.id, "mcp-preset-notion"), true);
+
+  await assert.rejects(
+    app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-github" }),
+    /Connect this app in Aiden first/u,
+  );
+  assert.equal(app.policies.get(owner.id)?.revision, custom.revision, "a refused add changes nothing");
+
+  assert.equal(
+    await app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    "added",
+  );
+  const added = app.policies.get(owner.id)!;
+  assert.equal(added.accessMode, "custom");
+  assert.deepEqual(added.custom, { ...custom.custom, connectionIds: ["connection:notion"] });
+
+  assert.equal(
+    await app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    "already_allowed",
+  );
+  assert.equal(app.policies.get(owner.id)?.revision, added.revision, "a second tap is a no-op");
+});
+
+test("Add to this Bot refuses to re-approve another app whose tools changed since access was saved", async () => {
+  const owner = bot("bot:add-connection-drift");
+  const app = fixture({
+    bots: [owner],
+    connections: [
+      { id: "connection:notion", sourceId: "mcp-preset-notion", available: true },
+      { id: "connection:linear", sourceId: "mcp-preset-linear", available: true },
+    ],
+  });
+  await app.service.initialize();
+  const custom = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "custom",
+      catalogRevision: CATALOG_REVISION,
+      custom: {
+        providerId: "provider:opaque",
+        modelId: "model:opaque",
+        fileScopeIds: [],
+        shellEnabled: false,
+        connectionIds: ["connection:linear"],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  });
+  // Linear was approved with tools that have since changed under the same id.
+  const drifted = { version: 1, connections: [{ sourceId: "mcp-preset-linear" }], drifted: true };
+  app.botBindings.set(owner.id, drifted);
+
+  await assert.rejects(
+    app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    /changed since you last saved it/u,
+  );
+  assert.equal(app.policies.get(owner.id)?.revision, custom.revision, "nothing was re-approved");
+  assert.deepEqual(app.policies.get(owner.id)?.custom?.connectionIds, ["connection:linear"]);
+  assert.equal(app.botBindings.get(owner.id), drifted);
+
+  // With Linear's saved approval still current, the same tap adds Notion.
+  app.botBindings.set(owner.id, { version: 1, connections: [{ sourceId: "mcp-preset-linear" }] });
+  assert.equal(
+    await app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    "added",
+  );
+  assert.deepEqual(app.policies.get(owner.id)?.custom?.connectionIds, ["connection:linear", "connection:notion"]);
+});
+
+test("Add to this Bot checks the other apps' approvals again when the save retries on fresh inventory", async () => {
+  const owner = bot("bot:add-connection-race");
+  // The setup save takes the first lease; the grant's first save lease is
+  // invalidated (inventory changed mid-save), so it retries on a third.
+  const app = fixture({
+    bots: [owner],
+    connections: [
+      { id: "connection:notion", sourceId: "mcp-preset-notion", available: true },
+      { id: "connection:linear", sourceId: "mcp-preset-linear", available: true },
+    ],
+    inventoryLeaseInvalidationPlan: [false, true, false],
+  });
+  await app.service.initialize();
+  const custom = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "custom",
+      catalogRevision: CATALOG_REVISION,
+      custom: {
+        providerId: "provider:opaque",
+        modelId: "model:opaque",
+        fileScopeIds: [],
+        shellEnabled: false,
+        connectionIds: ["connection:linear"],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  });
+  // Linear still matched when the save began, and changed before it could commit.
+  app.botBindings.set(owner.id, {
+    version: 1,
+    connections: [{ sourceId: "mcp-preset-linear" }],
+    reconcileStates: ["ready", "drifted"],
+  });
+
+  await assert.rejects(
+    app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    /changed since you last saved it/u,
+  );
+  assert.equal(app.inventoryLeaseAcquisitions(), 3, "the refusal came from the retried save");
+  assert.equal(app.policies.get(owner.id)?.revision, custom.revision, "nothing was re-approved");
+  assert.deepEqual(app.policies.get(owner.id)?.custom?.connectionIds, ["connection:linear"]);
 });
 
 test("Edit Bot model updates the one persistent Full Access chat without rewriting history", async () => {

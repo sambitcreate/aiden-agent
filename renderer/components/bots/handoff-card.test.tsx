@@ -152,3 +152,41 @@ test("the panel's copy of the buttons names the Bot's computer too, and a Bot on
   render(<HandoffActions handoff={onComputer} name="Ada" finishOn="Studio" onOpen={() => undefined} onAnswer={() => undefined} />);
   assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip"]);
 });
+
+test("a step on the Bot's own browser opens there, never in the person's browser, and is answered Done or Skip", () => {
+  const { answers, opens } = mount({ ...HANDOFF, action: "Choose the delivery slot", open: { url: "https://shop.example/checkout" }, target: "browser" });
+  screen.getByText("Your turn: Choose the delivery slot");
+  screen.getByText("Opens in Ada’s own browser at shop.example, not in yours.");
+  assert.equal(screen.queryByText("Opens shop.example"), null);
+  assert.deepEqual(buttonNames(), ["Open in Ada’s browser", "Skip", "Done"]);
+  fireEvent.click(screen.getByRole("button", { name: "Open in Ada’s browser" }));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  assert.equal(opens(), 1);
+  assert.deepEqual(answers, ["done"]);
+  cleanup();
+  mount({ ...HANDOFF, open: undefined, target: "computer" });
+  screen.getByText("Opens on Ada’s own computer, with you in control. Ada waits until you answer.");
+  assert.deepEqual(buttonNames(), ["Open Ada’s computer", "Skip", "Done"]);
+});
+
+test("a step on the Bot's screen on another Mac offers Finish there beside Skip and Done", () => {
+  let finishes = 0;
+  const answers: BotHandoffOutcome[] = [];
+  render(
+    <HandoffCard
+      name="Ada"
+      avatar={DEFAULT_BOT_AVATAR}
+      handoff={{ kind: "action", action: "Choose the delivery slot", onMac: true }}
+      finishOn="Studio"
+      onOpen={() => undefined}
+      onFinish={() => (finishes += 1)}
+      onAnswer={(outcome) => answers.push(outcome)}
+    />,
+  );
+  screen.getByText("This step is on Ada’s own screen on Studio.");
+  assert.deepEqual(buttonNames(), ["Finish on Studio", "Skip", "Done"]);
+  fireEvent.click(screen.getByRole("button", { name: "Finish on Studio" }));
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  assert.equal(finishes, 1);
+  assert.deepEqual(answers, ["done"]);
+});

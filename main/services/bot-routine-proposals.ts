@@ -437,6 +437,8 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
    * Finish revisions cut short. A replacement whose card was shown settles
    * the card it replaces; one saved but never shown (a quit before its card
    * was appended) is dropped, so the original card stays the one to answer.
+   * The conversation decides whether a card was shown: a quit between the
+   * append and the `revisionShown` save leaves a visible card unmarked.
    * Must run inside `serial(botId)`.
    */
   async function finishRevisions(
@@ -444,9 +446,11 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     records: BotRoutineProposalRecord[],
     append: Append = sessionAppend(botId),
   ): Promise<void> {
-    const unshown = records.filter((record) => record.revises !== undefined && !record.revisionShown && record.status === "pending");
-    if (unshown.length > 0) {
-      records.splice(0, records.length, ...records.filter((record) => !unshown.includes(record)));
+    const unmarked = records.filter((record) => record.revises !== undefined && !record.revisionShown && record.status === "pending");
+    if (unmarked.length > 0) {
+      const shownIds = await shownCardIds(botId);
+      for (const record of unmarked) if (shownIds.has(record.proposalId)) record.revisionShown = true;
+      records.splice(0, records.length, ...records.filter((record) => !unmarked.includes(record) || record.revisionShown));
       await save(botId, records);
     }
     for (const replacement of [...records]) {
@@ -456,6 +460,17 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       await settle(botId, records, index, "dismissed", { append, supersededBy: replacement.proposalId });
       revised(botId, replacement.revises, replacement);
     }
+  }
+
+  /** The ids of the proposal cards in the Bot's conversation. */
+  async function shownCardIds(botId: string): Promise<Set<string>> {
+    const ids = new Set<string>();
+    for (const entry of await dependencies.conversationEntries(botId)) {
+      if (entry.kind !== BOT_ROUTINE_PROPOSAL_ENTRY_KIND) continue;
+      const data = entry.data as { proposalId?: unknown } | null;
+      if (data && typeof data === "object" && typeof data.proposalId === "string") ids.add(data.proposalId);
+    }
+    return ids;
   }
 
   /**

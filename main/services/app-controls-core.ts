@@ -47,6 +47,11 @@ export interface AppControlDependencies {
   loadOperations(): Promise<StoredAppOperation[]>;
   saveOperations(operations: StoredAppOperation[]): Promise<void>;
   onChanged(): void;
+  /**
+   * Refuses a change that can't take effect cleanly right now, before any
+   * intent is stored, so a retry with a fresh operation is not blocked.
+   */
+  admit?(operation: AppControlOperation): Promise<void> | void;
 }
 export function appControlPolicy(settings: AppSettings): AppControlPolicy {
   return resolveAppControlPolicy(settings);
@@ -96,7 +101,7 @@ const GROUPS: Record<
         "Terminal theme",
         "Theme for this CLI session and its saved terminal defaults.",
       ],
-      ["appearance.mode", "Theme", "Choose the serving app's color mode."],
+      ["appearance.mode", "Color mode", "Light, dark, or match the system. Color themes are in Settings → Appearance."],
       ["appearance.chatWidth", "Chat width", "Width of conversations on the serving desktop."],
       ["appearance.reduceMotion", "Reduce motion", "Prefer less motion on the serving desktop."],
     ],
@@ -224,6 +229,7 @@ export class AppControlsService {
       }
       if (operation.expectedRevision !== appControlRevision(state, operation.control))
         throw new Error("Settings changed. Refresh this control before trying again.");
+      await this.deps.admit?.(operation);
       if (!context.isCurrent()) throw new Error("Control target is no longer available.");
       if (operations.length >= 500)
         throw new Error(

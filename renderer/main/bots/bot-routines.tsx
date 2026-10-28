@@ -3,13 +3,14 @@ import { CalendarClock, ChevronRight, Plus, RotateCcw } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, Text } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
+import { queryKeys } from "../../lib/queries";
 import type { BotRoutine } from "../../../main/services/scheduled-bot-routines";
 import type { BotDefinition } from "../../shared/bots";
 import { formatBotRoutineLabel } from "../../shared/bot-routine-label";
 import { BOT_DAILY_CHECKIN_SUGGESTION } from "../../shared/bot-routine-proposals";
 import { BotRoutineEditor } from "./bot-routine-editor";
 
-export const botRoutinesKey = (botId: string) => ["bot-routines", botId] as const;
+export const botRoutinesKey = queryKeys.botRoutines;
 
 type Editing = BotRoutine | "new" | "suggestion" | null;
 
