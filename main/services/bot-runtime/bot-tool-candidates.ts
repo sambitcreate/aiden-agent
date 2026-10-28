@@ -204,20 +204,26 @@ export function routineNotesCandidate(
  */
 export function routinesCandidate(
   botId: string,
-  dependencies: Omit<BotRoutinesToolDependencies, "propose"> & {
+  dependencies: Omit<BotRoutinesToolDependencies, "propose" | "revise"> & {
     propose(
       botId: string,
       input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
-      append: (kind: string, data: Record<string, unknown>) => Promise<void>,
-    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string; until?: number }>;
+      append: RoutineCardAppend,
+    ): ReturnType<BotRoutinesToolDependencies["propose"]>;
+    revise?(
+      botId: string,
+      proposalId: string,
+      input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
+      append: RoutineCardAppend,
+    ): ReturnType<NonNullable<BotRoutinesToolDependencies["revise"]>>;
   },
 ): BotToolCandidate {
-  const build = (append: (kind: string, data: Record<string, unknown>) => Promise<void>) =>
+  const { propose, revise, ...rest } = dependencies;
+  const build = (append: RoutineCardAppend) =>
     createBotRoutinesTool(botId, {
-      list: dependencies.list,
-      pause: dependencies.pause,
-      ...(dependencies.recentDecisions ? { recentDecisions: dependencies.recentDecisions } : {}),
-      propose: (id, input) => dependencies.propose(id, input, append),
+      ...rest,
+      propose: (id, input) => propose(id, input, append),
+      ...(revise ? { revise: (id: string, proposalId: string, input: Parameters<BotRoutinesToolDependencies["propose"]>[1]) => revise(id, proposalId, input, append) } : {}),
     });
   return {
     tool: build(async () => {
@@ -227,6 +233,8 @@ export function routinesCandidate(
     bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),
   };
 }
+
+type RoutineCardAppend = (kind: string, data: Record<string, unknown>) => Promise<void>;
 
 /**
  * The Bot's `propose_skill` tool. The card is appended to the calling
