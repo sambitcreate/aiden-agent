@@ -146,6 +146,7 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
+  botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
 });
 

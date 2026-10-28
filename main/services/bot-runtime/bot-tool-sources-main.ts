@@ -85,6 +85,11 @@ export interface BotToolSourceDeps {
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
+  /**
+   * The Bot's own Custom access leaves this connection out: the same check its
+   * connect card uses, so the tool and the card agree on "Add to this Bot".
+   */
+  botLacksConnection?(botId: string, sourceId: string): Promise<boolean>;
   /** The Bot's name, for what its browser tells the person. */
   botName?(botId: string): Promise<string | undefined>;
 }
@@ -409,18 +414,24 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
+      const turnLacksConnection = (sourceId: string) =>
+        authority.accessMode === "custom" &&
+        !authority.connections.some((connection) => connection.sourceId === sourceId);
+      // Only the Bot's own access can be widened from a card; a chat reduction stays as it is.
+      const botLacksConnection = async (id: string, sourceId: string) =>
+        deps.botLacksConnection ? deps.botLacksConnection(id, sourceId) : turnLacksConnection(sourceId);
       tools.push(
         suggestConnectionCandidate(botId, {
           isConnected,
           isDismissed: (id, pluginId) => deps.dismissals.isDismissed(id, pluginId),
-          // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
-          botLacksConnection: (_id, pluginId) => {
+          botLacksConnection: async (id, pluginId) => {
             const sourceId = connectionSourceIdFor(pluginId);
-            return (
-              authority.accessMode === "custom" &&
-              sourceId !== undefined &&
-              !authority.connections.some((connection) => connection.sourceId === sourceId)
-            );
+            return sourceId !== undefined && (await botLacksConnection(id, sourceId));
+          },
+          chatLacksConnection: async (id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return sourceId !== undefined && turnLacksConnection(sourceId) && !(await botLacksConnection(id, sourceId));
           },
         }),
       );

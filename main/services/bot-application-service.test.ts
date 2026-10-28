@@ -584,6 +584,10 @@ function fixture(options: {
         catalogRetainedProviders.push(input?.retainedProviders);
         return catalog();
       },
+      // A saved binding marked `drifted` stands for approved facts that changed since.
+      async reconcile(binding: unknown) {
+        return { state: (binding as { drifted?: boolean }).drifted ? "drifted" : "ready" };
+      },
       async bindCustom(input?: {
         botId?: string;
         snapshot?: BotCapabilityCatalogSnapshot;
@@ -943,6 +947,55 @@ test("Add to this Bot grants one connected app to Custom access and nothing else
     "already_allowed",
   );
   assert.equal(app.policies.get(owner.id)?.revision, added.revision, "a second tap is a no-op");
+});
+
+test("Add to this Bot refuses to re-approve another app whose tools changed since access was saved", async () => {
+  const owner = bot("bot:add-connection-drift");
+  const app = fixture({
+    bots: [owner],
+    connections: [
+      { id: "connection:notion", sourceId: "mcp-preset-notion", available: true },
+      { id: "connection:linear", sourceId: "mcp-preset-linear", available: true },
+    ],
+  });
+  await app.service.initialize();
+  const custom = await app.service.updateBotAccess({
+    audienceId: "device:a",
+    botId: owner.id,
+    expectedRevision: app.policies.get(owner.id)!.revision,
+    access: {
+      accessMode: "custom",
+      catalogRevision: CATALOG_REVISION,
+      custom: {
+        providerId: "provider:opaque",
+        modelId: "model:opaque",
+        fileScopeIds: [],
+        shellEnabled: false,
+        connectionIds: ["connection:linear"],
+        skillIds: [],
+        otherCapabilityIds: [],
+      },
+    },
+  });
+  // Linear was approved with tools that have since changed under the same id.
+  const drifted = { version: 1, connections: [{ sourceId: "mcp-preset-linear" }], drifted: true };
+  app.botBindings.set(owner.id, drifted);
+
+  await assert.rejects(
+    app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    /changed since you last saved it/u,
+  );
+  assert.equal(app.policies.get(owner.id)?.revision, custom.revision, "nothing was re-approved");
+  assert.deepEqual(app.policies.get(owner.id)?.custom?.connectionIds, ["connection:linear"]);
+  assert.equal(app.botBindings.get(owner.id), drifted);
+
+  // With Linear's saved approval still current, the same tap adds Notion.
+  app.botBindings.set(owner.id, { version: 1, connections: [{ sourceId: "mcp-preset-linear" }] });
+  assert.equal(
+    await app.service.grantBotConnection({ audienceId: "device:a", botId: owner.id, sourceId: "mcp-preset-notion" }),
+    "added",
+  );
+  assert.deepEqual(app.policies.get(owner.id)?.custom?.connectionIds, ["connection:linear", "connection:notion"]);
 });
 
 test("Edit Bot model updates the one persistent Full Access chat without rewriting history", async () => {

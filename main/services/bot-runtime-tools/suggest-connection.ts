@@ -93,9 +93,9 @@ export async function resolveConnectCardStatus(
 ): Promise<ConnectCardStatus> {
   if (await deps.isConnected(card.pluginId)) {
     const sourceId = connectionSourceIdFor(card.pluginId);
-    return sourceId !== undefined && (await deps.botLacksConnection(botId, sourceId))
-      ? "needs_access"
-      : "connected";
+    if (sourceId === undefined || !(await deps.botLacksConnection(botId, sourceId))) return "connected";
+    // Not now on "Add to this Bot" settles the card without granting anything.
+    return (await deps.isDismissed(botId, card.pluginId)) ? "dismissed" : "needs_access";
   }
   if (await deps.isDismissed(botId, card.pluginId)) return "dismissed";
   return card.status;
@@ -109,6 +109,11 @@ export interface SuggestConnectionDeps {
    * leaves it out. The card then offers "Add to this Bot" instead.
    */
   botLacksConnection?(botId: string, pluginId: string): MaybePromise<boolean>;
+  /**
+   * Optional: true when the Bot's own access includes the app but this chat's
+   * narrower access leaves it out. No card can change that, so none is shown.
+   */
+  chatLacksConnection?(botId: string, pluginId: string): MaybePromise<boolean>;
   /** True after the person chose Not now for this plugin on this Bot. */
   isDismissed(botId: string, pluginId: string): MaybePromise<boolean>;
   appendConnectCard(botId: string, card: ConnectCardEntry): MaybePromise<void>;
@@ -119,6 +124,7 @@ export interface SuggestConnectionDeps {
 export type SuggestConnectionStatus =
   | "suggested"
   | "already_connected"
+  | "chat_restricted"
   | "dismissed"
   | "pending"
   | "unknown_plugin";
@@ -190,6 +196,13 @@ export function createSuggestConnectionTool(
         const id = suggestion.pluginId;
         const connected = await deps.isConnected(id);
         const needsAccess = connected && (await deps.botLacksConnection?.(botId, id)) === true;
+        if (connected && !needsAccess && (await deps.chatLacksConnection?.(botId, id)) === true) {
+          return result(
+            "chat_restricted",
+            id,
+            `${suggestion.name} is connected and in your Bot access, but this chat's own access was narrowed and leaves it out, so you can't use it here. Tell the person; a card can't change this chat's access.`,
+          );
+        }
         if (connected && !needsAccess) {
           return result(
             "already_connected",
