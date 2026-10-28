@@ -407,6 +407,18 @@ test("approval keys leave the message box alone once something is typed", () => 
   fireEvent.keyDown(deny, primaryKey("Enter"));
   fireEvent.keyDown(deny, primaryKey("Backspace"));
   assert.deepEqual(decisions, []);
+
+  // Spaces alone are still typing: ⌘⌫ there deletes to the line start.
+  fireEvent.change(composer, { target: { value: "  " } });
+  composer.focus();
+  fireEvent.keyDown(composer, primaryKey("Backspace"));
+  assert.deepEqual(decisions, []);
+
+  // So is an empty box with an attachment or skill staged, which the box marks.
+  fireEvent.change(composer, { target: { value: "" } });
+  composer.setAttribute("data-message-draft", "attached");
+  fireEvent.keyDown(composer, primaryKey("Enter"));
+  assert.deepEqual(decisions, []);
 });
 
 test("approval keys leave other text fields, the terminal and the file editor alone, even when empty", () => {

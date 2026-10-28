@@ -2353,8 +2353,9 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
-              // Approval keys stay off while this holds a draft, wherever focus is.
-              data-message-draft=""
+              // Approval keys stay off while this holds a draft, wherever focus is; the
+              // value marks staged attachments or a skill that the text alone doesn't show.
+              data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}

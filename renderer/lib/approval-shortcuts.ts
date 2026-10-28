@@ -36,20 +36,23 @@ function editableText(target: Element): string | null {
   return null;
 }
 
-const hasText = (element: Element) => (editableText(element) ?? "").trim() !== "";
+// Any character counts, spaces included, and so does a staged attachment or skill,
+// which the message box marks with a non-empty `data-message-draft`.
+const holdsDraft = (element: Element) =>
+  (editableText(element) ?? "") !== "" || (element.getAttribute("data-message-draft") ?? "") !== "";
 
 /**
  * Whether the keys are free for the approval: focus is on the message box or
  * on something that takes no typing (never another text field, the terminal,
- * the file editor or a device screen), the message box is empty even after
- * focus moves to a button, and no dialog, menu or picker is open on top.
+ * the file editor or a device screen), the message box is empty (no text, not
+ * even spaces, and nothing attached) even after focus moves to a button, and no dialog, menu or picker is open on top.
  */
 export function approvalShortcutTargetIsFree(target: EventTarget | null, root: ParentNode): boolean {
   const focused = target instanceof Element ? target : null;
   if (isReservedTypingSurface(focused)) return false;
   if (isEditableTypingTarget(focused) && !focused?.closest("[data-message-draft]")) return false;
   for (const draft of root.querySelectorAll("[data-message-draft]")) {
-    if (hasText(draft)) return false;
+    if (holdsDraft(draft)) return false;
   }
   return !typingRedirectBlockedByOverlay(root, focused);
 }
