@@ -26,6 +26,7 @@ import {
   normalizeBotHandoffAction,
   withoutBotHandoffControls,
   type BotHandoffResultDetails,
+  type BotHandoffTarget,
 } from "../../../renderer/shared/bot-handoffs.js";
 import { isBoundedBotText } from "../../../renderer/shared/bot-capabilities.js";
 import { handoffDoneText, handoffSkippedText } from "./bot-handoff-text.js";
@@ -43,10 +44,36 @@ const DESCRIPTION =
   "and Skip, and their answer comes back as this tool's result: wait for it, then check the result before you " +
   "continue. Never ask for passwords or codes in the chat.";
 
+/** Where this Bot can hand a step over in its own browser or on its own computer, this turn. */
+export interface BotHandoffTargets {
+  browser: boolean;
+  computer: boolean;
+}
+
+/** The tool's description, with `where` explained only for what the Bot has. */
+export function botHandoffDescription(targets: BotHandoffTargets = { browser: false, computer: false }): string {
+  const where = [
+    targets.browser ? 'where: "browser" for a page in your browser' : undefined,
+    targets.computer ? 'where: "computer" for a step on your own computer' : undefined,
+  ].filter((value) => value !== undefined);
+  if (where.length === 0) return DESCRIPTION;
+  return (
+    `${DESCRIPTION} When the step is in your own ${targets.browser && targets.computer ? "browser or computer" : targets.browser ? "browser" : "computer"}, ` +
+    `pass ${where.join(", or ")} (with \`open.url\` for the page): the person does it there, on the Mac or by ` +
+    "finishing on the Mac from their phone, never in their own browser."
+  );
+}
+
+export interface BotHandoffDeps {
+  /** Where the step may be, for the description and the check. Left out: neither. */
+  targets?: BotHandoffTargets;
+}
+
 interface HandoffParams {
   action: string;
   why?: string;
   open?: { url: string };
+  target?: BotHandoffTarget;
 }
 
 /**
@@ -64,8 +91,8 @@ export function handoffWhyOf(value: unknown): string | undefined {
 }
 
 /** The model's arguments, checked again here: the harness's schema check cannot see https or blank text. */
-function parseParams(params: unknown): HandoffParams {
-  const record = (params ?? {}) as { action?: unknown; why?: unknown; open?: unknown };
+function parseParams(params: unknown, targets: BotHandoffTargets): HandoffParams {
+  const record = (params ?? {}) as { action?: unknown; why?: unknown; open?: unknown; where?: unknown };
   if (typeof record.action !== "string") throw new Error("A hand-off needs an action: the step the person should do.");
   const action = normalizeBotHandoffAction(record.action);
   if (!action) throw new Error("A hand-off needs an action: the step the person should do.");
@@ -83,14 +110,32 @@ function parseParams(params: unknown): HandoffParams {
     }
     open = { url: href };
   }
-  return { action, ...(why === undefined ? {} : { why }), ...(open === undefined ? {} : { open }) };
+  let target: BotHandoffTarget | undefined;
+  if (record.where !== undefined) {
+    if (record.where !== "browser" && record.where !== "computer") {
+      throw new Error("`where` must be \"browser\" or \"computer\".");
+    }
+    if (!targets[record.where]) {
+      throw new Error(
+        record.where === "browser" ? "You have no browser to hand a step over in." : "You have no computer to hand a step over on.",
+      );
+    }
+    target = record.where;
+  }
+  return {
+    action,
+    ...(why === undefined ? {} : { why }),
+    ...(open === undefined ? {} : { open }),
+    ...(target === undefined ? {} : { target }),
+  };
 }
 
-export function botHandoffCandidate(botId: string, handoffs: BotHandoffs): BotToolCandidate {
+export function botHandoffCandidate(botId: string, handoffs: BotHandoffs, deps: BotHandoffDeps = {}): BotToolCandidate {
+  const targets = deps.targets ?? { browser: false, computer: false };
   const schema: AgentTool = {
     name: BOT_HANDOFF_TOOL_NAME,
     label: "Hand Off",
-    description: DESCRIPTION,
+    description: botHandoffDescription(targets),
     // One card at a time: a second hand-off in the same round waits for the first.
     executionMode: "sequential",
     parameters: Type.Object({
@@ -110,6 +155,19 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs): BotTo
           }),
         }),
       ),
+      ...(targets.browser || targets.computer
+        ? {
+            where: Type.Optional(
+              Type.Union(
+                [
+                  ...(targets.browser ? [Type.Literal("browser")] : []),
+                  ...(targets.computer ? [Type.Literal("computer")] : []),
+                ],
+                { description: "Set when the step is in your own browser or on your own computer." },
+              ),
+            ),
+          }
+        : {}),
     }),
     async execute(): Promise<AgentToolResult<null>> {
       throw new Error("A hand-off needs the Bot's conversation.");
@@ -122,7 +180,7 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs): BotTo
     bind: (call: BotToolCall): AgentTool => ({
       ...schema,
       async execute(_toolCallId, params): Promise<AgentToolResult<BotHandoffResultDetails>> {
-        const { action, why, open } = parseParams(params);
+        const { action, why, open, target } = parseParams(params, targets);
         const memo = await call.memo<{ waitId: string }>(BOT_HANDOFF_MEMO, { waitId: randomUUID() });
         const answer = await handoffs.request({
           botId,
@@ -132,6 +190,7 @@ export function botHandoffCandidate(botId: string, handoffs: BotHandoffs): BotTo
           action,
           ...(why === undefined ? {} : { why }),
           ...(open === undefined ? {} : { open }),
+          ...(target === undefined ? {} : { target }),
           source: "tool",
           signal: call.signal,
         });

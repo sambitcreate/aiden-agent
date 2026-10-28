@@ -238,7 +238,7 @@ fun AidenChatDetailScreen(
     val follow = rememberAidenTranscriptFollowState(listState)
 
     val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
-    // Revision 43: a Workspace chat's total, or a Bot chat's month, re-read after each reply
+    // Revision 44: a Workspace chat's total, or a Bot chat's month, re-read after each reply
     // settles and after a send the Mac refused.
     val spending = remember(chatId) { AidenSpendingNoticeState() }
     val spendingTransport = readAloudClient.takeIf { serverInfo?.supportsSpendingLimits == true }

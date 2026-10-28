@@ -81,7 +81,7 @@ object AidenRemoteProtocol {
     /** Contract revision 35: `GET /chats/{chatId}/visuals/{visualId}/document`, the
      * self-contained page a phone opens full screen when a visual's snapshot is tapped. */
     const val CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1"
-    /** Contract revision 43: a chat's or Bot's spending limit, and Allow more once it is reached. */
+    /** Contract revision 44: a chat's or Bot's spending limit, and Allow more once it is reached. */
     const val SPENDING_LIMITS_FEATURE = "spending-limits-v1"
     const val MAX_QUESTION_COUNT = 4
     const val MIN_QUESTION_OPTIONS = 2
@@ -564,6 +564,12 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_HANDOFF_NOTES = AidenRemoteCapability("bot:handoff-notes")
         /**
+         * Contract revision 43: a step on the Bot's own browser or computer says so (`onMac`), and
+         * this phone offers Finish on your Mac for it. It grants no authority, and is asked for
+         * like [BOT_HANDOFF_NOTES].
+         */
+        val BOT_HANDOFF_ON_MAC = AidenRemoteCapability("bot:handoff-on-mac")
+        /**
          * Contract revision 39: this phone renders the structured `schedule` card
          * on scheduled-task approvals. It grants no authority: the Mac attaches the card only
          * when the device also holds `schedule:read`. There is no `/server` feature token: the
@@ -603,7 +609,7 @@ data class AidenRemoteCapability(val rawValue: String) {
         val PHONE_BOT_ACTIVITY = listOf(BOT_ACTIVITY)
 
         /** Negotiable when the Mac lists them in `serverCapabilities`, in a call of their own. */
-        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS, BOT_HANDOFF_NOTES)
+        val PHONE_BOT_HANDOFFS = listOf(BOT_HANDOFFS, BOT_HANDOFF_NOTES, BOT_HANDOFF_ON_MAC)
 
         /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)

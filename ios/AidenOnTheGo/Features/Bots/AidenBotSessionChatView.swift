@@ -202,7 +202,7 @@ struct AidenBotSessionChatView: View {
         .task(id: filesLookupKey) {
             await loadFilesTools()
         }
-        // Revision 43: re-read the Bot's month after each reply, send and refusal.
+        // Revision 44: re-read the Bot's month after each reply, send and refusal.
         .task(id: spendingRefreshKey) {
             await spending.refresh(owner: .bot(botID), transport: spendingTransport)
         }

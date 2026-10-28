@@ -31,7 +31,7 @@ The model never changes while waiting.
 
 - Waits: rejection reading from status, rate-limit headers and error text; reset time or backoff; one test request per limit; restart-surviving waits; a wait row with Retry now in chats and Bot chats; Settings → Limits & spending.
 - Spending: a ledger built on the cost Pi records per response, a meter around every chat, Bot, helper and routine request, notices with Allow more on the Mac, a Bot Profile monthly limit, Telegram refusal lines.
-- Phones: Remote revision 43 (`spending-limits-v1`, provisional), spending status and Allow more routes, iOS and Android notices.
+- Phones: Remote revision 44 (`spending-limits-v1`, provisional), spending status and Allow more routes, iOS and Android notices.
 
 ## Not done
 

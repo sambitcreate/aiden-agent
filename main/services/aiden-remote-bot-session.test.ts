@@ -2855,6 +2855,41 @@ test("only a device that also asked for hand-off notes is told a password card t
   }
 });
 
+test("only a device that asked for on-Mac steps is told one is on the Bot's own screen; others get the card without its page", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const ON_MAC = { handoffs: true, handoffOnMac: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const onMac = await openAudienceStream(service, ON_MAC);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await onMac.until(() => onMac.frames.length >= 1, "the on-Mac snapshot");
+    handOff({
+      waitId: fixture.onMacHandoff.waitId,
+      action: fixture.onMacHandoff.action,
+      why: fixture.onMacHandoff.why,
+      open: { url: "https://shop.example.com/checkout" },
+      target: "browser",
+    });
+    const { onMac: _onMac, ...rev40Card } = fixture.onMacHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, ON_MAC)).handoff, fixture.onMacHandoff);
+    // An older holder can't offer Finish on your Mac, but never gets the Bot's page either.
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev40Card);
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffOnMac: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await onMac.until(() => card(onMac) !== undefined, "the on-Mac hand-off frame");
+    assert.deepEqual(card(onMac), fixture.onMacHandoff);
+    assert.deepEqual(card(holder), rev40Card);
+  } finally {
+    await holder.close();
+    await onMac.close();
+    await service.close();
+  }
+});
+
 test("a hand-off, its answer and a pause reach holders and other devices frame for frame as the fixture shows, at the same seqs", async () => {
   const fixture = (await contractFixture()).botHandoffs;
   const driven = drivenConversation(scoutConversation());

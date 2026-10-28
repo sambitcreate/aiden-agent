@@ -33,6 +33,7 @@ export interface BotBrowserHandoffService {
   transferOwner(workspaceId: string, owner: RendererDocumentOwner): void;
   command(workspaceId: string, command: BrowserCommand, context: BrowserCommandContext): Promise<BrowserCommandResult>;
   hold(workspaceId: string, tabId: string, hold: BrowserHold): void;
+  getState(workspaceId: string): { activeTabId: string | null };
   release(workspaceId: string, holdId: string): void;
 }
 
@@ -51,13 +52,15 @@ export interface BotBrowserHandoffDeps {
 
 /**
  * Open `url` for the card `waitId` of `botId` in the Bot's browser and hold
- * its tab for the person. `owner` is the document whose Open was pressed.
- * False when the Bot's browser can't open it.
+ * its tab for the person. Without a `url` (a step on the Bot's browser that
+ * names no page) the Bot's current tab is brought forward and held as it is.
+ * `owner` is the document whose Open was pressed. False when the Bot's
+ * browser can't open it, or has no tab to hold.
  */
 export type BotBrowserHandoffOpener = (
   botId: string,
   waitId: string,
-  url: string,
+  url: string | undefined,
   hold: "handoff" | "sign_in",
   owner?: RendererDocumentOwner,
 ) => Promise<boolean>;
@@ -150,7 +153,13 @@ export function createBotBrowserHandoffOpener(deps: BotBrowserHandoffDeps): BotB
     if (document !== undefined) service.transferOwner(workspaceId, document);
     const key = heldKey(botId, waitId);
     let tabId = await reopen(service, key, workspaceId);
-    if (tabId === undefined) {
+    if (tabId === undefined && url === undefined) {
+      if (hold === "sign_in") return false;
+      // No page named: the tab the Bot is on now, kept on its page.
+      const current = service.getState(workspaceId).activeTabId;
+      if (current === null) return false;
+      tabId = (await service.command(workspaceId, { action: "select", tabId: current }, { source: "user" })).tabId ?? current;
+    } else if (tabId === undefined && url !== undefined) {
       // `open_link` shows the Bot's tab already on that page, else opens one.
       const command: BrowserCommand =
         hold === "sign_in" ? { action: "create", url, show: true } : { action: "open_link", url };

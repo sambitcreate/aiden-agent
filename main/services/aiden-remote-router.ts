@@ -267,7 +267,7 @@ export interface AidenRemoteRouterDependencies {
   providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   /**
-   * Spending limits (contract revision 43). Absent: the spending routes are
+   * Spending limits (contract revision 44). Absent: the spending routes are
    * `not_found` and phones are not told `spending-limits-v1`.
    */
   spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
@@ -1664,7 +1664,7 @@ export function aidenRemoteServerFeatures(
     ...(support.botActivity ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
     // Bot message attachments (contract revision 33).
     ...(support.botAttachments ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
-    // Spending limits (contract revision 43): the Mac shows its own notices.
+    // Spending limits (contract revision 44): the Mac shows its own notices.
     ...(phone && support.spending ? [AIDEN_REMOTE_SPENDING_LIMITS_FEATURE] : []),
     // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
     ...(phone && support.mobileSimulators ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE] : []),
@@ -1817,6 +1817,14 @@ function holdsBotHandoffNotes(
   dependencies: AidenRemoteRouterDependencies,
 ): boolean {
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
+}
+
+/** Whether this device is also told when a hand-off step is on the Bot's own screen (revision 43). */
+function holdsBotHandoffOnMac(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
 }
 
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
@@ -2640,6 +2648,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           }),
         );
@@ -2663,6 +2672,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           },
         );

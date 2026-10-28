@@ -167,6 +167,10 @@ data class AidenServer(
     val offersBotHandoffNotes: Boolean
         get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_NOTES) == true
 
+    /** The Mac offers `bot:handoff-on-mac` (revision 43). Only a Mac serving hand-offs offers it. */
+    val offersBotHandoffOnMac: Boolean
+        get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_ON_MAC) == true
+
     /** Offered and held: show hand-off cards, the paused state, and Pause and Resume. */
     val supportsBotHandoffs: Boolean
         get() = offersBotHandoffs && capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS)
@@ -207,7 +211,7 @@ data class AidenServer(
     val supportsChatVisualViewer: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
 
-    /** The chat and Bot screens show the spending notice with Allow more (revision 43). */
+    /** The chat and Bot screens show the spending notice with Allow more (revision 44). */
     val supportsSpendingLimits: Boolean
         get() = features.contains(AidenRemoteProtocol.SPENDING_LIMITS_FEATURE)
 

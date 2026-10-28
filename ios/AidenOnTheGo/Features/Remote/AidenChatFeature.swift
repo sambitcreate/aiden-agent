@@ -5830,7 +5830,7 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
-    /// Revision 43: a Workspace chat's total, or a Bot chat's month.
+    /// Revision 44: a Workspace chat's total, or a Bot chat's month.
     private var spendingOwner: AidenSpendingOwner {
         model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
     }
