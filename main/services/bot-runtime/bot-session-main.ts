@@ -638,7 +638,8 @@ const runWatchdog = createBotRunWatchdog({
     botHandoffs.pending(botId).length > 0 ||
     botApprovals.pending(botId).length > 0 ||
     botQuestions.pending(botId).length > 0,
-  isWaitingOnUsageLimit: (botId) => usageLimits.waits().some((wait) => wait.ownerKind === "bot" && wait.ownerId === botId),
+  // Held back only: a test request already sent can still hang, and the watchdog catches it.
+  isWaitingOnUsageLimit: (botId) => usageLimits.gate.isHeld({ kind: "bot", id: botId }),
   stopForStall: async (botId) => {
     botRunStalls.mark(botId);
     try {

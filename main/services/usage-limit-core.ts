@@ -724,6 +724,14 @@ export class UsageLimitGate {
     return result;
   }
 
+  /** Whether a request of this owner waits for a limit to clear. A test request already sent is not waiting. */
+  isHeld(owner: UsageLimitOwner): boolean {
+    for (const waiter of this.waiters.values()) {
+      if (waiter.owner.kind === owner.kind && waiter.owner.id === owner.id) return true;
+    }
+    return false;
+  }
+
   /** The limit that holds a request on these keys now, account first. */
   private holding(keys: readonly string[]): UsageLimitEntry | undefined {
     for (const key of keys) {

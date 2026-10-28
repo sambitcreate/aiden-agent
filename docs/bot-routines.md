@@ -23,7 +23,7 @@ Desktop Bots heal their own routines (spec: `docs/superpowers/specs/2026-10-27-b
 - **Before a fire.** About 30 minutes before each enabled routine fires, Aiden checks the Bot once: its state, its model setting (repaired when only the stored details went stale), its AI sign-in (refreshed early), the connections a Custom grant names, and its Bot computer (read only; nothing is started). A problem becomes a card; a later passing check resolves it. Profile → Health shows the newest check and offers Check now.
 - **A reply that claims a failed step worked.** The result still reaches the person, with the line "One step didn't work: {step}. Check the chat.", and it counts toward the pause.
 - **Stuck runs the person started.** They are never stopped automatically. After 10 minutes without progress, a card asks Stop or Keep waiting.
-- **Waiting out a usage limit.** A run whose request waits for a provider's usage limit to clear is not stuck: the watchdog neither stops it nor raises a card while it waits, and its 10 minutes start again when the limit clears. See [usage limits and spending limits](usage-limits-and-spending.md).
+- **Waiting out a usage limit.** A run whose request waits for a provider's usage limit to clear is not stuck: the watchdog neither stops it nor raises a card while it waits, and its 10 minutes start again when the limit clears. Once the test request has gone out, a reply that hangs is caught as usual. See [usage limits and spending limits](usage-limits-and-spending.md).
 
 The standalone CLI records failure kinds but does not yet retry, pause routines, run pre-fire checks or raise cards.
 

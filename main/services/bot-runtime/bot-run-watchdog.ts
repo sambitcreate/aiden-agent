@@ -17,7 +17,7 @@ export interface BotRunWatchdogDependencies {
   lastProgressAt(botId: string): number | undefined;
   runKind(botId: string): "routine" | "attended" | null;
   isWaitingOnPerson(botId: string): boolean;
-  /** A request of this Bot's waits for a provider's usage limit to clear. */
+  /** A request of this Bot's is held back until a provider's usage limit clears (not one already sent). */
   isWaitingOnUsageLimit?(botId: string): boolean;
   stopForStall(botId: string): Promise<void>;
   raiseStall(botId: string): Promise<void>;

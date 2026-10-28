@@ -69,7 +69,8 @@ async function settle(): Promise<void> {
 type Script =
   | { kind: "text"; text: string }
   | { kind: "reject"; message: string; status?: number; headers?: Record<string, string> }
-  | { kind: "fail-after-text"; text: string; message: string };
+  | { kind: "fail-after-text"; text: string; message: string }
+  | { kind: "hang" };
 
 function scripted(m: Model<Api>, script: Script, options: SimpleStreamOptions | undefined): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
@@ -78,6 +79,7 @@ function scripted(m: Model<Api>, script: Script, options: SimpleStreamOptions | 
     const start = fauxAssistantMessage("");
     start.content = [];
     stream.push({ type: "start", partial: start });
+    if (script.kind === "hang") return;
     if (script.kind === "reject") {
       if (script.status !== undefined) await options?.onResponse?.({ status: script.status, headers: script.headers ?? {} }, m);
       const error = fauxAssistantMessage("", { stopReason: "error", errorMessage: script.message });
@@ -307,6 +309,25 @@ test("a held limit that clears after the longest wait ends the wait, including o
   assert.match(rejected.errorMessage ?? "", /^429 /u);
   assert.equal(calls.length, 1);
   assert.deepEqual(gate.waits(), []);
+});
+
+test("a request is held while it waits for the reset, and not once its test request is out", async () => {
+  const owner = { kind: "bot" as const, id: "bot-1" };
+  const { calls, clock, gate, streamFn } = fixture(
+    [{ kind: "reject", message: RATE_LIMITED, status: 429, headers: { "retry-after": "60" } }, { kind: "hang" }],
+    { owner },
+  );
+  void streamFn(model(), context, {});
+  await settle();
+  assert.equal(calls.length, 1);
+  assert.equal(gate.isHeld(owner), true);
+  assert.equal(gate.isHeld({ kind: "bot", id: "bot-2" }), false);
+
+  // The reset passes: the test request goes out and the provider never answers.
+  await clock.advance(65_000);
+  assert.equal(calls.length, 2);
+  assert.equal(gate.isHeld(owner), false);
+  assert.deepEqual(gate.waits().map((wait) => wait.trying), [true]);
 });
 
 test("stopping a waiting reply ends it as stopped without another request", async () => {
