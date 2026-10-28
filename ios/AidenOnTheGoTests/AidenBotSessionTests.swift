@@ -4834,6 +4834,30 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         XCTAssertEqual(transport.answers.map(\.request.outcome), [.skipped])
     }
 
+    func testAStepOnTheBotsOwnScreenIsFinishedOnTheMacOrAnsweredDoneOrSkip() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            var card = try XCTUnwrap(object["handoff"] as? [String: Any])
+            card.removeValue(forKey: "open")
+            card["onMac"] = true
+            object["handoff"] = card
+        })
+        XCTAssertEqual(model.handoff?.onMac, true)
+        XCTAssertTrue(model.composerAnswersHandoff, "a note still marks the step done")
+
+        transport.opened = false
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(transport.opens.map(\.waitId), [waitID])
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden on your Mac to finish this step.")
+        transport.opened = true
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish this step on your Mac.")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card stays until it is answered")
+
+        let done = await model.answerHandoff(.done)
+        XCTAssertTrue(done)
+        XCTAssertEqual(transport.answers.map(\.request.outcome), [.done])
+    }
+
     func testFixtureFramesShowSettleRecordAndPauseAndAlertOnceForANewWait() async throws {
         let frames = try frames()
         let first = try XCTUnwrap(frames.first)

@@ -1,3 +1,4 @@
+import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
@@ -120,6 +121,7 @@ import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
+import { requestAppPath } from "./app-navigation.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
 import { systemTimezone } from "./schedule-store.js";
 import { botMemoryService } from "./bot-memory/bot-memory-main.js";
@@ -427,6 +429,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeHostRuns: AidenRemoteHostRunService | undefined;
   let activeHostFeed: AidenRemoteHostFeedService | undefined;
   let activeBotSessions: AidenRemoteBotSessionService | undefined;
+  // A connect card a phone shows as pending turns Connected once the app is set up here.
+  mcpLiveStatus.subscribe(() => void activeBotSessions?.refreshConnectCards());
   let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
   const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
@@ -932,7 +936,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
                   return connectCardStatus(botId, card);
                 },
-                connectionRequested: async ({ pluginId }) => {
+                connectionRequested: async ({ botId, pluginId }) => {
+                  // Already connected but left out of this Bot's access: the
+                  // Mac opens the Bot's chat, where the card offers "Add to this Bot".
+                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                  const card = { type: "connect_card", pluginId, reason: "", status: "pending" } as const;
+                  if ((await connectCardStatus(botId, card)) === "needs_access") {
+                    await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+                    return;
+                  }
                   if (!openConnectionSetup(pluginId)) {
                     throw new AidenRemoteServiceError("not_found", "Aiden can't connect that app.", 404);
                   }

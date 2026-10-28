@@ -99,6 +99,14 @@ reach cards, the Bot's own computer or browser, routines or subagents.
 - A card the password or money rule opened never quotes what the Bot was
   typing. Its reason, and the Done the Bot reads, name the field instead
   ("was about to: type into the “Card number” field").
+- A card a rule opened for the Bot's browser or computer tools is a step on
+  the Bot's own screen: on the Mac it offers "Open in <Bot>’s browser" or
+  "Open <Bot>’s computer" (never the person's own browser), and on a phone
+  (a device holding `bot:handoff-on-mac`) Finish on your Mac opens it there.
+  The Mac's Bot panel then shows that browser tab or the Computer tab, once
+  per card and without moving keyboard focus. A browser step that names no
+  page holds the tab the Bot is on, as it is; with no tab open, only the
+  chat comes forward.
 - Each turn's answer is its own transcript row, even when a provider reuses
   the same tool-call id in every turn.
 

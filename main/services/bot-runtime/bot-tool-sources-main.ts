@@ -18,12 +18,13 @@
 // builds; it never decides what a Bot may use.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
+import { connectionSourceIdFor, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -88,6 +89,11 @@ export interface BotToolSourceDeps {
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
+  /**
+   * The Bot's own Custom access leaves this connection out: the same check its
+   * connect card uses, so the tool and the card agree on "Add to this Bot".
+   */
+  botLacksConnection?(botId: string, sourceId: string): Promise<boolean>;
   /** The Bot's name, for what its browser tells the person. */
   botName?(botId: string): Promise<string | undefined>;
 }
@@ -128,6 +134,13 @@ export function isConnected(pluginId: string): Promise<boolean> {
     hasOAuthTokens: (server, preset) =>
       hasOAuthTokens({ ...server, url: server.url ?? (preset.transport === "http" ? preset.url : undefined) }),
   });
+}
+
+/** Where a call a rule handed to the person would have acted: the Bot's own browser or computer, else nowhere. */
+export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefined {
+  if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) return "browser";
+  if (toolName === BOT_COMPUTER_TOOL_NAME || toolName === BOT_COMPUTER_SHELL_TOOL_NAME) return "computer";
+  return undefined;
 }
 
 // Routine services load lazily: they import the scheduler, which must not
@@ -436,23 +449,39 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
         (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
+      const turnLacksConnection = (sourceId: string) =>
+        authority.accessMode === "custom" &&
+        !authority.connections.some((connection) => connection.sourceId === sourceId);
+      // Only the Bot's own access can be widened from a card; a chat reduction stays as it is.
+      const botLacksConnection = async (id: string, sourceId: string) =>
+        deps.botLacksConnection ? deps.botLacksConnection(id, sourceId) : turnLacksConnection(sourceId);
       tools.push(
         suggestConnectionCandidate(botId, {
           isConnected,
           isDismissed: (id, pluginId) => deps.dismissals.isDismissed(id, pluginId),
+          botLacksConnection: async (id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return sourceId !== undefined && (await botLacksConnection(id, sourceId));
+          },
+          chatLacksConnection: async (id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return sourceId !== undefined && turnLacksConnection(sourceId) && !(await botLacksConnection(id, sourceId));
+          },
         }),
       );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
-      tools.push(botHandoffCandidate(botId, botHandoffs));
       // Only in turns a person started (ingress also withholds it on routine,
       // catch-up, wake-up and intro runs), and only while the person's per-Bot
       // switch is on.
       if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
         tools.push(wakeUpCandidate(botId, lazyWakeUps));
       }
-      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       const signInOnComputer = has("computer") && facts.hasComputer;
+      // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
+      tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
       tools.push(
         signInCandidate(botId, botHandoffs, {
           ...(deps.botName ? { botName: deps.botName } : {}),

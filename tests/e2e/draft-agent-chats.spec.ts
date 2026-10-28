@@ -45,6 +45,29 @@ test("abandoned drafts never persist; first send creates exactly one conversatio
   expect((await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([sent.id]);
 });
 
+test("Back from Settings reopens an empty new agent instead of a missing chat", async ({ aiden }) => {
+  const { page, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  const draftRow = page.locator("[data-sidebar] [data-draft-chat]");
+  const composer = page.locator("textarea");
+  const draftId = await draftRow.getAttribute("data-draft-chat");
+  expect(draftId).toBeTruthy();
+  for (let visit = 0; visit < 2; visit++) {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await expect(composer).toBeEditable();
+    await expect(page.getByText(/no longer available/u)).toHaveCount(0);
+    await expect(composer).not.toHaveAttribute("placeholder", /no longer available/u);
+    // The same blank agent comes back, still renderer-only.
+    await expect(draftRow).toHaveCount(1);
+    expect(await draftRow.getAttribute("data-draft-chat")).toBe(draftId);
+    expect(await regularChats(userDataDir)).toEqual([]);
+  }
+  await composer.fill("Sent after a trip to Settings");
+  await composer.press("Enter");
+  await expect.poll(async () => (await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([draftId]);
+});
+
 test("startup migration removes legacy empty chats once and keeps sent conversations", async ({ aiden }) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.page.locator("textarea").fill("Keep this real conversation");
