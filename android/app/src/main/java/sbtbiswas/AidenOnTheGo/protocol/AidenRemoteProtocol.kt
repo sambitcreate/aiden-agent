@@ -556,7 +556,7 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_HANDOFF_NOTES = AidenRemoteCapability("bot:handoff-notes")
         /**
-         * Contract revision 41: a step on the Bot's own browser or computer says so (`onMac`), and
+         * Contract revision 42: a step on the Bot's own browser or computer says so (`onMac`), and
          * this phone offers Finish on your Mac for it. It grants no authority, and is asked for
          * like [BOT_HANDOFF_NOTES].
          */

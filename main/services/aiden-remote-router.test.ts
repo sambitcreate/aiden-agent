@@ -105,6 +105,8 @@ async function fixture(options: {
   visualViewer?: boolean;
   /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
+  /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
+  contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -462,6 +464,15 @@ async function fixture(options: {
             cancelForkSummary: async (id: string) => {
               calls.push(`fork-summary-cancel:${id}`);
               return { cancelled: true };
+            },
+          }
+        : {}),
+      ...(options.contextPressure
+        ? {
+            supportsContextPressure: true,
+            contextPressure: async (id: string, selection?: { providerId: string; modelId: string }) => {
+              calls.push(`context-pressure:${id}:${selection ? `${selection.providerId}/${selection.modelId}` : "chat-model"}`);
+              return options.contextPressure as never;
             },
           }
         : {}),
@@ -2399,6 +2410,31 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
     assert.equal(inbox.status, 200);
     assert.equal((await inbox.json()).conversations[0].canRespondToApproval, true);
 
+    // A search reaches the Bot service as typed, whichever way the client encoded it.
+    for (const [encoded, typed] of [
+      ["plan%20week", "plan week"],
+      ["caf%C3%A9%20%26%20bar", "café & bar"],
+      ["100%25+done%2B", "100% done+"],
+    ] as const) {
+      const searched = await fetch(`${app.base}/bot-conversations?query=${encoded}`, { headers });
+      assert.equal(searched.status, 200, encoded);
+      await searched.arrayBuffer();
+      assert.equal(app.calls[app.calls.length - 1], `bots:conversations:device-authorized-12345678:${typed}`, encoded);
+    }
+    // Only query values are decoded: an encoded path, a broken escape, an
+    // escape that isn't UTF-8 or one that decodes to a control is refused.
+    for (const target of [
+      "/bot%2Dconversations",
+      "/bot-conversations?query=plan%2",
+      "/bot-conversations?query=%FF",
+      "/bot-conversations?query=a%00b",
+      "/bot-conversations?query=a%0Ab",
+    ]) {
+      const refused = await fetch(`${app.base}${target}`, { headers });
+      assert.equal(refused.status, 400, target);
+      assert.equal((await refused.json()).error.code, "invalid_request", target);
+    }
+
     const uploaded = await fetch(`${app.base}/bots/bot-1/avatar`, {
       method: "PUT",
       headers: {
@@ -2436,6 +2472,9 @@ test("Bot inbox and avatar routes preserve device grants, approval ownership, an
       ),
       [
         "bots:conversations:device-authorized-12345678:plan week",
+        "bots:conversations:device-authorized-12345678:plan week",
+        "bots:conversations:device-authorized-12345678:café & bar",
+        "bots:conversations:device-authorized-12345678:100% done+",
         "bots:avatar:put:device-authorized-12345678:bot-1:bot_revision_1:bot-avatar-put-key-0001",
         `bots:avatar:content:bot-1:${metadata.assetRevision}`,
         `bots:avatar:delete:bot-1:${metadata.assetRevision}`,
@@ -6187,5 +6226,106 @@ test("a paired desktop's host feed carries paused Bot rows only when it holds bo
     } finally {
       await mac.close();
     }
+  }
+});
+
+test("context pressure is a desktop chat read gated by its feature, chat:read and the Bot-chat rule", async () => {
+  const answer = {
+    chatId: "chat-1",
+    pressure: {
+      contextTokens: 9_000,
+      contextWindow: 128_000,
+      inputBudgetTokens: 100_000,
+      reservedTokens: 28_000,
+      percentOfWindow: 7,
+      percentOfUsableInput: 9,
+      shouldCompact: false,
+      messageTokens: 3_000,
+      staticTokens: 6_000,
+      source: "estimated",
+      computedAt: 1_787_166_120_000,
+    },
+  };
+  const read = (base: string, query = "") => fetch(`${base}/chats/chat-1/context${query}`, { headers: HOST_HEADERS });
+  const contextCalls = (calls: string[]) => calls.filter((call) => call.startsWith("context-pressure:"));
+
+  const unwired = await fixture({ deviceType: "mac", capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), false);
+    const response = await read(unwired.base);
+    assert.equal(response.status, 404);
+    assert.equal(await errorCode(response), "not_found");
+  } finally {
+    await unwired.close();
+  }
+
+  // Phones are never told about it: their feature list is capped and they have no meter.
+  const phone = await fixture({ deviceType: "iphone", contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${phone.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), false);
+  } finally {
+    await phone.close();
+  }
+
+  const desktop = await fixture({ deviceType: "mac", contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${desktop.base}/server`, { headers: HOST_HEADERS })).json();
+    assert.equal(server.features.includes("chat-context-pressure-v1"), true);
+    const own = await read(desktop.base);
+    assert.equal(own.status, 200);
+    assert.deepEqual(await own.json(), answer);
+    const picked = await read(desktop.base, "?providerId=custom:local&modelId=org/model-large:free");
+    assert.equal(picked.status, 200);
+    await picked.arrayBuffer();
+    // The same pair percent-encoded names the same model.
+    const encoded = await read(desktop.base, "?providerId=custom%3Alocal&modelId=org%2Fmodel-large%3Afree");
+    assert.equal(encoded.status, 200);
+    await encoded.arrayBuffer();
+    for (const query of [
+      "?providerId=custom:local",
+      "?modelId=model-1",
+      "?providerId=p&modelId=m&draft=hello",
+      "?providerId=p&providerId=q&modelId=m",
+      "?providerId=&modelId=m",
+      `?providerId=p&modelId=${"m".repeat(257)}`,
+      "?providerId=p+q&modelId=m",
+      "?providerId=p%00&modelId=m",
+      "?providerId=p%zz&modelId=m",
+    ]) {
+      const refused = await read(desktop.base, query);
+      assert.equal(refused.status, 400, query);
+      assert.equal(await errorCode(refused), "invalid_request", query);
+    }
+    assert.deepEqual(contextCalls(desktop.calls), [
+      "context-pressure:chat-1:chat-model",
+      "context-pressure:chat-1:custom:local/org/model-large:free",
+      "context-pressure:chat-1:custom:local/org/model-large:free",
+    ]);
+    assert.equal((await fetch(`${desktop.base}/chats/chat-1/context`, { method: "POST", headers: HOST_HEADERS })).status, 404);
+  } finally {
+    await desktop.close();
+  }
+
+  const noRead = await fixture({ deviceType: "mac", contextPressure: answer, capabilities: ["server:read"] });
+  try {
+    const response = await read(noRead.base);
+    assert.equal(response.status, 403);
+    assert.equal(await errorCode(response), "capability_denied");
+    assert.deepEqual(contextCalls(noRead.calls), []);
+  } finally {
+    await noRead.close();
+  }
+
+  // A Bot chat is unreachable without bot:read, as on every other chat read.
+  const botChat = await fixture({ deviceType: "mac", botChat: true, contextPressure: answer, capabilities: ["server:read", "chat:read"] });
+  try {
+    const response = await read(botChat.base);
+    assert.equal(response.status, 404);
+    await response.arrayBuffer();
+    assert.deepEqual(contextCalls(botChat.calls), []);
+  } finally {
+    await botChat.close();
   }
 });

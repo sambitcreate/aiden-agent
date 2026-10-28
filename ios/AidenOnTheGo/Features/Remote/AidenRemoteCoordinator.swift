@@ -835,7 +835,7 @@ final class AidenRemoteCoordinator {
     /// Opt-ins a Mac older than their revision refuses by name, in the order
     /// they are asked for after the progress batch: `bot:handoffs` (revision
     /// 37), with `bot:handoff-notes` (revision 40) and `bot:handoff-on-mac`
-    /// (revision 41) in the same call when the Mac offers them, then
+    /// (revision 42) in the same call when the Mac offers them, then
     /// `schedule:cards` (revision 39).
     static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
         [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],

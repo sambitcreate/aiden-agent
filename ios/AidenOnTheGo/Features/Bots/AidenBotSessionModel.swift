@@ -176,7 +176,7 @@ struct AidenBotHandoffMacPrompt: Equatable, Sendable {
     let waitId: String
     /// The Mac brought the hand-off forward; otherwise no Aiden window could show it.
     let opened: Bool
-    /// A sign-in, or (revision 41) a step on the Bot's own screen.
+    /// A sign-in, or (revision 42) a step on the Bot's own screen.
     var signIn: Bool = true
 
     var text: String {
@@ -234,7 +234,7 @@ enum AidenBotSessionCopy {
     static let handoffFilesWait = "Send files after you answer the card."
     static let finishSigningInOnMac = "Finish signing in on your Mac."
     static let openAidenOnMac = "Open Aiden on your Mac to finish signing in."
-    /// Revision 41: a step on the Bot's own browser or computer.
+    /// Revision 42: a step on the Bot's own browser or computer.
     static let finishStepOnMac = "Finish this step on your Mac."
     static let openAidenOnMacForStep = "Open Aiden on your Mac to finish this step."
     static let handoffOnMacDetail = "This step is on the Bot’s own screen on your Mac."

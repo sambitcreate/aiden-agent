@@ -3,6 +3,31 @@ import Foundation
 import ImageIO
 import zlib
 
+/// A request query as the Mac reads it back. Macs before contract revision 41
+/// refuse any `%` in a URL, so what they could read stays literal: a space
+/// travels as `+`, which every Mac decodes, and the separators ids, dates and
+/// cursors use stay as they are. Only a character that can't travel literally
+/// (`& + # %`, accents, emoji) is percent-encoded, which revision 41 Macs
+/// accept. `URLQueryItem` alone sends a space as `%20` and `+` as itself.
+enum AidenHostQuery {
+    private static let literal: CharacterSet = {
+        var set = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        // `=` is safe in a value (the Mac splits each pair at its first `=`),
+        // and base64 cursors carry it, so it stays literal for older Macs.
+        set.insert(charactersIn: "-._~!*'():@/$,;?= ")
+        return set
+    }()
+
+    static func value(_ raw: String) -> String {
+        (raw.addingPercentEncoding(withAllowedCharacters: literal) ?? "")
+            .replacingOccurrences(of: " ", with: "+")
+    }
+
+    static func encode(_ items: [URLQueryItem]) -> String {
+        items.map { "\(value($0.name))=\(value($0.value ?? ""))" }.joined(separator: "&")
+    }
+}
+
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
     case ipad
@@ -3013,7 +3038,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 throw AidenRemoteClientError.invalidEndpoint
             }
-            components.queryItems = query
+            components.percentEncodedQuery = AidenHostQuery.encode(query)
             guard let queryURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
             url = queryURL
         }

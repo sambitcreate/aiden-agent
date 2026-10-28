@@ -212,7 +212,7 @@ class AidenBotHandoffsContractTest {
         assertEquals(false, decodedNoNote.takesNote)
         assertEquals(noNote, decodedNoNote.toJson())
         assertEquals(true, AidenBotHandoff.parse(handoff).takesNote)
-        // Revision 41: a step on the Bot's own screen says so, only as true, on an action without a page.
+        // Revision 42: a step on the Bot's own screen says so, only as true, on an action without a page.
         val onMac = handoffs.getValue("onMacHandoff").jsonObject
         val decodedOnMac = AidenBotHandoff.parse(onMac)
         assertTrue(decodedOnMac.onMac)
@@ -330,7 +330,7 @@ class AidenBotHandoffsContractTest {
         assertFalse(aidenShouldRequestBotHandoffs(mac(base + both, emptyList()), installationHolding(base + both)))
         // Notes without hand-offs are not an offer.
         assertTrue(aidenBotHandoffGrantsToRequest(mac(base, listOf(notes)), installationHolding(base)).isEmpty())
-        // Revision 41: on-Mac steps ride the same way.
+        // Revision 42: on-Mac steps ride the same way.
         val onMac = AidenRemoteCapability.BOT_HANDOFF_ON_MAC
         assertEquals(both + onMac, aidenBotHandoffGrantsToRequest(mac(base, both + onMac), installationHolding(base)))
         assertEquals(listOf(onMac), aidenBotHandoffGrantsToRequest(mac(base + both, listOf(onMac)), installationHolding(base + both)))

@@ -1577,7 +1577,7 @@ class AidenBotSessionController(
     }
 
     /**
-     * Revision 37: Finish on your Mac, for a sign-in hand-off (and, revision 41, a step on the
+     * Revision 37: Finish on your Mac, for a sign-in hand-off (and, revision 42, a step on the
      * Bot's own screen there). The card stays; it then says whether the Mac brought the Bot's
      * browser or computer forward. A retry after an unknown outcome reuses the key.
      */

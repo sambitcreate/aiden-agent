@@ -607,7 +607,7 @@ enum AidenBotHandoffKind: String, Codable, Sendable {
 /// is finished on the Mac, so the phone offers Finish on your Mac and Skip.
 /// Revision 40: a card a password-or-code rule opened carries
 /// `takesNote: false` (`takesNote`), so it is answered without a note.
-/// Revision 41: a step on the Bot's own browser or computer carries
+/// Revision 42: a step on the Bot's own browser or computer carries
 /// `onMac: true` and no `open`, so the phone offers Finish on your Mac beside
 /// Skip and Done.
 struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
@@ -637,7 +637,7 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
     /// Revision 40: false on a card whose answer may carry no note, so the
     /// composer holds instead of sending a code to the Bot as Done's note.
     let takesNote: Bool
-    /// Revision 41: the step is on the Bot's own screen on the Mac.
+    /// Revision 42: the step is on the Bot's own screen on the Mac.
     let onMac: Bool
 
     init(
@@ -670,7 +670,7 @@ struct AidenRemoteBotHandoff: Codable, Equatable, Sendable {
         // Only ever `false` when present (revision 40).
         let takesNote = try AidenBotWire.optional(Bool.self, from: values, forKey: .takesNote)
         if takesNote == true { throw AidenBotContractError.invalidField("takesNote") }
-        // Only ever `true`, on an action without `open` (revision 41).
+        // Only ever `true`, on an action without `open` (revision 42).
         let onMac = try AidenBotWire.optional(Bool.self, from: values, forKey: .onMac)
         if onMac == false { throw AidenBotContractError.invalidField("onMac") }
         let kind = try values.decode(AidenBotHandoffKind.self, forKey: .kind)

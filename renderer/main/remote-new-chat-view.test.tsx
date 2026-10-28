@@ -21,7 +21,7 @@ const laptop: NewChatMachine = { id: "host-c", label: "Laptop", availability: "o
 const CHAT: HostChatCapability[] = ["send", "attach", "createChat"];
 
 const catalog: HostModelCatalog = {
-  providers: [{ id: "prov", label: "Provider", models: [{ id: "fast", label: "Fast model", supportsImages: false }] }],
+  providers: [{ id: "prov", label: "Provider", models: [{ id: "fast", label: "Fast model", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: false }] }],
   defaults: { providerId: "prov", modelId: "fast" },
 };
 
@@ -94,6 +94,18 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
   );
   assert.equal(view.attr("data-remote-new-chat-unresolved"), null);
   assert.doesNotMatch(view.text, /first\.|Connecting to/u, "nothing holds the first message back");
+});
+
+test("the new chat's composer sits on the column once, and the header chip names the Mac", () => {
+  const view = renderPane();
+  const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
+  assert.equal(chip?.textContent, "Runs on Studio");
+  const composer = view.all.find((node) => node.hasAttribute("data-browser-composer-inset"));
+  assert.ok(composer);
+  const columns = (node: Element) => (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
+  for (let parent = composer.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
+    assert.equal(columns(parent), false, "a second column around it would narrow it by another dock gutter");
+  }
 });
 
 test("sending waits for a project, a reachable host and a connected control", () => {

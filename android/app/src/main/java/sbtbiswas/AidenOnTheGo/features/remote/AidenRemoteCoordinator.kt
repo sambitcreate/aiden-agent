@@ -94,7 +94,7 @@ internal fun aidenProgressCapabilitiesToRequest(
  * call of its own after the progress grants, unless [installation] already holds it. Revision 40:
  * `bot:handoff-notes` joins that call only when the Mac offers it too, so a Mac on an earlier
  * revision still grants hand-offs, and a phone that holds them asks for the notes alone once its Mac updates.
- * Revision 41's `bot:handoff-on-mac` joins the same way.
+ * Revision 42's `bot:handoff-on-mac` joins the same way.
  */
 internal fun aidenBotHandoffGrantsToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> {
     if (!server.offersBotHandoffs) return emptyList()

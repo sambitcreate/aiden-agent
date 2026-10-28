@@ -662,7 +662,7 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
-  /** `bot:handoff-on-mac` beside it: a step on the Bot's own screen says so (revision 41). */
+  /** `bot:handoff-on-mac` beside it: a step on the Bot's own screen says so (revision 42). */
   onMac: boolean;
 }
 

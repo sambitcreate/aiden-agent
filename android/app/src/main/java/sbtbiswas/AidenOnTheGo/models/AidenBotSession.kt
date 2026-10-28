@@ -546,7 +546,7 @@ enum class AidenBotHandoffKind(val wireValue: String) {
  * [waitId] through `POST /bots/{botId}/handoffs/{waitId}/answer` with Done or Skip. A sign-in
  * is finished in the Bot's own browser on the Mac, so a phone offers Finish on your Mac and Skip.
  * Revision 40: a card a password-or-code rule opened carries `takesNote: false` ([takesNote]).
- * Revision 41: a step on the Bot's own browser or computer carries `onMac: true` ([onMac]) and no
+ * Revision 42: a step on the Bot's own browser or computer carries `onMac: true` ([onMac]) and no
  * `open`, so a phone offers Finish on your Mac beside Skip and Done.
  */
 data class AidenBotHandoff(
@@ -562,7 +562,7 @@ data class AidenBotHandoff(
      * it), so the composer holds instead of sending a code to the Bot as Done's note.
      */
     val takesNote: Boolean = true,
-    /** Revision 41: the step is on the Bot's own screen on the Mac. */
+    /** Revision 42: the step is on the Bot's own screen on the Mac. */
     val onMac: Boolean = false
 ) {
     init {

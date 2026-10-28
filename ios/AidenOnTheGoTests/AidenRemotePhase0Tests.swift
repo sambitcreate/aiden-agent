@@ -5,6 +5,29 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenRemotePhase0Tests: XCTestCase {
+    func testBotSearchQueryReachesTheMacAsTypedAndPlainWordsStayLiteral() throws {
+        // The Mac decodes a query value as `URLSearchParams` does: `+` is a space, then escapes.
+        func macReads(_ value: String) -> String? {
+            value.replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+        }
+        for search in ["plan week", "release notes & more", "café ☕ 100% done+", "it's #1 = best", "a/b:c@d"] {
+            let encoded = AidenHostQuery.value(search)
+            XCTAssertEqual(macReads(encoded), search, search)
+            XCTAssertFalse(encoded.contains("&") || encoded.contains("#") || encoded.contains(" "), search)
+        }
+        // Macs before revision 41 refuse any `%`; spaces and the separators ids, dates and cursors use never need one.
+        for value in ["plan week", "team: ops/weekly", "2026-10-27T12:00:00.000Z", "cur_abc=="] {
+            XCTAssertFalse(AidenHostQuery.value(value).contains("%"), value)
+        }
+        var components = try XCTUnwrap(URLComponents(string: "https://studio.example.ts.net/api/aiden/v1/bot-conversations"))
+        components.percentEncodedQuery = AidenHostQuery.encode([
+            URLQueryItem(name: "query", value: "café & bar"),
+            URLQueryItem(name: "limit", value: "20"),
+        ])
+        let url = try XCTUnwrap(components.url)
+        XCTAssertEqual(url.query(percentEncoded: true), "query=caf%C3%A9+%26+bar&limit=20")
+    }
+
     func testConnectionRecoveryDistinguishesOfflineTrustAndVersionFailures() {
         let offline = AidenConnectionIssue.classify(URLError(.notConnectedToInternet))
         XCTAssertEqual(offline.title, "Waiting for network")
@@ -148,7 +171,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 41)
+        XCTAssertEqual(fixture.contractRevision, 42)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         // Revision 19 run-control losers learn the winning decision; phones keep
         // their mobile-only grants, so the fixture never offers host capabilities.

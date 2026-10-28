@@ -117,7 +117,7 @@ export interface PeerClient {
  * (`"own_call"`): a host that does not know a name refuses the whole request.
  * `bot:handoff-notes` (revision 40), asked for the same way, also tells this
  * Mac when a hand-off card takes no note, and `bot:handoff-on-mac` (revision
- * 41) when a step is on the Bot's own screen there.
+ * 42) when a step is on the Bot's own screen there.
  */
 const NEGOTIATED_GRANTS: ReadonlyArray<readonly [grant: string, feature: string, call?: "own_call"]> = [
   ["tasks:read", AIDEN_REMOTE_CHAT_TASKS_FEATURE],

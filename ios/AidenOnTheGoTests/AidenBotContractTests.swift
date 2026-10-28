@@ -2199,7 +2199,7 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: card)).takesNote)
         let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedNoNote)) as? [String: Any])
         XCTAssertEqual(reencoded["takesNote"] as? Bool, false)
-        // Revision 41: a step on the Bot's own screen says so, only as true, on an action without a page.
+        // Revision 42: a step on the Bot's own screen says so, only as true, on an action without a page.
         let onMac = try XCTUnwrap(raw["onMacHandoff"] as? [String: Any])
         let decodedOnMac = try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: onMac))
         XCTAssertTrue(decodedOnMac.onMac)
