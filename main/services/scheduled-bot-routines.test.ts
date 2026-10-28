@@ -15,6 +15,7 @@ import {
   createBotRoutineCatchUp,
   createBotRoutineCatchUpTrigger,
   createBotRoutineExecutor,
+  botRoutineRequestId,
   createBotRoutineService,
   countSkippedWhilePaused,
   parseBotRoutineCreate,
@@ -55,7 +56,7 @@ class FakeBotSession implements BotRoutinePorts {
   silenced: Array<{ botId: string; submissionId: string }> = [];
   resumeCalls = 0;
   dismissCalls = 0;
-  private submissions = new Map<string, string>();
+  submissions = new Map<string, string>();
   failAfterNextAdmission = false;
   failBeforeNextAdmission = false;
 
@@ -403,6 +404,29 @@ test("delivery never waits for the Bot runtime", async (t) => {
 
   assert.deepEqual(bodies, ["One urgent message."], "the saved answer reaches the person");
   assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0, "the fire settled");
+});
+
+test("a replayed event run observes the turn admitted before a quit, and a recorded one never sends again", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Receipts",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Sort the receipts.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  const trigger: ScheduledRunTrigger = { kind: "event", eventId: "e1", source: "file_change", payload: "a.pdf" };
+  const requestId = botRoutineRequestId(task.id, trigger);
+  // Pi admitted the turn, then Aiden quit before the run was recorded.
+  h.session.submissions.set(requestId, "sub-admitted");
+  const replayed = await h.run(task, requestId, trigger);
+  assert.equal(h.session.sends.length, 0, "the admitted turn is observed, not sent again");
+  assert.equal(replayed.result, "success");
+  assert.equal(replayed.id, requestId);
+  assert.equal(h.session.deliveries.length, 1);
+  const again = await h.run(task, requestId, trigger);
+  assert.equal(again.id, requestId);
+  assert.equal(h.session.sends.length, 0);
+  assert.equal((await h.store.runs(task.id)).filter((entry) => entry.id === requestId).length, 1);
 });
 
 test("recovery waits for another run on the Bot routine and still submits its pending fire", async (t) => {

@@ -179,10 +179,20 @@ function message(error: unknown): string {
  * `bot-reply-outbox`.
  */
 function botSessionFailure(error: unknown): BotRoutineFailure | undefined {
-  if (!(error instanceof Error) || error.name !== "BotSessionError") return undefined;
+  if (!(error instanceof Error)) return undefined;
+  const typed = (error as { authority?: unknown; classification?: unknown });
+  // A runtime authority refusal, thrown as is or carried by a session error.
+  if (error.name === "BotRuntimeAuthorityError" && typeof typed.classification === "string") {
+    return classifyBotRoutineFailure({ authority: typed.classification, detail: error.message });
+  }
+  if (error.name !== "BotSessionError") return undefined;
   const reason = (error as { reason?: unknown }).reason;
   if (typeof reason !== "string" || !reason) return undefined;
-  return classifyBotRoutineFailure({ sessionReason: reason, detail: error.message });
+  return classifyBotRoutineFailure({
+    sessionReason: reason,
+    detail: error.message,
+    ...(typeof typed.authority === "string" ? { authority: typed.authority } : {}),
+  });
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -371,7 +381,9 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       const startedAt = now();
       const trigger = options.trigger ?? { kind: "manual", key: options.runId ?? randomUUID() };
       const requestId = botRoutineRequestId(task.id, trigger);
-      const recovering = durableFire(trigger) && options.runId === requestId;
+      // An event run carries its own request id as the run id, so a replay
+      // after a restart observes what was recorded or admitted, like a fire.
+      const recovering = (durableFire(trigger) || trigger.kind === "event") && options.runId === requestId;
       let ports: BotRoutineExecutorPorts | undefined;
       let fingerprint: string | undefined;
       let outcome: BotRoutineOutcome;

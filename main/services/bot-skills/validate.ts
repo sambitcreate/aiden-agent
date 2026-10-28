@@ -75,5 +75,9 @@ export function validateBotSkillProposal(
   if (!parsed || parsed.frontmatter.name !== name || (parsed.frontmatter.description ?? "") !== description.replace(/\s+/gu, " ") || parsed.body !== instructions) {
     return { ok: false, errors: ["The skill would not read back as written; remove unusual characters from its name or description."] };
   }
-  return { ok: true, file, preview: context.current !== undefined ? wholeFileDiff(context.current, file) : file, update: context.current !== undefined };
+  // The card must carry every proposed line. A diff against a huge current
+  // file would be cut short, so then the card shows the whole proposed file.
+  const diff = context.current !== undefined ? wholeFileDiff(context.current, file) : file;
+  const preview = diff.length <= BOT_SKILL_PROPOSAL_LIMITS.previewChars ? diff : file;
+  return { ok: true, file, preview, update: context.current !== undefined };
 }

@@ -25,8 +25,12 @@ export function createBotLearningHistory(deps: {
   profileDir(): string;
   /** The target's state now, in the same text form the change stored. */
   current(botId: string, target: BotLearningTarget): Promise<string | null>;
-  /** Put the target back to `content` (null: remove it). */
-  apply(botId: string, target: BotLearningTarget, content: string | null): Promise<void>;
+  /**
+   * Put the target back to `content` (null: remove it), only while it still
+   * equals `expected`. Returns false, changing nothing, when it moved: the
+   * check must sit inside the target's own write boundary.
+   */
+  apply(botId: string, target: BotLearningTarget, content: string | null, expected: string | null): Promise<boolean>;
   fingerprint(botId: string): Promise<string>;
   now?(): number;
 }): BotLearningHistory {
@@ -88,7 +92,7 @@ export function createBotLearningHistory(deps: {
         if (change.undoneAt !== undefined) return { ok: false, code: "already_undone" };
         if ((await deps.current(botId, change.target)) !== change.after) return { ok: false, code: "conflict" };
         const before = await deps.fingerprint(botId);
-        await deps.apply(botId, change.target, change.before);
+        if (!(await deps.apply(botId, change.target, change.before, change.after))) return { ok: false, code: "conflict" };
         const at = now();
         changes[index] = { ...change, undoneAt: at };
         changes.push({

@@ -34,7 +34,11 @@ export interface BotEventRoutine {
   lastRunAt?: number;
   day?: { key: string; count: number };
   held?: { eventId: string; payload: string; at: number };
+  /** Accepted events whose run isn't recorded yet; replayed after a restart. */
+  running?: Array<{ eventId: string; payload: string; at: number }>;
 }
+
+export const BOT_EVENT_RUNNING_MAX = 4;
 
 export type { BotEventRoutineView } from "../../../renderer/shared/bot-event-routines.js";
 import type { BotEventRoutineView } from "../../../renderer/shared/bot-event-routines.js";
@@ -85,6 +89,13 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     : [];
   const day = record.day && typeof record.day === "object" ? record.day as { key?: unknown; count?: unknown } : undefined;
   const held = record.held && typeof record.held === "object" ? record.held as { eventId?: unknown; payload?: unknown; at?: unknown } : undefined;
+  const running = Array.isArray(record.running)
+    ? (record.running as Array<{ eventId?: unknown; payload?: unknown; at?: unknown } | null>)
+      .filter((entry): entry is { eventId: string; payload: string; at: number } =>
+        !!entry && typeof entry.eventId === "string" && typeof entry.payload === "string" && typeof entry.at === "number")
+      .slice(-BOT_EVENT_RUNNING_MAX)
+      .map(({ eventId, payload, at }) => ({ eventId, payload, at }))
+    : [];
   return {
     id: record.id,
     botId,
@@ -101,6 +112,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     ...(held && typeof held.eventId === "string" && typeof held.payload === "string" && typeof held.at === "number"
       ? { held: { eventId: held.eventId, payload: held.payload, at: held.at } }
       : {}),
+    ...(running.length ? { running } : {}),
   };
 }
 

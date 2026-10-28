@@ -10,6 +10,7 @@ import { writesIntoSkillDirectory } from "../bot-file-tool-router.js";
 import type { DiscoveredSkill } from "../types.js";
 import { botHomeSkillFile, createBotSkillProposalService } from "./proposals.js";
 import { validateBotSkillProposal } from "./validate.js";
+import { botSkillProposalOf } from "../../../renderer/shared/bot-skill-proposals.js";
 
 const roots: string[] = [];
 after(() => {
@@ -119,6 +120,20 @@ test("Add writes the file, approves that content, and a second pending proposal 
   assert.equal(await h.approvals.isApproved("bot-a", fingerprint, fingerprint), true, "the file as the loader reads it is approved");
   assert.equal(h.invalidated(), 1);
   assert.equal(h.entries[h.entries.length - 1]?.kind, "aiden.skill-proposal-status");
+});
+
+test("an update to a huge current skill shows every proposed line on its card", async () => {
+  const home = tempRoot();
+  const h = service(tempRoot(), home);
+  const file = botHomeSkillFile(home, "meal-plan");
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `---\nname: meal-plan\ndescription: "Use when planning meals."\n---\n\n${"x".repeat(70_000)}\n`);
+  const proposed = await h.proposals.propose("bot-a", { name: "meal-plan", description: "Use when planning meals.", instructions: "Only suggest vegetarian dinners." });
+  assert.ok(proposed.ok);
+  const card = botSkillProposalOf(h.entries[0]?.data);
+  assert.ok(card);
+  assert.equal(card.update, true);
+  assert.ok(card.preview.includes("Only suggest vegetarian dinners."), "the instructions Add would approve are on the card");
 });
 
 test("a skill found in the folder becomes a review card; Use skill approves it without rewriting the file", async () => {

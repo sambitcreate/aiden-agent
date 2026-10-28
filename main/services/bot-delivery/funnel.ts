@@ -9,6 +9,7 @@
 // Deferred rows are sent later by the flush; this module only decides and
 // records.
 
+import { createHash } from "node:crypto";
 import type { ScheduledTask } from "../types.js";
 import type { BotDeliveryClass, BotDeliveryLog, BotDeliveryRow } from "./log.js";
 
@@ -135,6 +136,7 @@ export function createBotDeliveryFunnel(deps: {
       status: input.status,
       ...(input.routineTask !== undefined ? { routineId: input.routineTask.id } : {}),
       ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
+      ...(input.routineTask?.notify === false ? { quiet: true } : {}),
       createdAt: at,
       deliverAfter: decision.kind === "defer" ? decision.until : at,
       ...(decision.kind === "suppress" ? { suppressed: true } : {}),
@@ -147,6 +149,10 @@ export function createBotDeliveryFunnel(deps: {
 
   async function flushBot(botId: string, at: number): Promise<number | undefined> {
     const rows = await deps.log.list(botId);
+    // A digest whose channels didn't all go out last time: only the owed ones.
+    for (const row of rows.filter((entry) => entry.class === "digest" && entry.sentAt === undefined && entry.suppressed !== true)) {
+      await send(row, inputOf(row), at).catch(() => undefined);
+    }
     const held = rows.filter((row) => row.suppressed !== true && row.sentAt === undefined && row.deliverAfter > row.createdAt);
     const due = held.filter((row) => row.deliverAfter <= at);
     const later = held.filter((row) => row.deliverAfter > at).map((row) => row.deliverAfter);
@@ -155,35 +161,42 @@ export function createBotDeliveryFunnel(deps: {
     for (const row of issues) await send(row, inputOf(row), at).catch(() => undefined);
     if (others.length === 1) await send(others[0]!, inputOf(others[0]!), at).catch(() => undefined);
     else if (others.length > 1) {
-      const digest: BotDeliveryInput = {
+      // The digest is a row of its own, keyed by the rows it covers: a crash
+      // or a failed channel resumes the same digest (same Telegram request
+      // id), and the Mac banner is stamped once it went out.
+      const ids = others.map((row) => row.id).sort();
+      const { row: digest } = await deps.log.append({
         botId,
         class: "digest",
-        dedupeKey: `digest:away:${at}`,
+        dedupeKey: `digest:away:${createHash("sha256").update(ids.join("\0")).digest("hex").slice(0, 32)}`,
         title: (await deps.botName?.(botId)) ?? "Your Bot",
         body: awayDigestBody(others.length),
         status: "info",
-        requestId: `${BOT_DELIVERY_REQUEST_PREFIX}away-${botId}-${at}`,
-      };
-      try {
-        await deps.mac(digest);
-      } catch {
-        // The banner is best effort; Telegram and the record still go.
-      }
-      try {
-        await deps.telegram(digest);
-        await deps.log.markCovered(botId, others.map((row) => row.id), digest.dedupeKey, at);
-      } catch {
-        // Left owed; the next flush tries again (one more banner at most).
-      }
+        createdAt: at,
+        deliverAfter: at,
+      });
+      await deps.log.markCovered(botId, ids, digest.dedupeKey, at);
+      await send(digest, inputOf(digest), at).catch(() => undefined);
     }
     return later.length ? Math.min(...later) : undefined;
+  }
+
+  // One flush per Bot at a time, so overlapping flushes never send one digest twice.
+  const flushing = new Map<string, Promise<number | undefined>>();
+  function flushBotSerial(botId: string, at: number): Promise<number | undefined> {
+    const next = (flushing.get(botId) ?? Promise.resolve(undefined)).catch(() => undefined).then(() => flushBot(botId, at));
+    flushing.set(botId, next);
+    void next.finally(() => {
+      if (flushing.get(botId) === next) flushing.delete(botId);
+    }).catch(() => undefined);
+    return next;
   }
 
   return {
     async flush(at) {
       let next: number | undefined;
       for (const botId of await deps.log.botIds()) {
-        const botNext = await flushBot(botId, at).catch(() => undefined);
+        const botNext = await flushBotSerial(botId, at).catch(() => undefined);
         if (botNext !== undefined) next = next === undefined ? botNext : Math.min(next, botNext);
       }
       return next;

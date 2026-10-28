@@ -140,10 +140,21 @@ export type BotSessionErrorReason =
   | "paused_by_person";
 
 export class BotSessionError extends Error {
-  constructor(readonly reason: BotSessionErrorReason, message?: string) {
+  /**
+   * `authority`: the typed `BotRuntimeAuthorityError` classification behind
+   * this refusal (for example `model_changed`), so routines can record it.
+   */
+  constructor(readonly reason: BotSessionErrorReason, message?: string, readonly authority?: string) {
     super(message ?? defaultMessage(reason));
     this.name = "BotSessionError";
   }
+}
+
+/** The typed classification of a `BotRuntimeAuthorityError`, by name (it may come from another module instance). */
+function authorityOf(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "BotRuntimeAuthorityError") return undefined;
+  const classification = (error as { classification?: unknown }).classification;
+  return typeof classification === "string" && classification ? classification : undefined;
 }
 
 function defaultMessage(reason: BotSessionErrorReason): string {
@@ -496,13 +507,14 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
   async function modelFor(
     botId: string,
-  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string }> {
+  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string; authority?: string }> {
     try {
       const ref = await deps.resolveModel(botId);
       return ref === null ? { kind: "none" } : { kind: "ok", ref };
     } catch (error) {
       const message = error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error");
-      return { kind: "error", message };
+      const authority = authorityOf(error);
+      return { kind: "error", message, ...(authority !== undefined ? { authority } : {}) };
     }
   }
 
@@ -515,7 +527,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
-    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
+    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
     const model = resolved.ref;
     await registry.refresh();
     const agent = await conversation.agent(ctx);

@@ -5,7 +5,7 @@
 
 import { watch as fsWatch } from "node:fs";
 import { app, ipcMain, logger } from "../../platform.js";
-import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
+import { botRoutineRequestId, createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import { scheduleStore } from "../schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
@@ -105,8 +105,12 @@ export async function forgetBotEventRoutines(botId: string): Promise<void> {
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
   run: async (routine, event) => {
+    const trigger = { kind: "event" as const, eventId: event.eventId, source: event.source, payload: event.payload };
+    // The event's own request id as the run id: a replay after a restart
+    // reads the recorded run or the admitted turn instead of sending again.
     await executor.run(eventRoutineTask(routine), {
-      trigger: { kind: "event", eventId: event.eventId, source: event.source, payload: event.payload },
+      trigger,
+      runId: botRoutineRequestId(routine.id, trigger),
       signal: new AbortController().signal,
     });
   },

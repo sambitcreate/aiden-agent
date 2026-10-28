@@ -49,6 +49,8 @@ export interface BotDeliveryRow {
   sentAt?: number;
   /** Sent inside one "While you were away" digest: the group counts as one notification. */
   coveredBy?: string;
+  /** The routine's notifications are off: kept for the record, never a phone alert. */
+  quiet?: boolean;
 }
 
 /** The two live channels a row has to clear; phones read the log itself. */
@@ -128,6 +130,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   const sentAt = optionalTimestamp(value.sentAt);
   if (macSentAt === null || telegramSentAt === null || sentAt === null) return undefined;
   const coveredBy = optionalText(value.coveredBy, 160);
+  const quiet = value.quiet === true;
   return {
     id,
     botId,
@@ -145,6 +148,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     ...(telegramSentAt !== undefined ? { telegramSentAt } : {}),
     ...(sentAt !== undefined ? { sentAt } : {}),
     ...(coveredBy !== undefined ? { coveredBy } : {}),
+    ...(quiet ? { quiet: true } : {}),
   };
 }
 

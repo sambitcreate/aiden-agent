@@ -122,7 +122,7 @@ export function countedToday(rows: readonly BotDeliveryRow[], dayStart: number, 
   const digests = new Set<string>();
   let count = 0;
   for (const row of rows) {
-    if (!BOT_DELIVERY_COUNTED_CLASSES.has(row.class) || row.suppressed === true) continue;
+    if (!BOT_DELIVERY_COUNTED_CLASSES.has(row.class) || row.suppressed === true || row.quiet === true) continue;
     if (row.deliverAfter < dayStart || row.deliverAfter > now) continue;
     if (row.coveredBy !== undefined) digests.add(row.coveredBy);
     else count += 1;

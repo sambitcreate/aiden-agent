@@ -21,6 +21,7 @@ import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotLearningBudget } from "./budget.js";
 import { botBehaviorFingerprint } from "./fingerprint.js";
 import { createBotLearningHistory } from "./history.js";
+import { restoreSkillFile } from "./restore-skill.js";
 import { createRoutineReflection } from "./routine-reflection.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -59,19 +60,37 @@ function memoryText(view: Awaited<ReturnType<typeof botMemory.view>>): string {
   return JSON.stringify({ memory: view.memory.entries.map(({ text }) => text), user: view.user.entries.map(({ text }) => text) });
 }
 
-async function restoreMemory(botId: string, content: string | null): Promise<void> {
-  const desired = content ? (JSON.parse(content) as Record<BotMemoryTarget, string[]>) : { memory: [], user: [] };
-  const view = await botMemory.view(botId);
+type MemorySnapshot = Record<BotMemoryTarget, string[]>;
+
+function parseSnapshot(content: string | null): MemorySnapshot {
+  const parsed = content ? (JSON.parse(content) as Partial<MemorySnapshot>) : {};
+  return { memory: parsed.memory ?? [], user: parsed.user ?? [] };
+}
+
+/**
+ * Turn memory from `expected` back into `content`, one store at a time. Each
+ * store is checked against `expected` under the memory write lock, so an
+ * edit made since is never overwritten: that store (and any after it) is
+ * left alone and the restore reports false.
+ */
+async function restoreMemory(botId: string, content: string | null, expected: string | null, assertCurrent?: () => Promise<void>): Promise<boolean> {
+  const desired = parseSnapshot(content);
+  const seen = parseSnapshot(expected);
   for (const target of ["memory", "user"] as const) {
-    const current = view[target].entries.map(({ text }) => text);
-    const want = desired[target] ?? [];
+    const current = seen[target];
+    const want = desired[target];
+    if (JSON.stringify(current) === JSON.stringify(want)) continue;
     const removals = current.filter((text) => !want.includes(text)).map((text) => ({ action: "remove" as const, match: text }));
     const additions = want.filter((text) => !current.includes(text)).map((text) => ({ action: "add" as const, content: text }));
     if (!removals.length && !additions.length) continue;
-    const result = await botMemory.apply(botId, target, [...removals, ...additions]);
-    if (!result.ok) throw new Error(result.error);
+    const result = await botMemory.apply(botId, target, [...removals, ...additions], { expectTexts: current, ...(assertCurrent ? { assertCurrent } : {}) });
+    if (!result.ok) {
+      if (result.code === "changed") return false;
+      throw new Error(result.error);
+    }
   }
   botMemory.markStale(botId);
+  return true;
 }
 
 async function skillFile(botId: string, name: string): Promise<string> {
@@ -90,25 +109,20 @@ export const botLearningHistory = createBotLearningHistory({
     }
     return fs.readFile(await skillFile(botId, target.name), "utf8").catch(() => null);
   },
-  async apply(botId, target, content) {
-    if (target.kind === "memory") return restoreMemory(botId, content);
+  async apply(botId, target, content, expected) {
+    if (target.kind === "memory") return restoreMemory(botId, content, expected);
     if (target.kind === "lesson") {
       const status = content === null ? "retired" : "active";
       await botLessons.setStatus(botId, target.lessonId, status);
       // The chat's Learned line and lesson card follow the page.
       await appendEntry(botId, BOT_LESSON_STATUS_ENTRY_KIND, { lessonId: target.lessonId, status }).catch(() => undefined);
-      return;
+      return true;
     }
     const file = await skillFile(botId, target.name);
     const { invalidateBotSkills } = await import("../bot-capability-services-main.js");
-    // Undoing an added skill removes its file; restoring an earlier version
-    // writes that text back, which loads only if it was approved before.
-    if (content === null) await fs.rm(path.dirname(file), { recursive: true, force: true });
-    else {
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      await fs.writeFile(file, content, { mode: 0o600 });
-    }
+    if (!(await restoreSkillFile(file, content, expected))) return false;
     invalidateBotSkills();
+    return true;
   },
 });
 
@@ -244,12 +258,17 @@ export async function maybeTidyMemory(botId: string): Promise<"not_needed" | "to
       const fresh = await botMemory.view(botId);
       if (fresh.revision !== view.revision) return "unchanged";
       const usedBefore = fresh[target].usedChars;
-      const result = await botMemory.apply(botId, target, operations);
+      const fence = () => admission.lease.revalidate();
+      // Checked again under the write lock: an edit since `fresh` wins.
+      const result = await botMemory.apply(botId, target, operations, {
+        expectTexts: fresh[target].entries.map(({ text }) => text),
+        assertCurrent: fence,
+      });
       if (!result.ok) return "unchanged";
       const after = await botMemory.view(botId);
       if (after[target].usedChars >= usedBefore) {
-        // Not smaller: put back exactly what was there a moment ago.
-        await restoreMemory(botId, memoryText(fresh));
+        // Not smaller: put back what was there, unless someone edited since.
+        await restoreMemory(botId, memoryText(fresh), memoryText(after), fence);
         return "unchanged";
       }
       const change = await botLearningHistory.record({ botId, kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before: memoryText(fresh), after: memoryText(after) });

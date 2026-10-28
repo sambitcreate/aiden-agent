@@ -3,13 +3,17 @@
 // that arrives too soon is held (the newest wins) and runs once the gap allows.
 
 import { BOT_ROUTINE_EVENT_LIMITS, type BotRoutineTriggerKind } from "../../../renderer/shared/bot-routine-trigger.js";
-import type { BotEventRoutine, BotEventRoutineStore } from "./store.js";
+import { BOT_EVENT_RUNNING_MAX, type BotEventRoutine, type BotEventRoutineStore } from "./store.js";
 
 export type BotRoutineEventOutcome = "queued" | "held" | "duplicate" | "daily_limit" | "disabled" | "unknown";
 
 export interface BotRoutineEventDispatcherDependencies {
   store: Pick<BotEventRoutineStore, "mutate" | "list">;
-  /** Runs the routine once with this event; resolves when the run is recorded. */
+  /**
+   * Runs the routine once with this event; resolves when the run is recorded.
+   * The same event may be run again after a restart: the run must read the
+   * recorded run or the admitted turn by the event's id before sending.
+   */
   run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<void>;
   isPaused(botId: string): Promise<boolean>;
   now(): number;
@@ -25,8 +29,24 @@ function dayKey(at: number, timeZone: string): string {
 export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDispatcherDependencies) {
   const heldTimers = new Map<string, { cancel(): void }>();
 
+  /** The receipt list with this event added; the oldest drop past the bound. */
+  function withRunning(routine: BotEventRoutine, event: { eventId: string; payload: string }, at: number) {
+    const others = (routine.running ?? []).filter((entry) => entry.eventId !== event.eventId);
+    return [...others, { eventId: event.eventId, payload: event.payload, at }].slice(-BOT_EVENT_RUNNING_MAX);
+  }
+
+  /** Runs an accepted event, then drops its receipt once the run is recorded. */
   async function start(routine: BotEventRoutine, event: { eventId: string; payload: string }): Promise<void> {
-    await dependencies.run(routine, { ...event, source: routine.trigger.kind });
+    try {
+      await dependencies.run(routine, { ...event, source: routine.trigger.kind });
+    } finally {
+      await dependencies.store.mutate(routine.botId, routine.id, (current) => {
+        const running = (current.running ?? []).filter((entry) => entry.eventId !== event.eventId);
+        if (running.length === (current.running ?? []).length) return { result: undefined };
+        const { running: _previous, ...rest } = current;
+        return { next: running.length ? { ...rest, running } : rest, result: undefined };
+      }).catch((error: unknown) => dependencies.onError?.(error));
+    }
   }
 
   function armHeld(botId: string, routineId: string, at: number): void {
@@ -47,7 +67,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) return { next: { ...routine, held: undefined }, result: undefined };
       const event = routine.held;
       return {
-        next: { ...routine, held: undefined, lastRunAt: now, day: { key: today, count: count + 1 } },
+        next: { ...routine, held: undefined, running: withRunning(routine, event, now), lastRunAt: now, day: { key: today, count: count + 1 } },
         result: { routine, event },
       };
     });
@@ -83,8 +103,10 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
             result: { kind: "held" as const, at: nextAllowed },
           };
         }
+        // The receipt is written with the claim, before the caller hears
+        // "queued": a quit before the run is recorded replays it.
         return {
-          next: { ...routine, seenEventIds, lastRunAt: now, day: { key: today, count: count + 1 } },
+          next: { ...routine, seenEventIds, running: withRunning(routine, { eventId: event.eventId, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
           result: { kind: "queued" as const, routine },
         };
       });
@@ -100,9 +122,12 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       return decision.kind;
     },
 
-    /** Re-arm held events after a restart. */
+    /** After a restart: replay accepted events whose run wasn't recorded, and re-arm held ones. */
     async rearm(routines: readonly BotEventRoutine[]): Promise<void> {
       for (const routine of routines) {
+        for (const event of routine.running ?? []) {
+          void start(routine, event).catch((error: unknown) => dependencies.onError?.(error));
+        }
         if (!routine.held) continue;
         armHeld(routine.botId, routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs);
       }

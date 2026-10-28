@@ -55,6 +55,8 @@ export function createBotNotificationFeed(dependencies: BotNotificationFeedDepen
         // routine results alone.
         const issue = row.class === "issue" && options.issues === true;
         if (!issue && (row.class !== "routine_result" || row.routineId === undefined)) continue;
+        // A routine saved with notifications off never alerts a phone.
+        if (row.quiet === true) continue;
         const botName = await nameOf(row.botId);
         if (botName === undefined) continue;
         if (issue) {

@@ -4,7 +4,7 @@
 export const BOT_SKILL_PROPOSAL_ENTRY_KIND = "aiden.skill-proposal";
 export const BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND = "aiden.skill-proposal-status";
 export const BOT_SKILL_PROPOSAL_CHANNELS = { respond: "bots:skillProposals:respond" } as const;
-export const BOT_SKILL_PROPOSAL_LIMITS = { nameChars: 48, descriptionChars: 240, instructionsBytes: 16_384, reasonChars: 280, pendingPerBot: 1 } as const;
+export const BOT_SKILL_PROPOSAL_LIMITS = { nameChars: 48, descriptionChars: 240, instructionsBytes: 16_384, reasonChars: 280, pendingPerBot: 1, previewChars: 64 * 1024 } as const;
 
 export type BotSkillProposalStatus = "pending" | "added" | "dismissed";
 export type BotSkillProposalOrigin = "bot" | "folder";
@@ -40,7 +40,7 @@ export function botSkillProposalOf(value: unknown): BotSkillProposalEntryData | 
     description: data.description.slice(0, 400),
     ...(typeof data.reason === "string" ? { reason: data.reason.slice(0, 400) } : {}),
     origin: data.origin,
-    preview: data.preview.slice(0, 64 * 1024),
+    preview: data.preview.slice(0, BOT_SKILL_PROPOSAL_LIMITS.previewChars),
     update: data.update,
   };
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
@@ -12,6 +12,7 @@ import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotLearningBudget } from "./budget.js";
 import { botBehaviorFingerprint } from "./fingerprint.js";
 import { createBotLearningHistory } from "./history.js";
+import { restoreSkillFile } from "./restore-skill.js";
 import { createRoutineReflection, reflectionMessage, reflectionRunView } from "./routine-reflection.js";
 
 const roots: string[] = [];
@@ -35,10 +36,16 @@ test("same fingerprint inputs in any order give the same 64-hex digest; a change
 
 test("history Undo restores before when nothing changed since, and refuses after a later edit", async () => {
   let state: string | null = "after";
+  const root = fixedRoot();
   const history = createBotLearningHistory({
-    profileDir: fixedRoot(),
+    profileDir: root,
     current: async () => state,
-    apply: async (_botId, _target, content) => { state = content; },
+    // Compare-and-set, as the real targets do under their write lock.
+    apply: async (_botId, _target, content, expected) => {
+      if (state !== expected) return false;
+      state = content;
+      return true;
+    },
     fingerprint: async () => "f".repeat(64),
   });
   const change = await history.record({ botId: "bot-a", kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before: "before", after: "after" });
@@ -49,6 +56,42 @@ test("history Undo restores before when nothing changed since, and refuses after
   state = "hand edited";
   assert.deepEqual(await history.undo("bot-a", second.id), { ok: false, code: "conflict" });
   assert.equal(state, "hand edited", "a conflict changes nothing");
+  // An edit that lands after the early check but before the write is still a conflict.
+  const third = await history.record({ botId: "bot-a", kind: "memory_tidy", summary: "Tidied a third time", target: { kind: "memory" }, before: "hand edited", after: "after3" });
+  state = "after3";
+  const racing = createBotLearningHistory({
+    profileDir: root,
+    current: async () => state,
+    apply: async (_botId, _target, content, expected) => {
+      state = "edited during undo";
+      if (state !== expected) return false;
+      state = content;
+      return true;
+    },
+    fingerprint: async () => "f".repeat(64),
+  });
+  assert.deepEqual(await racing.undo("bot-a", third.id), { ok: false, code: "conflict" });
+  assert.equal(state, "edited during undo");
+  assert.equal((await racing.list("bot-a")).find((entry) => entry.id === third.id)?.undoneAt, undefined);
+});
+
+test("undoing an added skill removes only its SKILL.md, keeping files the person added beside it", async () => {
+  const folder = path.join(fixedRoot()(), "skills", "weekly-report");
+  mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, "SKILL.md");
+  writeFileSync(file, "# Weekly report");
+  writeFileSync(path.join(folder, "fetch.sh"), "echo hi");
+  assert.equal(await restoreSkillFile(file, null, "# Weekly report"), true);
+  assert.equal(existsSync(file), false);
+  assert.equal(readFileSync(path.join(folder, "fetch.sh"), "utf8"), "echo hi");
+  const lone = path.join(fixedRoot()(), "skills", "lone");
+  mkdirSync(lone, { recursive: true });
+  writeFileSync(path.join(lone, "SKILL.md"), "# Lone");
+  assert.equal(await restoreSkillFile(path.join(lone, "SKILL.md"), null, "# Lone"), true);
+  assert.equal(existsSync(lone), false, "an empty folder goes with it");
+  writeFileSync(file, "# Edited by hand");
+  assert.equal(await restoreSkillFile(file, null, "# Weekly report"), false);
+  assert.equal(readFileSync(file, "utf8"), "# Edited by hand");
 });
 
 test("the 13th learning request of a local day is refused; a new day resets it", async () => {

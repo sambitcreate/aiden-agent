@@ -235,10 +235,33 @@ test("three held rows produce one digest banner and stay three rows for phones",
   assert.equal(h.calls.mac[0]?.class, "digest");
   assert.equal(h.calls.mac[0]?.body, "While you were away: 3 updates.");
   assert.equal(h.calls.telegram.length, 1);
-  assert.equal((await h.log.due(undefined, NOW + HOUR)).length, 3);
+  assert.equal((await h.log.due(undefined, NOW + HOUR)).filter((row) => row.class === "routine_result").length, 3);
   assert.ok((await h.log.list("bot:scout")).every((row) => row.sentAt !== undefined));
   await h.funnel.flush(NOW + 2 * HOUR);
   assert.equal(h.calls.mac.length, 1, "a flushed row is never sent again");
+});
+
+test("an away digest whose Telegram keeps failing shows one Mac banner and keeps one Telegram identity", async (t) => {
+  let telegramUp = false;
+  const h = await harness({ decide: async () => ({ kind: "defer", until: NOW + HOUR }) }, {
+    telegram: async () => {
+      if (!telegramUp) throw new Error("The Telegram outbox is unavailable.");
+    },
+  });
+  t.after(h.cleanup);
+  for (const key of ["a", "b"]) await h.funnel.deliver(routineResult({ dedupeKey: key, requestId: key }));
+  await h.funnel.flush(NOW + HOUR);
+  await h.funnel.flush(NOW + HOUR + 5 * 60_000);
+  await h.funnel.flush(NOW + HOUR + 10 * 60_000);
+  assert.equal(h.calls.mac.length, 1, "the banner went out once");
+  telegramUp = true;
+  await h.funnel.flush(NOW + HOUR + 15 * 60_000);
+  await h.funnel.flush(NOW + HOUR + 20 * 60_000);
+  assert.equal(h.calls.mac.length, 1);
+  const ids = new Set(h.calls.telegram.map((input) => input.requestId));
+  assert.equal(ids.size, 1, "every Telegram attempt carries the same request id");
+  assert.equal(h.calls.telegram.length, 4, "three failures, then one success, then nothing");
+  assert.equal((await h.log.due(undefined, NOW + 2 * HOUR)).filter((row) => row.class === "routine_result").length, 2);
 });
 
 test("a held issue is sent on its own, from the stored row", async (t) => {

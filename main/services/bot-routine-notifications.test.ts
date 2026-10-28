@@ -31,7 +31,7 @@ function delivery(overrides: Partial<Omit<BotDeliveryRow, "id">> = {}): Omit<Bot
 
 async function harness(options: { names?: Record<string, string> } = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-feed-"));
-  const log = createBotDeliveryLog({ profileDir: () => profile });
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
   let now = NOW;
   const feed = createBotNotificationFeed({
     log,
@@ -172,6 +172,25 @@ test("never lists silent, skipped or blocked runs", async (t) => {
   assert.deepEqual([silent.result, skipped.result, blocked.result], ["silent", "skipped", "blocked"]);
   assert.deepEqual(await log.due(undefined, NOW), []);
   assert.deepEqual((await h.feed.list(undefined)).notifications, []);
+
+  // A routine saved with notifications off: its visible reply and its failure
+  // are kept, but neither alerts a phone.
+  const quietTask: ScheduledTask = { ...task, id: "routine-2", notify: false };
+  await executor(session({ kind: "idle" }, { kind: "completed", text: "Three new emails." })).run(quietTask, {
+    signal: new AbortController().signal,
+    trigger: { kind: "manual", key: "quiet-ok" },
+  });
+  await executor(session({ kind: "idle" }, { kind: "failed", reason: "model_error", error: "boom" } as BotRoutineSubmissionOutcome)).run(quietTask, {
+    signal: new AbortController().signal,
+    trigger: { kind: "manual", key: "quiet-failed" },
+  });
+  assert.equal((await log.due(undefined, NOW)).length, 2, "both rows are on record");
+  assert.deepEqual((await h.feed.list(undefined)).notifications, []);
+  await executor(session({ kind: "idle" }, { kind: "completed", text: "Hello." })).run(task, {
+    signal: new AbortController().signal,
+    trigger: { kind: "manual", key: "loud" },
+  });
+  assert.equal((await h.feed.list(undefined)).notifications.length, 1, "a routine with notifications on still alerts");
 });
 
 test("a failure is announced with the fixed line, never its error text", async (t) => {
