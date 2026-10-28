@@ -79,3 +79,16 @@ test("any turn the host accepts fences its chat's queue, and one it didn't confi
     setRemoteQueueFence("host-b:chat-9", null);
   }
 });
+
+test("a refused attempt puts back the fence of the turn accepted before it", async () => {
+  try {
+    await sendFencedTurn("host-b:chat-8", async () => ({ streamId: "run-a" }), () => 1_000);
+    // Try again while A's run hasn't been seen: refused, A's fence must survive.
+    await assert.rejects(sendFencedTurn("host-b:chat-8", async () => { throw new Error("turn_already_active"); }, () => 1_500));
+    assert.deepEqual(remoteQueueFence("host-b:chat-8"), { runId: "run-a", since: 1_000 });
+    await sendFencedTurn("host-b:chat-8", async () => null, () => 1_600);
+    assert.equal(remoteQueueFence("host-b:chat-8")?.runId, "run-a", "an unconfirmed attempt doesn't lift it either");
+  } finally {
+    setRemoteQueueFence("host-b:chat-8", null);
+  }
+});

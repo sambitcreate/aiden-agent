@@ -522,7 +522,8 @@ export function RemoteChatPane({
     failedReplyId && capabilities?.has("send")
       ? {
           messageId: failedReplyId,
-          busy: failureBusy || Boolean(state?.sending) || sendRefusal !== null,
+          // A turn already sent from here owns the chat until it settles.
+          busy: failureBusy || Boolean(state?.sending) || sendRefusal !== null || fenceHolds,
           // Compaction and provider sign-in happen on that Mac.
           supports: (action: ProviderFailureAction) => action === "try_again" || action === "continue",
           onAction: (action: ProviderFailureAction) => {

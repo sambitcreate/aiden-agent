@@ -68,9 +68,12 @@ export async function sendFencedTurn(
   // Held from before the send: the session reports the send finished a step
   // before its receipt reaches here, and the queue must not slip into that gap.
   const pending: RemoteQueueFence | null = key ? { runId: null, since: now() } : null;
+  // An attempt that doesn't start puts back the fence it found, so a refusal
+  // never lifts the hold an earlier accepted turn still needs.
+  const previous = key ? remoteQueueFence(key) : null;
   if (key && pending) setRemoteQueueFence(key, pending);
   const release = () => {
-    if (key && remoteQueueFence(key) === pending) setRemoteQueueFence(key, null);
+    if (key && remoteQueueFence(key) === pending) setRemoteQueueFence(key, previous);
   };
   let receipt: { streamId: string } | null;
   try {
@@ -80,7 +83,7 @@ export async function sendFencedTurn(
     throw error;
   }
   if (!receipt) {
-    // Unconfirmed: the reconciliation banner holds the queue from here.
+    // Unconfirmed: the reconciliation banner holds the queue from here too.
     release();
     return;
   }
