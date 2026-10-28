@@ -1,6 +1,6 @@
 # Bot wake sources
 
-Status: In progress (2026-10-28). Stacked PRs on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
+Status: In progress (2026-10-28). Step 1 built; steps 2 and 3 in progress. Stacked PRs on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
 
 ## Why
 
@@ -26,6 +26,11 @@ Read from `NousResearch/hermes-agent` on 2026-10-28 (product reference, no copie
    - The card shows the timezone a schedule runs in.
    - The tool description and the Bot system prompt list every way a Bot can be woken.
    - Phones render the new card shape (Remote revision claimed at merge).
+   - Built (2026-10-28, `feature/bot-wake-sources`):
+     - No Remote wire-shape change, so no revision is claimed. Phones get the same `routine_proposal` entry; its `label` now carries the timezone ("Every day at 9:00 AM · Pacific Time") or the trigger ("When this routine's link is called"). A replaced card is omitted on phones.
+     - Revise supersedes: the new content gets a new card and proposal id, and the old card settles as dismissed by the host with `supersededBy`. It never counts as a decline, takes no extra pending slot, and moves a linked follow-up to the new card. Answered or replaced cards return `not_pending`.
+     - A link routine's token comes back once, to the Mac that pressed Add routine, which shows Copy link on the card. The Bot, the conversation, the proposals file and phones never see it. A link routine accepted on a phone shows New link on the Mac card (or in the profile) to make its link there.
+     - The wake-source list lives in `main/services/bot-wake-sources.ts`, shared by the system prompt and the `routines` tool description, with one slot each for steps 2 and 3.
 2. **Self wake-ups** (`feature/bot-self-wake`).
    - A `wake_up` tool (`set`, `list`, `cancel`): a one-time wake in the same Bot chat, 1 minute to 24 hours ahead, at most 3 pending per Bot, with no approval card.
    - Offered only in turns the person started. A routine, event or wake-up run cannot set one, which keeps Hermes-style loop prevention; repeated checking belongs to step 3.

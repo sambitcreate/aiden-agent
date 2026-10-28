@@ -46,7 +46,7 @@ import {
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision,
-  BotRoutineProposalDeclineReason, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+  BotRoutineProposalDeclineReason, BotRoutineProposalRespondResult } from "../../shared/bot-routine-proposals";
 import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -619,6 +619,7 @@ export function TranscriptEntries({
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onNewRoutineLink,
   onRespondToSkill,
   onRespondToLesson,
   onUndoLearning,
@@ -647,7 +648,9 @@ export function TranscriptEntries({
     proposalId: string,
     decision: BotRoutineProposalDecision,
     reason?: BotRoutineProposalDeclineReason,
-  ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  ): Promise<BotRoutineProposalRespondResult | null>;
+  /** A new link for a link routine a card added; the old one stops working. */
+  onNewRoutineLink?(routineId: string): Promise<string | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
   /** Keep or decline a lesson from a routine's runs. */
@@ -773,7 +776,10 @@ export function TranscriptEntries({
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
+                {...(row.routineId ? { routineId: row.routineId } : {})}
+                {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
+                {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
               />
             ) : null;
           case "lesson_proposal":
@@ -1273,6 +1279,14 @@ export function BotChatPane({ botId }: { botId: string }) {
       throw error;
     }
   };
+  const newRoutineLink = async (routineId: string) => {
+    try {
+      return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link."));
+      throw error;
+    }
+  };
   const respondToProposal = async (
     proposalId: string,
     decision: BotRoutineProposalDecision,
@@ -1283,7 +1297,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
       });
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
-      return result.status;
+      return result;
     } catch (error) {
       toast.error(
         userFacingErrorMessage(
@@ -1466,6 +1480,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
+          onNewRoutineLink={newRoutineLink}
           onRespondToSkill={respondToSkill}
           onRespondToLesson={async (lessonId, decision) => {
             try {

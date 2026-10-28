@@ -15907,7 +15907,8 @@
               "label": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 120
+                "maxLength": 120,
+                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM · Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
               },
               "status": {
                 "enum": [

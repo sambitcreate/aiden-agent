@@ -14,7 +14,8 @@ import {
   createBotRoutineProposalService,
   parseBotRoutineProposalRespond,
 } from "./bot-routine-proposals.js";
-import { routinesCandidate } from "./bot-runtime/bot-tool-candidates.js";
+import { eventRoutinesToolSource, routinesCandidate } from "./bot-runtime/bot-tool-candidates.js";
+import { BOT_EVENT_ROUTINES_MAX, createBotEventRoutineStore } from "./bot-routine-events/store.js";
 import type { BotToolCall } from "./bot-runtime/tool-adapter.js";
 import { createScheduleServiceCore } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
@@ -22,7 +23,6 @@ import { createBotRoutineService } from "./scheduled-bot-routines.js";
 import { projectBotTranscript } from "./bot-runtime/live-projection.js";
 import { BOT_ROUTINE_PROPOSALS_FILE } from "./bot-routine-proposals.js";
 import { botSessionDirectory } from "./bot-routine-notes.js";
-import { createBotEventRoutineStore } from "./bot-routine-events/store.js";
 
 const roots: string[] = [];
 after(() => {
@@ -72,11 +72,15 @@ function harness() {
   const failures = { statusAppend: false };
   let sequence = 0;
   const clock = { at: Date.UTC(2026, 9, 9, 12) };
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => clock.at });
+  const revisions: Array<[string, string, string]> = [];
   // A fresh service over the same profile and schedule store is an app restart.
   const start = () =>
     createBotRoutineProposalService({
       profileDir: () => root,
       routines,
+      eventRoutines: events,
+      onRevised: (...revision) => void revisions.push(revision),
       defaultTimezone: () => "UTC",
       appendEntry: async (botId, kind, data) => {
         if (failures.statusAppend && kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) throw new Error("disk full");
@@ -92,7 +96,7 @@ function harness() {
     projectBotTranscript(appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never)
       .flatMap((entry) => (entry.type === "routine_proposal" ? [{ status: entry.status, routineId: entry.routineId }] : []));
   const proposalsFile = path.join(botSessionDirectory(root, "bot-a"), BOT_ROUTINE_PROPOSALS_FILE);
-  return { routines, proposals, appended, failures, start, cards, proposalsFile, clock };
+  return { routines, events, revisions, proposals, appended, failures, start, cards, proposalsFile, clock };
 }
 
 const dailyPlan = { name: "Weekly meal plan", schedule: { kind: "weekly", days: [0], time: "09:00" }, prompt: "Plan this week's meals." };
@@ -445,6 +449,172 @@ test("follow-ups the host dismissed when they expired never count as declines", 
   }
   assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, true);
   assert.deepEqual(await h.proposals.recentDecisions("bot-a"), []);
+});
+
+const reportLink = { name: "Report landed", trigger: { kind: "webhook" }, prompt: "Summarize the new report." };
+
+test("a trigger card adds an event routine on Add routine, and its link token reaches only that first answer", async () => {
+  const { proposals, events, routines, appended, start } = harness();
+  for (const bad of [
+    { ...reportLink, trigger: { kind: "webhook", url: "https://example.com" } },
+    { ...reportLink, trigger: { kind: "file_change", folder: "../outside" } },
+    { ...reportLink, schedule: { kind: "daily", time: "09:00" } },
+  ]) {
+    const refused = await proposals.propose("bot-a", bad);
+    assert.equal(refused.ok === false && refused.code, "invalid");
+  }
+  assert.equal(appended.length, 0);
+
+  const proposed = await proposals.propose("bot-a", reportLink);
+  assert.ok(proposed.ok);
+  assert.deepEqual(appended[0]?.data, {
+    proposalId: proposed.proposal.proposalId,
+    name: "Report landed",
+    prompt: "Summarize the new report.",
+    trigger: { kind: "webhook" },
+    label: "When this routine's link is called",
+  });
+  assert.deepEqual(await events.list("bot-a"), [], "a proposal alone makes no link");
+
+  const input = { botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" as const };
+  const [first, second] = await Promise.all([proposals.respond(input), proposals.respond(input)]);
+  const [made] = await events.list("bot-a");
+  assert.equal((await events.list("bot-a")).length, 1, "two answers make one routine");
+  assert.deepEqual(await routines.list("bot-a"), [], "no scheduled routine is made");
+  assert.equal(first.routineId, made!.id);
+  assert.equal(typeof first.token, "string");
+  assert.equal((await events.findByToken(first.token!))?.id, made!.id, "the token opens this routine");
+  assert.deepEqual(second, { status: "accepted", routineId: made!.id }, "a repeat answer carries no token");
+  assert.deepEqual(
+    await start().respond(input),
+    { status: "accepted", routineId: made!.id },
+    "after a restart the same answer, still without a token",
+  );
+  assert.ok(!JSON.stringify(appended).includes(first.token!), "the conversation never holds the token");
+});
+
+test("a trigger proposal is refused once the Bot keeps as many event routines as it can", async () => {
+  const { proposals, events } = harness();
+  for (let index = 0; index < BOT_EVENT_ROUTINES_MAX; index += 1) {
+    await events.create("bot-a", { name: `Link ${index}`, prompt: "Go.", trigger: { kind: "webhook" } });
+  }
+  const refused = await proposals.propose("bot-a", reportLink);
+  assert.equal(refused.ok === false && refused.code, "invalid");
+  assert.ok((await proposals.propose("bot-a", dailyPlan)).ok, "a schedule card is still fine");
+});
+
+test("revising a waiting card replaces it without taking another slot, and only a waiting card can be revised", async () => {
+  const { proposals, appended, revisions } = harness();
+  const first = await proposals.propose("bot-a", dailyPlan);
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // Both slots are taken, yet a revision (even into a trigger card) still lands.
+  const revised = await proposals.revise("bot-a", first.proposal.proposalId, { ...reportLink, name: "Weekly meal plan" });
+  assert.ok(revised.ok);
+  assert.equal(revised.replaced, first.proposal.proposalId);
+  assert.notEqual(revised.proposal.proposalId, first.proposal.proposalId);
+  assert.equal(await proposals.pendingCount("bot-a"), 2);
+  assert.deepEqual(revisions, [["bot-a", first.proposal.proposalId, revised.proposal.proposalId]]);
+
+  const shown = projectBotTranscript(appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never)
+    .flatMap((entry) => (entry.type === "routine_proposal" ? [{ id: entry.proposal.proposalId, status: entry.status, supersededBy: entry.supersededBy }] : []));
+  assert.deepEqual(shown, [
+    { id: first.proposal.proposalId, status: "dismissed", supersededBy: revised.proposal.proposalId },
+    { id: second.proposal.proposalId, status: "pending", supersededBy: undefined },
+    { id: revised.proposal.proposalId, status: "pending", supersededBy: undefined },
+  ]);
+  await assert.rejects(
+    proposals.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+    "the replaced card can't be answered",
+  );
+  assert.deepEqual(await proposals.recentDecisions("bot-a"), [], "a replaced card is not a decline");
+
+  await proposals.respond({ botId: "bot-a", proposalId: second.proposal.proposalId, decision: "dismiss" });
+  const answered = await proposals.revise("bot-a", second.proposal.proposalId, dailyPlan);
+  assert.equal(answered.ok === false && answered.code, "not_pending");
+  const replacedAgain = await proposals.revise("bot-a", first.proposal.proposalId, dailyPlan);
+  assert.equal(replacedAgain.ok === false && replacedAgain.code, "not_pending");
+  const unknown = await proposals.revise("bot-a", "00000000-0000-4000-8000-999999999999", dailyPlan);
+  assert.equal(unknown.ok === false && unknown.code, "not_found");
+  // Renaming a waiting card into one the person just turned down is a new idea.
+  const renamed = await proposals.revise("bot-a", revised.proposal.proposalId, { ...dailyPlan, name: "gym  Reminder" });
+  assert.equal(renamed.ok === false && renamed.code, "declined_before");
+});
+
+test("the routines tool lists and pauses event routines, shows waiting cards, and never shows a link", async () => {
+  const { proposals, events, routines, appended } = harness();
+  const changed: string[] = [];
+  // The tool writes its cards into this Bot's conversation, where Add routine reads them.
+  const conversation: BotToolCall = {
+    ...call([]),
+    appendEntry: async (kind, data) => void appended.push({ botId: "bot-a", kind, data: data as Record<string, unknown> }),
+  };
+  const tool = routinesCandidate("bot-a", {
+    list: (botId) => routines.list(botId),
+    pause: (botId, id) => routines.pause(botId, id),
+    propose: async (botId, input, append) => {
+      const outcome = await proposals.propose(botId, input, append);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+    revise: async (botId, proposalId, input, append) => {
+      const outcome = await proposals.revise(botId, proposalId, input, append);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+    },
+    pending: (botId) => proposals.pending(botId),
+    eventRoutines: eventRoutinesToolSource(async () => ({ store: events, changed: (botId) => void changed.push(botId) })),
+    recentDecisions: (botId) => proposals.recentDecisions(botId),
+  }).bind!(conversation);
+
+  const proposed = json(await tool.execute("c1", { action: "propose", ...reportLink }));
+  assert.equal(proposed.ok, true);
+  const accepted = await proposals.respond({ botId: "bot-a", proposalId: String(proposed.proposalId), decision: "accept" });
+  const waiting = json(await tool.execute("c2", { action: "propose", ...dailyPlan }));
+
+  const listed = json(await tool.execute("c3", { action: "list" }));
+  assert.deepEqual(listed, {
+    routines: [],
+    eventRoutines: [{ id: accepted.routineId, name: "Report landed", label: "When this routine's link is called", enabled: true, kind: "event" }],
+    pendingSuggestions: [{ proposalId: waiting.proposalId, name: "Weekly meal plan", label: "Every Sunday at 9:00 AM · UTC" }],
+    recentDecisions: [{ name: "Report landed", label: "When this routine's link is called", status: "accepted", decidedAt: Date.UTC(2026, 9, 9, 12) }],
+  });
+
+  const revised = json(await tool.execute("c4", { action: "revise", proposalId: waiting.proposalId, ...dailyPlan, schedule: { kind: "daily", time: "07:30" } }));
+  assert.equal(revised.ok, true);
+  assert.notEqual(revised.proposalId, waiting.proposalId);
+  assert.deepEqual(
+    appended.map((entry) => entry.kind),
+    [
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND,
+    ],
+    "the revised card and the replaced card's status land in this conversation",
+  );
+
+  const paused = json(await tool.execute("c5", { action: "pause", id: accepted.routineId }));
+  assert.deepEqual(paused, { routine: { id: accepted.routineId, name: "Report landed", label: "When this routine's link is called", enabled: false, kind: "event" } });
+  assert.equal((await events.list("bot-a"))[0]!.enabled, false);
+  assert.deepEqual(changed, ["bot-a"], "a pause re-arms the Bot's event sources");
+  assert.ok(!JSON.stringify({ proposed, listed, revised, paused, appended }).includes(accepted.token!), "the Bot never sees the token");
+});
+
+test("an event routine an interrupted Add routine already made settles its card as accepted, with no second link", async () => {
+  const { proposals, events } = harness();
+  const proposed = await proposals.propose("bot-a", reportLink);
+  assert.ok(proposed.ok);
+  // The routine was saved, then the app quit before the card settled.
+  const { routine } = await events.create("bot-a", { ...reportLink, sourceProposalId: proposed.proposal.proposalId });
+  const again = await events.create("bot-a", { ...reportLink, sourceProposalId: proposed.proposal.proposalId });
+  assert.equal(again.routine.id, routine.id);
+  assert.equal(again.token, undefined, "making it again returns no new token");
+
+  const answer = await proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "dismiss" });
+  assert.deepEqual(answer, { status: "accepted", routineId: routine.id });
+  assert.equal((await events.list("bot-a")).length, 1);
 });
 
 test("a Bot proposes a watch through the routines tool, and Add routine saves it waiting for its first check", async () => {

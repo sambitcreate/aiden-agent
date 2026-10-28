@@ -2150,7 +2150,7 @@
         "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
         "name": "Daily check-in",
         "prompt": "Check in briefly…",
-        "label": "Every day at 9:00 AM",
+        "label": "Every day at 9:00 AM · UTC",
         "status": "pending",
         "createdAt": "2026-08-19T15:02:05.000Z"
       },
@@ -2160,7 +2160,7 @@
         "proposalId": "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
         "name": "Weekly meal plan",
         "prompt": "Plan this week's meals.",
-        "label": "Every Sunday at 9:00 AM",
+        "label": "Every Sunday at 9:00 AM · UTC",
         "status": "accepted",
         "routineId": "task_fixture_routine_02",
         "createdAt": "2026-08-19T15:03:00.000Z"

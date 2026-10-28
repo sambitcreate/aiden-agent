@@ -32,6 +32,7 @@ export interface BotRoutineProposalStatusEntryData {
 
 /** The person-readable name of a timezone, e.g. "Pacific Time"; the IANA id when there is none. */
 export function botRoutineTimezoneName(timezone: string, at: Date = new Date()): string {
+  if (/^(?:Etc\/)?(?:UTC|UCT|GMT|Zulu|Universal)$/iu.test(timezone)) return "UTC";
   try {
     const name = new Intl.DateTimeFormat("en-US", { timeZone: timezone, timeZoneName: "longGeneric" })
       .formatToParts(at)

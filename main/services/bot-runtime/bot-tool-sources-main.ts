@@ -19,8 +19,6 @@
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import { formatBotRoutineTriggerLabel } from "../../../renderer/shared/bot-routine-trigger.js";
-import type { BotEventRoutine } from "../bot-routine-events/store.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
@@ -55,6 +53,7 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  eventRoutinesToolSource,
   routinesCandidate,
   proposeSkillCandidate,
   routineTaskIdOfCall,
@@ -148,24 +147,12 @@ const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
   },
   pending: async (botId) => (await proposalServices()).botRoutineProposals.pending(botId),
-  eventRoutines: {
-    list: async (botId) =>
-      (await eventRoutineServices()).botEventRoutines.list(botId).then((routines) => routines.map(eventRoutineSummary)),
-    pause: async (botId, routineId) => {
-      const services = await eventRoutineServices();
-      if (!(await services.botEventRoutines.list(botId)).some((routine) => routine.id === routineId)) return undefined;
-      const paused = await services.botEventRoutines.update(botId, routineId, { enabled: false });
-      services.botEventRoutinesChanged(botId);
-      return eventRoutineSummary(paused);
-    },
-  },
+  eventRoutines: eventRoutinesToolSource(async () => {
+    const services = await eventRoutineServices();
+    return { store: services.botEventRoutines, changed: services.botEventRoutinesChanged };
+  }),
   recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
-
-/** What the Bot sees of an event routine: never its link or token hash. */
-function eventRoutineSummary(routine: BotEventRoutine): { id: string; name: string; label: string; enabled: boolean } {
-  return { id: routine.id, name: routine.name, label: formatBotRoutineTriggerLabel(routine.trigger), enabled: routine.enabled };
-}
 
 const lazyRoutineNotes = {
   set: async (botId: string, taskId: string, key: unknown, value: unknown) =>
