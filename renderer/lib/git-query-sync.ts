@@ -1,6 +1,7 @@
 // Keeps Git display queries fresh from push events instead of fast polling:
 // - `git:changed` (main watches HEAD, index, refs) for repository changes;
-// - agent tool results and `chats:settled` for working-tree edits;
+// - agent tool results, `workspace:files-touched` (any window's or phone's
+//   turn) and `chats:settled` for working-tree edits;
 // - window re-activation for edits made in other apps.
 // Queries keep a slow safety-net interval while the window is active.
 
@@ -74,6 +75,10 @@ export function subscribeGitQuerySync(
       refreshPullRequestIfStale(workspaceId);
     }),
     subscribe("chats:settled", (payload) => {
+      const workspaceId = workspaceOf(payload);
+      if (workspaceId) refreshWorkingTree(workspaceId);
+    }),
+    subscribe("workspace:files-touched", (payload) => {
       const workspaceId = workspaceOf(payload);
       if (workspaceId) refreshWorkingTree(workspaceId);
     }),
