@@ -10,6 +10,8 @@ import { createSuggestConnectionTool, type SuggestConnectionDeps } from "../bot-
 import { createRoutineNotesTool, type BotRoutineNotesStore } from "../bot-routine-notes.js";
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import { createBotRoutinesTool, type BotRoutinesToolDependencies } from "../schedule-tool.js";
+import { formatBotRoutineTriggerLabel } from "../../../renderer/shared/bot-routine-trigger.js";
+import type { BotEventRoutine, BotEventRoutineStore } from "../bot-routine-events/store.js";
 import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
 import { createShareImageTool } from "../share-image-tool.js";
 import type { Attachment } from "../types.js";
@@ -202,6 +204,30 @@ export function routineNotesCandidate(
  * The Bot's `routines` tool. A proposal's card is appended to the calling
  * conversation, so it shows exactly where the Bot suggested it.
  */
+/** What the Bot sees of an event routine: never its link or token hash. */
+function eventRoutineSummary(routine: BotEventRoutine): { id: string; name: string; label: string; enabled: boolean } {
+  return { id: routine.id, name: routine.name, label: formatBotRoutineTriggerLabel(routine.trigger), enabled: routine.enabled };
+}
+
+/**
+ * The `routines` tool's view of a Bot's event routines: list them and turn one
+ * off. `changed` re-arms its watches after a pause.
+ */
+export function eventRoutinesToolSource(
+  services: () => Promise<{ store: Pick<BotEventRoutineStore, "list" | "update">; changed(botId: string): void }>,
+): NonNullable<BotRoutinesToolDependencies["eventRoutines"]> {
+  return {
+    list: async (botId) => (await (await services()).store.list(botId)).map(eventRoutineSummary),
+    pause: async (botId, routineId) => {
+      const { store, changed } = await services();
+      if (!(await store.list(botId)).some((routine) => routine.id === routineId)) return undefined;
+      const paused = await store.update(botId, routineId, { enabled: false });
+      changed(botId);
+      return eventRoutineSummary(paused);
+    },
+  };
+}
+
 export function routinesCandidate(
   botId: string,
   dependencies: Omit<BotRoutinesToolDependencies, "propose" | "revise"> & {
