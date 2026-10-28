@@ -108,11 +108,15 @@ const dispatcher = createBotRoutineEventDispatcher({
     const trigger = { kind: "event" as const, eventId: event.eventId, source: event.source, payload: event.payload };
     // The event's own request id as the run id: a replay after a restart
     // reads the recorded run or the admitted turn instead of sending again.
-    await executor.run(eventRoutineTask(routine), {
+    const requestId = botRoutineRequestId(routine.id, trigger);
+    const run = await executor.run(eventRoutineTask(routine), {
       trigger,
-      runId: botRoutineRequestId(routine.id, trigger),
+      runId: requestId,
       signal: new AbortController().signal,
     });
+    // Only a run recorded under the event's own id is its answer; an
+    // uncertain one (recorded under another id) is replayed on next start.
+    return { settled: run.id === requestId };
   },
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
   now: Date.now,

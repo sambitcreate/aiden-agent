@@ -11,6 +11,7 @@ import {
 } from "../../../renderer/shared/bot-lessons.js";
 import type { BotLearningTarget } from "../../../renderer/shared/bot-learning.js";
 import { botMemory } from "../bot-memory/bot-memory-main.js";
+import { storeView } from "../bot-memory/store.js";
 import type { MemoryReviewExtras } from "../bot-memory/review.js";
 import { BOT_MEMORY_TIDY, needsMemoryTidy, proposeMemoryTidy } from "../bot-memory/tidy.js";
 import { createNoteHowToTool, NOTE_HOW_TO_INSTRUCTIONS } from "../bot-lessons/how-to-tool.js";
@@ -265,13 +266,15 @@ export async function maybeTidyMemory(botId: string): Promise<"not_needed" | "to
         assertCurrent: fence,
       });
       if (!result.ok) return "unchanged";
-      const after = await botMemory.view(botId);
-      if (after[target].usedChars >= usedBefore) {
+      // The state the guarded write produced, read inside the same write
+      // lock: a later edit must never become part of what Undo restores over.
+      const written = JSON.stringify({ memory: result.loaded.stores.memory.texts, user: result.loaded.stores.user.texts });
+      if (storeView(result.loaded, target).usedChars >= usedBefore) {
         // Not smaller: put back what was there, unless someone edited since.
-        await restoreMemory(botId, memoryText(fresh), memoryText(after), fence);
+        await restoreMemory(botId, memoryText(fresh), written, fence);
         return "unchanged";
       }
-      const change = await botLearningHistory.record({ botId, kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before: memoryText(fresh), after: memoryText(after) });
+      const change = await botLearningHistory.record({ botId, kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before: memoryText(fresh), after: written });
       await appendEntry(botId, "aiden.memory-tidy", { targets: [target], changeId: change.id }).catch(() => undefined);
       return "tidied";
     } finally {

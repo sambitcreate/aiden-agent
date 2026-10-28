@@ -51,7 +51,7 @@ test("an event run's input has notes, then the escaped event, then the prompt an
   assert.equal(message.match(/<\/event>/gu)?.length, 1, "the payload cannot close the block");
 });
 
-function dispatcherHarness(store: ReturnType<typeof createBotEventRoutineStore>, run?: (event: { eventId: string }) => Promise<void>) {
+function dispatcherHarness(store: ReturnType<typeof createBotEventRoutineStore>, run?: (event: { eventId: string }) => Promise<{ settled: boolean } | void>) {
   const clock = { at: Date.UTC(2026, 9, 27, 12) };
   const runs: Array<{ eventId: string; payload: string }> = [];
   const timers: Array<{ at: number; fn: () => void; cancelled: boolean }> = [];
@@ -59,7 +59,7 @@ function dispatcherHarness(store: ReturnType<typeof createBotEventRoutineStore>,
     store,
     run: async (_routine, event) => {
       runs.push({ eventId: event.eventId, payload: event.payload });
-      await run?.(event);
+      return run?.(event);
     },
     isPaused: async () => false,
     now: () => clock.at,
@@ -115,6 +115,20 @@ test("an accepted event whose run never finished is replayed after a restart; a 
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(again.runs, []);
   assert.equal(await again.dispatcher.emit("bot-a", routine.id, { eventId: "e1", payload: "a.pdf" }), "duplicate");
+});
+
+test("an event whose run outcome is uncertain keeps its receipt and is replayed on the next start", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const first = dispatcherHarness(store, async () => ({ settled: false }));
+  assert.equal(await first.dispatcher.emit("bot-a", routine.id, { eventId: "w1", payload: "{}" }), "queued");
+  for (let attempt = 0; attempt < 200 && first.runs.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual((await store.list("bot-a"))[0]?.running?.map((entry) => entry.eventId), ["w1"]);
+  const restarted = dispatcherHarness(store);
+  await restarted.dispatcher.rearm(await store.list("bot-a"));
+  for (let attempt = 0; attempt < 200 && restarted.runs.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(restarted.runs.map((run) => run.eventId), ["w1"]);
 });
 
 test("the 25th event of the day is refused, and a disabled routine refuses events", async () => {

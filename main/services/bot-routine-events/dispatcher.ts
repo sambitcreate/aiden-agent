@@ -13,8 +13,10 @@ export interface BotRoutineEventDispatcherDependencies {
    * Runs the routine once with this event; resolves when the run is recorded.
    * The same event may be run again after a restart: the run must read the
    * recorded run or the admitted turn by the event's id before sending.
+   * `settled: false` (or a throw): the outcome is unknown, so the receipt
+   * stays for the next start to replay.
    */
-  run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<void>;
+  run(routine: BotEventRoutine, event: { eventId: string; source: BotRoutineTriggerKind; payload: string }): Promise<{ settled: boolean } | void>;
   isPaused(botId: string): Promise<boolean>;
   now(): number;
   timeZone(): string;
@@ -37,10 +39,11 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
 
   /** Runs an accepted event, then drops its receipt once the run is recorded. */
   async function start(routine: BotEventRoutine, event: { eventId: string; payload: string }): Promise<void> {
+    let settled = false;
     try {
-      await dependencies.run(routine, { ...event, source: routine.trigger.kind });
+      settled = (await dependencies.run(routine, { ...event, source: routine.trigger.kind }))?.settled !== false;
     } finally {
-      await dependencies.store.mutate(routine.botId, routine.id, (current) => {
+      if (settled) await dependencies.store.mutate(routine.botId, routine.id, (current) => {
         const running = (current.running ?? []).filter((entry) => entry.eventId !== event.eventId);
         if (running.length === (current.running ?? []).length) return { result: undefined };
         const { running: _previous, ...rest } = current;
