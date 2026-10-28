@@ -17,6 +17,12 @@
 // A feed also runs without subscribers while a reply is running, so the end
 // of every run is observed and reported (`onRunSettled`) for list rows.
 
+import {
+  BOT_SKILL_PROPOSAL_ENTRY_KIND,
+  BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND,
+  botSkillProposalOf,
+  botSkillProposalStatusOf,
+} from "../../../renderer/shared/bot-skill-proposals.js";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
@@ -132,7 +138,7 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal"]);
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -286,10 +292,14 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     return rowId;
   };
   const issued = new Map<string, number>();
+  const skillStatus = new Map<string, "added" | "dismissed">();
   for (const record of entries) {
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
       if (status) proposalStatus.set(status.proposalId, status);
+    } else if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) {
+      const status = botSkillProposalStatusOf(record.data);
+      if (status) skillStatus.set(status.proposalId, status.status);
     } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
       const status = botIssueStatusOf(record.data);
       if (status) issueStatus.set(status.issueId, status.resolution);
@@ -380,6 +390,14 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_SKILL_PROPOSAL_ENTRY_KIND) {
+      const proposal = botSkillProposalOf(record.data);
+      if (proposal) {
+        mapped.push({ entry: { id, type: "skill_proposal", proposal, status: skillStatus.get(proposal.proposalId) ?? "pending" }, turn });
+      }
+      continue;
+    }
+    if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
     if (record.kind === BOT_ISSUE_ENTRY_KIND) {
       const issue = botIssueOf(record.data);
       if (issue) {

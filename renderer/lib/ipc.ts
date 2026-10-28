@@ -1749,6 +1749,11 @@ export const botsApi = {
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
   },
+  /** Skills a Bot proposed (or found in its folder) and the person's answer. */
+  skillProposals: {
+    respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
+      invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
+  },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>

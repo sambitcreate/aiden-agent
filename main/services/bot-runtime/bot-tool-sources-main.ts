@@ -54,6 +54,7 @@ import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } 
 import {
   routineNotesCandidate,
   routinesCandidate,
+  proposeSkillCandidate,
   routineTaskIdOfCall,
   shareImageCandidate,
   suggestConnectionCandidate,
@@ -411,6 +412,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
+      tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
+        (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
       tools.push(
         suggestConnectionCandidate(botId, {

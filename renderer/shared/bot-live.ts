@@ -185,6 +185,14 @@ export type BotTranscriptEntry =
       routineId?: string;
       at?: number;
     }
+  /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
+  | {
+      id: string;
+      type: "skill_proposal";
+      proposal: import("./bot-skill-proposals.js").BotSkillProposalEntryData;
+      status: import("./bot-skill-proposals.js").BotSkillProposalStatus;
+      at?: number;
+    }
   /**
    * A "Needs you" issue the host raised for this Bot (plan F2). `status` is
    * `open` until a status entry settles it; a settled card keeps one quiet line.

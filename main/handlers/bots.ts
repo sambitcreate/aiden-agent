@@ -243,6 +243,16 @@ export function registerBotHandlers(): void {
       ipcMain.broadcast("bots:changed", { botId });
     },
   });
+  // Skill cards: Add writes and approves the exact content; Not now leaves it unused.
+  ipcMain.handle("bots:skillProposals:respond", async (_event, input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid skill response.");
+    const fields = input as Record<string, unknown>;
+    if (Object.keys(fields).some((key) => key !== "botId" && key !== "proposalId" && key !== "decision")) throw new Error("Invalid skill response.");
+    if (fields.decision !== "add" && fields.decision !== "dismiss") throw new Error("Invalid skill response.");
+    if (typeof fields.proposalId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.proposalId)) throw new Error("Invalid skill response.");
+    const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
+    return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
+  });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

@@ -92,6 +92,20 @@ async function writesIntoProtectedRoot(
   return false;
 }
 
+/** Skill folders the skill loaders read: `.aiden/skill(s)`, `.claude/skills`, `.agents`. */
+const SKILL_DIRECTORY = /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/u;
+
+/**
+ * Whether a write lands in a folder the skill loaders read. A Bot never
+ * writes skills itself: it proposes one (`propose_skill`) and the person
+ * approves it, or a hand-written file waits for approval.
+ */
+export async function writesIntoSkillDirectory(locationRoot: string, params: Record<string, unknown>): Promise<boolean> {
+  if (typeof params.path !== "string") return false;
+  const target = await realTarget(path.resolve(locationRoot, params.path));
+  return SKILL_DIRECTORY.test(target) || SKILL_DIRECTORY.test(path.resolve(locationRoot, params.path));
+}
+
 type ToolParameterObject = TSchema & {
   readonly type: "object";
   readonly properties: Record<string, TSchema>;
@@ -286,6 +300,9 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
           (await writesIntoProtectedRoot(selected.root, underlyingParams, (options.protectedRoots ?? processProtectedRoots)()))
         ) {
           throw new Error("Aiden manages this Bot's own session and memory files; file tools cannot change them.");
+        }
+        if (WRITING_TOOLS.has(name) && (await writesIntoSkillDirectory(selected.root, underlyingParams))) {
+          throw new Error("Skills need the person's OK. Use propose_skill instead.");
         }
         try {
           return await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);

@@ -11,6 +11,7 @@ import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
 import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
@@ -636,6 +637,7 @@ export function TranscriptEntries({
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onRespondToSkill,
   onActOnIssue,
   connectLabel,
   connecting,
@@ -664,6 +666,8 @@ export function TranscriptEntries({
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Add or decline a proposed (or found) skill. */
+  onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
   /** Connect cards' button text, e.g. where the connection is finished. */
   connectLabel?: string;
   /** A connection request is being sent. */
@@ -782,6 +786,15 @@ export function TranscriptEntries({
                 proposal={row.proposal}
                 status={row.status}
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
+              />
+            ) : null;
+          case "skill_proposal":
+            return onRespondToSkill ? (
+              <SkillProposalCard
+                key={row.id}
+                proposal={row.proposal}
+                status={row.status}
+                onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
               />
             ) : null;
           case "issue":
@@ -1242,6 +1255,14 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  const respondToSkill = async (proposalId: string, decision: "add" | "dismiss") => {
+    try {
+      return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
+      throw error;
+    }
+  };
   const respondToProposal = async (
     proposalId: string,
     decision: BotRoutineProposalDecision,
@@ -1435,6 +1456,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
+          onRespondToSkill={respondToSkill}
           onActOnIssue={actOnIssue}
         />
         {shownSends.map((send) => {

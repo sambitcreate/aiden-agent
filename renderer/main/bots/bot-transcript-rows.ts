@@ -52,6 +52,12 @@ export type BotTranscriptRow =
       status: BotRoutineProposalStatus;
       routineId?: string;
     }
+  | {
+      kind: "skill_proposal";
+      id: string;
+      proposal: import("../../shared/bot-skill-proposals").BotSkillProposalEntryData;
+      status: import("../../shared/bot-skill-proposals").BotSkillProposalStatus;
+    }
   /** A "Needs you" issue the host raised; settles to one quiet line. */
   | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
@@ -147,6 +153,9 @@ export function botTranscriptRows(
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
           });
+          break;
+        case "skill_proposal":
+          rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
           break;
         case "routines_skipped":
           rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
