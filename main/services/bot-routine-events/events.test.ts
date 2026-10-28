@@ -131,6 +131,24 @@ test("an event whose run outcome is uncertain keeps its receipt and is replayed 
   assert.deepEqual(restarted.runs.map((run) => run.eventId), ["w1"]);
 });
 
+test("with four runs unfinished, a fifth event waits as the held one and no receipt is dropped", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const h = dispatcherHarness(store, () => new Promise<void>(() => undefined));
+  for (const id of ["e1", "e2", "e3", "e4"]) {
+    assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: id, payload: id }), "queued");
+    h.clock.at += 5 * MIN;
+  }
+  assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e5", payload: "e5" }), "held");
+  const [stored] = await store.list("bot-a");
+  assert.deepEqual(stored?.running?.map((entry) => entry.eventId), ["e1", "e2", "e3", "e4"]);
+  assert.equal(stored?.held?.eventId, "e5");
+  await h.advance(h.clock.at + 5 * MIN);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(h.runs.map((run) => run.eventId), ["e1", "e2", "e3", "e4"], "it still waits while every slot is busy");
+  assert.equal((await store.list("bot-a"))[0]?.held?.eventId, "e5");
+});
+
 test("the 25th event of the day is refused, and a disabled routine refuses events", async () => {
   const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
   const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });

@@ -31,10 +31,15 @@ function dayKey(at: number, timeZone: string): string {
 export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDispatcherDependencies) {
   const heldTimers = new Map<string, { cancel(): void }>();
 
-  /** The receipt list with this event added; the oldest drop past the bound. */
+  /** The receipt list with this event added. Callers admit only below the bound, so none is dropped. */
   function withRunning(routine: BotEventRoutine, event: { eventId: string; payload: string }, at: number) {
     const others = (routine.running ?? []).filter((entry) => entry.eventId !== event.eventId);
-    return [...others, { eventId: event.eventId, payload: event.payload, at }].slice(-BOT_EVENT_RUNNING_MAX);
+    return [...others, { eventId: event.eventId, payload: event.payload, at }];
+  }
+
+  /** Every receipt slot holds an unfinished run: a new event waits as the held one. */
+  function full(routine: BotEventRoutine): boolean {
+    return (routine.running?.length ?? 0) >= BOT_EVENT_RUNNING_MAX;
   }
 
   /** Runs an accepted event, then drops its receipt once the run is recorded. */
@@ -64,8 +69,13 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
   async function releaseHeld(botId: string, routineId: string): Promise<void> {
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
+    let retryAt: number | undefined;
     const claimed = await dependencies.store.mutate(botId, routineId, (routine) => {
       if (!routine.held || !routine.enabled) return { result: undefined };
+      if (full(routine)) {
+        retryAt = now + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+        return { result: undefined };
+      }
       const count = routine.day?.key === today ? routine.day.count : 0;
       if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) return { next: { ...routine, held: undefined }, result: undefined };
       const event = routine.held;
@@ -75,6 +85,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       };
     });
     if (claimed) await start(claimed.routine, claimed.event);
+    else if (retryAt !== undefined) armHeld(botId, routineId, retryAt);
   }
 
   return {
@@ -99,7 +110,9 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
         if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) {
           return { next: { ...routine, seenEventIds }, result: { kind: "daily_limit" as const } };
         }
-        const nextAllowed = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+        const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+        // Too soon, or every receipt slot is busy: hold it (the newest wins).
+        const nextAllowed = full(routine) ? Math.max(gapEnds, now + BOT_ROUTINE_EVENT_LIMITS.minGapMs) : gapEnds;
         if (now < nextAllowed) {
           return {
             next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now } },
