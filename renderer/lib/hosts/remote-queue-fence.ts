@@ -10,8 +10,8 @@ import * as React from "react";
  */
 
 export interface RemoteQueueFence {
-  /** The accepted turn's run (its stream id). */
-  runId: string;
+  /** The accepted turn's run (its stream id); `null` while the send awaits its receipt. */
+  runId: string | null;
   /** When it was accepted, for the stall fallback. */
   since: number;
 }
@@ -39,6 +39,8 @@ const SETTLED_RUN_STATES = new Set(["done", "failed", "cancelled"]);
 export function remoteQueueFenceHolds(fence: RemoteQueueFence | null, view: RemoteQueueFenceView): boolean {
   if (!fence) return false;
   if (view.now - fence.since >= REMOTE_QUEUE_FENCE_STALL_MS) return false;
+  // Sent, receipt not in yet: the host may already be running it.
+  if (fence.runId === null) return true;
   if (view.hostRunState !== undefined && SETTLED_RUN_STATES.has(view.hostRunState)) return false;
   return !(view.run?.runId === fence.runId && view.run.ended);
 }
@@ -63,8 +65,26 @@ export async function sendFencedTurn(
   send: () => Promise<{ streamId: string } | null>,
   now: () => number = Date.now,
 ): Promise<void> {
-  const receipt = await send();
-  if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: now() });
+  // Held from before the send: the session reports the send finished a step
+  // before its receipt reaches here, and the queue must not slip into that gap.
+  const pending: RemoteQueueFence | null = key ? { runId: null, since: now() } : null;
+  if (key && pending) setRemoteQueueFence(key, pending);
+  const release = () => {
+    if (key && remoteQueueFence(key) === pending) setRemoteQueueFence(key, null);
+  };
+  let receipt: { streamId: string } | null;
+  try {
+    receipt = await send();
+  } catch (error) {
+    release();
+    throw error;
+  }
+  if (!receipt) {
+    // Unconfirmed: the reconciliation banner holds the queue from here.
+    release();
+    return;
+  }
+  if (key) setRemoteQueueFence(key, { runId: receipt.streamId, since: now() });
 }
 
 export function remoteQueueFence(key: string): RemoteQueueFence | null {

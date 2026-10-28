@@ -57,6 +57,13 @@ test("the fence belongs to the host and chat, not to a pane", () => {
 
 test("any turn the host accepts fences its chat's queue, and one it didn't confirm leaves it open", async () => {
   try {
+    // Held while the send is in flight, before any receipt exists.
+    let answer!: (receipt: { streamId: string }) => void;
+    const inFlight = sendFencedTurn("host-b:chat-9", () => new Promise((resolve) => { answer = resolve; }), () => 4_000);
+    assert.equal(remoteQueueFenceHolds(remoteQueueFence("host-b:chat-9"), view({ now: 4_001 })), true, "no gap before the receipt");
+    answer({ streamId: "run-first" });
+    await inFlight;
+    assert.equal(remoteQueueFence("host-b:chat-9")?.runId, "run-first");
     await sendFencedTurn("host-b:chat-9", async () => ({ streamId: "run-typed" }), () => 5_000);
     assert.deepEqual(remoteQueueFence("host-b:chat-9"), { runId: "run-typed", since: 5_000 });
     // A Try again after it fences on the new run.
