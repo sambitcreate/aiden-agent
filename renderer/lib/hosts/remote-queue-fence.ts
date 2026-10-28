@@ -52,6 +52,21 @@ export function setRemoteQueueFence(key: string, fence: RemoteQueueFence | null)
   for (const listener of listeners) listener();
 }
 
+/**
+ * Starts a turn and fences the chat's queue on its run. Every new turn goes
+ * through here (typed, queued, or a failure card's Try again), so a queued
+ * follow-up never reaches the host while any of them is still running.
+ * `key` is bound before the send, so a receipt after the pane closed still fences.
+ */
+export async function sendFencedTurn(
+  key: string | null,
+  send: () => Promise<{ streamId: string } | null>,
+  now: () => number = Date.now,
+): Promise<void> {
+  const receipt = await send();
+  if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: now() });
+}
+
 export function remoteQueueFence(key: string): RemoteQueueFence | null {
   return fences.get(key) ?? null;
 }

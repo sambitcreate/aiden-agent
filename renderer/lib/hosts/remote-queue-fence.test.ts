@@ -4,6 +4,7 @@ import {
   REMOTE_QUEUE_FENCE_STALL_MS,
   remoteQueueFence,
   remoteQueueFenceHolds,
+  sendFencedTurn,
   setRemoteQueueFence,
   type RemoteQueueFenceView,
 } from "./remote-queue-fence";
@@ -52,4 +53,22 @@ test("the fence belongs to the host and chat, not to a pane", () => {
     setRemoteQueueFence("host-b:chat-1", null);
   }
   assert.equal(remoteQueueFence("host-b:chat-1"), null);
+});
+
+test("any turn the host accepts fences its chat's queue, and one it didn't confirm leaves it open", async () => {
+  try {
+    await sendFencedTurn("host-b:chat-9", async () => ({ streamId: "run-typed" }), () => 5_000);
+    assert.deepEqual(remoteQueueFence("host-b:chat-9"), { runId: "run-typed", since: 5_000 });
+    // A Try again after it fences on the new run.
+    await sendFencedTurn("host-b:chat-9", async () => ({ streamId: "run-retry" }), () => 6_000);
+    assert.equal(remoteQueueFence("host-b:chat-9")?.runId, "run-retry");
+    setRemoteQueueFence("host-b:chat-9", null);
+    // An unresolved send is held by the reconciliation banner, which also blocks the queue.
+    await sendFencedTurn("host-b:chat-9", async () => null);
+    assert.equal(remoteQueueFence("host-b:chat-9"), null);
+    await assert.rejects(sendFencedTurn("host-b:chat-9", async () => { throw new Error("refused"); }));
+    assert.equal(remoteQueueFence("host-b:chat-9"), null);
+  } finally {
+    setRemoteQueueFence("host-b:chat-9", null);
+  }
 });

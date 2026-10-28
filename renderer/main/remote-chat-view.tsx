@@ -48,6 +48,7 @@ import {
   REMOTE_QUEUE_FENCE_STALL_MS,
   remoteQueueFence,
   remoteQueueFenceHolds,
+  sendFencedTurn,
   setRemoteQueueFence,
   useRemoteQueueFence,
 } from "../lib/hosts/remote-queue-fence";
@@ -419,7 +420,10 @@ export function RemoteChatPane({
   const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
 
-  const { send, sendTurn, submitInput } = remoteComposerActions(control, runId, host.label, () => selection.extras);
+  const { sendTurn, submitInput } = remoteComposerActions(control, runId, host.label, () => selection.extras);
+  // Typed sends, queued ones and Try again all fence the queue on their run.
+  const send = (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) =>
+    sendFencedTurn(turnKey, () => sendTurn(text, attachments, skill));
   const generating = live && run?.status === "running";
   // A run the host is still working on; an idle view with no run is not one.
   const runActive = live && run?.runId != null;
@@ -464,12 +468,7 @@ export function RemoteChatPane({
       !forkSummaryHoldsSend(lineage?.forkedFrom),
     // `enabled` already waits for the host's run to end.
     waitUntilIdle: () => Promise.resolve(true),
-    send: async (message) => {
-      // Bound now, so a receipt that lands after this pane closes still fences its chat.
-      const key = turnKey;
-      const receipt = await sendTurn(message.text, message.attachments, message.skillInvocation);
-      if (receipt && key) setRemoteQueueFence(key, { runId: receipt.streamId, since: Date.now() });
-    },
+    send: (message) => send(message.text, message.attachments, message.skillInvocation),
   });
   const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {
     messageQueue.add({ id: createChatTurnId(), text, attachments, ...(skill ? { skillInvocation: skill } : {}) });
