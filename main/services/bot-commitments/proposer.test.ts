@@ -114,3 +114,26 @@ test("a 28 December promise due 3 January is accepted by the schedule store", as
   } as never);
   assert.equal(new Date(saved.nextRunAt!).toISOString(), "2027-01-03T09:00:00.000Z");
 });
+
+test("a follow-up card nobody answered by its day is settled, freeing its slot", async () => {
+  const h = harness();
+  const dismissed: string[] = [];
+  const proposer = createBotCommitmentProposer({
+    commitments: h.store,
+    proposals: {
+      propose: async () => ({ ok: true, proposal: { proposalId: "p-late" } }),
+      pendingCount: async () => 0,
+      dismiss: async (_botId, proposalId) => void dismissed.push(proposalId),
+    },
+    pendingLimit: 2,
+    timeZone: () => "UTC",
+    now: () => h.clock.at,
+  });
+  assert.ok((await h.store.add("bot-a", { text: "Invoice", dueDate: "2026-10-29" })).ok);
+  await proposer.pump("bot-a");
+  assert.equal((await h.store.list("bot-a"))[0]?.status, "proposed");
+  h.clock.at = Date.UTC(2026, 9, 30, 12);
+  await proposer.pump("bot-a");
+  assert.deepEqual(dismissed, ["p-late"]);
+  assert.equal((await h.store.list("bot-a"))[0]?.status, "expired");
+});

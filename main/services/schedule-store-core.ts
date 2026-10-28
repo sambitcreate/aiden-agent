@@ -880,6 +880,14 @@ export function createScheduleStore(
       });
     },
 
+    /** Drop every run recorded under `taskId` (an event routine that is gone). */
+    async removeRuns(taskId: string): Promise<void> {
+      await runs.update((draft) => {
+        const kept = draft.filter((value) => normalizeStoredRun(value)?.taskId !== taskId);
+        draft.splice(0, draft.length, ...kept);
+      });
+    },
+
     async remove(id: string): Promise<void> {
       await tasks.update((draft) => {
         const index = draft.findIndex((value) => normalizeStoredTask(value)?.id === id);

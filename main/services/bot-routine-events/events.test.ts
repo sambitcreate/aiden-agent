@@ -86,9 +86,11 @@ test("dedupes an event id, holds one that arrives within 5 minutes and runs it w
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e1", payload: "a.pdf" }), "duplicate");
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e2", payload: "b.pdf" }), "held");
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e3", payload: "c.pdf" }), "held", "the newest held event wins");
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  for (let attempt = 0; attempt < 200 && h.runs.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(h.runs.map((run) => run.eventId), ["e1"]);
   await h.advance(h.clock.at + 5 * MIN);
+  // The held run is released through the store; wait for it rather than a fixed delay.
+  for (let attempt = 0; attempt < 200 && h.runs.length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
   assert.deepEqual(h.runs.map((run) => run.eventId), ["e1", "e3"]);
 });
 
@@ -107,14 +109,16 @@ test("the 25th event of the day is refused, and a disabled routine refuses event
 
 function folderHarness(routines: BotEventRoutine[], options: { home: string; resolve?: Record<string, string> }) {
   const listeners = new Map<string, (file: string | null) => void>();
+  const errors = new Map<string, () => void>();
   const emitted: Array<{ routineId: string; eventId: string; payload: string }> = [];
   const refused: string[] = [];
   const timers: Array<() => void> = [];
   const watches = createBotFolderWatches({
     routines: async () => routines,
     homePath: async () => options.home,
-    watch: (folder, listener) => {
+    watch: (folder, listener, onError) => {
       listeners.set(folder, listener);
+      errors.set(folder, onError);
       return { close: () => listeners.delete(folder) };
     },
     dispatcher: { emit: async (_botId, routineId, event) => { emitted.push({ routineId, ...event }); return "queued"; } },
@@ -126,7 +130,7 @@ function folderHarness(routines: BotEventRoutine[], options: { home: string; res
     },
     realpath: async (target) => options.resolve?.[target] ?? target,
   });
-  return { watches, listeners, emitted, refused, fireTimers: () => timers.splice(0).forEach((fn) => fn()) };
+  return { watches, listeners, errors, emitted, refused, fireTimers: () => timers.splice(0).forEach((fn) => fn()) };
 }
 
 function routineOf(id: string, folder: string): BotEventRoutine {
@@ -189,4 +193,27 @@ test("webhooks: a valid token queues, repeats in a minute dedupe and always answ
   const rotated = await store.rotateToken("bot-a", routine.id);
   assert.deepEqual(await handler({ token: token!, contentType: "text/plain", body }), { status: 404 }, "the old link stops working");
   assert.equal((await handler({ token: rotated, contentType: "text/plain", body: new TextEncoder().encode("ping") })).status, 202);
+});
+
+test("a watch that dies is re-armed on the next rearm, and overlapping rearms open one watch", async () => {
+  let opened = 0;
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot" });
+  const original = h.listeners;
+  await Promise.all([h.watches.rearm(), h.watches.rearm()]);
+  opened = original.size;
+  assert.equal(opened, 1);
+  h.errors.get(path.join("/home/bot", "Inbox"))!();
+  assert.equal(original.size, 0, "the dead watch is closed");
+  await h.watches.rearm();
+  assert.equal(original.size, 1, "and a fresh one opens");
+});
+
+test("a deep JSON body stays as sent and is never pretty-printed into a huge string", async () => {
+  const { webhookPayload } = await import("./webhook.js");
+  const deep = "[".repeat(4_000) + "]".repeat(4_000);
+  const started = Date.now();
+  const payload = webhookPayload("application/json", new TextEncoder().encode(deep))!;
+  assert.ok(payload.length <= 4_000, String(payload.length));
+  assert.ok(Date.now() - started < 200);
+  assert.equal(webhookPayload("application/json", new TextEncoder().encode("{\"a\":1}")), "{\n  \"a\": 1\n}");
 });

@@ -14,7 +14,8 @@ export const BOT_FOLDER_EVENT_MAX_PATHS = 50;
 export interface BotFolderWatchDependencies {
   routines(): Promise<BotEventRoutine[]>;
   homePath(botId: string): Promise<string>;
-  watch(folder: string, listener: (file: string | null) => void): { close(): void };
+  /** `onError`: the watch died (folder deleted or replaced); it is re-armed on the next rearm. */
+  watch(folder: string, listener: (file: string | null) => void, onError: () => void): { close(): void };
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
   /** A routine whose folder is outside the Bot's home: tell the person once. */
   refused(routine: BotEventRoutine): void;
@@ -43,7 +44,7 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
     const paths = [...window.paths];
     if (!paths.length) return;
     const eventId = createHash("sha256").update(`${window.startedAt}\0${[...paths].sort().join("\0")}`).digest("hex").slice(0, 32);
-    void dependencies.dispatcher.emit(routine.botId, routine.id, { eventId, payload: folderEventPayload(paths) });
+    void dependencies.dispatcher.emit(routine.botId, routine.id, { eventId, payload: folderEventPayload(paths) }).catch(() => undefined);
   }
 
   function noticed(routine: BotEventRoutine, file: string | null): void {
@@ -61,7 +62,8 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
       };
       windows.set(routine.id, window);
     }
-    window.paths.add(relative);
+    // Bounded during a storm: the payload shows 50 paths and a count anyway.
+    if (window.paths.size < BOT_FOLDER_EVENT_MAX_PATHS + 1_000) window.paths.add(relative);
   }
 
   async function folderOf(routine: BotEventRoutine): Promise<string | undefined> {
@@ -74,8 +76,9 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
     return target;
   }
 
-  return {
-    async rearm(): Promise<void> {
+  let rearming: Promise<void> = Promise.resolve();
+
+  async function rearmOnce(): Promise<void> {
       const wanted = new Map<string, BotEventRoutine>();
       for (const routine of await dependencies.routines()) {
         if (routine.enabled && routine.trigger.kind === "file_change") wanted.set(routine.id, routine);
@@ -94,9 +97,22 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
           dependencies.refused(routine);
           continue;
         }
-        const handle = dependencies.watch(folder, (file) => noticed(routine, file));
-        watches.set(id, { key: JSON.stringify(routine.trigger), close: () => handle.close() });
+        const key = JSON.stringify(routine.trigger);
+        const handle = dependencies.watch(folder, (file) => noticed(routine, file), () => {
+          // A dead watch leaves the map, so the next rearm makes a fresh one.
+          if (watches.get(id)?.key === key) watches.delete(id);
+          handle.close();
+        });
+        watches.set(id, { key, close: () => handle.close() });
       }
+  }
+
+  return {
+    /** Serialized: overlapping rearms never open two watches for one routine. */
+    rearm(): Promise<void> {
+      const next = rearming.catch(() => undefined).then(rearmOnce);
+      rearming = next;
+      return next;
     },
     dispose(): void {
       for (const watch of watches.values()) watch.close();

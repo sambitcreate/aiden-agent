@@ -11,7 +11,7 @@ import { requestAppPath } from "../app-navigation.js";
 import { BOT_ROUTINE_FAILED_PREVIEW } from "../scheduled-bot-routines.js";
 import { showScheduledNotification } from "../schedule-notification.js";
 import { BOT_DELIVERY_REQUEST_PREFIX, createBotDeliveryFunnel, type BotDeliveryFunnel } from "./funnel.js";
-import { createBotDeliveryGate } from "./gate.js";
+import { countedToday, createBotDeliveryGate } from "./gate.js";
 import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
@@ -35,10 +35,7 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
       settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
       // rows count once they come due, suppressed ones never do.
-      sentToday: async (botId, dayStart, now) =>
-        (await botDeliveryLog.list(botId)).filter((row) =>
-          (row.class === "routine_result" || row.class === "proposal") &&
-          row.suppressed !== true && row.deliverAfter >= dayStart && row.deliverAfter <= now).length,
+      sentToday: async (botId, dayStart, now) => countedToday(await botDeliveryLog.list(botId), dayStart, now),
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
     botName: async (botId) => (await botStore.get(botId))?.name,

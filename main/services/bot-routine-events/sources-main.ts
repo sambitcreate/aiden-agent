@@ -7,7 +7,7 @@ import { watch as fsWatch } from "node:fs";
 import { app, ipcMain, logger } from "../../platform.js";
 import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import { scheduleStore } from "../schedule-store.js";
-import type { ScheduledTask } from "../types.js";
+import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
@@ -40,7 +40,67 @@ const executor = createBotRoutineExecutor({
   ports: async () => (await import("../scheduled-bot-routines-main.js")).botRoutinePorts(),
   deliver: async (input) => (await import("../bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
   broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+  afterRun: async (task, run) => {
+    await eventRoutineAfterRun(task, run).catch((error: unknown) =>
+      logger.warn("bots", `Bot event routine ${task.id} follow-up failed.`, error));
+  },
 });
+
+/**
+ * Healing for event routines (spec §5 S2, adapted): a failure only the person
+ * can fix raises one card; three failed runs in a row of the same kind turn
+ * the routine off with one card. No retries: the next event is the retry.
+ */
+async function eventRoutineAfterRun(task: ScheduledTask, run: ScheduledRun): Promise<void> {
+  const botId = task.botId;
+  if (!botId) return;
+  const { botIssues } = await import("../bot-issues/service-main.js");
+  const key = `event_failed:${task.id}`;
+  if (run.result === "success" && run.failure?.kind !== "tool_error") {
+    await botIssues.resolve(botId, key, "fixed");
+    return;
+  }
+  if (run.result !== "error" && run.failure?.kind !== "tool_error") return;
+  const { failureStreak, fireOutcomes, BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD } = await import("../bot-routine-recovery.js");
+  const streak = failureStreak(fireOutcomes(await scheduleStore.runs(task.id)));
+  const kind = run.failure?.kind ?? "other";
+  const needsPerson = kind === "sign_in" || kind === "access_changed" || kind === "model_setup";
+  if (streak.count >= BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD) {
+    await botEventRoutines.update(botId, task.id, { enabled: false });
+    rearmBotEventRoutines();
+    await botIssues.raise({
+      botId,
+      kind: "routine_paused",
+      dedupeKey: key,
+      title: `Turned off ${task.name}`,
+      body: `It failed ${BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD} times in a row. Turn it back on in the Bot's profile when it's fixed.`,
+      routineId: task.id,
+      actions: [],
+    });
+  } else if (needsPerson) {
+    await botIssues.raise({
+      botId,
+      kind: "routine_failed",
+      dedupeKey: key,
+      title: `${task.name} needs you`,
+      body: kind === "sign_in" ? "Sign in to your AI provider again so it can run." : kind === "model_setup" ? "This Bot needs a working AI model." : "This Bot's model or access changed. Check its settings.",
+      routineId: task.id,
+      actions: [{ kind: "open_settings", section: kind === "sign_in" ? "providers" : kind === "model_setup" ? "model" : "access" }],
+    });
+  }
+}
+
+/** An event routine is gone: its runs and notes go with it. */
+export async function forgetBotEventRoutine(botId: string, routineId: string): Promise<void> {
+  await scheduleStore.removeRuns(routineId);
+  const { botRoutineNotes } = await import("../scheduled-bot-routines-main.js");
+  await botRoutineNotes.clear(botId, routineId).catch(() => undefined);
+}
+
+/** A Bot is deleted: every event routine's runs go (the routine file goes with the Bot's folder). */
+export async function forgetBotEventRoutines(botId: string): Promise<void> {
+  for (const routine of await botEventRoutines.list(botId)) await forgetBotEventRoutine(botId, routine.id);
+}
 
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
@@ -69,10 +129,13 @@ const folders = createBotFolderWatches({
     const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
     return (await botManagedWorkspace.resolve(botId)).homePath;
   },
-  watch: (folder, listener) => {
+  watch: (folder, listener, onError) => {
     const handle = fsWatch(folder, { recursive: true, persistent: false }, (_event, file) =>
       listener(typeof file === "string" ? file : file === null ? null : String(file)));
-    handle.on("error", (error) => logger.warn("bots", "A Bot folder watch stopped.", error));
+    handle.on("error", (error) => {
+      logger.warn("bots", "A Bot folder watch stopped.", error);
+      onError();
+    });
     return { close: () => handle.close() };
   },
   dispatcher,

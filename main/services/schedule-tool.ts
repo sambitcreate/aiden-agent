@@ -1756,7 +1756,7 @@ export interface BotRoutinesToolDependencies {
   /** Store the proposal and show its card. */
   propose(
     botId: string,
-    input: { name: string; schedule: unknown; prompt: string; reason?: string },
+    input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
   ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string; until?: number }>;
   /** The newest answered suggestions, so the Bot learns what the person declined. */
   recentDecisions?(botId: string): Promise<BotRoutineProposalDecisionSummary[]>;
@@ -1837,6 +1837,7 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         reason: Type.Optional(
           Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
         ),
+        requested: Type.Optional(Type.Boolean({ description: "true only when the person asked for this routine in this conversation." })),
       },
       { additionalProperties: false },
     ),
@@ -1865,12 +1866,13 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
       }
       if (action === "propose") {
-        routinesRequest(fields, ["name", "schedule", "prompt", "reason"]);
+        routinesRequest(fields, ["name", "schedule", "prompt", "reason", "requested"]);
         const outcome = await routines.propose(botId, {
           name: typeof fields.name === "string" ? fields.name : "",
           schedule: fields.schedule,
           prompt: typeof fields.prompt === "string" ? fields.prompt : "",
           ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
+          ...(fields.requested === true ? { requested: true } : {}),
         });
         if (!outcome.ok) {
           return result({

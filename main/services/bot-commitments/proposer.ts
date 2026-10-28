@@ -23,9 +23,11 @@ export interface BotCommitmentProposerDependencies {
   proposals: {
     propose(
       botId: string,
-      input: { name: string; schedule: unknown; prompt: string; reason?: string },
+      input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
     ): Promise<{ ok: true; proposal: { proposalId: string } } | { ok: false; code: string; error: string }>;
     pendingCount(botId: string): Promise<number>;
+    /** Settle a still-open follow-up card whose day has passed. */
+    dismiss?(botId: string, proposalId: string): Promise<void>;
   };
   pendingLimit: number;
   timeZone(): string;
@@ -39,7 +41,14 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
     const today = localDate(dependencies.now(), dependencies.timeZone());
     const records = await dependencies.commitments.list(botId);
     for (const record of records) {
-      if (record.status === "waiting" && daysBetween(today, record.dueDate) < 1) {
+      const overdue = daysBetween(today, record.dueDate) < 0 ||
+        (daysBetween(today, record.dueDate) === 0 && record.status === "waiting");
+      if (!overdue) continue;
+      if (record.status === "waiting") await dependencies.commitments.update(botId, record.id, { status: "expired" });
+      // A follow-up card nobody answered by its day: settle it so it neither
+      // fires late nor holds a pending slot.
+      if (record.status === "proposed" && record.proposalId) {
+        await dependencies.proposals.dismiss?.(botId, record.proposalId).catch(() => undefined);
         await dependencies.commitments.update(botId, record.id, { status: "expired" });
       }
     }
@@ -49,7 +58,7 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
       .sort((a, b) => a.createdAt - b.createdAt);
     for (const record of waiting) {
       if (free <= 0) break;
-      const outcome = await dependencies.proposals.propose(botId, commitmentProposal(record));
+      const outcome = await dependencies.proposals.propose(botId, { ...commitmentProposal(record), requested: true });
       if (outcome.ok) {
         await dependencies.commitments.update(botId, record.id, { status: "proposed", proposalId: outcome.proposal.proposalId });
         free -= 1;

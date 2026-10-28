@@ -8,7 +8,7 @@
 // Times are wall-clock times in the Mac's time zone.
 
 import type { BotInterruptions } from "../../../renderer/shared/bots.js";
-import type { BotDeliveryClass } from "./log.js";
+import type { BotDeliveryClass, BotDeliveryRow } from "./log.js";
 import type { BotDeliveryGate, BotDeliveryInput } from "./funnel.js";
 
 export type BotDeliveryDecision =
@@ -17,7 +17,7 @@ export type BotDeliveryDecision =
   | { kind: "suppress"; reason: "daily_limit"; digestKey: string };
 
 /** Classes that count toward, and are limited by, the daily cap. */
-export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set(["routine_result", "proposal", "digest"]);
+export const BOT_DELIVERY_COUNTED_CLASSES: ReadonlySet<BotDeliveryClass> = new Set(["routine_result", "proposal"]);
 
 interface WallClock { year: number; month: number; day: number; minutes: number }
 
@@ -105,10 +105,27 @@ export function createBotDeliveryGate(deps: {
     async decide(input: BotDeliveryInput, now: number) {
       const timeZone = deps.timeZone();
       const settings = await deps.settings(input.botId);
-      const sentToday = BOT_DELIVERY_COUNTED_CLASSES.has(input.class) && input.class !== "digest"
+      const sentToday = BOT_DELIVERY_COUNTED_CLASSES.has(input.class)
         ? await deps.sentToday(input.botId, localDay(now, timeZone).start, now)
         : 0;
       return decideBotDelivery({ settings, class: input.class, botId: input.botId, now, timeZone, sentToday });
     },
   };
+}
+
+/**
+ * Proactive notifications that reached the person today: each counted row,
+ * except that rows sent inside one "While you were away" digest count once.
+ * Suppressed rows never count; held rows count once they come due.
+ */
+export function countedToday(rows: readonly BotDeliveryRow[], dayStart: number, now: number): number {
+  const digests = new Set<string>();
+  let count = 0;
+  for (const row of rows) {
+    if (!BOT_DELIVERY_COUNTED_CLASSES.has(row.class) || row.suppressed === true) continue;
+    if (row.deliverAfter < dayStart || row.deliverAfter > now) continue;
+    if (row.coveredBy !== undefined) digests.add(row.coveredBy);
+    else count += 1;
+  }
+  return count + digests.size;
 }

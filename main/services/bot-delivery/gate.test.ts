@@ -68,3 +68,14 @@ test("parseBotInterruptions rejects 24:00, dailyLimit 21 and extra keys", () => 
   assert.throws(() => parseBotInterruptions({ ...valid, extra: true }));
   assert.throws(() => parseBotInterruptions({ ...valid, dailyLimit: 1.5 }));
 });
+
+test("rows sent inside one away digest count as one notification", async () => {
+  const { countedToday } = await import("./gate.js");
+  const day = Date.parse("2026-10-27T00:00:00Z");
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, botId: "b", class: "routine_result" as const, dedupeKey: id, title: "t", body: "b", status: "succeeded" as const,
+    createdAt: day + 1, deliverAfter: day + 7 * 3_600_000, ...extra,
+  });
+  const rows = [row("a", { coveredBy: "d1" }), row("b", { coveredBy: "d1" }), row("c", { coveredBy: "d1" }), row("e"), row("s", { suppressed: true })];
+  assert.equal(countedToday(rows, day, day + 12 * 3_600_000), 2);
+});

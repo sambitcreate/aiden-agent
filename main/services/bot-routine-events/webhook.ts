@@ -4,6 +4,7 @@
 // response never says whether the routine ran.
 
 import { createHash } from "node:crypto";
+import { BOT_ROUTINE_EVENT_LIMITS } from "../../../renderer/shared/bot-routine-trigger.js";
 import { BOT_WEBHOOK_LIMITS, type BotEventRoutineStore } from "./store.js";
 import type { BotRoutineEventDispatcher } from "./dispatcher.js";
 
@@ -15,17 +16,50 @@ export interface BotWebhookRequest {
   body: Uint8Array;
 }
 
-/** The text the Bot sees: plain text as sent, JSON pretty-printed. */
+/** Deepest bracket nesting outside strings; stops counting past `limit`. */
+function jsonDepth(text: string, limit: number): number {
+  let depth = 0;
+  let deepest = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === "\\") index += 1;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === "[" || char === "{") {
+      depth += 1;
+      if (depth > deepest) deepest = depth;
+      if (deepest > limit) return deepest;
+    } else if (char === "]" || char === "}") depth -= 1;
+  }
+  return deepest;
+}
+
+const PRETTY_MAX_DEPTH = 16;
+
+/**
+ * The text the Bot sees: plain text as sent, shallow JSON pretty-printed.
+ * Bounded before anything is expanded: deep or long JSON stays as sent, so a
+ * crafted body can never grow into a huge string.
+ */
 export function webhookPayload(contentType: string, body: Uint8Array): string | undefined {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(body);
   if (contentType === "application/json") {
+    let parsed: unknown;
     try {
-      return JSON.stringify(JSON.parse(text), null, 2);
+      parsed = JSON.parse(text);
     } catch {
       return undefined;
     }
+    if (text.length > BOT_ROUTINE_EVENT_LIMITS.payloadChars || jsonDepth(text, PRETTY_MAX_DEPTH) > PRETTY_MAX_DEPTH) {
+      return text.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars);
+    }
+    return JSON.stringify(parsed, null, 2).slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2);
   }
-  return text;
+  return text.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2);
 }
 
 export function createBotWebhookHandler(deps: {

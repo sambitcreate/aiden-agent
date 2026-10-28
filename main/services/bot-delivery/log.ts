@@ -47,6 +47,8 @@ export interface BotDeliveryRow {
   telegramSentAt?: number;
   /** When every channel had gone out; unset until the row is fully delivered. */
   sentAt?: number;
+  /** Sent inside one "While you were away" digest: the group counts as one notification. */
+  coveredBy?: string;
 }
 
 /** The two live channels a row has to clear; phones read the log itself. */
@@ -72,6 +74,8 @@ export interface BotDeliveryLog {
   list(botId: string): Promise<BotDeliveryRow[]>;
   /** Bots that have a delivery log. */
   botIds(): Promise<string[]>;
+  /** These rows went out inside one digest, sent on every channel at `at`. */
+  markCovered(botId: string, ids: readonly string[], digestId: string, at: number): Promise<void>;
 }
 
 const CLASSES: ReadonlySet<string> = new Set<BotDeliveryClass>([
@@ -123,6 +127,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
   const telegramSentAt = optionalTimestamp(value.telegramSentAt);
   const sentAt = optionalTimestamp(value.sentAt);
   if (macSentAt === null || telegramSentAt === null || sentAt === null) return undefined;
+  const coveredBy = optionalText(value.coveredBy, 160);
   return {
     id,
     botId,
@@ -139,6 +144,7 @@ function parseRow(value: unknown, botId: string): BotDeliveryRow | undefined {
     ...(macSentAt !== undefined ? { macSentAt } : {}),
     ...(telegramSentAt !== undefined ? { telegramSentAt } : {}),
     ...(sentAt !== undefined ? { sentAt } : {}),
+    ...(coveredBy !== undefined ? { coveredBy } : {}),
   };
 }
 
@@ -258,6 +264,16 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
 
     list: (botId) => load(botId),
     botIds,
+    markCovered(botId, ids, digestId, at) {
+      return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
+        const wanted = new Set(ids);
+        const rows = await load(botId);
+        await save(botId, rows.map((row) => (wanted.has(row.id)
+          ? { ...row, macSentAt: row.macSentAt ?? at, telegramSentAt: row.telegramSentAt ?? at, sentAt: row.sentAt ?? at, coveredBy: digestId }
+          : row)));
+      });
+    },
   };
 
   async function botIds(): Promise<string[]> {

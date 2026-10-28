@@ -59,7 +59,9 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
       if (await dependencies.isPaused(botId)) return "disabled";
       const now = dependencies.now();
       const today = dayKey(now, dependencies.timeZone());
-      const payload = [...event.payload].slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars).join("");
+      // Cut by length first, so a huge payload is never spread into an array.
+      const payload = [...event.payload.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2)]
+        .slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars).join("");
       type Decision =
         | { kind: "disabled" | "duplicate" | "daily_limit" }
         | { kind: "held"; at: number }

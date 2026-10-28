@@ -230,13 +230,19 @@ export function registerBotHandlers(): void {
       list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId),
       create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
       update: async (botId, id, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.update(botId, id, input),
-      remove: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.remove(botId, id),
+      remove: async (botId, id) => {
+        const sources = await import("../services/bot-routine-events/sources-main.js");
+        const removed = await sources.botEventRoutines.remove(botId, id);
+        if (removed) await sources.forgetBotEventRoutine(botId, id);
+        return removed;
+      },
       rotateToken: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.rotateToken(botId, id),
     },
     linkFor: async (token) => {
       const { getAidenRemoteService } = await import("../services/aiden-remote-service-main.js");
       const status = await (await getAidenRemoteService()).status().catch(() => undefined);
-      const base = status?.running ? status.lanEndpoint ?? status.tailscaleEndpoint : undefined;
+      // Tailscale first: it reaches this Mac from anywhere the person's devices are.
+      const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
       return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
     },
     changed: (botId) => {

@@ -23,6 +23,7 @@ function fakeApi(link: string | null = "http://mac.local:4567/hooks/bot-routines
       routine.enabled = input.enabled;
       return routine;
     },
+    rotateLink: async () => ({ link: "http://mac.local:4567/hooks/bot-routines/new" }),
     remove: async (input) => {
       routines.splice(routines.findIndex((entry) => entry.id === input.id), 1);
       return { removed: true };
@@ -67,4 +68,16 @@ test("Add routine stays disabled until name, task and folder are filled", async 
   fireEvent.change(screen.getByLabelText("Routine name"), { target: { value: "x" } });
   fireEvent.change(screen.getByLabelText("What to do"), { target: { value: "y" } });
   assert.equal(add.disabled, true, "a folder is still needed");
+});
+
+test("a link routine's link can be made again after it was lost", async () => {
+  const h = fakeApi(null);
+  render(<BotEventRoutines bot={BOT} api={h.api} />);
+  fireEvent.click(await screen.findByRole("button", { name: /Add/u }));
+  fireEvent.change(screen.getByLabelText("Routine name"), { target: { value: "Orders" } });
+  fireEvent.change(screen.getByLabelText("What to do"), { target: { value: "Summarize." } });
+  fireEvent.click(screen.getByRole("radio", { name: "Its link is called" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add routine" }));
+  fireEvent.click(await screen.findByRole("button", { name: "New link for Orders" }));
+  await waitFor(() => assert.ok(screen.getByRole("button", { name: /Copy link/u })));
 });

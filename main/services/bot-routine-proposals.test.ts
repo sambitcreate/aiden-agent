@@ -417,3 +417,12 @@ test("the respond parser takes a reason only with dismiss", () => {
   assert.throws(() => parseBotRoutineProposalRespond({ ...base, decision: "accept", reason: "wrong_time" }));
   assert.throws(() => parseBotRoutineProposalRespond({ ...base, decision: "dismiss", reason: "meh" }));
 });
+
+test("a routine the person asked for gets its card even while the Bot is cooling off", async () => {
+  const h = harness();
+  await decline(h, "One");
+  await decline(h, "Two");
+  await decline(h, "Three");
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, false);
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One", requested: true })).ok, true);
+});

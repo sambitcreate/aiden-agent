@@ -679,6 +679,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
         memory.forgetBot(botId);
       },
       (botId) => toolSources.forgetBot(botId),
+      async (botId) => (await import("../bot-routine-events/sources-main.js")).forgetBotEventRoutines(botId),
       async (botId) => {
         runtimeModels.forget(botId);
         resolvedModels.delete(botId);

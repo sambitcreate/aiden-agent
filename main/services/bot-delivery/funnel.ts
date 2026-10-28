@@ -166,14 +166,14 @@ export function createBotDeliveryFunnel(deps: {
       };
       try {
         await deps.mac(digest);
-        await deps.telegram(digest);
-        for (const row of others) {
-          await deps.log.markChannel(botId, row.id, "mac", at);
-          await deps.log.markChannel(botId, row.id, "telegram", at);
-          await deps.log.markSent(botId, row.id, at);
-        }
       } catch {
-        // Left owed; the next flush tries again.
+        // The banner is best effort; Telegram and the record still go.
+      }
+      try {
+        await deps.telegram(digest);
+        await deps.log.markCovered(botId, others.map((row) => row.id), digest.dedupeKey, at);
+      } catch {
+        // Left owed; the next flush tries again (one more banner at most).
       }
     }
     return later.length ? Math.min(...later) : undefined;

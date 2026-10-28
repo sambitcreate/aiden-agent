@@ -19,6 +19,7 @@ export interface BotEventRoutinesApi {
   create(input: { botId: string; name: string; prompt: string; trigger: BotRoutineTrigger }): Promise<{ routine: BotEventRoutineView; link?: string | null }>;
   update(input: { botId: string; id: string; enabled: boolean }): Promise<BotEventRoutineView>;
   remove(input: { botId: string; id: string }): Promise<{ removed: boolean }>;
+  rotateLink(input: { botId: string; id: string }): Promise<{ link: string | null }>;
 }
 
 export function BotEventRoutines({
@@ -68,12 +69,28 @@ export function BotEventRoutines({
                 void api.update({ botId: bot.id, id: routine.id, enabled }).then(reload, (error: unknown) =>
                   toast.error(userFacingErrorMessage(error, "Aiden couldn’t change that routine.")))}
             />
+            {routine.trigger.kind === "webhook" ? (
+              <Button
+                size="small"
+                variant="transparent"
+                aria-label={`New link for ${routine.name}`}
+                onClick={() =>
+                  void api.rotateLink({ botId: bot.id, id: routine.id }).then(
+                    ({ link: next }) => setLink({ name: routine.name, link: next }),
+                    (error: unknown) => toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link.")),
+                  )}
+              >
+                New link
+              </Button>
+            ) : null}
             <Button
               iconOnly
               size="small"
               variant="transparent"
               aria-label={`Remove ${routine.name}`}
-              onClick={() => void api.remove({ botId: bot.id, id: routine.id }).then(reload)}
+              onClick={() =>
+                void api.remove({ botId: bot.id, id: routine.id }).then(reload, (error: unknown) =>
+                  toast.error(userFacingErrorMessage(error, "Aiden couldn’t remove that routine.")))}
             >
               <Trash2 />
             </Button>
@@ -84,7 +101,7 @@ export function BotEventRoutines({
         <Field
           label={`${link.name}'s link`}
           description={link.link
-            ? "Works on your network or Tailscale while this Mac is awake. It is shown only now."
+            ? "Works on your network or Tailscale while this Mac is awake. It is shown only now; New link makes another and stops this one. The Mac's certificate is self-signed, so callers may need to allow that (curl -k)."
             : "Turn on Aiden On The Go in Settings to use this routine's link."}
         >
           {link.link ? (

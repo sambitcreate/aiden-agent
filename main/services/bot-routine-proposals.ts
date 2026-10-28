@@ -325,7 +325,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
      */
     propose(
       botId: string,
-      input: { name: string; schedule: unknown; prompt: string; reason?: string },
+      input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
       append: Append = sessionAppend(botId),
     ): Promise<BotRoutineProposeResult> {
       return serial(botId, async () => {
@@ -340,20 +340,22 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           return { ok: false, code: "invalid", error: `The reason is at most ${BOT_ROUTINE_PROPOSAL_REASON_LIMIT} characters.` };
         }
         const records = await reconcile(botId, await load(botId), append);
-        const backoff = proposalBackoff(records, parsed.name, now());
+        // Back-off is for the Bot's own ideas: a routine the person asked for,
+        // or a follow-up the Bot promised them, always gets its card.
+        const backoff = input.requested ? undefined : proposalBackoff(records, parsed.name, now());
         if (backoff?.code === "cooling_off") {
           return {
             ok: false,
             code: "cooling_off",
             until: backoff.until,
-            error: "The person declined most recent suggestions. Don't suggest new routines for a while unless they ask.",
+            error: "The person declined most recent suggestions. Don't suggest new routines on your own for a while; if they asked for this one, propose it again with requested set to true.",
           };
         }
         if (backoff?.code === "declined_before") {
           return {
             ok: false,
             code: "declined_before",
-            error: "The person declined a routine like this recently. Don't suggest it again unless they ask.",
+            error: "The person declined a routine like this recently. Don't suggest it again on your own; if they asked for it, propose it again with requested set to true.",
           };
         }
         if (records.filter((record) => record.status === "pending").length >= BOT_ROUTINE_PROPOSAL_PENDING_LIMIT) {
