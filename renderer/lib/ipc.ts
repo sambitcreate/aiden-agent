@@ -932,6 +932,13 @@ export const modelsApi = {
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
   list: () => invoke<Workspace[]>("workspaces:list"),
+  memoryFacts: (workspaceId: string) =>
+    invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
+      "workspaces:memoryFacts",
+      workspaceId,
+    ),
+  deleteMemoryFact: (workspaceId: string, factId: string) =>
+    invoke<boolean>("workspaces:deleteMemoryFact", workspaceId, factId),
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
