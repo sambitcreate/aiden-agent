@@ -207,7 +207,7 @@ export function TodoPanel({
             <span aria-hidden="true" className="text-tertiary">
               ·
             </span>
-            <span className="line-clamp-1 min-w-0 text-secondary [overflow-wrap:anywhere]">{chipDetail}</span>
+            <span className="line-clamp-1 min-w-0 text-left text-secondary [overflow-wrap:anywhere]">{chipDetail}</span>
           </button>
         </HoverCardTrigger>
         <HoverCardContent

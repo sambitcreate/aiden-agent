@@ -521,7 +521,7 @@ export function SubagentComposerPill({
             <span aria-hidden="true" className="h-3.5 w-px shrink-0 bg-separator @max-[30rem]:hidden" />
             <span
               className={cn(
-                "line-clamp-1 min-w-0 [overflow-wrap:anywhere] @max-[30rem]:hidden",
+                "line-clamp-1 min-w-0 text-left [overflow-wrap:anywhere] @max-[30rem]:hidden",
                 headline.tone === "attention" ? "text-support-warning" : "text-secondary",
               )}
             >
