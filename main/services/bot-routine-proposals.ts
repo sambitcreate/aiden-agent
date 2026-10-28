@@ -301,6 +301,8 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
 
   type Append = (kind: string, data: Record<string, unknown>) => Promise<void>;
   const sessionAppend = (botId: string): Append => (kind, data) => dependencies.appendEntry(botId, kind, data);
+  type Entries = () => Promise<readonly { kind: string; data?: unknown }[]>;
+  const sessionEntries = (botId: string): Entries => () => dependencies.conversationEntries(botId);
 
   /**
    * What a proposal asks for, validated like the routine it would add: a
@@ -407,13 +409,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
    * record says: an Add routine cut short after creating it (a failed status
    * write, a quit) settles as accepted rather than staying open or turning
    * into Not added. Must run inside `serial(botId)`. From inside a Bot's
-   * tool call, `append` is that call's own write: the Bot's session would wait
-   * on a pause or quit that waits for the call.
+   * tool call, `append` and `entries` are that call's own write and read: the
+   * Bot's session would wait on a pause or quit that waits for the call.
    */
   async function reconcile(
     botId: string,
     records: BotRoutineProposalRecord[],
     append: Append = sessionAppend(botId),
+    entries: Entries = sessionEntries(botId),
   ): Promise<BotRoutineProposalRecord[]> {
     for (let index = 0; index < records.length; index += 1) {
       const record = records[index]!;
@@ -421,7 +424,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       const created = await createdFrom(botId, record.proposalId);
       if (created) await settle(botId, records, index, "accepted", { routineId: created.id, append });
     }
-    await finishRevisions(botId, records, append);
+    await finishRevisions(botId, records, append, entries);
     return records;
   }
 
@@ -445,10 +448,11 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     botId: string,
     records: BotRoutineProposalRecord[],
     append: Append = sessionAppend(botId),
+    entries: Entries = sessionEntries(botId),
   ): Promise<void> {
     const unmarked = records.filter((record) => record.revises !== undefined && !record.revisionShown && record.status === "pending");
     if (unmarked.length > 0) {
-      const shownIds = await shownCardIds(botId);
+      const shownIds = await shownCardIds(entries);
       for (const record of unmarked) if (shownIds.has(record.proposalId)) record.revisionShown = true;
       records.splice(0, records.length, ...records.filter((record) => !unmarked.includes(record) || record.revisionShown));
       await save(botId, records);
@@ -463,9 +467,9 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
   }
 
   /** The ids of the proposal cards in the Bot's conversation. */
-  async function shownCardIds(botId: string): Promise<Set<string>> {
+  async function shownCardIds(entries: Entries): Promise<Set<string>> {
     const ids = new Set<string>();
-    for (const entry of await dependencies.conversationEntries(botId)) {
+    for (const entry of await entries()) {
       if (entry.kind !== BOT_ROUTINE_PROPOSAL_ENTRY_KIND) continue;
       const data = entry.data as { proposalId?: unknown } | null;
       if (data && typeof data === "object" && typeof data.proposalId === "string") ids.add(data.proposalId);
@@ -542,12 +546,14 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
 
     /**
      * Validate and store a proposal, then show its card through `append`
-     * (the calling tool's own conversation write). At most two wait at once.
+     * (the calling tool's own conversation write; `entries` is its read).
+     * At most two wait at once.
      */
     propose(
       botId: string,
       input: BotRoutineProposalInput,
       append: Append = sessionAppend(botId),
+      entries: Entries = sessionEntries(botId),
     ): Promise<BotRoutineProposeResult> {
       return serial(botId, async () => {
         let content: ProposalContent;
@@ -558,7 +564,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         } catch (error) {
           return { ok: false, code: "invalid", error: error instanceof Error ? error.message : "Invalid routine." };
         }
-        const records = await reconcile(botId, await load(botId), append);
+        const records = await reconcile(botId, await load(botId), append, entries);
         // Back-off is for the Bot's own ideas. A follow-up the host queued for a
         // promise always gets its card. The model's own "the person asked"
         // claim only gets past a same-name decline, never cooling off.
@@ -600,6 +606,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       proposalId: string,
       input: BotRoutineProposalInput,
       append: Append = sessionAppend(botId),
+      entries: Entries = sessionEntries(botId),
     ): Promise<BotRoutineReviseResult> {
       return serial(botId, async () => {
         let content: ProposalContent;
@@ -610,7 +617,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         } catch (error) {
           return { ok: false, code: "invalid", error: error instanceof Error ? error.message : "Invalid routine." };
         }
-        const records = await reconcile(botId, await load(botId), append);
+        const records = await reconcile(botId, await load(botId), append, entries);
         const wanted = proposalId.toLowerCase();
         const index = records.findIndex((record) => record.proposalId === wanted);
         const current = records[index];
