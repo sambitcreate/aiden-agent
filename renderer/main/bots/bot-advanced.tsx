@@ -58,19 +58,11 @@ import { updateBotIdentity } from "./bot-identity";
 import { botRoutinesKey } from "./bot-routines";
 import { botInterruptionsSummary } from "./bot-interruptions-page";
 import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
-import {
-  BotPageShell,
-  BotPageSkeleton,
-  useDiscardChangesGuard,
-} from "./bot-page-shell";
+import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
 
-type ToggleKey =
-  "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
+type ToggleKey = "fileScopeIds" | "connectionIds" | "skillIds" | "otherCapabilityIds";
 
-function sameDraft(
-  left: BotAccessDraft | null,
-  right: BotAccessDraft | null,
-): boolean {
+function sameDraft(left: BotAccessDraft | null, right: BotAccessDraft | null): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
@@ -91,17 +83,12 @@ function ModelSection({
   const usingRecommended = sameBotModelChoice(recommended, draft);
   const primary = findBotModel(catalog, draft.providerId, draft.modelId);
   const visionAvailable = catalog.providers.some(
-    (candidate) =>
-      candidate.available &&
-      candidate.models.some((item) => item.available && item.supportsImages),
+    (candidate) => candidate.available && candidate.models.some((item) => item.available && item.supportsImages),
   );
   if (!firstAvailableModel(catalog)) {
     return (
       <FieldSet title="AI model">
-        <Field
-          label="No AI model yet"
-          description="Add one in Settings → Providers so this Bot can reply."
-        >
+        <Field label="No AI model yet" description="Add one in Settings → Providers so this Bot can reply.">
           <Button size="small" variant="filled" onClick={onSetUpModel}>
             Set up
           </Button>
@@ -111,34 +98,17 @@ function ModelSection({
   }
   return (
     <FieldSet title="AI model">
-      <Field
-        label="Model"
-        description={
-          primary
-            ? botModelCapabilityLabel(primary.model.supportsImages)
-            : undefined
-        }
-      >
+      <Field label="Model" description={primary ? botModelCapabilityLabel(primary.model.supportsImages) : undefined}>
         <BotModelPicker
           catalog={catalog}
           label="AI model"
           providerId={draft.providerId}
           modelId={draft.modelId}
-          recommended={
-            recommended.providerId && recommended.modelId
-              ? {
-                  providerId: recommended.providerId,
-                  modelId: recommended.modelId,
-                }
-              : undefined
-          }
+          recommended={recommended.providerId && recommended.modelId
+            ? { providerId: recommended.providerId, modelId: recommended.modelId }
+            : undefined}
           disabled={disabled}
-          onSelect={(providerId, modelId) =>
-            onChange({
-              ...draft,
-              ...chooseBotModel(catalog, draft, providerId, modelId),
-            })
-          }
+          onSelect={(providerId, modelId) => onChange({ ...draft, ...chooseBotModel(catalog, draft, providerId, modelId) })}
         />
       </Field>
       {primary && !primary.model.supportsImages ? (
@@ -155,11 +125,7 @@ function ModelSection({
               modelId={draft.visionModelId}
               disabled={disabled}
               onSelect={(providerId, modelId) =>
-                onChange({
-                  ...draft,
-                  ...chooseBotVisionModel(catalog, draft, providerId, modelId),
-                })
-              }
+                onChange({ ...draft, ...chooseBotVisionModel(catalog, draft, providerId, modelId) })}
             />
           </Field>
         ) : (
@@ -169,10 +135,7 @@ function ModelSection({
           />
         )
       ) : null}
-      <Field
-        label="Recommended"
-        description="The first model you set up, plus an image model when it reads text only."
-      >
+      <Field label="Recommended" description="The first model you set up, plus an image model when it reads text only.">
         <Button
           size="small"
           variant="filled"
@@ -199,20 +162,14 @@ function ToggleFields({
   onToggle(id: string, checked: boolean): void;
 }) {
   // Hide unusable, unselected entries instead of rows that can never be enabled.
-  const visible = options.filter(
-    (option) => option.available || selected.includes(option.id),
-  );
+  const visible = options.filter((option) => option.available || selected.includes(option.id));
   if (visible.length === 0) return <Field description="None available yet." />;
   return (
     <>
       {visible.map((option) => {
         const checked = selected.includes(option.id);
         return (
-          <Field
-            key={option.id}
-            label={option.label}
-            description={option.description}
-          >
+          <Field key={option.id} label={option.label} description={option.description}>
             <Switch
               checked={checked}
               disabled={disabled || (!option.available && !checked)}
@@ -230,8 +187,7 @@ const ACCESS_CHOICES = [
   {
     value: "full",
     label: "Everything",
-    description:
-      "Anything Aiden can use on this Mac, including every app you connect. Approvals and safety rules still apply.",
+    description: "Anything Aiden can use on this Mac, including every app you connect. Approvals and safety rules still apply.",
   },
   {
     value: "custom",
@@ -253,15 +209,7 @@ function AccessSection({
 }) {
   const toggle = (key: ToggleKey, id: string, checked: boolean) => {
     if (key === "fileScopeIds") {
-      onChange({
-        ...draft,
-        fileScopeIds: nextBotFileScopeIds(
-          draft.fileScopeIds,
-          catalog.fileScopes,
-          id,
-          checked,
-        ),
-      });
+      onChange({ ...draft, fileScopeIds: nextBotFileScopeIds(draft.fileScopeIds, catalog.fileScopes, id, checked) });
       return;
     }
     const ids = new Set(draft[key]);
@@ -279,27 +227,17 @@ function AccessSection({
             aria-label="What it can use"
             value={full ? "full" : "custom"}
             disabled={disabled}
-            onValueChange={(value) =>
-              onChange({ ...draft, usesFullAccess: value === "full" })
-            }
+            onValueChange={(value) => onChange({ ...draft, usesFullAccess: value === "full" })}
           >
             {ACCESS_CHOICES.map((choice) => (
               <Label
                 key={choice.value}
                 className="cursor-pointer items-start rounded-control bg-well px-3 py-2.5 hover:bg-list-hover has-[[data-state=checked]]:bg-list-selection"
               >
-                <RadioGroupItem
-                  value={choice.value}
-                  aria-label={choice.label}
-                  className="mt-0.5 shrink-0"
-                />
+                <RadioGroupItem value={choice.value} aria-label={choice.label} className="mt-0.5 shrink-0" />
                 <span className="min-w-0">
-                  <span className="block text-regular text-primary">
-                    {choice.label}
-                  </span>
-                  <span className="mt-0.5 block text-small text-secondary">
-                    {choice.description}
-                  </span>
+                  <span className="block text-regular text-primary">{choice.label}</span>
+                  <span className="mt-0.5 block text-small text-secondary">{choice.description}</span>
                 </span>
               </Label>
             ))}
@@ -315,9 +253,7 @@ function AccessSection({
             <Switch
               checked={draft.webSearchEnabled}
               disabled={disabled}
-              onCheckedChange={(webSearchEnabled) =>
-                onChange({ ...draft, webSearchEnabled })
-              }
+              onCheckedChange={(webSearchEnabled) => onChange({ ...draft, webSearchEnabled })}
               aria-label="Allow web search"
             />
           </Field>
@@ -331,18 +267,11 @@ function AccessSection({
               disabled={disabled}
               onToggle={(id, checked) => toggle("fileScopeIds", id, checked)}
             />
-            <Field
-              label="Run commands"
-              description="Let it run commands in Terminal on this Mac."
-            >
+            <Field label="Run commands" description="Let it run commands in Terminal on this Mac.">
               <Switch
                 checked={draft.shellEnabled}
-                disabled={
-                  disabled || (!catalog.shellAvailable && !draft.shellEnabled)
-                }
-                onCheckedChange={(shellEnabled) =>
-                  onChange({ ...draft, shellEnabled })
-                }
+                disabled={disabled || (!catalog.shellAvailable && !draft.shellEnabled)}
+                onCheckedChange={(shellEnabled) => onChange({ ...draft, shellEnabled })}
                 aria-label="Allow running commands"
               />
             </Field>
@@ -375,9 +304,7 @@ function AccessSection({
                 options={catalog.otherCapabilities}
                 selected={draft.otherCapabilityIds}
                 disabled={disabled}
-                onToggle={(id, checked) =>
-                  toggle("otherCapabilityIds", id, checked)
-                }
+                onToggle={(id, checked) => toggle("otherCapabilityIds", id, checked)}
               />
             </FieldSet>
           ) : null}
@@ -412,12 +339,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
       setOpen(false);
       toast.success("Telegram connected");
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(
-          error,
-          "Aiden couldn’t connect this Telegram chat.",
-        ),
-      );
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t connect this Telegram chat."));
     } finally {
       setSaving(false);
     }
@@ -429,12 +351,7 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
       qc.setQueryData(queryKeys.botTelegramBinding(bot.id), null);
       toast.success("Telegram disconnected");
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(
-          error,
-          "Aiden couldn’t disconnect this Telegram chat.",
-        ),
-      );
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t disconnect this Telegram chat."));
     } finally {
       setSaving(false);
     }
@@ -454,20 +371,11 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
         }
       >
         {binding.isError ? (
-          <Button
-            size="small"
-            variant="filled"
-            onClick={() => void binding.refetch()}
-          >
+          <Button size="small" variant="filled" onClick={() => void binding.refetch()}>
             <RotateCcw /> Try again
           </Button>
         ) : binding.data ? (
-          <Button
-            size="small"
-            variant="filled"
-            disabled={saving}
-            onClick={() => void unbind()}
-          >
+          <Button size="small" variant="filled" disabled={saving} onClick={() => void unbind()}>
             <Unlink /> Disconnect
           </Button>
         ) : (
@@ -495,25 +403,13 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
         onConfirm={bind}
       >
         {targets.isLoading ? (
-          <div
-            role="status"
-            aria-label="Loading Telegram chats"
-            className="h-8 w-full rounded-control bg-control motion-safe:animate-pulse"
-          />
+          <div role="status" aria-label="Loading Telegram chats" className="h-8 w-full rounded-control bg-control motion-safe:animate-pulse" />
         ) : targets.isError ? (
-          <Callout
-            color="red"
-            role="alert"
-            className="flex-row items-center justify-between gap-3"
-          >
+          <Callout color="red" role="alert" className="flex-row items-center justify-between gap-3">
             <Text variant="small" color="red">
               Aiden couldn’t load your Telegram chats.
             </Text>
-            <Button
-              size="small"
-              variant="filled"
-              onClick={() => void targets.refetch()}
-            >
+            <Button size="small" variant="filled" onClick={() => void targets.refetch()}>
               <RotateCcw /> Try again
             </Button>
           </Callout>
@@ -558,12 +454,9 @@ function SelfWakeUpsField({ bot }: { bot: BotDefinition }) {
     setSaving(true);
     try {
       await updateBotIdentity(qc, bot.id, { selfWakeUps: next });
-      if (!next)
-        void qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
+      if (!next) void qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(error, "Aiden couldn’t save this setting."),
-      );
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save this setting."));
     } finally {
       setSaving(false);
     }
@@ -619,11 +512,7 @@ export function BotAdvanced({
   const accessChanged = draft !== null && !sameDraft(draft, baseline);
   const dirty = accessChanged;
   const discardDescription = `Your changes to ${bot.name}’s Advanced settings won’t be saved.`;
-  const guard = useDiscardChangesGuard({
-    dirty,
-    onLeave: onClose,
-    description: discardDescription,
-  });
+  const guard = useDiscardChangesGuard({ dirty, onLeave: onClose, description: discardDescription });
   const chatActivityGuard = useDiscardChangesGuard({
     dirty,
     onLeave: onOpenChatActivity,
@@ -662,10 +551,7 @@ export function BotAdvanced({
         expectedRevision: state.access.revision,
         access: update,
       });
-      qc.setQueryData<BotAccessState>(queryKeys.botAccess(bot.id), {
-        ...state,
-        access: saved,
-      });
+      qc.setQueryData<BotAccessState>(queryKeys.botAccess(bot.id), { ...state, access: saved });
       void qc.invalidateQueries({ queryKey: queryKeys.botAccess(bot.id) });
     } else {
       qc.setQueryData(queryKeys.botAccess(bot.id), state);
@@ -682,9 +568,7 @@ export function BotAdvanced({
       if (accessChanged && draft && baseline) await saveAccess(draft, baseline);
       toast.success("Saved");
     } catch (error) {
-      toast.error(
-        userFacingErrorMessage(error, "Aiden couldn’t save these settings."),
-      );
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save these settings."));
     } finally {
       setSaving(false);
     }
@@ -702,21 +586,13 @@ export function BotAdvanced({
       heading="Advanced"
       description={`Settings for ${bot.name}. Most people never need these.`}
       actions={
-        <Button
-          variant="accent"
-          disabled={saving || !dirty}
-          onClick={() => void save()}
-        >
+        <Button variant="accent" disabled={saving || !dirty} onClick={() => void save()}>
           {saving ? "Saving…" : "Save"}
         </Button>
       }
     >
       {failed ? (
-        <Callout
-          color="red"
-          role="alert"
-          className="mb-7 flex-row items-center justify-between gap-4"
-        >
+        <Callout color="red" role="alert" className="mb-7 flex-row items-center justify-between gap-4">
           <div>
             <Text variant="small-strong" color="red">
               These settings couldn’t be loaded
@@ -747,19 +623,9 @@ export function BotAdvanced({
             draft={draft}
             disabled={saving}
             onChange={setDraft}
-            onSetUpModel={() =>
-              void navigate({
-                to: "/settings",
-                search: { section: "providers" },
-              })
-            }
+            onSetUpModel={() => void navigate({ to: "/settings", search: { section: "providers" } })}
           />
-          <AccessSection
-            catalog={catalog}
-            draft={draft}
-            disabled={saving}
-            onChange={setDraft}
-          />
+          <AccessSection catalog={catalog} draft={draft} disabled={saving} onChange={setDraft} />
         </>
       )}
       <FieldSet title="Chat">
@@ -772,20 +638,11 @@ export function BotAdvanced({
           }}
         >
           <span className="min-w-0 flex-1">
-            <span className="block text-strong text-primary">
-              Chat activity
-            </span>
-            <span className="mt-0.5 block text-small text-secondary">
-              What you see while {bot.name} works.
-            </span>
+            <span className="block text-strong text-primary">Chat activity</span>
+            <span className="mt-0.5 block text-small text-secondary">What you see while {bot.name} works.</span>
           </span>
-          <span className="shrink-0 text-small text-secondary">
-            {botChatActivitySummary(bot.chatActivity)}
-          </span>
-          <ChevronRight
-            aria-hidden="true"
-            className="size-4 shrink-0 text-tertiary"
-          />
+          <span className="shrink-0 text-small text-secondary">{botChatActivitySummary(bot.chatActivity)}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <button
           type="button"
@@ -796,20 +653,11 @@ export function BotAdvanced({
           }}
         >
           <span className="min-w-0 flex-1">
-            <span className="block text-strong text-primary">
-              Interruptions
-            </span>
-            <span className="mt-0.5 block text-small text-secondary">
-              When {bot.name} may send you messages on its own.
-            </span>
+            <span className="block text-strong text-primary">Interruptions</span>
+            <span className="mt-0.5 block text-small text-secondary">When {bot.name} may send you messages on its own.</span>
           </span>
-          <span className="shrink-0 text-small text-secondary">
-            {botInterruptionsSummary(bot.interruptions)}
-          </span>
-          <ChevronRight
-            aria-hidden="true"
-            className="size-4 shrink-0 text-tertiary"
-          />
+          <span className="shrink-0 text-small text-secondary">{botInterruptionsSummary(bot.interruptions)}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <SelfWakeUpsField bot={bot} />
       </FieldSet>

@@ -86,6 +86,11 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
       if (record) await dependencies.commitments.update(botId, record.id, { status });
       await this.pump(botId);
     },
+    /** The Bot revised a follow-up's card: the follow-up now waits on the new card. */
+    async onProposalRevised(botId: string, replacedId: string, proposalId: string): Promise<void> {
+      const record = (await dependencies.commitments.list(botId)).find((entry) => entry.proposalId === replacedId);
+      if (record) await dependencies.commitments.update(botId, record.id, { proposalId });
+    },
   };
 }
 

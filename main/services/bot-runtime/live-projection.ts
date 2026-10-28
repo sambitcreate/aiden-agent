@@ -180,11 +180,15 @@ function memorySaveOf(details: unknown): BotMemoryTarget[] | null {
 function proposalOf(data: unknown): BotRoutineProposalEntryData | null {
   if (typeof data !== "object" || data === null) return null;
   const record = data as Record<string, unknown>;
-  for (const key of ["proposalId", "name", "prompt", "timezone", "label"] as const) {
+  for (const key of ["proposalId", "name", "prompt", "label"] as const) {
     if (typeof record[key] !== "string") return null;
   }
-  if (typeof record.schedule !== "object" || record.schedule === null) return null;
   if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  // A schedule card (with its timezone) or a trigger card, never both.
+  const trigger = typeof record.trigger === "object" && record.trigger !== null;
+  const schedule = typeof record.schedule === "object" && record.schedule !== null && typeof record.timezone === "string";
+  if (trigger === schedule) return null;
+  if (trigger && (record.schedule !== undefined || record.timezone !== undefined)) return null;
   return data as BotRoutineProposalEntryData;
 }
 
@@ -194,10 +198,12 @@ function proposalStatusOf(data: unknown): BotRoutineProposalStatusEntryData | nu
   if (typeof record.proposalId !== "string") return null;
   if (record.status !== "accepted" && record.status !== "dismissed") return null;
   if (record.routineId !== undefined && typeof record.routineId !== "string") return null;
+  if (record.supersededBy !== undefined && typeof record.supersededBy !== "string") return null;
   return {
     proposalId: record.proposalId,
     status: record.status,
     ...(record.routineId === undefined ? {} : { routineId: record.routineId }),
+    ...(record.status === "dismissed" && record.supersededBy !== undefined ? { supersededBy: record.supersededBy } : {}),
   };
 }
 
@@ -397,6 +403,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             proposal,
             status: decided?.status ?? "pending",
             ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+            ...(decided?.supersededBy === undefined ? {} : { supersededBy: decided.supersededBy }),
           },
           turn,
         });

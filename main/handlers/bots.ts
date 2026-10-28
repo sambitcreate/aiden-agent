@@ -238,16 +238,9 @@ export function registerBotHandlers(): void {
       },
       rotateToken: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.rotateToken(botId, id),
     },
-    linkFor: async (token) => {
-      const { getAidenRemoteService } = await import("../services/aiden-remote-service-main.js");
-      const status = await (await getAidenRemoteService()).status().catch(() => undefined);
-      // Tailscale first: it reaches this Mac from anywhere the person's devices are.
-      const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
-      return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
-    },
+    linkFor: async (token) => (await import("../services/bot-routine-events/sources-main.js")).botRoutineWebhookLink(token),
     changed: (botId) => {
-      void import("../services/bot-routine-events/sources-main.js").then(({ rearmBotEventRoutines }) => rearmBotEventRoutines());
-      ipcMain.broadcast("bots:changed", { botId });
+      void import("../services/bot-routine-events/sources-main.js").then(({ botEventRoutinesChanged }) => botEventRoutinesChanged(botId));
     },
   });
   // Skill cards: Add writes and approves the exact content; Not now leaves it unused.

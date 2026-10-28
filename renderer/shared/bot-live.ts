@@ -183,6 +183,8 @@ export type BotTranscriptEntry =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      /** The revised card that replaced this one (status dismissed). */
+      supersededBy?: string;
       at?: number;
     }
   /** A lesson from a routine's runs, waiting for Keep; or a Learned line from a correction; or a tidy. */
