@@ -69,7 +69,9 @@ function harness() {
   });
   // `appended` is the Bot's conversation: the cards the person is shown.
   const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
-  const failures = { statusAppend: false };
+  // `sessionClosing`: the Bot's session is closing for a pause, so reading it
+  // through the session waits until the closing tool call returns.
+  const failures = { statusAppend: false, sessionClosing: false };
   let sequence = 0;
   const clock = { at: Date.UTC(2026, 9, 9, 12) };
   const events = createBotEventRoutineStore({ profileDir: () => root, now: () => clock.at });
@@ -86,7 +88,10 @@ function harness() {
         if (failures.statusAppend && kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) throw new Error("disk full");
         appended.push({ botId, kind, data });
       },
-      conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+      conversationEntries: async (botId) => {
+        if (failures.sessionClosing) return new Promise<never>(() => undefined);
+        return appended.filter((entry) => entry.botId === botId);
+      },
       now: () => clock.at,
       newId: () => `00000000-0000-4000-8000-${String((sequence += 1)).padStart(12, "0")}`,
     });
@@ -635,6 +640,53 @@ test("a revision whose card was shown just before Aiden quit still replaces the 
   const accepted = await restarted.respond({ botId: "bot-a", proposalId: replacementId, decision: "accept" });
   assert.equal(accepted.status, "accepted");
   assert.deepEqual(cards().map((card) => card.status), ["dismissed", "pending", "accepted"]);
+});
+
+test("a routines call during a pause finishes a cut-short revision from its own conversation", async () => {
+  const { proposals, start, proposalsFile, appended, failures } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  assert.ok(first.ok);
+  // Aiden quit after showing the replacement card and before saving that it was shown.
+  const file = JSON.parse(await readFile(proposalsFile, "utf8")) as { proposals: Array<Record<string, unknown>> };
+  const original = file.proposals.find((record) => record.proposalId === first.proposal.proposalId)!;
+  const replacementId = "00000000-0000-4000-8000-000000000999";
+  file.proposals.push({ ...original, proposalId: replacementId, schedule: { kind: "daily", time: "10:00" }, revises: original.proposalId });
+  await writeFile(proposalsFile, JSON.stringify(file));
+  const originalCard = appended.find((entry) => entry.data.proposalId === first.proposal.proposalId)!;
+  appended.push({ ...originalCard, data: { ...originalCard.data, proposalId: replacementId } });
+  const restarted = start();
+
+  // The person pauses the Bot while its routines call runs: the session waits for the call.
+  failures.sessionClosing = true;
+  const conversation: BotToolCall = {
+    ...call([]),
+    entries: async () => appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never,
+    appendEntry: async (kind, data) => void appended.push({ botId: "bot-a", kind, data: data as Record<string, unknown> }),
+  };
+  const tool = routinesCandidate("bot-a", {
+    list: async () => [],
+    pause: async () => {
+      throw new Error("unused");
+    },
+    propose: async (botId, input, append, entries) => {
+      const outcome = await restarted.propose(botId, input, append, entries);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+  }).bind!(conversation);
+  let timer: NodeJS.Timeout | undefined;
+  const result = await Promise.race([
+    tool.execute("c1", { action: "propose", ...dailyPlan, name: "Gym reminder" }),
+    new Promise<"stuck">((resolve) => (timer = setTimeout(() => resolve("stuck"), 2_000))),
+  ]).finally(() => clearTimeout(timer));
+  assert.notEqual(result, "stuck", "the call never waits on the session the pause is closing");
+  assert.equal(json(result as AgentToolResult<unknown>).ok, true);
+
+  failures.sessionClosing = false;
+  assert.deepEqual(
+    (await restarted.pending("bot-a")).map((entry) => entry.proposalId).sort(),
+    [replacementId, json(result as AgentToolResult<unknown>).proposalId].sort(),
+    "the shown replacement took the old card's place",
+  );
 });
 
 test("the routines tool lists and pauses event routines, shows waiting cards, and never shows a link", async () => {

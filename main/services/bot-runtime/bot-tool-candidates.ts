@@ -235,32 +235,37 @@ export function routinesCandidate(
       botId: string,
       input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
       append: RoutineCardAppend,
+      entries?: RoutineCardEntries,
     ): ReturnType<BotRoutinesToolDependencies["propose"]>;
     revise?(
       botId: string,
       proposalId: string,
       input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
       append: RoutineCardAppend,
+      entries?: RoutineCardEntries,
     ): ReturnType<NonNullable<BotRoutinesToolDependencies["revise"]>>;
   },
 ): BotToolCandidate {
   const { propose, revise, ...rest } = dependencies;
-  const build = (append: RoutineCardAppend) =>
+  const build = (append: RoutineCardAppend, entries?: RoutineCardEntries) =>
     createBotRoutinesTool(botId, {
       ...rest,
-      propose: (id, input) => propose(id, input, append),
-      ...(revise ? { revise: (id: string, proposalId: string, input: Parameters<BotRoutinesToolDependencies["propose"]>[1]) => revise(id, proposalId, input, append) } : {}),
+      propose: (id, input) => propose(id, input, append, entries),
+      ...(revise ? { revise: (id: string, proposalId: string, input: Parameters<BotRoutinesToolDependencies["propose"]>[1]) => revise(id, proposalId, input, append, entries) } : {}),
     });
   return {
     tool: build(async () => {
       throw new Error("Suggesting a routine needs a Bot conversation.");
     }),
     replay: "unsafe",
-    bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue)),
+    // Cards are written and read through the call, never by reopening the
+    // Bot's session, which a pause closes while it waits for this call.
+    bind: (call) => build((kind, data) => call.appendEntry(kind, data as JsonValue), () => call.entries()),
   };
 }
 
 type RoutineCardAppend = (kind: string, data: Record<string, unknown>) => Promise<void>;
+type RoutineCardEntries = () => Promise<readonly { kind: string; data?: unknown }[]>;
 
 /**
  * The Bot's `propose_skill` tool. The card is appended to the calling
