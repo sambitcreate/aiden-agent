@@ -9,7 +9,7 @@ Status: Implemented (2026-10-07), merged in PR #371 and shipped in 0.55.0; pendi
 - the loopback MCP bridge, prompt reconstruction, and activity mapping;
 - the session store, runtime, provider wrapper, pinned-release installer, launcher, and generation host.
 
-**Antigravity (`main/services/antigravity/`)** pins runtime 1.3.0 for macOS (arm64 and Intel) and Linux (x64 and arm64), and adds an isolated profile, Google sign-in with a paste-back fallback, and the service with its lazy provider.
+**Antigravity (`main/services/antigravity/`)** pins runtime 1.4.3 (1.3.0 until 2026-10-27) for macOS (arm64 and Intel) and Linux (x64 and arm64), and adds an isolated profile, Google sign-in with a paste-back fallback, and the service with its lazy provider.
 
 **Integration points:**
 - `providers:harness:*` IPC drives the runtime section in the provider setup dialog.
@@ -21,7 +21,7 @@ Status: Implemented (2026-10-07), merged in PR #371 and shipped in 0.55.0; pendi
 **Tests:** `npm run test:acp` runs fake-ACP-agent behavioural suites end to end through the real process and connection stack, plus the installer, launcher, auth, service and UI tests.
 
 **Deviations from the plan below:**
-- **Runtime version.** 1.3.0 replaced 1.1.1/1.2.x and adds an Intel macOS build. The spike found its temp footprint negligible.
+- **Runtime version.** 1.3.0 replaced 1.1.1/1.2.x and adds an Intel macOS build. The spike found its temp footprint negligible. 1.4.3 replaced 1.3.0 on 2026-10-27 (see the spike notes).
 - **Rewind and edit-resubmit stay enabled.** A history mismatch starts a fresh agent session with a bounded reconstruction and a visible "Started a fresh agent session" activity row, instead of hiding those controls.
 - **No origin label.** Native activity reuses Aiden's tool rows without an "Antigravity" origin field, so the Remote contract is unchanged; the assistant message already names the provider.
 - **No logo.** Antigravity uses the neutral initial provider icon until brand-asset terms are confirmed.

@@ -2,6 +2,23 @@
 
 Date: 2026-10-06. Host: Apple Silicon macOS, unauthenticated probe. Feeds [antigravity-acp-provider-plan.md](antigravity-acp-provider-plan.md).
 
+## Runtime 1.4.3 (2026-10-27)
+
+Aiden's pin moved from 1.3.0 to **1.4.3**, the registry's current version. Google published 1.4.0 (Oct 12), 1.4.1 (Oct 16), 1.4.2 and 1.4.3 (both Oct 23) in between.
+
+- **Hashes.** All four archives were downloaded from `dl.google.com`, and each SHA-256 matches `antigravity-acp/agent.json` in the ACP registry. Member sizes were read from the archives.
+- **Layout.** Unchanged: `agy_acp_server.par` plus `localharness_external`, the same executable, and `--uid=` on Linux.
+- **Identity.** The linux-x64 server, started with an isolated `GEMINI_HOME` and `TMPDIR`, returned `protocolVersion: 1` and `agentInfo: { name: "antigravity-acp", version: "1.4.3" }`. It also reported `loadSession`, `sessionCapabilities.resume`/`list`, `auth.logout`, the same four auth methods (including `oauth-personal`), and new `_meta.antigravity` flags (`tier`, `systemPrompt.append`) that Aiden ignores.
+  - The probe container has no IPv6, so it ran with `--enforce_kernel_ipv6_support=false`; normal hosts do not need that flag.
+- **Still open.** A signed-in chat on 1.4.3 (models list, file routing, resume) has not been checked yet.
+
+| Platform | Archive | Server | Harness |
+| --- | ---: | ---: | ---: |
+| darwin-arm64 | 114.1 MB | 282.4 MB | 123.0 MB |
+| darwin-x86_64 | 119.8 MB | 286.7 MB | 127.6 MB |
+| linux-x86_64 | 336.8 MB | 927.7 MB | 133.9 MB |
+| linux-aarch64 | 322.9 MB | 932.7 MB | 127.5 MB |
+
 ## Runtime 1.3.0 supersedes the plan's sizing
 
 The ACP registry (`agentclientprotocol/registry`, `antigravity-acp/agent.json`) now publishes **1.3.0**, and it adds **`darwin-x86_64`**, so Intel Macs are supported.
