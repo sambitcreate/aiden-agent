@@ -284,9 +284,11 @@ function leadingStatus(text: string): number | undefined {
 
 /**
  * What a rejected request means for waiting. A known HTTP status decides
- * first: only 408, 429, 503 and 529 can wait (409 only with a reset header),
- * and every other 4xx and 5xx goes on as it does today. Without a status,
- * the error text decides.
+ * first: 429 and 529 wait; 503 and 408 wait only when they read as an
+ * overload (a reset header, or limit or busy text); 409 only with a reset
+ * header. Every other 4xx and 5xx, and a bare 503 or 408, is an ordinary
+ * failure that a chat's automatic retries handle. Without a status, the
+ * error text decides.
  */
 export function classifyUsageLimit(input: {
   errorMessage?: string;
@@ -310,7 +312,12 @@ export function classifyUsageLimit(input: {
   if (BILLING_HINT.test(text) && fromText === undefined) return { kind: "stop", reason: "billing" };
 
   if (status !== undefined) {
-    const waitable = status === 408 || status === 429 || status === 503 || status === 529 || (status === 409 && fromHeaders !== undefined);
+    const overload = fromHeaders !== undefined || RATE_LIMITED.test(text);
+    const waitable =
+      status === 429 ||
+      status === 529 ||
+      ((status === 503 || status === 408) && overload) ||
+      (status === 409 && fromHeaders !== undefined);
     if (!waitable) return { kind: "none" };
   } else if (!RATE_LIMITED.test(text)) {
     // Without a status, only text that reads as a limit waits; a reset time alone is not one.

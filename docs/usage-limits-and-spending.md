@@ -42,6 +42,7 @@ A workspace chat retries a failed request up to five times, waiting 2 to 32 seco
 - A chat never retries a usage limit Aiden gave up on, one that outlasts the longest wait, or one turned away by the give-up rule above. The error carries a marker the chat's retry check reads, so the reply fails once with the reset time instead of showing "Trying again".
 - A Bot's stuck-run watchdog does not count a usage-limit wait against a run: it neither stops a routine nor asks "Still working?" while the request is held back. The test request that goes out when the limit clears counts as usual, so a hung one is still caught.
 - A Bot's retries are Pi Durable's own and do not read the marker. The give-up rule refuses each of them at once without sending, so the run still ends promptly.
+- A plain server error (a 503 or 408 with no reset time and no rate-limit or overload wording) is not a usage limit. It goes straight to those retries, so it shows "Trying again" rather than a wait.
 - With waiting off (**Don't wait**), a usage limit is an ordinary failure and is retried like any other.
 
 ## Spending limits

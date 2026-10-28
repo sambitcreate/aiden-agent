@@ -147,6 +147,17 @@ test("billing, bad requests and other failures never wait", () => {
   );
   assert.deepEqual(classifyUsageLimit({ errorMessage: "401 invalid x-api-key", now: NOW }), { kind: "none" });
   assert.deepEqual(classifyUsageLimit({ errorMessage: "500 Internal server error", now: NOW }), { kind: "none" });
+  // A bare 503 or 408 is a passing server failure, retried as one; an overloaded 503 waits.
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "503 Service Unavailable", observation: { status: 503, headers: {} }, now: NOW }), { kind: "none" });
+  assert.deepEqual(classifyUsageLimit({ errorMessage: "408 Request Timeout", now: NOW }), { kind: "none" });
+  assert.deepEqual(
+    classifyUsageLimit({ errorMessage: "503 The model is overloaded. Please try again later.", now: NOW }),
+    { kind: "wait", scope: "model" },
+  );
+  assert.deepEqual(
+    classifyUsageLimit({ errorMessage: "503 Service Unavailable", observation: { status: 503, headers: { "retry-after": "30" } }, now: NOW }),
+    { kind: "wait", scope: "model", resetAt: NOW + 30_000 },
+  );
   assert.deepEqual(classifyUsageLimit({ errorMessage: "fetch failed", now: NOW }), { kind: "none" });
   // A reset time with nothing that reads as a limit is not a limit.
   assert.deepEqual(classifyUsageLimit({ errorMessage: "Please try again in 5s", now: NOW }), { kind: "none" });
