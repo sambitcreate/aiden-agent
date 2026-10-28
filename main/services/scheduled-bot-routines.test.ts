@@ -429,6 +429,27 @@ test("a replayed event run observes the turn admitted before a quit, and a recor
   assert.equal((await h.store.runs(task.id)).filter((entry) => entry.id === requestId).length, 1);
 });
 
+test("an event run whose reply is lost after admission stays unknown, and its replay observes the same turn", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Hook",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "React to the call.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  const trigger: ScheduledRunTrigger = { kind: "event", eventId: "w9", source: "webhook", payload: "{}" };
+  const requestId = botRoutineRequestId(task.id, trigger);
+  h.session.replies.push(Promise.reject(new Error("The reply stream dropped.")) as never);
+  const lost = await h.run(task, requestId, trigger);
+  assert.equal(lost.result, "blocked");
+  assert.notEqual(lost.id, requestId, "an unknown outcome is not the event's answer");
+  assert.equal(h.session.deliveries.length, 0);
+  const replayed = await h.run(task, requestId, trigger);
+  assert.equal(replayed.id, requestId);
+  assert.equal(replayed.result, "success");
+  assert.equal(h.session.sends.length, 1, "the admitted turn is observed, never sent twice");
+});
+
 test("recovery waits for another run on the Bot routine and still submits its pending fire", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());

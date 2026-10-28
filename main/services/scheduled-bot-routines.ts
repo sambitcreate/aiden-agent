@@ -221,6 +221,16 @@ function durableFire(trigger: ScheduledRunTrigger): boolean {
   return trigger.kind === "automatic" || trigger.kind === "retry";
 }
 
+/**
+ * A run that can be replayed by its stable request id: scheduled fires, and
+ * event runs (whose receipt the event dispatcher keeps). After Pi admitted
+ * such a run, a lost reply is an unknown outcome to observe later, never a
+ * terminal failure.
+ */
+function replayable(trigger: ScheduledRunTrigger): boolean {
+  return durableFire(trigger) || trigger.kind === "event";
+}
+
 /** The label shown on a routine's turn. */
 function routineLabel(task: ScheduledTask, trigger: ScheduledRunTrigger): string | undefined {
   const name = task.name?.trim();
@@ -248,7 +258,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     // A new fire cannot start while the person has paused the whole Bot.
     // An admitted fire remains pending so its reply can be observed after Resume.
     if (state.kind === "paused") {
-      if (durableFire(trigger) && existingSubmissionId)
+      if (replayable(trigger) && existingSubmissionId)
         throw new RoutineOutcomeUnknown("This Bot is paused by the person.");
       return { result: "skipped", reason: "paused_by_person", output: "", surface: false };
     }
@@ -292,7 +302,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         if (reason === "bot_paused" || reason === "paused_by_person") {
           return { result: "skipped", reason, output: "", surface: false };
         }
-        if (durableFire(trigger)) {
+        if (replayable(trigger)) {
           // A failed send may have committed in Pi before its response was lost.
           // Read by the stable request ID before deciding whether this is a
           // terminal pre-admission failure or an outcome to recover later.
@@ -314,7 +324,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     try {
       outcome = await abortable(ports.awaitReply(task.botId, submission.submissionId, signal), signal);
     } catch (error) {
-      if (durableFire(trigger)) throw new RoutineOutcomeUnknown(message(error));
+      if (replayable(trigger)) throw new RoutineOutcomeUnknown(message(error));
       throw error;
     }
     // The watchdog stopped a run that made no progress: a retryable stall,
@@ -337,7 +347,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     if (outcome.kind === "interrupted") {
       // Pi can report a paused submission without settling it. Keep the
       // automatic fire's receipt until the person resumes that same turn.
-      if (durableFire(trigger) && !outcome.settled)
+      if (replayable(trigger) && !outcome.settled)
         throw new RoutineOutcomeUnknown("The Bot turn is waiting for Resume.");
       // Paused mid-run: the person stopped it on purpose, so nothing surfaces.
       const after = await ports.state(task.botId).catch(() => undefined);
@@ -352,7 +362,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       try {
         await ports.markSilent(task.botId, submission.submissionId);
       } catch (error) {
-        if (durableFire(trigger)) throw new RoutineOutcomeUnknown(message(error));
+        if (replayable(trigger)) throw new RoutineOutcomeUnknown(message(error));
         throw error;
       }
       return { result: "silent", output: "", surface: false };
@@ -383,7 +393,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       const requestId = botRoutineRequestId(task.id, trigger);
       // An event run carries its own request id as the run id, so a replay
       // after a restart observes what was recorded or admitted, like a fire.
-      const recovering = (durableFire(trigger) || trigger.kind === "event") && options.runId === requestId;
+      const recovering = replayable(trigger) && options.runId === requestId;
       let ports: BotRoutineExecutorPorts | undefined;
       let fingerprint: string | undefined;
       let outcome: BotRoutineOutcome;
@@ -457,7 +467,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           );
       } catch (error) {
         const cancelled = options.signal.aborted;
-        const uncertain = error instanceof RoutineOutcomeUnknown || (cancelled && durableFire(trigger));
+        const uncertain = error instanceof RoutineOutcomeUnknown || (cancelled && replayable(trigger));
         outcome = {
           result: cancelled || uncertain ? "blocked" : "error",
           output: "",
