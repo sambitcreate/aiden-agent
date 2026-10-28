@@ -54,6 +54,7 @@ import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } 
 import {
   routineNotesCandidate,
   routinesCandidate,
+  proposeSkillCandidate,
   routineTaskIdOfCall,
   shareImageCandidate,
   suggestConnectionCandidate,
@@ -139,6 +140,7 @@ const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
     const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
+  recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
 const lazyRoutineNotes = {
@@ -168,6 +170,8 @@ export interface BotToolSourcesMain extends BotToolSources {
   shutdown(): Promise<void>;
   /** Close one Bot's Computer Use controller and browser tabs (Bot deleted). */
   forgetBot(botId: string): Promise<void>;
+  /** The Bot's connected-service (MCP) tool names from its newest tool build. */
+  mcpToolNames(botId: string): ReadonlySet<string>;
 }
 
 export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMain {
@@ -408,6 +412,8 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
+      tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
+        (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
       tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
       tools.push(
         suggestConnectionCandidate(botId, {
@@ -459,6 +465,10 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
           }
           return undefined;
       }
+    },
+
+    mcpToolNames(botId) {
+      return new Set((builtMcpTools.get(botId) ?? []).map((tool) => tool.name));
     },
 
     async shutdown() {

@@ -83,7 +83,7 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
     case "failed_turn":
       return withTime({ id: entry.id, type: "failed_turn" as const, retryText: entry.retryText ?? null }, entry.createdAt);
     // Cards this Mac does not opt into (`bot:cards`); the host never sends them here. Nor
-    // revision 43 images: without `bot:images` the host sends the line that stands for them.
+    // revision 44 images: without `bot:images` the host sends the line that stands for them.
     case "memory_update":
     case "routine_proposal":
     case "shared_image":
@@ -220,6 +220,10 @@ export function applyRemoteBotSessionEvent(
       return next({});
     case "handoff":
       return { ...next({}), handoff: event.payload.handoff };
+    case "issues":
+      // Contract revision 42: Bot issue cards are a phone surface in this
+      // revision; the Mac reads the same cards from its own Bot transcript.
+      return next({});
   }
 }
 

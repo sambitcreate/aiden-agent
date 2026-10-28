@@ -123,7 +123,7 @@ object AidenBotSessionWire {
     const val MAX_SUBMISSION_ID_LENGTH = 64
     const val MAX_PLUGIN_ID_LENGTH = 80
     const val MAX_ROUTINE_ID_LENGTH = 160
-    /** Revision 43: a shared image's name, and its largest size (the Mac's inline image limit). */
+    /** Revision 44: a shared image's name, and its largest size (the Mac's inline image limit). */
     const val MAX_SHARED_IMAGE_NAME_LENGTH = 255
     const val MAX_SHARED_IMAGE_BYTES = 8 * 1_048_576
     val SHARED_IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg")
@@ -310,7 +310,7 @@ sealed class AidenBotSessionEntry {
     }
 
     /**
-     * Revision 43 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
+     * Revision 44 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
      * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
      */
     @Serializable
@@ -725,6 +725,125 @@ object AidenBotSessionActivitySerializer :
     override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
 }
 
+// Contract revision 42 (`bot:issues`): the Bot's host-owned "Needs you" cards.
+
+/** The bounds the Mac's own issue parsers use. */
+object AidenRemoteIssueWire {
+    /** Open cards plus retained settled ones: the most a session may carry. */
+    const val MAX_CARDS = 58
+    const val MAX_TITLE_LENGTH = 80
+    const val MAX_BODY_LENGTH = 280
+    const val MAX_ID_LENGTH = 160
+    const val MAX_ACTIONS = 2
+
+    private val ID = Regex("^[A-Za-z0-9._:-]{1,160}$")
+
+    /** A card, routine or issue id: `^[A-Za-z0-9._:-]{1,160}$`. */
+    fun validateId(value: String, field: String) {
+        if (!ID.matches(value)) throw AidenBotContractException.InvalidField(field)
+    }
+}
+
+/** The four kinds of card the host raises. */
+@Serializable
+enum class AidenBotIssueKind {
+    @SerialName("preflight_failed") PREFLIGHT_FAILED,
+    @SerialName("routine_failed") ROUTINE_FAILED,
+    @SerialName("routine_paused") ROUTINE_PAUSED,
+    @SerialName("run_stalled") RUN_STALLED
+}
+
+/**
+ * What a phone may do with a card. `open_settings` is the Mac's own surface and never crosses
+ * the wire: a card that offered only that arrives with no actions.
+ */
+@Serializable
+enum class AidenBotIssueActionKind {
+    @SerialName("open_chat") OPEN_CHAT,
+    @SerialName("resume_routine") RESUME_ROUTINE,
+    @SerialName("stop_run") STOP_RUN,
+    @SerialName("keep_waiting") KEEP_WAITING
+}
+
+/** One action a card offers, exactly as the host sends it. `routineId` only on RESUME_ROUTINE. */
+@Serializable
+data class AidenBotIssueAction(
+    val kind: AidenBotIssueActionKind,
+    val routineId: String? = null
+) {
+    init {
+        when (kind) {
+            AidenBotIssueActionKind.RESUME_ROUTINE -> {
+                val id = routineId ?: throw AidenBotContractException.InvalidField("issue.action.routineId")
+                AidenRemoteIssueWire.validateId(id, "issue.action.routineId")
+            }
+            else -> if (routineId != null) throw AidenBotContractException.InvalidField("issue.action.routineId")
+        }
+    }
+}
+
+/**
+ * Contract revision 42 (`bot:issues` devices only): one host-owned "Needs you" card. A settled
+ * card (`resolved`) offers nothing a phone may take.
+ */
+@Serializable
+data class AidenBotIssue(
+    val id: String,
+    val kind: AidenBotIssueKind,
+    val title: String,
+    val body: String,
+    val routineId: String? = null,
+    /** In card order, at most two; the last one is primary. */
+    val actions: List<AidenBotIssueAction>,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val resolved: Boolean
+) {
+    init {
+        AidenRemoteIssueWire.validateId(id, "issue.id")
+        AidenBotWire.validateString(title, "issue.title", AidenRemoteIssueWire.MAX_TITLE_LENGTH)
+        AidenBotWire.validateString(body, "issue.body", AidenRemoteIssueWire.MAX_BODY_LENGTH, allowEmpty = true)
+        routineId?.let { AidenRemoteIssueWire.validateId(it, "issue.routineId") }
+        if (actions.size > AidenRemoteIssueWire.MAX_ACTIONS) throw AidenBotContractException.InvalidField("issue.actions")
+        if (resolved && actions.isNotEmpty()) {
+            throw AidenBotContractException.InvalidCombination("settled issue with actions")
+        }
+    }
+
+    companion object {
+        /** At most [AidenRemoteIssueWire.MAX_CARDS] cards, each with its own id. */
+        fun validateList(issues: List<AidenBotIssue>) {
+            if (issues.size > AidenRemoteIssueWire.MAX_CARDS || issues.map { it.id }.toSet().size != issues.size) {
+                throw AidenBotContractException.InvalidField("issues")
+            }
+        }
+
+        /** One session's list; present only for a device holding `bot:issues`. */
+        fun parseList(element: JsonElement): List<AidenBotIssue> {
+            val array = element as? JsonArray ?: throw AidenBotContractException.InvalidField("issues")
+            val issues = array.map {
+                AidenBotWireJson.json.decodeFromJsonElement(AidenBotIssue.serializer(), it)
+            }
+            validateList(issues)
+            return issues
+        }
+    }
+}
+
+/** `POST /bots/{botId}/issues/{issueId}/act`: one action the card offers. */
+@Serializable
+data class AidenBotIssueActRequest(val action: AidenBotIssueAction)
+
+@Serializable
+enum class AidenBotIssueActResult {
+    @SerialName("done") DONE,
+    /** Nothing is open under that id: the card should be dropped. */
+    @SerialName("not_open") NOT_OPEN
+}
+
+/** The act route's receipt: `{ result: "done" | "not_open" }`. */
+@Serializable
+data class AidenBotIssueActReceipt(val result: AidenBotIssueActResult)
+
 /** A message waiting for the running turn: STEER joins it, QUEUE runs after it. */
 @Serializable
 data class AidenBotQueuedMessage(
@@ -773,7 +892,12 @@ data class AidenBotSession(
      * Revision 37 (`bot:handoffs` devices only): the step the Bot handed back, or null. A holder is
      * always sent the key, as `null` when nothing waits; an older phone never is.
      */
-    val handoff: AidenBotHandoff? = null
+    val handoff: AidenBotHandoff? = null,
+    /**
+     * Revision 42 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
+     * from an older Mac or a device without the grant; an empty list means no card is open.
+     */
+    val issues: List<AidenBotIssue>? = null
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -785,6 +909,7 @@ data class AidenBotSession(
             throw AidenBotContractException.InvalidField("entries")
         }
         queued?.let { AidenBotQueuedMessage.validateList(it) }
+        issues?.let { AidenBotIssue.validateList(it) }
     }
 }
 
@@ -817,10 +942,14 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
         // A hand-off is written only when one waits, so an older Mac's session reads back as it came.
         val handoff = value.handoff?.let { mapOf("handoff" to it.toJson()) } ?: emptyMap()
+        // Revision 42: the list is written only when this session carries one at all.
+        val issues = value.issues?.let {
+            mapOf("issues" to jsonEncoder.json.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), it))
+        } ?: emptyMap()
         jsonEncoder.encodeJsonElement(
             JsonObject(
                 body + ("question" to (value.question?.toJson() ?: JsonNull)) +
-                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff
+                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + issues
             )
         )
     }
@@ -838,9 +967,11 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
         // Revision 37: `handoff` reaches only `bot:handoffs` devices, as `null` when nothing waits.
         val handoff = body["handoff"]?.let { if (it is JsonNull) null else AidenBotHandoff.parse(it) }
+        // Revision 42: `issues` reaches only `bot:issues` devices; absent from every other session.
+        val issues = body["issues"]?.let { if (it is JsonNull) null else AidenBotIssue.parseList(it) }
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
-            JsonObject(body - "question" - "approval" - "handoff" + ("entries" to readable))
+            JsonObject(body - "question" - "approval" - "handoff" - "issues" + ("entries" to readable))
         )
         return AidenBotSession(
             botId = fields.botId,
@@ -856,7 +987,8 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             approval = if (approval is JsonNull) null else AidenBotApproval.parse(approval),
             activity = fields.activity,
             queued = fields.queued,
-            handoff = handoff
+            handoff = handoff,
+            issues = issues
         )
     }
 }
@@ -958,6 +1090,12 @@ sealed class AidenBotSessionEventPayload {
     data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
     /** Revision 37: the step the Bot handed back appeared (non-null) or was settled (null). */
     data class Handoff(val handoff: AidenBotHandoff?) : AidenBotSessionEventPayload()
+    /** Revision 42: the Bot's issue cards, oldest first; an empty list clears them. */
+    data class Issues(val issues: List<AidenBotIssue>) : AidenBotSessionEventPayload() {
+        init {
+            AidenBotIssue.validateList(issues)
+        }
+    }
     /** Revision 30: the person's messages still waiting for the turn. */
     data class Queued(val queued: List<AidenBotQueuedMessage>) : AidenBotSessionEventPayload() {
         init {
@@ -1001,6 +1139,7 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Activity -> "activity"
             is AidenBotSessionEventPayload.Queued -> "queued"
             is AidenBotSessionEventPayload.Handoff -> "handoff"
+            is AidenBotSessionEventPayload.Issues -> "issues"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
 }
@@ -1038,6 +1177,9 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             }
             is AidenBotSessionEventPayload.Handoff -> buildJsonObject {
                 put("handoff", p.handoff?.toJson() ?: JsonNull)
+            }
+            is AidenBotSessionEventPayload.Issues -> buildJsonObject {
+                put("issues", wire.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), p.issues))
             }
             AidenBotSessionEventPayload.Closed -> JsonObject(emptyMap())
         }
@@ -1122,6 +1264,10 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 payload.requireKeys(setOf("handoff"))
                 val element = payload.getValue("handoff")
                 AidenBotSessionEventPayload.Handoff(if (element is JsonNull) null else AidenBotHandoff.parse(element))
+            }
+            "issues" -> {
+                payload.requireKeys(setOf("issues"))
+                AidenBotSessionEventPayload.Issues(AidenBotIssue.parseList(payload.getValue("issues")))
             }
             "closed" -> {
                 payload.requireKeys(emptySet())

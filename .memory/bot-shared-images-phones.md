@@ -1,6 +1,6 @@
-# Bot shared images on the phones (Remote revision 43, `bot:images`)
+# Bot shared images on the phones (Remote revision 44, `bot:images`)
 
-Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-bot-images` (tool audit item 6a). Revision 43 is provisional; re-claim it at merge after whatever `main` holds then (constant `AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`).
+Status (2026-10-27): implemented on branch `claude/project-thread-p5v2my-bot-images` (tool audit item 6a). Revision 44 is provisional; re-claim it at merge after whatever `main` holds then (constant `AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`).
 
 - Bots already shared images on the Mac (`share_image` -> `shared_image` transcript entry with base64 bytes). Phones and paired Macs saw nothing.
 - Host: `bot:images` is opt-in, offered in `serverCapabilities` when the image route is wired, negotiated alone. Holders get `{type:"shared_image", id, name, mimeType, size}` without bytes; others get an assistant message with the same id: "I shared an image: NAME. Open this chat on your Mac to see it."

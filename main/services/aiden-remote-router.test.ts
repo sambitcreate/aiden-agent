@@ -23,6 +23,7 @@ import {
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { AidenOperationNotExecutedError } from "./aiden-remote-operation-contract.js";
 import { VISUAL_VIEWER_CSP } from "../../renderer/shared/visual-viewer.js";
 import { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { AidenRemoteBotService } from "./aiden-remote-bots.js";
@@ -105,6 +106,9 @@ async function fixture(options: {
   visualViewer?: boolean;
   /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
+  /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
+  botIssueCount?: number;
+  botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
 } = {}) {
@@ -166,6 +170,7 @@ async function fixture(options: {
     avatar: { semantic: { version: 1 as const, shape: "orb" as const, color: "sky" as const } },
     health: "ready" as const,
     ...(options.pausedBot ? { sessionState: "paused" as const, paused: true } : {}),
+    ...(options.botIssueCount === undefined ? {} : { issueCount: options.botIssueCount }),
     access: botAccess,
     createdAt: new Date(1_000).toISOString(),
     updatedAt: new Date(2_000).toISOString(),
@@ -262,6 +267,7 @@ async function fixture(options: {
               capability !== "bot:handoffs" &&
               capability !== "bot:handoff-notes" &&
               capability !== "bot:images" &&
+              capability !== "bot:issues" &&
               capability !== "schedule:cards",
           )
         ) {
@@ -1051,6 +1057,7 @@ async function fixture(options: {
           },
         }
       : {}),
+    ...(options.botRoutineWebhook ? { botRoutineWebhook: options.botRoutineWebhook } : {}),
   };
   const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
@@ -3930,6 +3937,8 @@ function concreteRequestPath(template: string): string {
         case ":segment":
         case ":offset":
           return "0";
+        case ":token":
+          return "t".repeat(43);
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
@@ -6298,6 +6307,284 @@ test("bot:images is offered and negotiable while shared images are served, and o
   } finally {
     await holder.close();
     await plain.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 42: Bot issues on phones (`bot:issues`)
+// ---------------------------------------------------------------------------
+
+const ISSUE_ID = "issue_card_1";
+
+/** A Bot session service that records which view each route asked for. */
+function recordingIssueSessions(seen: string[], supportsIssues: boolean) {
+  const base = recordingHandoffSessions([], true) as unknown as Record<string, unknown>;
+  const state = { state: "idle" as const, interrupted: false };
+  return {
+    ...base,
+    supportsIssues,
+    session: async (botId: string, options: { issues?: boolean } = {}) => {
+      seen.push(`session:${options.issues === true ? "issues" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, ...state, entries: [], hasOlder: false, question: null, approval: null };
+    },
+    openEvents: async (
+      _deviceId: string,
+      _botId: string,
+      response: import("node:http").ServerResponse,
+      admit: () => void,
+      options: { issues?: boolean } = {},
+    ) => {
+      seen.push(`events:${options.issues === true ? "issues" : "plain"}`);
+      admit();
+      response.writeHead(204);
+      response.end();
+    },
+    actIssue: async (deviceId: string, botId: string, issueId: string, key: string, body: unknown) => {
+      seen.push(`act:${deviceId}:${botId}:${issueId}:${key}:${JSON.stringify(body)}`);
+      return { result: "done" as const };
+    },
+  } as unknown as NonNullable<import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botSessions"]>;
+}
+
+test("bot:issues is offered and negotiable only while the issue route is wired, with no new feature token", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["bot:issues"] }),
+  };
+  const features: Record<string, string[]> = {};
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingIssueSessions([], wired),
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:issues"), wired);
+      assert.equal(server.capabilities.includes("bot:issues"), false, "offered, not yet granted");
+      features[String(wired)] = server.features;
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      const body = await response.json();
+      if (wired) assert.ok(body.capabilities.includes("bot:issues"));
+      else assert.equal(body.error?.code, "not_found");
+    } finally {
+      await app.close();
+    }
+  }
+  // The `/server` feature budget is unchanged: the capability alone announces revision 42.
+  assert.deepEqual(features.true, features.false);
+
+  // A device that never accepted the Bot vocabulary is not told about it.
+  const legacy = await fixture({
+    capabilities: ["server:read", "bot:read"],
+    deviceType: "iphone",
+    botSessions: recordingIssueSessions([], true),
+  });
+  try {
+    const server = await (await fetch(`${legacy.base}/server`, { headers })).json();
+    assert.equal(server.serverCapabilities, undefined);
+  } finally {
+    await legacy.close();
+  }
+});
+
+test("issue cards reach only a device holding bot:issues, and only its summaries carry issueCount", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const seen: string[] = [];
+  for (const [label, capabilities, holder] of [
+    ["holder", ["server:read", "bot:read", "bot:write", "chat:read", "bot:issues"], true],
+    ["plain", ["server:read", "bot:read", "bot:write", "chat:read"], false],
+    ["other opt-ins", ["server:read", "bot:read", "bot:write", "chat:read", "bot:handoffs", "bot:cards"], false],
+  ] as Array<[string, AidenRemoteCapability[], boolean]>) {
+    const app = await fixture({
+      capabilities,
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingIssueSessions(seen, true),
+      botIssueCount: 2,
+    });
+    try {
+      const session = await fetch(`${app.base}/bots/bot-1/session`, { headers });
+      await session.arrayBuffer();
+      const stream = await fetch(`${app.base}/bots/bot-1/session/events`, { headers });
+      await stream.arrayBuffer();
+      const list = await (await fetch(`${app.base}/bots`, { headers })).json();
+      const detail = await (await fetch(`${app.base}/bots/bot-1`, { headers })).json();
+      assert.equal(list.bots[0].issueCount, holder ? 2 : undefined, label);
+      assert.equal(detail.issueCount, holder ? 2 : undefined, label);
+      assert.deepEqual(seen.splice(0), [
+        `session:${holder ? "issues" : "plain"}`,
+        `events:${holder ? "issues" : "plain"}`,
+      ], label);
+    } finally {
+      await app.close();
+    }
+  }
+});
+
+test("the issue act route runs one action per key, answers not_open, and refuses an action the card never offers", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const calls: Array<{ botId: string; issueId: string; action: string }> = [];
+  let answer: "done" | "not_open" | "invalid" = "done";
+  const issues = {
+    list: async () => [],
+    act: async (botId: string, issueId: string, action: { kind: string }) => {
+      calls.push({ botId, issueId, action: action.kind });
+      return answer;
+    },
+    onChange: () => () => {},
+  };
+  const bot = {
+    id: "bot-1",
+    revision: "bot_revision_1",
+    name: "Planner",
+    instructions: "Plan.",
+    avatar: { version: 1 as const, shape: "orb" as const, color: "sky" as const },
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  };
+  const ledger = new Map<string, unknown>();
+  const sessions = new AidenRemoteBotSessionService({
+    bots: {
+      bot: async () => bot,
+      summaryOf: async () => { throw new Error("not used"); },
+      executeIdempotent: async (scope, _input, action) => {
+        if (ledger.has(scope.key)) return ledger.get(scope.key) as never;
+        try {
+          const result = await action();
+          ledger.set(scope.key, result);
+          return result;
+        } catch (error) {
+          // The real ledger forgets a refusal that never ran and surfaces its cause.
+          if (error instanceof AidenOperationNotExecutedError) throw error.cause;
+          throw error;
+        }
+      },
+    },
+    runtime: async () => ({}) as never,
+    issues,
+    projectorIdleMs: 60_000,
+  });
+  const app = await fixture({
+    capabilities: ["server:read", "bot:read", "bot:write", "bot:issues"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions,
+  });
+  const post = (key: string | undefined, body: unknown) => ({
+    method: "POST",
+    headers: {
+      ...headers,
+      "content-type": "application/json",
+      ...(key === undefined ? {} : { "idempotency-key": key }),
+    },
+    body: JSON.stringify(body),
+  });
+  try {
+    const url = `${app.base}/bots/bot-1/issues/${ISSUE_ID}/act`;
+    const first = await fetch(url, post("issue-act-request-0001", { action: { kind: "stop_run" } }));
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { result: "done" });
+    // A repeat with the same key replays the receipt; the host action runs once.
+    const replay = await fetch(url, post("issue-act-request-0001", { action: { kind: "stop_run" } }));
+    assert.equal(replay.status, 200);
+    assert.deepEqual(await replay.json(), { result: "done" });
+    assert.deepEqual(calls, [{ botId: "bot-1", issueId: ISSUE_ID, action: "stop_run" }]);
+
+    // not_open is a success.
+    answer = "not_open";
+    const gone = await fetch(url, post("issue-act-request-0002", { action: { kind: "open_chat" } }));
+    assert.equal(gone.status, 200);
+    assert.deepEqual(await gone.json(), { result: "not_open" });
+
+    // An action the card no longer offers records nothing; the same key is
+    // checked again once the card offers it.
+    answer = "invalid";
+    const stale = await fetch(url, post("issue-act-request-0003", { action: { kind: "keep_waiting" } }));
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).error.code, "operation_stale");
+    answer = "done";
+    const retried = await fetch(url, post("issue-act-request-0003", { action: { kind: "keep_waiting" } }));
+    assert.equal(retried.status, 200);
+    assert.deepEqual(await retried.json(), { result: "done" });
+
+    // Unknown kinds, desktop-only settings and a malformed body never reach the host.
+    const before = calls.length;
+    for (const body of [
+      { action: { kind: "surprise" } },
+      { action: { kind: "open_settings", section: "model" } },
+      { action: { kind: "resume_routine" } },
+      { action: { kind: "stop_run" }, extra: true },
+    ]) {
+      const response = await fetch(url, post("issue-act-request-0004", body));
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.equal((await response.json()).error.code, "invalid_request");
+    }
+    assert.equal(calls.length, before);
+
+    // Missing key and capability are refused before anything runs.
+    assert.equal((await fetch(url, post(undefined, { action: { kind: "stop_run" } }))).status, 400);
+    const refused = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: sessions,
+    });
+    try {
+      const response = await fetch(`${refused.base}/bots/bot-1/issues/${ISSUE_ID}/act`, post("issue-act-request-0005", { action: { kind: "stop_run" } }));
+      assert.equal(response.status, 403);
+      assert.equal((await response.json()).error.code, "capability_denied");
+    } finally {
+      await refused.close();
+    }
+    const unwired = await fixture({
+      capabilities: ["server:read", "bot:read", "bot:write", "bot:issues"],
+      acceptsBotCapabilities: true,
+      deviceType: "iphone",
+      botSessions: recordingHandoffSessions([], true),
+    });
+    try {
+      const response = await fetch(`${unwired.base}/bots/bot-1/issues/${ISSUE_ID}/act`, post("issue-act-request-0006", { action: { kind: "stop_run" } }));
+      assert.equal(response.status, 404);
+      assert.equal((await response.json()).error.code, "not_found");
+    } finally {
+      await unwired.close();
+    }
+  } finally {
+    await app.close();
+    await sessions.close();
+  }
+});
+
+test("a Bot routine link needs no device credential, answers with no body, and never opens other routes", async () => {
+  const seen: Array<{ token: string; contentType?: string; body: string }> = [];
+  const app = await fixture({
+    authenticate: "invalid",
+    botRoutineWebhook: async (request) => {
+      seen.push({ token: request.token, contentType: request.contentType, body: new TextDecoder().decode(request.body) });
+      return { status: 202 };
+    },
+  });
+  try {
+    const token = "A".repeat(43);
+    const accepted = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "ping" });
+    assert.equal(accepted.status, 202);
+    assert.equal(await accepted.text(), "");
+    assert.deepEqual(seen, [{ token, contentType: "text/plain", body: "ping" }]);
+    const get = await fetch(`${app.base}/hooks/bot-routines/${token}`);
+    assert.equal(get.status, 405);
+    const tooLarge = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "x".repeat(17_000) });
+    assert.equal(tooLarge.status, 413);
+    const server = await fetch(`${app.base}/server`, { headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1" } });
+    assert.notEqual(server.status, 200, "a routine token is not a device credential");
+    const logged = JSON.stringify(app.logs);
+    assert.ok(!logged.includes(token), "the token never reaches the log");
+  } finally {
+    await app.close();
   }
 });
 

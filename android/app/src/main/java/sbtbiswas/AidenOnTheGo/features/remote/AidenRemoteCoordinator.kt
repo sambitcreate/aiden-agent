@@ -112,11 +112,18 @@ internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: 
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
 
 /**
- * Revision 43: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
+ * Revision 44: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
  * of its own after `schedule:cards`, unless [installation] already holds it.
  */
 internal fun aidenShouldRequestBotImages(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
+
+/**
+ * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
+ * in a call of its own after every other negotiation, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
@@ -163,7 +170,7 @@ internal suspend fun aidenRequestScheduleCards(
     )
 
 /**
- * Revision 43: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
+ * Revision 44: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
  * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its Bots'
  * shared images then read as a line that says to open the chat on the Mac.
  */
@@ -175,6 +182,23 @@ internal suspend fun aidenRequestBotImages(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestBotImages(server, installation)) listOf(AidenRemoteCapability.BOT_IMAGES) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 42: asks [server] for `bot:issues` alone, exactly as
+ * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; the Bot chat then shows no issue cards.
+ */
+internal suspend fun aidenRequestBotIssues(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotIssues(server, installation)) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList(),
         client,
         stillCurrent
     )
@@ -506,13 +530,22 @@ class AidenRemoteCoordinator(
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
                 )
-                // Revision 43: `bot:images` goes alone too, after the schedule card.
-                val negotiatedServer = negotiateSoloCapability(
+                // Revision 44: `bot:images` goes alone too, after the schedule card.
+                val imagesServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = scheduleCardsServer,
                     request = ::aidenRequestBotImages
+                )
+                // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
+                // name never costs this phone its other grants.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = imagesServer,
+                    request = ::aidenRequestBotIssues
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
@@ -596,7 +629,7 @@ class AidenRemoteCoordinator(
 
     /**
      * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
-     * `schedule:cards`, revision 43 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
+     * `schedule:cards`, revision 44 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
      * only that the Mac can't grant it; the pairing carries on with what it has.
      */
     private suspend fun negotiateSoloCapability(

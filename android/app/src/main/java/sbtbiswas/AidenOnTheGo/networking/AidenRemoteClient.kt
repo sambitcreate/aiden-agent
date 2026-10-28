@@ -1715,6 +1715,28 @@ class AidenRemoteClient(
         }
     }
 
+    /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
+    suspend fun actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ): AidenBotIssueActReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenRemoteIssueWire.validateId(issueId, "issueId")
+        return executeRequest(
+            "/bots/$botId/issues/$issueId/act",
+            method = "POST",
+            bodyJson = json.encodeToString(AidenBotIssueActRequest.serializer(), request),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botIssues")
+        ) { bytes ->
+            decodeBotWire(AidenBotIssueActReceipt.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
     private suspend fun botSessionControl(botId: String, action: String, idempotencyKey: UUID): AidenBotSessionStateView {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(
@@ -2090,7 +2112,7 @@ class AidenRemoteClient(
     }
 
     /**
-     * Revision 43 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Revision 44 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
      * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
      * Mac's inline image limit, is accepted.
      */

@@ -1558,7 +1558,7 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 7)
     }
 
-    /// Revision 43: a shared image is read from its session route, and only a
+    /// Revision 44: a shared image is read from its session route, and only a
     /// PNG or JPEG answer with the no-store and nosniff headers is accepted.
     func testBotSessionImageReadsItsRouteAndAcceptsOnlyPNGOrJPEG() async throws {
         let client = makeClient()
@@ -4560,7 +4560,7 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
-    /// Contract revision 43: `bot:images` is asked for alone, after the other
+    /// Contract revision 44: `bot:images` is asked for alone, after the other
     /// opt-ins, only from a Mac that offers it, and a Bot chat reopens its feed
     /// once it is granted.
     @MainActor

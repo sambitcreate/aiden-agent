@@ -1,6 +1,7 @@
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
+import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
 import { AIDEN_REMOTE_PROVIDER_CREATE_FEATURE, type AidenRemoteProviderService } from "./aiden-remote-providers.js";
 import { AidenRemoteTtsService, REMOTE_TTS_FEATURE } from "./aiden-remote-tts.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -43,6 +44,7 @@ import {
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
   AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
+  AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
@@ -76,6 +78,7 @@ import {
   parseAidenRemoteJson,
   parseAidenRemoteQuestionRespondRequest,
   type AidenRemoteBotDetail,
+  type AidenRemoteBotSummary,
   type AidenRemoteCapability,
   type AidenRemoteProgressCapability,
   type AidenRemoteBotConversationQuery,
@@ -171,6 +174,11 @@ type AidenRemoteRouterDeviceRegistry = {
 };
 
 export interface AidenRemoteRouterDependencies {
+  /**
+   * A Bot event routine's link (spec 2026-10-27 §6 P1). Unauthenticated
+   * except for the token in the path; absent, the route is `not_found`.
+   */
+  botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
   instanceId: string;
   displayName(): string;
   appVersion: string;
@@ -326,9 +334,12 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
-        // Contract revision 43 (`bot:images`).
+        // Contract revision 44 (`bot:images`).
         | "sharedImage"
         | "supportsSharedImages"
+        // Contract revision 42 (`bot:issues`).
+        | "actIssue"
+        | "supportsIssues"
       >
     >;
   /**
@@ -400,6 +411,7 @@ export type AidenRemoteRouteLabel =
   | "botHandoffAnswer"
   | "botHandoffOpenOnMac"
   | "botPause"
+  | "botIssueAct"
   | "botRoutines"
   | "botConnectionRequests"
   | "botMemory"
@@ -462,11 +474,13 @@ export type AidenRemoteRouteLabel =
   | "runApprovalRespond"
   | "runQuestionRespond"
   | "runInputs"
+  | "botRoutineWebhook"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
 export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
+  botRoutineWebhook: ["/hooks/bot-routines/:token"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
   pairingRequests: ["/pairing/requests"],
@@ -491,6 +505,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
   botPause: ["/bots/:botId/pause"],
+  botIssueAct: ["/bots/:botId/issues/:issueId/act"],
   botRoutines: ["/bots/:botId/routines", "/bots/:botId/routines/:routineId"],
   botConnectionRequests: ["/bots/:botId/connection-requests"],
   botMemory: ["/bots/:botId/memory", "/bots/:botId/memory/edits"],
@@ -803,6 +818,23 @@ function writeError(
     },
   };
   writeJson(response, error.status, envelope);
+}
+
+const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
+
+/** The raw body, or undefined once it passes `maximumBytes`. */
+async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
+  const declared = request.headers["content-length"];
+  if (typeof declared === "string" && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) return undefined;
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maximumBytes) return undefined;
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readJsonBody(
@@ -1773,13 +1805,13 @@ function holdsBotHandoffNotes(
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
 }
 
-/** Revision 43: shared-image entries and their byte route ship together, or not at all. */
+/** Revision 44: shared-image entries and their byte route ship together, or not at all. */
 function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
   const sessions = dependencies.botSessions;
   return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
 }
 
-/** Whether this device is sent `shared_image` entries (revision 43). */
+/** Whether this device is sent `shared_image` entries (revision 44). */
 function holdsBotImages(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
@@ -1797,6 +1829,47 @@ function requireBotHandoffs(
   }
   requireDeviceCapabilities(device, ["bot:read", "bot:handoffs"]);
   return dependencies.botSessions!;
+}
+
+/**
+ * Revision 42: the issue act route and the holder projection ship together,
+ * or not at all.
+ */
+function botIssuesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsIssues === true && typeof sessions.actIssue === "function";
+}
+
+/** Whether this device is sent revision-42 issue shapes. */
+function holdsBotIssues(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:issues") && botIssuesWired(dependencies);
+}
+
+/** A revision-42 route: not_found where unwired, capability_denied without `bot:issues`. */
+function requireBotIssues(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): NonNullable<AidenRemoteRouterDependencies["botSessions"]> {
+  if (!botIssuesWired(dependencies)) {
+    throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+  }
+  requireDeviceCapabilities(device, ["bot:read", "bot:issues"]);
+  return dependencies.botSessions!;
+}
+
+/** One Bot summary as this device reads it: `paused` (revision 37) and `issueCount` (revision 42). */
+function botSummaryForAudience(
+  summary: AidenRemoteBotSummary,
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): AidenRemoteBotSummary {
+  return projectBotSummaryIssuesForAudience(
+    projectBotSummaryForAudience(summary, { handoffs: holdsBotHandoffs(device, dependencies) }),
+    { issues: holdsBotIssues(device, dependencies) },
+  );
 }
 
 /** Revision 33: uploads, removals and `attachmentIds` ship together, or not at all. */
@@ -1820,7 +1893,10 @@ function writeBotDetail(
   device: AidenRemoteRouterAuthenticatedDevice,
   dependencies: AidenRemoteRouterDependencies,
 ): void {
-  const projected = projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) });
+  const projected = projectBotSummaryIssuesForAudience(
+    projectBotDetailForAudience(detail, { handoffs: holdsBotHandoffs(device, dependencies) }),
+    { issues: holdsBotIssues(device, dependencies) },
+  );
   if (device.capabilities.has("bot:activity")) {
     writeJson(response, status, projected);
     return;
@@ -1850,9 +1926,13 @@ function advertisedServerCapabilities(
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
       : []),
-    // Revision 43: offered only while shared images and their route are wired.
+    // Revision 44: offered only while shared images and their route are wired.
     ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
       ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
+      : []),
+    // Revision 42: offered only while the issue act route is wired.
+    ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
@@ -2021,6 +2101,30 @@ export function createAidenRemoteRequestHandler(
         );
         return device;
       };
+      const webhookMatch = /^\/hooks\/bot-routines\/([A-Za-z0-9_-]{20,100})$/u.exec(path);
+      if (webhookMatch) {
+        route = "botRoutineWebhook";
+        // No body says whether a link exists: an unwired host is a plain 404.
+        if (!dependencies.botRoutineWebhook) {
+          response.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" }).end();
+          return;
+        }
+        requireNoQuery(query);
+        const body = await readRawBody(request, BOT_ROUTINE_WEBHOOK_MAX_BYTES);
+        const answer = body === undefined
+          ? { status: 413 }
+          : await dependencies.botRoutineWebhook({
+            token: webhookMatch[1]!,
+            ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
+            body,
+          });
+        response.writeHead(answer.status, { "cache-control": "no-store" }).end();
+        return;
+      }
       if (request.method === "GET" && path === "/health") {
         route = "health";
         const detail = healthDetailQuery(query);
@@ -2246,9 +2350,14 @@ export function createAidenRemoteRequestHandler(
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
-            // Revision 43: an opt-in to shared-image entries, offered only while their route is wired.
+            // Revision 44: an opt-in to shared-image entries, offered only while their route is wired.
             if (!botImagesWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 42: an opt-in to issue cards, offered only while their route is wired.
+            if (!botIssuesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot issues are unavailable on this Aiden installation.", 404);
             }
           } else if ((AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
@@ -2326,10 +2435,9 @@ export function createAidenRemoteRequestHandler(
         }
         requireNoQuery(query);
         const list = await dependencies.bots.list();
-        const audience = { handoffs: holdsBotHandoffs(device, dependencies) };
         writeJson(response, 200, {
           ...list,
-          bots: list.bots.map((summary) => projectBotSummaryForAudience(summary, audience)),
+          bots: list.bots.map((summary) => botSummaryForAudience(summary, device, dependencies)),
         });
         return;
       }
@@ -2520,7 +2628,7 @@ export function createAidenRemoteRequestHandler(
         const result = await botSessionsOrNotFound(dependencies).createFromPreset(device.id, key, body);
         writeJson(response, result.created ? 201 : 200, {
           ...result,
-          bot: projectBotSummaryForAudience(result.bot, { handoffs: holdsBotHandoffs(device, dependencies) }),
+          bot: botSummaryForAudience(result.bot, device, dependencies),
         });
         return;
       }
@@ -2541,6 +2649,7 @@ export function createAidenRemoteRequestHandler(
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
             images: holdsBotImages(device, dependencies),
+            issues: holdsBotIssues(device, dependencies),
           }),
         );
         return;
@@ -2564,6 +2673,7 @@ export function createAidenRemoteRequestHandler(
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
             images: holdsBotImages(device, dependencies),
+            issues: holdsBotIssues(device, dependencies),
           },
         );
         return;
@@ -2712,6 +2822,22 @@ export function createAidenRemoteRequestHandler(
         );
         return;
       }
+      const botIssueActMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/issues\/([A-Za-z0-9._:-]{1,160})\/act$/u.exec(path);
+      if (botIssueActMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "botIssueAct";
+        const body = await readJsonBody(request);
+        const device = await authenticate(request, dependencies.devices, "bot:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const sessions = requireBotIssues(device, dependencies);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await sessions.actIssue!(device.id, botIssueActMatch[1]!, botIssueActMatch[2]!, key, body),
+        );
+        return;
+      }
       const botPauseMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/pause$/u.exec(path);
       if (botPauseMatch && (request.method === "POST" || request.method === "DELETE")) {
         requireNoQuery(query);
@@ -2832,7 +2958,9 @@ export function createAidenRemoteRequestHandler(
         writeJson(
           response,
           200,
-          await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined),
+          await botSessionFeature(dependencies, "routineNotificationFeed")(params.get("since") ?? undefined, {
+            issues: holdsBotIssues(device, dependencies),
+          }),
         );
         return;
       }

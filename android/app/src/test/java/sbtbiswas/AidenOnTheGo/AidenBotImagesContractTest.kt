@@ -33,7 +33,7 @@ import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import java.time.Instant
 
 /**
- * Contract revision 43, `bot:images`: an image a Bot shared reaches a phone that holds the grant
+ * Contract revision 44, `bot:images`: an image a Bot shared reaches a phone that holds the grant
  * as a `shared_image` entry without its bytes, which the phone reads from the Bot's session
  * route. Every other device reads the same entry as an assistant line.
  */
@@ -78,7 +78,7 @@ class AidenBotImagesContractTest {
 
     @Test
     fun theFixtureIsAtRevision41AndNamesTheGrant() {
-        assertTrue(fixture.getValue("contractRevision").jsonPrimitive.content.toInt() >= 43)
+        assertTrue(fixture.getValue("contractRevision").jsonPrimitive.content.toInt() >= 44)
         assertEquals(AidenRemoteCapability.BOT_IMAGES, AidenRemoteCapability(botImages.getValue("capability").jsonPrimitive.content))
         assertTrue(AidenRemoteCapability.NEGOTIABLE.contains(AidenRemoteCapability.BOT_IMAGES))
     }

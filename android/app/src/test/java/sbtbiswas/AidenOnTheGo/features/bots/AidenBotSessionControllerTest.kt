@@ -521,7 +521,7 @@ class AidenBotSessionControllerTest {
     }
 
     /**
-     * Revision 43: an image the Bot shared is read from the Mac when it is drawn, once while the
+     * Revision 44: an image the Bot shared is read from the Mac when it is drawn, once while the
      * chat is open; a failed read is tried again, and an id the transcript doesn't hold is never asked for.
      */
     @Test
@@ -552,7 +552,7 @@ class AidenBotSessionControllerTest {
     }
 
     /**
-     * Revision 43: shared images stay within a byte budget. The oldest drawn image is dropped and
+     * Revision 44: shared images stay within a byte budget. The oldest drawn image is dropped and
      * read again when it is drawn next; an image the transcript no longer shows is dropped; closing
      * the chat lets every image go.
      */
