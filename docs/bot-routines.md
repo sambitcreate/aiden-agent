@@ -11,3 +11,17 @@ Before advancing a Bot routine, Aiden saves the fire's time, request ID, and ori
 The Bot chat and routine run history keep completed answers. Desktop banners are best effort: a crash after the run is saved can prevent its banner from appearing. Telegram delivery is queued durably when a Bot is bound to a chat; an uncertain send gets one duplicate-labelled retry, after which the outbox records a delivery failure rather than sending repeatedly. The answer remains available in the Bot chat and paired phone's routine feed.
 
 The desktop app must be running and the computer awake for a routine to run on time. If the Bot has an interrupted turn, a routine never resumes that turn itself; Aiden records the missed fire and can catch up after the person resumes the turn. This includes a one-time routine whose scheduled fire has already switched it off; that exact missed fire can still run once within the seven-day catch-up window. If the person pauses the whole Bot, new fires are skipped without automatic catch-up. A fire already admitted to Pi remains pending until the Bot resumes so Aiden can observe its answer without resubmission. Ordinary scheduled tasks are separate from Bot routines and use their own chats and approval settings.
+
+## When a routine fails
+
+Desktop Bots heal their own routines (spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §5).
+
+- **Why it failed.** Every failed run records a kind: temporary (the AI service was unreachable or busy), sign-in, access changed, model setup, a step that didn't work, stalled, or other. The provider's message is kept, with credentials redacted.
+- **Retries.** A temporary failure, or a run the watchdog stopped because it made no progress for 10 minutes, is tried again 5 minutes later and then 20 minutes after that, unless the routine's next regular fire comes first. A retry is saved like any claimed fire, so it survives a restart and still runs for a one-time routine.
+- **Needs you.** A sign-in, access or model problem raises one "Needs you" card at once, in the Bot's chat, in the sidebar, as a Mac notification and in Telegram. Phones that negotiate `bot:issues` show the same card.
+- **Pause after three.** Three failed fires in a row of the same kind pause the routine and leave one card with Resume. A success resolves the routine's cards.
+- **Before a fire.** About 30 minutes before each enabled routine fires, Aiden checks the Bot once: its state, its model setting (repaired when only the stored details went stale), its AI sign-in (refreshed early), the connections a Custom grant names, and its Bot computer (read only; nothing is started). A problem becomes a card; a later passing check resolves it. Profile → Health shows the newest check and offers Check now.
+- **A reply that claims a failed step worked.** The result still reaches the person, with the line "One step didn't work: {step}. Check the chat.", and it counts toward the pause.
+- **Stuck runs the person started.** They are never stopped automatically. After 10 minutes without progress, a card asks Stop or Keep waiting.
+
+The standalone CLI records failure kinds but does not yet retry, pause routines, run pre-fire checks or raise cards.
