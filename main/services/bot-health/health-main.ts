@@ -97,6 +97,7 @@ let onResume: (() => void) | undefined;
 export function startBotHealth(): void {
   if (preflight) return;
   void import("../bot-delivery/funnel-main.js").then(({ startBotDeliveryFlush }) => startBotDeliveryFlush());
+  void import("../bot-routine-events/sources-main.js").then(({ startBotEventRoutines }) => startBotEventRoutines());
   preflight = createBotRoutinePreflight({
     routines: () => scheduleStore.list(),
     run: (botId, routineId, signal) => runBotHealthChecks(botId, checks, { trigger: "pre_fire", routineId, signal, now: Date.now }),
@@ -127,6 +128,7 @@ export function startBotHealth(): void {
 
 export function stopBotHealth(): void {
   void import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush());
+  void import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines());
   preflight?.dispose();
   preflight = undefined;
   if (rearmTimer) clearInterval(rearmTimer);

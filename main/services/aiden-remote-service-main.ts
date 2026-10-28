@@ -465,6 +465,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
+    botRoutineWebhook: async (request) =>
+      (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
     workspaceApi: async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(

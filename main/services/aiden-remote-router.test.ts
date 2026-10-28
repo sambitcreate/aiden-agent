@@ -108,6 +108,7 @@ async function fixture(options: {
   pausedBot?: boolean;
   /** Contract revision 41: the Bot service's holder view carries `issueCount`. */
   botIssueCount?: number;
+  botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -1044,6 +1045,7 @@ async function fixture(options: {
           },
         }
       : {}),
+    ...(options.botRoutineWebhook ? { botRoutineWebhook: options.botRoutineWebhook } : {}),
   };
   const handler = createAidenRemoteRequestHandler(dependencies);
   const server = createServer(handler);
@@ -3895,6 +3897,8 @@ function concreteRequestPath(template: string): string {
         case ":segment":
         case ":offset":
           return "0";
+        case ":token":
+          return "t".repeat(43);
         case ":attachmentName":
           return `x${parameterIndex}.png`;
         case ":action":
@@ -6442,5 +6446,33 @@ test("the issue act route runs one action per key, answers not_open, and refuses
   } finally {
     await app.close();
     await sessions.close();
+  }
+});
+
+test("a Bot routine link needs no device credential, answers with no body, and never opens other routes", async () => {
+  const seen: Array<{ token: string; contentType?: string; body: string }> = [];
+  const app = await fixture({
+    authenticate: "invalid",
+    botRoutineWebhook: async (request) => {
+      seen.push({ token: request.token, contentType: request.contentType, body: new TextDecoder().decode(request.body) });
+      return { status: 202 };
+    },
+  });
+  try {
+    const token = "A".repeat(43);
+    const accepted = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "ping" });
+    assert.equal(accepted.status, 202);
+    assert.equal(await accepted.text(), "");
+    assert.deepEqual(seen, [{ token, contentType: "text/plain", body: "ping" }]);
+    const get = await fetch(`${app.base}/hooks/bot-routines/${token}`);
+    assert.equal(get.status, 405);
+    const tooLarge = await fetch(`${app.base}/hooks/bot-routines/${token}`, { method: "POST", headers: { "content-type": "text/plain" }, body: "x".repeat(17_000) });
+    assert.equal(tooLarge.status, 413);
+    const server = await fetch(`${app.base}/server`, { headers: { authorization: `Bearer ${token}`, "aiden-protocol-version": "1" } });
+    assert.notEqual(server.status, 200, "a routine token is not a device credential");
+    const logged = JSON.stringify(app.logs);
+    assert.ok(!logged.includes(token), "the token never reaches the log");
+  } finally {
+    await app.close();
   }
 });

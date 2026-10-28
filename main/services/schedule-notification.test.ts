@@ -250,6 +250,13 @@ async function executionHarness(
   // external relative specifier as written, so both spellings reach one port.
   ports["../../platform.js"] = ports["../platform.js"];
   ports["../app-navigation.js"] = ports["./app-navigation.js"];
+  // The delivery gate reads the Bot's interruption settings; quiet hours off
+  // and a high limit keep these tests independent of the time of day.
+  ports["../bot-store.js"] = {
+    botStore: {
+      get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
+    },
+  };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -301,7 +308,7 @@ async function executionHarness(
             }
             if (
               args.importer.endsWith("/bot-delivery/funnel-main.ts") &&
-              (args.path === "../../platform.js" || args.path === "../app-navigation.js")
+              (args.path === "../../platform.js" || args.path === "../app-navigation.js" || args.path === "../bot-store.js")
             ) {
               return { path: args.path, external: true };
             }

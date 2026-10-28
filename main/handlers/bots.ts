@@ -29,6 +29,7 @@ import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
 import { registerBotIssueHandlers } from "./bot-issues.js";
 import { registerBotHealthHandlers } from "./bot-health.js";
+import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
 import { botHealthReports } from "../services/bot-health/health-main.js";
 import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
@@ -220,6 +221,27 @@ export function registerBotHandlers(): void {
   registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     issues: botIssues,
+  });
+  // Profile → When something happens: event routines and their links.
+  registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    store: {
+      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId),
+      create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
+      update: async (botId, id, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.update(botId, id, input),
+      remove: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.remove(botId, id),
+      rotateToken: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.rotateToken(botId, id),
+    },
+    linkFor: async (token) => {
+      const { getAidenRemoteService } = await import("../services/aiden-remote-service-main.js");
+      const status = await (await getAidenRemoteService()).status().catch(() => undefined);
+      const base = status?.running ? status.lanEndpoint ?? status.tailscaleEndpoint : undefined;
+      return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
+    },
+    changed: (botId) => {
+      void import("../services/bot-routine-events/sources-main.js").then(({ rearmBotEventRoutines }) => rearmBotEventRoutines());
+      ipcMain.broadcast("bots:changed", { botId });
+    },
   });
   // Profile → Health: the newest check, and Check now.
   registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({

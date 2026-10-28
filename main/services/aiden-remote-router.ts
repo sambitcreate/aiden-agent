@@ -171,6 +171,11 @@ type AidenRemoteRouterDeviceRegistry = {
 };
 
 export interface AidenRemoteRouterDependencies {
+  /**
+   * A Bot event routine's link (spec 2026-10-27 §6 P1). Unauthenticated
+   * except for the token in the path; absent, the route is `not_found`.
+   */
+  botRoutineWebhook?(request: { token: string; contentType?: string; body: Uint8Array }): Promise<{ status: number }>;
   instanceId: string;
   displayName(): string;
   appVersion: string;
@@ -461,11 +466,13 @@ export type AidenRemoteRouteLabel =
   | "runApprovalRespond"
   | "runQuestionRespond"
   | "runInputs"
+  | "botRoutineWebhook"
   | "unknown";
 
 /** Canonical template(s) for every router route label. */
 export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel, readonly string[]>> = {
   health: ["/health"],
+  botRoutineWebhook: ["/hooks/bot-routines/:token"],
   pairingManualBootstrap: ["/pairing/manual-bootstrap"],
   pairingExchange: ["/pairing/exchange"],
   pairingRequests: ["/pairing/requests"],
@@ -801,6 +808,23 @@ function writeError(
     },
   };
   writeJson(response, error.status, envelope);
+}
+
+const BOT_ROUTINE_WEBHOOK_MAX_BYTES = 16_384;
+
+/** The raw body, or undefined once it passes `maximumBytes`. */
+async function readRawBody(request: IncomingMessage, maximumBytes: number): Promise<Uint8Array | undefined> {
+  const declared = request.headers["content-length"];
+  if (typeof declared === "string" && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes)) return undefined;
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += buffer.length;
+    if (bytes > maximumBytes) return undefined;
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 async function readJsonBody(
@@ -2000,6 +2024,30 @@ export function createAidenRemoteRequestHandler(
         );
         return device;
       };
+      const webhookMatch = /^\/hooks\/bot-routines\/([A-Za-z0-9_-]{20,100})$/u.exec(path);
+      if (webhookMatch) {
+        route = "botRoutineWebhook";
+        // No body says whether a link exists: an unwired host is a plain 404.
+        if (!dependencies.botRoutineWebhook) {
+          response.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "POST" }).end();
+          return;
+        }
+        requireNoQuery(query);
+        const body = await readRawBody(request, BOT_ROUTINE_WEBHOOK_MAX_BYTES);
+        const answer = body === undefined
+          ? { status: 413 }
+          : await dependencies.botRoutineWebhook({
+            token: webhookMatch[1]!,
+            ...(typeof request.headers["content-type"] === "string" ? { contentType: request.headers["content-type"] } : {}),
+            body,
+          });
+        response.writeHead(answer.status, { "cache-control": "no-store" }).end();
+        return;
+      }
       if (request.method === "GET" && path === "/health") {
         route = "health";
         const detail = healthDetailQuery(query);

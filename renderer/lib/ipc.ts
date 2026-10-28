@@ -1738,6 +1738,17 @@ export const botsApi = {
         input,
       ),
   },
+  /** Routines that run when something happens: a file change or the routine's link. */
+  eventRoutines: {
+    list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
+    create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string }) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
+    remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
+    rotateLink: (input: { botId: string; id: string }) =>
+      invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+  },
   /** A Bot's health checks: the newest report, and Check now. */
   health: {
     report: (botId: string) =>

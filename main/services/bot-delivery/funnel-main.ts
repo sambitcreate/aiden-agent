@@ -12,6 +12,7 @@ import { BOT_ROUTINE_FAILED_PREVIEW } from "../scheduled-bot-routines.js";
 import { showScheduledNotification } from "../schedule-notification.js";
 import { BOT_DELIVERY_REQUEST_PREFIX, createBotDeliveryFunnel, type BotDeliveryFunnel } from "./funnel.js";
 import { createBotDeliveryGate } from "./gate.js";
+import { botStore } from "../bot-store.js";
 import { resolveBotInterruptions } from "../../../renderer/shared/bots.js";
 import { createBotDeliveryLog } from "./log.js";
 
@@ -31,10 +32,7 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
   return (liveFunnel ??= createBotDeliveryFunnel({
     log: botDeliveryLog,
     gate: createBotDeliveryGate({
-      settings: async (botId) => {
-        const { botStore } = await import("../bot-store.js");
-        return resolveBotInterruptions((await botStore.get(botId))?.interruptions);
-      },
+      settings: async (botId) => resolveBotInterruptions((await botStore.get(botId))?.interruptions),
       // Proactive notifications that reached the person today count; held
       // rows count once they come due, suppressed ones never do.
       sentToday: async (botId, dayStart, now) =>
@@ -43,10 +41,7 @@ export function botDeliveryFunnel(): BotDeliveryFunnel {
           row.suppressed !== true && row.deliverAfter >= dayStart && row.deliverAfter <= now).length,
       timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
-    botName: async (botId) => {
-      const { botStore } = await import("../bot-store.js");
-      return (await botStore.get(botId))?.name;
-    },
+    botName: async (botId) => (await botStore.get(botId))?.name,
     mac: async (input) => {
       // An issue, a digest, or a held routine result sent from the log is the
       // funnel's own banner, following the hand-off notifier: only while no

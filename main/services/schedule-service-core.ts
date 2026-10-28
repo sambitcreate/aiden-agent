@@ -18,7 +18,9 @@ export type ScheduledRunTrigger =
   | { kind: "manual"; key: string }
   | { kind: "catch_up"; missedRunId: string; missedAt: number }
   /** A delayed retry of a failed Bot routine fire, replayed from its pending entry. */
-  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 };
+  | { kind: "retry"; requestId: string; failedRunId: string; attempt: 1 | 2 }
+  /** An event routine's run: what happened, as untrusted data for the Bot. */
+  | { kind: "event"; eventId: string; source: "file_change" | "webhook"; payload: string };
 
 interface ScheduleExecutionLike {
   run(task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger): Promise<ScheduledRun>;
