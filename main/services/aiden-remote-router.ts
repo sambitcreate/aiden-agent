@@ -1799,6 +1799,14 @@ function holdsBotHandoffNotes(
   return device.capabilities.has("bot:handoff-notes") && holdsBotHandoffs(device, dependencies);
 }
 
+/** Whether this device is also told when a hand-off step is on the Bot's own screen (revision 43). */
+function holdsBotHandoffOnMac(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
+}
+
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -2619,6 +2627,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           }),
         );
@@ -2642,6 +2651,7 @@ export function createAidenRemoteRequestHandler(
             activity: device.capabilities.has("bot:activity") && botActivityWired(dependencies),
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
+            handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           },
         );

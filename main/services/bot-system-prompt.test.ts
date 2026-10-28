@@ -104,9 +104,15 @@ test("managed-home rules follow the escaped persona and cannot be replaced by it
   assert.ok(personaEnd >= 0 && workspaceStart > personaEnd);
   assert.match(prompt, /mandatory and override any conflicting bot persona instructions/u);
   assert.match(prompt, /\/Users\/private\/Aiden &amp; Bots\/&lt;reviewer&gt;/u);
-  assert.match(prompt, /Start shell and tool work there/u);
+  assert.match(prompt, /Start your work there/u);
   assert.match(prompt, /create and save ordinary artifacts in the home workspace/u);
-  assert.match(prompt, /File tools may inspect or work in other OS-accessible Mac locations/u);
+  assert.match(prompt, /File tools may inspect or work in other OS-accessible locations on this computer/u);
+  assert.match(prompt, /except Aiden's own settings and Bot data files/u);
+  // Capability honesty comes after the persona, so persona text cannot remove it.
+  const honesty = prompt.indexOf("Authoritative Bot capabilities:");
+  assert.ok(honesty > personaEnd && honesty < workspaceStart);
+  assert.match(prompt, /the provided tool list wins/u);
+  assert.match(prompt, /never try to by editing Aiden's settings or data files/u);
   assert.match(prompt, /files outside the home workspace as user-owned/u);
   assert.match(prompt, /approval and destructive-action rules/u);
   assert.match(prompt, /Do not initialize a Git repository/u);
@@ -147,7 +153,7 @@ test("managed-home rules describe scoped, home-disabled, and file-off authority 
   assert.match(scoped, /only within these host-approved roots/u);
   assert.match(scoped, /<root>\/Users\/private\/Documents &amp; Notes<\/root>/u);
   assert.match(scoped, /<root>\/Volumes\/Team\/&lt;Shared&gt;<\/root>/u);
-  assert.doesNotMatch(scoped, /other OS-accessible Mac locations/u);
+  assert.doesNotMatch(scoped, /other OS-accessible locations/u);
 
   const homeOnly = withBotRuntimeInstructions("Base", bot, managed, {
     mode: "scoped",
@@ -163,7 +169,7 @@ test("managed-home rules describe scoped, home-disabled, and file-off authority 
   });
   assert.match(off, /File tools are unavailable for this turn/u);
   assert.match(off, /Shell availability is governed separately/u);
-  assert.doesNotMatch(off, /other OS-accessible Mac locations/u);
+  assert.doesNotMatch(off, /other OS-accessible locations/u);
 
   for (const approvedRoots of [
     ["relative/root"],

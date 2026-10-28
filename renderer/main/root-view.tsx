@@ -22,6 +22,7 @@ import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
+import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
 import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
@@ -388,6 +389,7 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => subscribeGitQuerySync(queryClient, onNotification), [queryClient]);
+  React.useEffect(() => subscribeWorkspaceFilesSync(queryClient, onNotification), [queryClient]);
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
@@ -518,6 +520,8 @@ function RootContent() {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
       queryClient.invalidateQueries({ queryKey: queryKeys.webSearch }),
+      // The Web pages row reads whether Web Search is on from its own snapshot.
+      queryClient.invalidateQueries({ queryKey: queryKeys.webFetch }),
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
       queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
       queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),

@@ -50,7 +50,7 @@ export function connectCardPending(entries: readonly EntryRecord[], pluginId: st
  */
 export function suggestConnectionCandidate(
   botId: string,
-  deps: Pick<SuggestConnectionDeps, "isConnected" | "isDismissed">,
+  deps: Pick<SuggestConnectionDeps, "isConnected" | "isDismissed" | "botLacksConnection" | "chatLacksConnection">,
 ): BotToolCandidate {
   const unbound = async (): Promise<never> => {
     throw new Error("Suggesting a connection needs a Bot conversation.");

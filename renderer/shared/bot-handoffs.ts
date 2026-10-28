@@ -49,7 +49,12 @@ export interface BotPendingHandoff {
   open?: { url: string };
   /** Sign-in only: the normalized https origin. */
   origin?: string;
-  /** Sign-in only: where the person signs in. Defaults to the Bot's browser. */
+  /**
+   * Where the step happens. A sign-in: where the person signs in (the Bot's
+   * browser when left out). An action: set only when the step is in the
+   * Bot's own browser or on its own computer, so Open brings that forward and
+   * a phone finishes it on the Mac instead of opening the page itself.
+   */
   target?: BotHandoffTarget;
   source: BotHandoffSource;
   /** Set when `source` is "rule". */
