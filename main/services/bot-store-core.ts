@@ -135,6 +135,8 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ...(chatActivity ? { chatActivity } : {}),
     // Also last: an unreadable setting reads as the defaults.
     ...(interruptions ? { interruptions } : {}),
+    // Also last, after interruptions: only "off" is stored.
+    ...(bot.selfWakeUps === false ? { selfWakeUps: false as const } : {}),
   };
   return projected;
 }
@@ -294,6 +296,10 @@ export function createBotStore(options: {
           const keptInterruptions = interruptions ?? bot.interruptions;
           delete bot.interruptions;
           if (keptInterruptions) bot.interruptions = keptInterruptions;
+          // Last of all; only "off" is stored, so a Bot that never changed it stays unchanged.
+          const selfWakeUpsOff = input.selfWakeUps === undefined ? bot.selfWakeUps === false : input.selfWakeUps === false;
+          delete bot.selfWakeUps;
+          if (selfWakeUpsOff) bot.selfWakeUps = false;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));
         });

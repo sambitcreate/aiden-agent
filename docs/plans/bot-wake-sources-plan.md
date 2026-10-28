@@ -31,6 +31,7 @@ Read from `NousResearch/hermes-agent` on 2026-10-28 (product reference, no copie
    - Offered only in turns the person started. A routine, event or wake-up run cannot set one, which keeps Hermes-style loop prevention; repeated checking belongs to step 3.
    - Fires go through the existing one-time routine claim, recovery and delivery funnel, so quiet hours, the daily limit, pause and `[SILENT]` apply.
    - The person sees each pending wake-up (with Cancel) in the chat and the Bot's routines, and can switch the tool off per Bot.
+   - Implemented on `feature/bot-self-wake` (2026-10-28). The tool lives in `main/services/bot-wake-ups/`. A wake-up is a one-time Bot routine with a `wakeUp` marker, hidden once spent. The per-Bot switch (Advanced → Chat, default on) cancels pending wake-ups when turned off. No Remote revision: phones see a one-time routine named Wake-up.
 3. **Watch routines** (`feature/bot-watch-routines`).
    - A `watch` event trigger: a bounded HTTPS GET or a script in the Bot's folder, checked every N minutes (at least 5).
    - The output is hashed, and the Bot is woken only when it changes, with a bounded diff as the event payload. The first check records a baseline.

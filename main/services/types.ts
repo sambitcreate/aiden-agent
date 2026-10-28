@@ -568,6 +568,8 @@ export interface ScheduledTask {
   routineSchedule?: BotRoutineSchedule;
   /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
   sourceProposalId?: string;
+  /** Main-owned: a one-time routine the Bot set for itself with `wake_up`, not one the person made. Set once. */
+  wakeUp?: BotWakeUpMarker;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -623,7 +625,14 @@ export interface ScheduledTaskInput {
   routineSchedule?: BotRoutineSchedule;
   /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
   sourceProposalId?: string;
+  /** Main-owned: the Bot set this one-time routine for itself (`wake_up`). Set once, at creation. */
+  wakeUp?: BotWakeUpMarker;
   notify?: boolean;
+}
+
+/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
+export interface BotWakeUpMarker {
+  setAt: number;
 }
 
 export interface ScheduledTaskSettings {

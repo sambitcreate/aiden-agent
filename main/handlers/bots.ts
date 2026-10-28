@@ -305,8 +305,15 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });
-  ipcMain.handle("bots:update", async (_event, input: unknown) => {
-    return botApplicationService.updateBot(parseBotUpdate(input));
+  ipcMain.handle("bots:update", async (_event, raw: unknown) => {
+    const input = parseBotUpdate(raw);
+    const updated = await botApplicationService.updateBot(input);
+    // Turning "Let <Bot> set its own wake-ups" off also cancels the ones still pending.
+    if (input.selfWakeUps === false) {
+      const { botWakeUps } = await import("../services/bot-wake-ups/wake-ups-main.js");
+      await botWakeUps.cancelAll(updated.id);
+    }
+    return updated;
   });
   registerBotTelegramHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

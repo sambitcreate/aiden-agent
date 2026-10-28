@@ -194,6 +194,8 @@ export type BotTranscriptEntry =
       at?: number;
     }
   | { id: string; type: "memory_tidy"; changeId?: string; at?: number }
+  /** A wake-up the Bot set for itself (`wake_up`); the chip reads from the Bot's routines whether it is still waiting. */
+  | { id: string; type: "wake_up"; wakeUpId: string; fireAt: number; at?: number }
   /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
   | {
       id: string;
