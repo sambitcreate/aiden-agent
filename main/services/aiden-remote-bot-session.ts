@@ -679,18 +679,25 @@ interface Audience {
   handoffs: boolean;
   /** `bot:handoff-notes` beside it: a card that takes no note says so (revision 40). */
   notes: boolean;
+  /** `bot:handoff-on-mac` beside it: a step on the Bot's own screen says so (revision 43). */
+  onMac: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
 }
 
 /**
  * A hand-off as `audience` reads it: `takesNote` only for a device that holds
- * `bot:handoff-notes`. v0.61.0 holds `bot:handoffs` and rejects the key.
+ * `bot:handoff-notes`, and `onMac` only for one that holds
+ * `bot:handoff-on-mac`. Earlier decoders are closed and reject the keys.
  */
 function handoffForAudience(handoff: AidenRemoteBotHandoff | null, audience: Audience): AidenRemoteBotHandoff | null {
-  if (handoff === null || audience.notes || handoff.takesNote === undefined) return handoff;
-  const { takesNote: _takesNote, ...card } = handoff;
-  return card;
+  if (handoff === null) return handoff;
+  const { takesNote, onMac, ...card } = handoff;
+  return {
+    ...card,
+    ...(takesNote !== undefined && audience.notes ? { takesNote } : {}),
+    ...(onMac !== undefined && audience.onMac ? { onMac } : {}),
+  };
 }
 
 interface Subscriber extends Audience {
@@ -914,7 +921,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.issues}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.issues}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -1459,7 +1466,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; issues?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; issues?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -2053,6 +2060,7 @@ export class AidenRemoteBotSessionService {
       activity: options.activity === true && this.supportsActivity,
       handoffs: options.handoffs === true && this.supportsHandoffs,
       notes: options.handoffs === true && options.handoffNotes === true && this.supportsHandoffs,
+      onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
       issues: options.issues === true && this.supportsIssues,
     };
   }

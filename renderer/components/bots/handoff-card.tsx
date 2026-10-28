@@ -13,11 +13,17 @@
 // control, and the Bot's computer tools wait until the card is answered (a
 // program it left running in the guest is the limit; docs/bot-computers.md).
 //
+// A step on the Bot's own screen (an action with `target`) offers "Open in
+// Ada's browser" or "Open Ada's computer": the page opens there, never in the
+// person's own browser.
+//
 // A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
 // sign-in happens in its own browser over there, so that card offers
-// "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in.
+// "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in. A
+// step on its screen over there (`onMac`, Remote contract revision 43) offers
+// "Finish on <Mac>", Skip and Done.
 
-import { ExternalLink, Laptop, LogIn, Monitor } from "lucide-react";
+import { ExternalLink, Globe, Laptop, LogIn, Monitor } from "lucide-react";
 import { BotAvatar } from "../bot-avatar";
 import { Button } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
@@ -37,7 +43,20 @@ type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" |
   Pick<Partial<BotPendingHandoff>, "origin" | "target"> & {
     /** A paired Mac's card that takes no note (Remote contract revision 40). */
     takesNote?: boolean;
+    /** A paired Mac’s step on the Bot’s own screen there (Remote contract revision 43). */
+    onMac?: boolean;
   };
+
+/** An action on the Bot's own browser or computer, here or on its other Mac. */
+function onBotScreen(handoff: ShownHandoff): boolean {
+  return handoff.kind === "action" && (handoff.target !== undefined || handoff.onMac === true);
+}
+
+/** An action's Open on the Bot's own screen: "Open in Ada's browser" or "Open Ada's computer". */
+export function handoffScreenOpenLabel(name: string | undefined, target: "browser" | "computer"): string {
+  if (target === "computer") return name ? `Open ${name}’s computer` : "Open the computer";
+  return name ? `Open in ${name}’s browser` : "Open in the Bot’s browser";
+}
 
 function onComputer(handoff: Pick<ShownHandoff, "kind" | "target">): boolean {
   return handoff.kind === "sign_in" && handoff.target === "computer";
@@ -105,6 +124,11 @@ export function HandoffActions({
 }) {
   const signIn = handoff.kind === "sign_in";
   const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  const done = (
+    <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+      Done
+    </Button>
+  );
   const skip = (
     <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
       Skip
@@ -137,6 +161,30 @@ export function HandoffActions({
       </>
     );
   }
+  if (onBotScreen(handoff) && finishOn !== undefined) {
+    return (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
+          <Laptop aria-hidden="true" />
+          {`Finish on ${finishOn}`}
+        </Button>
+        {skip}
+        {done}
+      </>
+    );
+  }
+  if (onBotScreen(handoff) && handoff.target !== undefined) {
+    return (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
+          {handoff.target === "computer" ? <Monitor aria-hidden="true" /> : <Globe aria-hidden="true" />}
+          {handoffScreenOpenLabel(name, handoff.target)}
+        </Button>
+        {skip}
+        {done}
+      </>
+    );
+  }
   return (
     <>
       {handoff.open ? (
@@ -146,9 +194,7 @@ export function HandoffActions({
         </Button>
       ) : null}
       {skip}
-      <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
-        Done
-      </Button>
+      {done}
     </>
   );
 }
@@ -208,7 +254,17 @@ export function HandoffCard({
     >
       {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
       {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
-      {host ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
+      {host && !onBotScreen(handoff) ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
+      {onBotScreen(handoff) && finishOn === undefined && handoff.target !== undefined ? (
+        <p className="mt-1 text-tertiary">
+          {handoff.target === "computer"
+            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer.`
+            : `Opens in ${name}’s own browser${host ? ` at ${host}` : ""}, not in yours.`}
+        </p>
+      ) : null}
+      {onBotScreen(handoff) && finishOn !== undefined ? (
+        <p className="mt-1 text-tertiary">{`This step is on ${name}’s own screen on ${finishOn}.`}</p>
+      ) : null}
       {!signIn && botHandoffTakesNote(handoff) ? (
         <p className="mt-1 text-tertiary">{`${name} reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat.`}</p>
       ) : null}

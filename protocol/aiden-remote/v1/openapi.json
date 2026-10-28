@@ -2390,7 +2390,7 @@
           "bot:write",
           "bot:handoffs"
         ],
-        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in the Bot's own browser. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
+        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in, or (contract revision 43) a step on the Bot's own browser or computer, that browser or computer. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -7378,6 +7378,7 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7419,6 +7420,7 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7543,7 +7545,7 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
             "maxItems": 16,
             "items": {
@@ -7563,6 +7565,7 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7613,6 +7616,7 @@
                 "bot:activity",
                 "bot:handoffs",
                 "bot:handoff-notes",
+                "bot:handoff-on-mac",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -17321,6 +17325,10 @@
           "takesNote": {
             "description": "Contract revision 40, only for devices that also hold bot:handoff-notes: present, and false, only on a card whose answer may carry no note (one the Bot's password-or-code rule opened). Clients hide the note box for it; a note with its answer is 400 invalid_request whether or not the device was told.",
             "const": false
+          },
+          "onMac": {
+            "description": "Contract revision 43, only for devices that also hold bot:handoff-on-mac: present, and true, only on an action card whose step is on the Bot's own browser or computer. Such a card never carries open for any device; clients offer Finish on your Mac (POST /bots/{botId}/handoffs/{waitId}/open-on-mac), which brings the Bot's chat and its browser or computer forward on the Mac, beside Skip and Done.",
+            "const": true
           }
         },
         "additionalProperties": false
