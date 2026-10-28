@@ -9,7 +9,7 @@ export const BOT_WAKE_SOURCES: readonly string[] = [
   "A dated follow-up the memory review noted from a promise in the conversation.",
   "A wait resolving: an approval card answered, a hand-off finished, or a connection set up.",
   // Self wake-ups (Step 2) go here.
-  // Watch routines (Step 3) go here.
+  "A watch routine, proposed the same way: Aiden checks a web address or a script in your folder on an interval without you, and wakes you with what changed only when its output differs from the last check.",
 ];
 
 /** The list as prompt lines. */
