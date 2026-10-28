@@ -632,7 +632,8 @@ export function SubagentComposerPill({
             />
           ))}
         </ul>
-        <div className="mt-1 flex shrink-0 items-center gap-1.5 border-t border-separator px-1 pt-1.5">
+        {/* Wraps at narrow widths or large UI fonts, so no action or the shortcut is clipped. */}
+        <div className="mt-1 flex shrink-0 flex-wrap items-center gap-1.5 border-t border-separator px-1 pt-1.5">
           <Button
             variant="muted"
             size="small"
@@ -657,9 +658,8 @@ export function SubagentComposerPill({
               Stop all
             </Button>
           ) : null}
-          <span className="flex-1" />
           {shortcut ? (
-            <span className="text-mini text-tertiary">
+            <span className="ms-auto whitespace-nowrap text-mini text-tertiary">
               Toggle{" "}
               <Kbd>{prettyAccelerator(shortcut)}</Kbd>
             </span>
