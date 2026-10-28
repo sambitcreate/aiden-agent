@@ -84,6 +84,35 @@ test("a chat that already loaded or called an on-demand tool declares it from th
   assert.deepEqual(names(history(LOAD_TOOLS_TOOL_NAME, { names: ["run_anything"] })), ["read_file", LOAD_TOOLS_TOOL_NAME]);
 });
 
+test("the next run declares loaded tools in the same order the last request of the run did", async () => {
+  // Loaded against catalog order: make_schedule first, then render_chart.
+  const tools = [fixtureTool("read_file", "Read."), fixtureTool("render_chart", "Chart."), fixtureTool("make_schedule", "Schedule.")];
+  const loading = createOnDemandTools(tools, ON_DEMAND)!;
+  let lastDeclared: string[] = [];
+  const faux = createFauxCore({ models: [{ id: "m" }] });
+  const step = (message: ReturnType<typeof fauxAssistantMessage>) => (context: { messages: readonly unknown[] }) => {
+    lastDeclared = getCurrentTools(context.messages as never).map(({ name }) => name);
+    return message;
+  };
+  faux.setResponses([
+    step(fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["make_schedule"] })], { stopReason: "toolUse" })),
+    step(fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["render_chart"] })], { stopReason: "toolUse" })),
+    step(fauxAssistantMessage("done")),
+  ]);
+  const agent = new Agent({
+    initialState: { model: faux.getModel(), systemPrompt: "Base", tools: loading.initialTools([]) },
+    streamFn: faux.streamSimple,
+    prepareNextTurnWithContext: async ({ context }) => {
+      const next = await loading.prepare(context);
+      return next === context ? undefined : { context: next };
+    },
+  });
+  await agent.prompt("Plan and chart");
+
+  assert.deepEqual(lastDeclared, ["read_file", LOAD_TOOLS_TOOL_NAME, "make_schedule", "render_chart"]);
+  assert.deepEqual(loading.initialTools(agent.state.messages).map(({ name }) => name), lastDeclared);
+});
+
 test("loading cannot grant a tool the chat was not given, or one a host exclusion removed", async () => {
   const tools = [fixtureTool("read_file", "Read."), fixtureTool("render_chart", "Chart.")];
   const loading = createOnDemandTools(tools, ON_DEMAND)!;

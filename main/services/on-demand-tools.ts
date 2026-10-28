@@ -150,8 +150,9 @@ export function createOnDemandTools(
     loader,
     onDemand,
     initialTools(messages) {
-      const used = new Set(onDemandToolsUsed(messages, available));
-      return [...everyday, loader, ...onDemand.filter((tool) => used.has(tool.name))];
+      // First-use order, the order `prepare` appended them in during earlier
+      // runs, so the declared list (and the provider's cached prefix) stays the same.
+      return [...everyday, loader, ...onDemandToolsUsed(messages, available).map((name) => byName.get(name)!)];
     },
     async prepare(context) {
       const present = new Set(context.tools?.map((tool) => tool.name) ?? []);
