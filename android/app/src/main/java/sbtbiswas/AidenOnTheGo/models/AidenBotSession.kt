@@ -546,6 +546,8 @@ enum class AidenBotHandoffKind(val wireValue: String) {
  * [waitId] through `POST /bots/{botId}/handoffs/{waitId}/answer` with Done or Skip. A sign-in
  * is finished in the Bot's own browser on the Mac, so a phone offers Finish on your Mac and Skip.
  * Revision 40: a card a password-or-code rule opened carries `takesNote: false` ([takesNote]).
+ * Revision 43: a step on the Bot's own browser or computer carries `onMac: true` ([onMac]) and no
+ * `open`, so a phone offers Finish on your Mac beside Skip and Done.
  */
 data class AidenBotHandoff(
     val waitId: String,
@@ -559,7 +561,9 @@ data class AidenBotHandoff(
      * Revision 40: false on a card whose answer may carry no note (a password-or-code rule opened
      * it), so the composer holds instead of sending a code to the Bot as Done's note.
      */
-    val takesNote: Boolean = true
+    val takesNote: Boolean = true,
+    /** Revision 43: the step is on the Bot's own screen on the Mac. */
+    val onMac: Boolean = false
 ) {
     init {
         AidenBotHandoffWire.validateWaitId(waitId, "handoff.waitId")
@@ -576,15 +580,17 @@ data class AidenBotHandoff(
         why?.let { put("why", JsonPrimitive(it)) }
         openUrl?.let { url -> put("open", buildJsonObject { put("url", JsonPrimitive(url)) }) }
         if (!takesNote) put("takesNote", JsonPrimitive(false))
+        if (onMac) put("onMac", JsonPrimitive(true))
     }
 
     companion object {
         private val REQUIRED = setOf("waitId", "kind", "action")
-        private val ALLOWED = REQUIRED + setOf("why", "open", "takesNote")
+        private val ALLOWED = REQUIRED + setOf("why", "open", "takesNote", "onMac")
 
         /**
          * Exact keys, as the Mac's parser reads them: `why`, `open` and `takesNote` may be left
-         * out, never null, and `takesNote` is only ever `false`.
+         * out, never null, and `takesNote` is only ever `false`. `onMac` is only ever `true`, on an
+         * action without `open`.
          */
         fun parse(element: JsonElement): AidenBotHandoff {
             val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("handoff")
@@ -600,6 +606,15 @@ data class AidenBotHandoff(
             }
             val kind = AidenBotHandoffKind.fromWire(string(obj["kind"], "handoff.kind"))
                 ?: throw AidenBotContractException.InvalidField("handoff.kind")
+            val onMac = obj["onMac"]?.let { value ->
+                val flag = value as? JsonPrimitive
+                if (flag == null || flag.isString || flag.content != "true" ||
+                    kind != AidenBotHandoffKind.ACTION || obj.containsKey("open")
+                ) {
+                    throw AidenBotContractException.InvalidField("handoff.onMac")
+                }
+                true
+            } ?: false
             obj["takesNote"]?.let { value ->
                 val flag = value as? JsonPrimitive
                 if (flag == null || flag.isString || flag.content != "false") {
@@ -612,7 +627,8 @@ data class AidenBotHandoff(
                 action = string(obj["action"], "handoff.action"),
                 why = obj["why"]?.let { string(it, "handoff.why") },
                 openUrl = openUrl,
-                takesNote = !obj.containsKey("takesNote")
+                takesNote = !obj.containsKey("takesNote"),
+                onMac = onMac
             )
         }
     }

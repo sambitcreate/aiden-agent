@@ -632,6 +632,7 @@ export function TranscriptEntries({
   onRemoveQueued,
   onConnect,
   onDismissConnection,
+  onAddConnection,
   onOpenFile,
   onReply,
   onRetry,
@@ -656,6 +657,8 @@ export function TranscriptEntries({
   onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection?(pluginId: string): void;
+  /** "Add to this Bot" for an app connected in Aiden but left out of the Bot's access. */
+  onAddConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
@@ -767,6 +770,7 @@ export function TranscriptEntries({
                 card={row.card}
                 onConnect={onConnect}
                 {...(onDismissConnection ? { onDismiss: onDismissConnection } : {})}
+                {...(onAddConnection ? { onAddToBot: onAddConnection } : {})}
                 {...(connectLabel ? { connectLabel } : {})}
                 busy={connecting ?? false}
               />
@@ -923,6 +927,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [hiddenInterruptedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
+  const [addingConnection, setAddingConnection] = React.useState(false);
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
@@ -1324,6 +1329,19 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
+  /** "Add to this Bot": only this tap adds the app to the Bot's access. */
+  const addConnection = async (pluginId: string) => {
+    setAddingConnection(true);
+    try {
+      await botsApi.grantConnection(current.id, pluginId);
+      void qc.invalidateQueries({ queryKey: queryKeys.botAccess(current.id) });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t add that app to this Bot."));
+    } finally {
+      setAddingConnection(false);
+    }
+  };
+
   /**
    * One action on a "Needs you" issue: the service records the answer, and
    * the live transcript settles the card. Open chat is this surface already.
@@ -1479,6 +1497,8 @@ export function BotChatPane({ botId }: { botId: string }) {
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
+          onAddConnection={(pluginId) => void addConnection(pluginId)}
+          connecting={addingConnection}
           onOpenFile={(path) => panel.show("files", { path, botId })}
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}

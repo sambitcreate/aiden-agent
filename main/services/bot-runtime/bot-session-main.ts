@@ -28,12 +28,22 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { aidenConfigDir } from "../aiden-config-dir.js";
+import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
+import {
+  LOCAL_CONFIG_FILENAME,
+  PORTABLE_CONFIG_FILENAME,
+  PROVIDER_MODEL_CACHE_FILENAME,
+  SETTINGS_FILENAME,
+} from "../portable-config-core.js";
 import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
 import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
-import { botCapabilityStore, botManagedWorkspace } from "../bot-capability-services-main.js";
+import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
+import { botServiceProtectedRoot } from "../bot-protected-settings.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
 import type { BotPauseRecord } from "../bot-pause-store.js";
@@ -80,7 +90,7 @@ import {
   type BotSessionState,
 } from "./bot-session-service.js";
 import { createBotToolAssembly } from "./bot-tool-assembly.js";
-import { createBotToolSources, isConnected } from "./bot-tool-sources-main.js";
+import { createBotToolSources, isConnected, ruleHandoffTarget } from "./bot-tool-sources-main.js";
 import { botMemory as memory } from "../bot-memory/bot-memory-main.js";
 import { BOT_COMPACTION_FOCUS, createBotCompactionSteering } from "../bot-memory/compaction.js";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
@@ -100,7 +110,19 @@ const MODEL_CACHE_MS = 30_000;
 const profileDir = () => app.getPath("userData");
 // Every Bot's session database and memory files live under `<profile>/bots/`;
 // only Aiden writes them, never a Bot's file tools (whatever location they use).
-setBotFileToolProtectedRoots(() => [path.join(profileDir(), "bots")]);
+// Aiden's settings files and Bot storage (definitions, access state, pauses;
+// not the Bots' own homes) are fenced the same way, so a Bot cannot change app
+// settings or its own access by editing them.
+setBotFileToolProtectedRoots(() => [
+  path.join(profileDir(), "bots"),
+  path.join(profileDir(), "bots.json"),
+  botServiceProtectedRoot(botServiceRoot()),
+  path.join(aidenConfigDir(), PORTABLE_CONFIG_FILENAME),
+  path.join(profileDir(), SETTINGS_FILENAME),
+  path.join(profileDir(), LOCAL_CONFIG_FILENAME),
+  path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
+  path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
+]);
 const runtimeModels = createBotRuntimeModels();
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
@@ -170,6 +192,7 @@ const toolSources = createBotToolSources({
   imageInput,
   admit,
   dismissals,
+  botLacksConnection: (botId, sourceId) => botApplicationService.botLacksConnection(botId, sourceId),
   botName: async (botId) => (await botStore.get(botId))?.name,
 });
 
@@ -308,7 +331,7 @@ const extension: BotExtensionDeps = {
   beforeCompact: compactionSteering,
   requestApproval: (request) => botApprovals.request(request),
   // A rule that hands a call to the person opens a card on the same bridge as `hand_off`.
-  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request)),
+  requestHandoff: (request) => botHandoffs.request(ruleHandoffRequest(request, ruleHandoffTarget(request.toolName))),
   // Into the stopped call's own conversation, never through the harness host,
   // whose per-Bot lock a pause or quit holds while it waits for this call.
   recordHandoff: async (record, conversation) => {
@@ -438,11 +461,16 @@ function broadcastState(botId: string, state: BotSessionState): void {
   ipcMain.broadcast("bots:changed", { botId, session: state });
 }
 
-/** Connect cards show what is true now: connected, or answered with Not now. Shared with Remote. */
+/**
+ * Connect cards show what is true now: connected, connected but left out of
+ * this Bot's access, or answered with Not now. Shared with Remote.
+ */
 export async function connectCardStatus(botId: string, card: ConnectCardEntry) {
-  if (await isConnected(card.pluginId)) return "connected" as const;
-  if (await dismissals.isDismissed(botId, card.pluginId)) return "dismissed" as const;
-  return card.status;
+  return resolveConnectCardStatus(botId, card, {
+    isConnected,
+    botLacksConnection: (id, sourceId) => botApplicationService.botLacksConnection(id, sourceId),
+    isDismissed: (id, pluginId) => dismissals.isDismissed(id, pluginId),
+  });
 }
 
 let liveProjection: BotLiveProjection | undefined;
@@ -646,6 +674,20 @@ export function botLiveProjection(): BotLiveProjection {
     onError: (botId, error) => logger.warn("bots", `Bot ${botId} live view report.`, error),
   });
   return liveProjection;
+}
+
+/**
+ * "Add to this Bot": the person's tap adds one connection that is already set
+ * up in Aiden to this Bot's Custom access, then open chats re-read the card.
+ */
+export async function grantBotConnection(botId: string, pluginId: string): Promise<void> {
+  const sourceId = connectionSourceIdFor(pluginId);
+  if (sourceId === undefined || !(await isConnected(pluginId))) {
+    throw new Error("Connect this app in Aiden first.");
+  }
+  await botApplicationService.grantBotConnection({ audienceId: BOT_DESKTOP_AUDIENCE_ID, botId, sourceId });
+  ipcMain.broadcast("bots:changed", { botId });
+  await botLiveProjection().refresh(botId);
 }
 
 /** Remember a Not now for this Bot and update its open chats. */
