@@ -1430,3 +1430,88 @@ for (const mode of [
     await expect(palette).toBeHidden();
   });
 }
+
+test("a long prompt wraps inside its column, folds behind a chevron, and copies in full from the bubble's corner", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  // Narrow enough that one unbroken key is wider than the bubble's column.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1000, 760));
+  const token = `umbrelmcp_${"63d71902b67b06ef".repeat(8)}`;
+  const prompt = [
+    `Add my Umbrel to the global MCP config. The auth header is Authorization: Bearer ${token}.`,
+    // Taller than the window once expanded, so Find has to scroll to its match.
+    ...Array.from({ length: 60 }, (_, index) => `Step ${index + 1}: check the server and report what you find.`),
+    "END-OF-PROMPT",
+  ].join("\n");
+  await page.locator("textarea").fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const toggle = page.getByRole("button", { name: "Show full message" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const bubble = page.locator("[data-user-message-bubble]").filter({ has: toggle });
+  const body = page.locator(`[id="${await toggle.getAttribute("aria-controls")}"]`);
+
+  const geometry = () =>
+    bubble.evaluate((element) => {
+      const column = element.closest(".chat-content-column")!.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, columnLeft: column.left, columnRight: column.right };
+    });
+  const box = await geometry();
+  expect(box.left, "the bubble never spills left of the transcript column").toBeGreaterThanOrEqual(box.columnLeft - 0.5);
+  expect(box.right).toBeLessThanOrEqual(box.columnRight + 0.5);
+
+  const bodyHeight = () => body.evaluate((element) => element.getBoundingClientRect().height);
+  const lineHeight = await body.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
+  const folded = await bodyHeight();
+  expect(folded, "folded to six lines").toBeLessThanOrEqual(lineHeight * 6 + 1);
+
+  await toggle.click();
+  const showLess = page.getByRole("button", { name: "Show less" });
+  await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(bodyHeight).toBeGreaterThan(folded + lineHeight * 4);
+  await showLess.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(bodyHeight).toBeLessThanOrEqual(lineHeight * 6 + 1);
+
+  // Find selects a match in the hidden tail without focusing it; the fold opens so it shows.
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
+        .find("END-OF-PROMPT", false, false, true),
+    ),
+  ).toBe(true);
+  await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  // The match itself ends up inside the transcript's viewport, not just unclipped.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const selection = window.getSelection();
+        const scroller = document.querySelector("[data-follow]");
+        if (!selection || selection.rangeCount === 0 || !scroller) return false;
+        const match = selection.getRangeAt(0).getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        return selection.toString() === "END-OF-PROMPT" && match.top >= view.top && match.bottom <= view.bottom;
+      }),
+    )
+    .toBe(true);
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await showLess.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // Copy waits for the pointer (or focus inside the bubble, which the chevron
+  // just had), then sits in the bubble's top-right corner.
+  const copy = bubble.getByRole("button", { name: "Copy message" });
+  await page.locator("textarea").focus();
+  await page.mouse.move(0, 0);
+  await expect.poll(() => copy.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+  await bubble.hover();
+  await expect.poll(() => copy.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  const bubbleBox = (await bubble.boundingBox())!;
+  const copyBox = (await copy.boundingBox())!;
+  expect(bubbleBox.x + bubbleBox.width - (copyBox.x + copyBox.width)).toBeLessThanOrEqual(12);
+  expect(copyBox.y - bubbleBox.y).toBeLessThanOrEqual(12);
+  await copy.click();
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(prompt);
+});

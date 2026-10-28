@@ -11,7 +11,10 @@ import { createBotCreationKeyStore } from "../../../main/services/bot-creation-k
 import { newBotId } from "../../../main/services/bot-application-service.js";
 /** Node host for the shared durable Bot core. No Electron singleton imports. */
 import { lazyStream } from "@earendil-works/pi-ai";
-import { join } from "node:path";
+import { CodemodeSandbox, loadQuickJSWasm } from "@earendil-works/pi-codemode";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { setBotFileToolProtectedRoots } from "../../../main/services/bot-file-tool-router.js";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -143,6 +146,7 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
         return { allowed: true, ...(mcpAgentToolDescriptor(tool) ? { approval: { summary: `Allow ${tool.label ?? name}?` } } : {}) };
       }),
       requestApproval: approvals.request,
+      codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
       readmit: async (botId) => {
         if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
@@ -179,4 +183,19 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
     const result = await starter.startFromPreset(presetId, { createBot: (bot, botId) => ports.application.createBot({ audienceId, botId, bot }) });
     return { botId: result.bot.id, created: result.created };
   } } };
+}
+
+/**
+ * The sandbox Bot scripts run in. pi-codemode's own worker file is not on disk
+ * in the bundle, so workers start from the CLI's bundled codemode worker, read
+ * once into a data: URL (as Pi does) so an update that replaces the file never
+ * breaks a running daemon.
+ */
+function botCodemodeSandbox(): CodemodeSandbox {
+  const worker = join(dirname(process.env.AIDEN_CLI_ENTRY!), "chunks", "codemode-worker.js");
+  return new CodemodeSandbox({
+    memoryLimitBytes: 64 * 1024 * 1024,
+    wasm: loadQuickJSWasm(createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm")),
+    workerUrl: new URL(`data:text/javascript;base64,${readFileSync(worker).toString("base64")}`),
+  });
 }

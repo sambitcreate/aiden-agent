@@ -70,6 +70,7 @@ function harness() {
   const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
   const failures = { statusAppend: false };
   let sequence = 0;
+  const clock = { at: Date.UTC(2026, 9, 9, 12) };
   // A fresh service over the same profile and schedule store is an app restart.
   const start = () =>
     createBotRoutineProposalService({
@@ -81,7 +82,7 @@ function harness() {
         appended.push({ botId, kind, data });
       },
       conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
-      now: () => Date.UTC(2026, 9, 9, 12),
+      now: () => clock.at,
       newId: () => `00000000-0000-4000-8000-${String((sequence += 1)).padStart(12, "0")}`,
     });
   const proposals = start();
@@ -90,7 +91,7 @@ function harness() {
     projectBotTranscript(appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never)
       .flatMap((entry) => (entry.type === "routine_proposal" ? [{ status: entry.status, routineId: entry.routineId }] : []));
   const proposalsFile = path.join(botSessionDirectory(root, "bot-a"), BOT_ROUTINE_PROPOSALS_FILE);
-  return { routines, proposals, appended, failures, start, cards, proposalsFile };
+  return { routines, proposals, appended, failures, start, cards, proposalsFile, clock };
 }
 
 const dailyPlan = { name: "Weekly meal plan", schedule: { kind: "weekly", days: [0], time: "09:00" }, prompt: "Plan this week's meals." };
@@ -219,6 +220,7 @@ test("the routines tool can list, propose and pause, but never create a routine 
 
   assert.deepEqual(json(await tool.execute("c1", { action: "list" })), {
     routines: [{ id: existing.id, name: "Morning brief", label: "Every day at 8:00 AM", enabled: true }],
+    recentDecisions: [],
   });
 
   const proposed = json(await tool.execute("c2", { action: "propose", ...dailyPlan }));
@@ -353,4 +355,93 @@ test("a suggestion the Bot makes settles a card a cut-short Add routine left ope
     ],
   );
   assert.equal(throughCall[0]!.data.routineId, created.id);
+});
+
+const DAY = 86_400_000;
+
+async function decline(h: ReturnType<typeof harness>, name: string, reason?: "not_useful" | "wrong_time" | "already_have" | "other") {
+  const proposed = await h.proposals.propose("bot-a", { ...dailyPlan, name });
+  assert.ok(proposed.ok, JSON.stringify(proposed));
+  await h.proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "dismiss", ...(reason ? { reason } : {}) });
+  h.clock.at += 60_000;
+}
+
+test("a dismissal keeps its reason, and recentDecisions lists it", async () => {
+  const h = harness();
+  await decline(h, "Morning stretch", "wrong_time");
+  const [decision] = await h.proposals.recentDecisions("bot-a");
+  assert.equal(decision?.name, "Morning stretch");
+  assert.equal(decision?.status, "dismissed");
+  assert.equal(decision?.reason, "wrong_time");
+});
+
+test("three dismissals in the last five refuse new proposals for 7 days, with or without reasons", async () => {
+  const h = harness();
+  await decline(h, "One", "not_useful");
+  await decline(h, "Two");
+  await decline(h, "Three");
+  const refused = await h.proposals.propose("bot-a", { ...dailyPlan, name: "Four" });
+  assert.equal(refused.ok, false);
+  assert.equal(!refused.ok && refused.code, "cooling_off");
+  assert.ok(!refused.ok && refused.until !== undefined && refused.until > h.clock.at);
+  h.clock.at += 7 * DAY + 1;
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "Four" })).ok, true, "after a week it may suggest again");
+});
+
+test("the same name declined within 30 days is refused, loosely matched", async () => {
+  const h = harness();
+  await decline(h, "Weekly Meal  Plan");
+  const again = await h.proposals.propose("bot-a", { ...dailyPlan, name: "  weekly meal plan " });
+  assert.equal(!again.ok && again.code, "declined_before");
+  h.clock.at += 31 * DAY;
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "Weekly meal plan" })).ok, true);
+});
+
+test("recentDecisions lists at most 10, newest first", async () => {
+  const h = harness();
+  for (let index = 0; index < 12; index += 1) {
+    const proposed = await h.proposals.propose("bot-a", { ...dailyPlan, name: `Plan ${index}` });
+    assert.ok(proposed.ok);
+    await h.proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" });
+    h.clock.at += 60_000;
+  }
+  const decisions = await h.proposals.recentDecisions("bot-a");
+  assert.equal(decisions.length, 10);
+  assert.equal(decisions[0]?.name, "Plan 11");
+  assert.ok(decisions.every((decision) => decision.status === "accepted"));
+});
+
+test("the respond parser takes a reason only with dismiss", () => {
+  const base = { botId: "bot-a", proposalId: "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11" };
+  assert.deepEqual(parseBotRoutineProposalRespond({ ...base, decision: "dismiss", reason: "wrong_time" }), { ...base, decision: "dismiss", reason: "wrong_time" });
+  assert.throws(() => parseBotRoutineProposalRespond({ ...base, decision: "accept", reason: "wrong_time" }));
+  assert.throws(() => parseBotRoutineProposalRespond({ ...base, decision: "dismiss", reason: "meh" }));
+});
+
+test("a requested routine gets past a same-name decline but never past cooling off", async () => {
+  const h = harness();
+  await decline(h, "One");
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, false);
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One", requested: true })).ok, true);
+
+  const cooled = harness();
+  await decline(cooled, "One");
+  await decline(cooled, "Two");
+  await decline(cooled, "Three");
+  const refused = await cooled.proposals.propose("bot-a", { ...dailyPlan, name: "Four", requested: true });
+  assert.equal(!refused.ok && refused.code, "cooling_off");
+  assert.equal((await cooled.proposals.propose("bot-a", { ...dailyPlan, name: "Four", hostFollowUp: true })).ok, true,
+    "a follow-up the host queued for a promise still gets its card");
+});
+
+test("follow-ups the host dismissed when they expired never count as declines", async () => {
+  const h = harness();
+  for (const name of ["One", "Two", "Three"]) {
+    const proposed = await h.proposals.propose("bot-a", { ...dailyPlan, name, hostFollowUp: true });
+    assert.ok(proposed.ok);
+    await h.proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "dismiss", settledBy: "host" });
+    h.clock.at += 60_000;
+  }
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, true);
+  assert.deepEqual(await h.proposals.recentDecisions("bot-a"), []);
 });

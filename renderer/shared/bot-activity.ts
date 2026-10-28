@@ -98,6 +98,7 @@ const TOOL_PHASES: ReadonlyMap<string, BotToolPhase> = new Map<string, BotToolPh
 
 /** Fixed tools whose finished step reads differently from their phase's: a hand-off is not a question. */
 const TOOL_STEP_LABELS: ReadonlyMap<string, string> = new Map<string, string>([
+  ["codemode", "Ran a script"],
   ["hand_off", "Handed you a step"],
   ["sign_in", "Asked you to sign in"],
 ]);

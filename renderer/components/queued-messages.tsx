@@ -28,7 +28,7 @@ export function QueuedMessages({
   /** Send one queued text message into the running response. */
   onSteer?: (id: string) => Promise<void>;
 }) {
-  const state = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot);
+  const state = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot);
   const [draft, setDraft] = React.useState<QueuedChatMessage | null>(null);
   const editorTrigger = React.useRef<HTMLButtonElement | null>(null);
   const draggedId = React.useRef<string | null>(null);

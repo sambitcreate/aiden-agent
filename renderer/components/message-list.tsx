@@ -565,6 +565,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
 export interface ProviderFailureActions {
   onAction: (action: ProviderFailureAction) => void;
   onSwitchModel?: () => void;
+  /**
+   * Which actions this chat can take. A chat on a paired Mac can try again or
+   * continue, but compaction and provider settings live on that Mac. Omitted
+   * means every action.
+   */
+  supports?: (action: ProviderFailureAction) => boolean;
   /** An action is already running; the buttons wait for it. */
   busy?: boolean;
 }
@@ -609,16 +615,18 @@ export function ProviderFailureCallout({
       <Text variant="small" color="secondary" className="mt-0.5 block">
         {presentation.description}
       </Text>
-      {actions ? (
+      {actions && (actions.supports?.(action) !== false || actions.onSwitchModel) ? (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Button
-            size="small"
-            disabled={actions.busy}
-            data-provider-failure-action={action}
-            onClick={() => actions.onAction(action)}
-          >
-            {PROVIDER_FAILURE_ACTION_LABELS[action]}
-          </Button>
+          {actions.supports?.(action) !== false ? (
+            <Button
+              size="small"
+              disabled={actions.busy}
+              data-provider-failure-action={action}
+              onClick={() => actions.onAction(action)}
+            >
+              {PROVIDER_FAILURE_ACTION_LABELS[action]}
+            </Button>
+          ) : null}
           {actions.onSwitchModel ? (
             <Button variant="transparent" size="small" disabled={actions.busy} onClick={actions.onSwitchModel}>
               Switch model

@@ -11,6 +11,7 @@ import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
+import type { BotIssue, BotIssueResolution } from "./bot-issues.js";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
 import {
   botHandoffResultLine,
@@ -182,6 +183,34 @@ export type BotTranscriptEntry =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      at?: number;
+    }
+  /** A lesson from a routine's runs, waiting for Keep; or a Learned line from a correction; or a tidy. */
+  | {
+      id: string;
+      type: "lesson_proposal" | "lesson_learned";
+      lesson: import("./bot-lessons.js").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+      at?: number;
+    }
+  | { id: string; type: "memory_tidy"; changeId?: string; at?: number }
+  /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
+  | {
+      id: string;
+      type: "skill_proposal";
+      proposal: import("./bot-skill-proposals.js").BotSkillProposalEntryData;
+      status: import("./bot-skill-proposals.js").BotSkillProposalStatus;
+      at?: number;
+    }
+  /**
+   * A "Needs you" issue the host raised for this Bot (plan F2). `status` is
+   * `open` until a status entry settles it; a settled card keeps one quiet line.
+   */
+  | {
+      id: string;
+      type: "issue";
+      issue: BotIssue;
+      status: "open" | BotIssueResolution;
       at?: number;
     }
   /** Shown on unpause: the routines that fired while the Bot was paused, each with Run now. */

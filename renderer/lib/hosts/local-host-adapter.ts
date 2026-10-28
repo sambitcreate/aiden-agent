@@ -75,7 +75,8 @@ const LOCAL_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set<HostChatCapa
   "remove",
   "localPanels",
   "observe",
-  // No "fork": the local pane forks through `chatsApi` directly.
+  // No "fork" or "contextPressure": the local pane forks and reads its
+  // context meter through `chatsApi` directly.
 ]);
 
 const LOCAL_STATUS: HostChatStatus = { availability: "online", generation: 0 };
