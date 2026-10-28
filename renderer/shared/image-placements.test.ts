@@ -46,3 +46,14 @@ test("a source whose images and calls do not match one for one infers nothing", 
   assert.deepEqual(Object.fromEntries(placements), { "shared_a": "call-3" }, "the shared image still pairs");
   assert.equal(withInferredImagePlacements(undefined, [image("shown")], stored), stored);
 });
+
+test("a generate_image call without a placed image leaves shown images where they were", () => {
+  // A failed generation beside a display call that showed a duplicate: one
+  // image and one open call, but the image is the generation's, not the display's.
+  const placements = withInferredImagePlacements(
+    timeline(step("call-1", "generate_image", "failed"), step("call-2", "display_image")),
+    [image("generated")],
+    new Map(),
+  );
+  assert.deepEqual(Object.fromEntries(placements), {});
+});

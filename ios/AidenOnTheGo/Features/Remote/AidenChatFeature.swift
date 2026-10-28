@@ -6573,22 +6573,39 @@ struct AidenMessageView: View, Equatable {
 
     }
 
+    /// A committed assistant reply's rows in the order they happened, with each
+    /// visual and image beneath the step that made it; nil without a usable timeline.
+    private var messageChronologicalRows: [AidenChronologicalRow]? {
+        guard message.role == .assistant, presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        )
+    }
+
     private var messageContent: some View {
         VStack(
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
-            if message.role == .assistant,
-               presentationStyle != .botMessages,
-               let rows = AidenChronologicalProjection.rows(
-                   text: message.text,
-                   reasoning: message.reasoning ?? "",
-                   timeline: message.timeline,
-                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
-               ) {
-                AidenChronologicalTranscript(rows: rows, active: false) { visual in
-                    AnyView(visualRow(visual))
-                }
+            if let rows = messageChronologicalRows {
+                AidenChronologicalTranscript(
+                    rows: rows,
+                    active: false,
+                    visualContent: { visual in AnyView(visualRow(visual)) },
+                    imageContent: { images in
+                        AnyView(AidenMessageImageAttachmentsView(
+                            attachments: images,
+                            edge: AidenMessageMediaEdge.forRole(message.role),
+                            loadData: loadAttachmentImage,
+                            revealAttachmentID: imageArrivalRevealAttachmentID,
+                            onArrivalRevealed: onImageArrivalRevealed
+                        ))
+                    }
+                )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
@@ -6625,13 +6642,16 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             }
-            // Snapshots appear once, inline at their visual, never in the strip.
+            // Snapshots appear once, inline at their visual, never in the strip,
+            // and images drawn beneath their step leave it too.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
                 let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
-                if !imageAttachments.isEmpty {
+                let placedImageIDs = messageChronologicalRows.map(AidenChronologicalProjection.placedImageIDs) ?? []
+                let trailingImages = imageAttachments.filter { !placedImageIDs.contains($0.id) }
+                if !trailingImages.isEmpty {
                     AidenMessageImageAttachmentsView(
-                        attachments: imageAttachments,
+                        attachments: trailingImages,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
                         revealAttachmentID: imageArrivalRevealAttachmentID,
@@ -8785,6 +8805,8 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
+    /// Draws a committed message's images beneath their step; the live stream has none.
+    var imageContent: (([AidenMessageAttachment]) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -8821,6 +8843,8 @@ private struct AidenChronologicalTranscript: View {
                     }
                 case .visual(let visual):
                     visualContent?(visual)
+                case .images(let images):
+                    imageContent?(images)
                 }
             }
         }

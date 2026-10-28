@@ -154,7 +154,17 @@ export const AIDEN_REMOTE_BOT_ISSUES_CONTRACT_REVISION = 42 as const;
  * decoders are closed, so only holders get the key.
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION;
+/**
+ * Contract revision 44 (provisional; re-claim the next revision after
+ * `main`'s at merge by changing only
+ * `AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`): an assistant message's
+ * image attachment may carry `toolCallId`, the timeline tool step that
+ * produced it (`display_image`, `share_image` or `generate_image`), so a phone
+ * draws the image at that step as the desktop does instead of after the
+ * reply. Older clients ignore the key; an image without it trails the reply.
+ */
+export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;

@@ -1703,6 +1703,42 @@ class AidenChatTest {
     }
 
     @Test
+    fun eachImageSitsBeneathTheStepThatProducedIt() {
+        // Revision 44: an assistant image names the step that made it.
+        val wire = """
+            {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+             "attachments":[
+               {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+               {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+               {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+               {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"}],
+             "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+               {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+               {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """.trimIndent()
+        val message = json.decodeFromString<AidenChatMessage>(wire)
+        val images = message.attachments.orEmpty()
+        assertEquals(listOf("call-2", "call-1", null, null), images.map { it.placedToolCallId })
+        assertTrue("a malformed step id never drops the image", message.isWireSafe)
+
+        val rows = AidenChronologicalProjection.rows(message.text, "", message.timeline, images = images)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:call-1", "IMAGES:shown", "TEXT:Middle.", "TOOL:call-2", "IMAGES:shared_a", "TEXT:After."),
+            rows.map { row ->
+                when (row.kind) {
+                    AidenChronologicalRow.Kind.TEXT -> "TEXT:" + row.text
+                    AidenChronologicalRow.Kind.TOOL -> "TOOL:" + row.steps.joinToString(",") { it.toolCallId.orEmpty() }
+                    AidenChronologicalRow.Kind.IMAGES -> "IMAGES:" + row.images.joinToString(",") { it.id }
+                    else -> "${row.kind}:"
+                }
+            }
+        )
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+        // Only images without a step are left for the strip after the reply.
+        assertEquals(setOf("shown", "shared_a"), AidenChronologicalProjection.placedImageIds(rows))
+    }
+
+    @Test
     fun eachVisualFollowsTheToolStepThatDrewItAndUnmatchedVisualsTrail() {
         val message = fixtureVisualMessage()
         val rows = AidenChronologicalProjection.rows(

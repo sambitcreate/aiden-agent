@@ -430,6 +430,7 @@ import {
 } from "../../renderer/shared/image-generation/types.js";
 import {
   CHAT_ARTIFACT_EVENT_VERSION,
+  CHAT_ARTIFACT_VERSION,
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
 import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
@@ -450,7 +451,7 @@ import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
-import { createArtifactPlacementLedger, imageAttachmentPlacements } from "./generative-ui-placements.js";
+import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -1012,7 +1013,20 @@ async function prepareGeneration(
       throw new Error("The images shared in this response exceed the 16 MB limit.");
     }
     sharedImages.push(attachment);
-    imagePlacements.record(attachment.id, toolCallId);
+    if (attachment.kind !== "image" || attachment.data === undefined) {
+      imagePlacements.record(attachment.id, toolCallId);
+      return;
+    }
+    // Shown live at the sharing call's row, like a displayed image.
+    const { id, name, mimeType, size, data } = attachment;
+    presentPlacedImage(
+      imagePlacements,
+      { version: CHAT_ARTIFACT_VERSION, kind: "image", attachment: { id, name, mimeType, kind: "image", size, data } },
+      toolCallId,
+      (event) => {
+        sendGeneration(streamId, "chat:artifact", { streamId, event });
+      },
+    );
   };
   const runtime =
     botContext?.prepared.runtime ??
@@ -1945,18 +1959,8 @@ async function prepareGeneration(
         if (displayedImageIds.has(artifact.attachment.id)) return false;
         displayedImageIds.add(artifact.attachment.id);
         displayedImages.push(artifact.attachment);
-        // Every image sits at its call's row; only a generate_image call's
-        // Lens placeholder claims (reveals) its own images.
-        imagePlacements.record(artifact.attachment.id, source.toolCallId);
-        const placedToolCallId = imagePlacements.publicIdFor(artifact.attachment.id);
-        sendGeneration(streamId, "chat:artifact", {
-          streamId,
-          event: {
-            version: CHAT_ARTIFACT_EVENT_VERSION,
-            operation: "present",
-            artifact,
-            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
-          },
+        presentPlacedImage(imagePlacements, artifact, source.toolCallId, (event) => {
+          sendGeneration(streamId, "chat:artifact", { streamId, event });
         });
         return true;
       },

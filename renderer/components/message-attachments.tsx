@@ -214,7 +214,7 @@ function ImageCaptionAction({
       iconOnly
       aria-label={label}
       title={label}
-      className="text-tertiary opacity-0 transition-opacity hover:text-secondary group-hover/assistant-image:opacity-100 group-focus-within/assistant-image:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none"
+      className="text-tertiary opacity-0 transition-[opacity,background-color] hover:text-secondary group-hover/assistant-image:opacity-100 group-focus-within/assistant-image:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none"
       onClick={onClick}
     >
       {children}
@@ -258,7 +258,7 @@ function AssistantImage({
       }
     : undefined;
   return (
-    <figure className="group/assistant-image m-0 flex w-fit min-w-0 max-w-[min(100%,22.5rem)] flex-col" data-assistant-image={attachment.id}>
+    <figure className="group/assistant-image m-0 flex w-fit min-w-[min(100%,9rem)] max-w-[min(100%,22.5rem)] flex-col" data-assistant-image={attachment.id}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
@@ -297,7 +297,8 @@ function AssistantImage({
           <ContextMenuItem onSelect={open}>Open full view</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {/* Sized to the image (w-0 min-w-full), so the caption never widens the figure. */}
+      {/* Sized to the figure (w-0 min-w-full), so the caption never widens it; a
+          tiny image still gets a 9rem figure, room for its name and actions. */}
       <figcaption className="mt-1 flex w-0 min-w-full items-center gap-0.5 pl-1">
         <span className="min-w-0 flex-1 truncate text-mini text-tertiary">
           {attachment.name} · {fileSize(attachment.size)}

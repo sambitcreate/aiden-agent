@@ -31,6 +31,8 @@ enum class AidenAttachmentKind {
     @SerialName("text") TEXT
 }
 
+private val TOOL_CALL_ID = Regex("^call-[1-9][0-9]{0,15}$")
+
 @Serializable
 @Immutable
 data class AidenMessageAttachment(
@@ -38,8 +40,17 @@ data class AidenMessageAttachment(
     val name: String,
     val mimeType: String,
     val kind: AidenAttachmentKind,
-    val size: Int
+    val size: Int,
+    /**
+     * Contract revision 44: on an assistant image, the timeline tool step that
+     * produced it. Read through [placedToolCallId], which drops a malformed value.
+     */
+    val toolCallId: String? = null
 ) {
+    /** The producing step's public `call-N` id, or null when absent or malformed. */
+    val placedToolCallId: String?
+        get() = toolCallId?.takeIf { TOOL_CALL_ID.matches(it) }
+
     val isWireSafe: Boolean
         get() = id.isNotEmpty() &&
                 id.length <= 256 &&
@@ -298,9 +309,11 @@ data class AidenChronologicalRow(
     /** Set on an [Kind.EXTRACTION] row: the values a page read, after the line that read them. */
     val extraction: AidenWebExtractRecap? = null,
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
-    val visual: AidenChatVisual? = null
+    val visual: AidenChatVisual? = null,
+    /** Set on [Kind.IMAGES] rows: the images the step above produced (contract revision 44). */
+    val images: List<AidenMessageAttachment> = emptyList()
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL, IMAGES }
 }
 
 object AidenChronologicalProjection {
@@ -308,13 +321,16 @@ object AidenChronologicalProjection {
      * The reply in reading order. Each of [visuals] follows the tool step whose
      * `toolCallId` drew it (a run of same-offset tool steps splits there), and
      * visuals no step claims trail at the end. A live reply passes no visuals:
-     * snapshots exist only once the reply commits.
+     * snapshots exist only once the reply commits. Each of [images] likewise
+     * follows the step that produced it; an image no step claims gets no row
+     * and stays in the attachment strip after the reply ([placedImageIds]).
      */
     fun rows(
         text: String,
         reasoning: String,
         timeline: AidenGenerationTimeline?,
-        visuals: List<AidenChatVisual> = emptyList()
+        visuals: List<AidenChatVisual> = emptyList(),
+        images: List<AidenMessageAttachment> = emptyList()
     ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
@@ -332,6 +348,7 @@ object AidenChronologicalProjection {
             step.toolCallId.takeIf { step.kind == AidenAgentStep.Kind.TOOL }
         }
         val visualsByCall = visuals.filter { it.toolCallId in toolCallIds }.groupBy { it.toolCallId }
+        val imagesByCall = images.filter { it.placedToolCallId in toolCallIds }.groupBy { it.placedToolCallId }
         val result = mutableListOf<AidenChronologicalRow>()
         fun emitVisuals(drawn: List<AidenChatVisual>) {
             drawn.forEach { result += AidenChronologicalRow("visual-${it.id}", AidenChronologicalRow.Kind.VISUAL, visual = it) }
@@ -364,14 +381,18 @@ object AidenChronologicalProjection {
             } else {
                 val group = mutableListOf<AidenAgentStep>()
                 var drawn: List<AidenChatVisual> = emptyList()
+                var produced: List<AidenMessageAttachment> = emptyList()
                 while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
                     steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
                 ) {
                     val step = steps[index++]
                     group += step
                     val callId = step.toolCallId
-                    drawn = if (callId != null && emittedCalls.add(callId)) visualsByCall[callId].orEmpty() else emptyList()
-                    if (drawn.isNotEmpty()) break
+                    val fresh = callId != null && emittedCalls.add(callId)
+                    drawn = if (fresh) visualsByCall[callId].orEmpty() else emptyList()
+                    produced = if (fresh) imagesByCall[callId].orEmpty() else emptyList()
+                    // A step that drew a visual or produced an image closes its group.
+                    if (drawn.isNotEmpty() || produced.isNotEmpty()) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
                 // Values a page read in extract mode follow the line that read them.
@@ -384,6 +405,9 @@ object AidenChronologicalProjection {
                     }
                 }
                 emitVisuals(drawn)
+                if (produced.isNotEmpty()) {
+                    result += AidenChronologicalRow("images-${group.first().id}", AidenChronologicalRow.Kind.IMAGES, images = produced)
+                }
             }
             cursor = offset
         }
@@ -394,6 +418,10 @@ object AidenChronologicalProjection {
         emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
+
+    /** Ids of the images [rows] drew beneath their steps; the attachment strip leaves them out. */
+    fun placedImageIds(rows: List<AidenChronologicalRow>): Set<String> =
+        rows.flatMapTo(HashSet()) { row -> row.images.map { it.id } }
 }
 
 @Serializable

@@ -1,7 +1,10 @@
-import type {
-  ChatImagePlacementV1,
-  HtmlArtifactLayout,
-  HtmlArtifactPlacementV1,
+import {
+  CHAT_ARTIFACT_EVENT_VERSION,
+  type ChatArtifactEventV1,
+  type ChatImageArtifactV1,
+  type ChatImagePlacementV1,
+  type HtmlArtifactLayout,
+  type HtmlArtifactPlacementV1,
 } from "../../renderer/shared/chat-artifacts.js";
 
 /**
@@ -61,4 +64,27 @@ export function imageAttachmentPlacements(
     return toolCallId ? [{ attachmentId: attachment.id, toolCallId }] : [];
   });
   return placements.length ? placements : undefined;
+}
+
+/**
+ * Place an image the reply presents at the call that produced it and announce
+ * it live with that call's public id. Every image source (display_image,
+ * generate_image, share_image) goes through here, so each one renders at its
+ * own activity row, live and once saved, instead of trailing the reply; a
+ * generate_image call's Lens placeholder still claims only its own images.
+ */
+export function presentPlacedImage(
+  ledger: ArtifactPlacementLedger,
+  artifact: ChatImageArtifactV1,
+  rawToolCallId: string,
+  announce: (event: ChatArtifactEventV1) => void,
+): void {
+  ledger.record(artifact.attachment.id, rawToolCallId);
+  const toolCallId = ledger.publicIdFor(artifact.attachment.id);
+  announce({
+    version: CHAT_ARTIFACT_EVENT_VERSION,
+    operation: "present",
+    artifact,
+    ...(toolCallId ? { toolCallId } : {}),
+  });
 }

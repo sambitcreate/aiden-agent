@@ -1347,14 +1347,29 @@ private fun AssistantMessageRow(
     val visuals = message.visuals.orEmpty()
     // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
     val rowVisuals = aidenVisualsWithRows(message)
-    val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals)
     val progressText = projection?.progressText ?: ""
     // Visual snapshots render inside their visual rows, never as ordinary attachments.
     val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
-    val imageAttachments = aidenEligibleImageAttachments(attachments, visuals)
-    val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
+    val eligibleImages = aidenEligibleImageAttachments(attachments, visuals)
+    val imageIds = eligibleImages.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+    // Each image sits beneath the step that produced it; the rest trail the reply.
+    val chronologicalRows = if (isBotChat) null else
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals, eligibleImages)
+    val placedImageIds = chronologicalRows?.let(AidenChronologicalProjection::placedImageIds).orEmpty()
+    val imageAttachments = eligibleImages.filterNot { it.id in placedImageIds }
+    val revealAttachmentId = imageArrivalRevealGenerationId?.let {
+        AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
+    }
+    val renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = { images ->
+        AidenMessageImageAttachments(
+            attachments = images,
+            edge = AidenMessageMediaEdge.LEADING,
+            loadData = loadAttachmentImage,
+            revealAttachmentId = revealAttachmentId,
+            onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
+        )
+    }
     val renderVisual: @Composable (AidenChatVisual) -> Unit = { visual ->
         AidenVisualRow(
             visual = visual,
@@ -1380,7 +1395,8 @@ private fun AssistantMessageRow(
                     palette = palette,
                     onCopy = onCopy,
                     onOpenUrl = onOpenUrl,
-                    renderVisual = renderVisual
+                    renderVisual = renderVisual,
+                    renderImages = renderImages
                 )
             }
         } else {
@@ -1480,15 +1496,7 @@ private fun AssistantMessageRow(
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
-            AidenMessageImageAttachments(
-                attachments = imageAttachments,
-                edge = AidenMessageMediaEdge.LEADING,
-                loadData = loadAttachmentImage,
-                revealAttachmentId = imageArrivalRevealGenerationId?.let {
-                    AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
-                },
-                onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
-            )
+            renderImages(imageAttachments)
         }
         fallbackAttachments.forEach { attachment ->
             Spacer(modifier = Modifier.height(8.dp))
@@ -1918,6 +1926,8 @@ private fun AidenChronologicalTranscript(
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     renderVisual: @Composable (AidenChatVisual) -> Unit = {},
+    // A settled message's images beneath their step; the live reply has none.
+    renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = {},
     // Step ids of recaps already shown in this live reply; null for a settled message.
     enteredRecaps: MutableSet<String>? = null
 ) {
@@ -1962,6 +1972,7 @@ private fun AidenChronologicalTranscript(
                         row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
                     }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
+                    AidenChronologicalRow.Kind.IMAGES -> renderImages(row.images)
                 }
             }
         }

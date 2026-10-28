@@ -809,6 +809,17 @@ A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your ba
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botHandoffs`: a session waiting on a hand-off, its frames, the answer, open-on-Mac, pause and unpause shapes, paused session, summary, detail and refusal, and the same moments as a device without `bot:handoffs` sees them (`legacy`). The desktop parser reads the section only when `contractRevision` is 37 or newer.
 
+## Image placement, revision 44
+
+The host keeps the revision in one constant (`AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`). Revision 44 is provisional: it is re-claimed as the next free revision when the change merges.
+
+An assistant message's image attachment may carry `toolCallId`, the public `call-N` id (`^call-[1-9][0-9]*$`) of the timeline tool step that produced it: `display_image`, `share_image` or `generate_image`. It is display-only and needs no capability. User attachments and text attachments never carry it.
+
+- The host sends the placement it stored with the reply. For a reply saved before every image recorded its call, it pairs unplaced images with their completed `share_image` (`shared_` ids) or `display_image` calls in order, only when each source matches one for one and no `generate_image` call is left without a placed image; otherwise it sends none.
+- An image whose `toolCallId` names no step on the message's projected timeline, or that has none, trails the reply as before.
+
+**Clients.** The desktop transcript, Aiden On The Go for iOS and Android draw each placed image right beneath the activity line of its step, in the order the reply happened, and keep only unplaced images in the strip after the reply. A malformed `toolCallId` is dropped without dropping the image. Older clients ignore the key. Images still reach phones only when the reply is saved, not while it streams.
+
 ## Web page extract recap, revision 38
 
 The host keeps the revision in one constant (`AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`).
