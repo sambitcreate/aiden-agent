@@ -29,14 +29,22 @@ export function BrowserRecordingCard({ recording }: { recording: BrowserRecordin
   const [playback, setPlayback] = React.useState<Playback>({ phase: "idle" });
   const [revealFailed, setRevealFailed] = React.useState(false);
   const urlRef = React.useRef<string | undefined>(undefined);
-  React.useEffect(() => () => {
-    if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+  // A load that finishes after the card left the screen is dropped, never turned into a URL.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = undefined;
+    };
   }, []);
 
   const play = async () => {
     setPlayback({ phase: "loading" });
     try {
       const video = await browserApi.recording(recording.id);
+      if (!mountedRef.current) return;
       if (!video) {
         setPlayback({ phase: "missing" });
         return;
@@ -45,7 +53,7 @@ export function BrowserRecordingCard({ recording }: { recording: BrowserRecordin
       urlRef.current = url;
       setPlayback({ phase: "ready", url });
     } catch {
-      setPlayback({ phase: "missing" });
+      if (mountedRef.current) setPlayback({ phase: "missing" });
     }
   };
 

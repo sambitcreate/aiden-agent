@@ -34,6 +34,7 @@ import { createChatForkService, type ChatForkRequest } from "./chat-fork-service
 import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
+import { HostRunRegistry } from "./host-run-registry.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -1294,6 +1295,27 @@ test("a chat's browser recordings are read only by the id its own timeline names
   const without = fixture(chat({ messages: [recordingMessage(named)] }));
   assert.equal(without.service.supportsBrowserRecordings, false);
   await assert.rejects(without.service.browserRecording("chat-1", named), hasCode("not_found", 404));
+});
+
+test("a recording a still-running turn has shown can be played before the reply is saved", async () => {
+  const named = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const video = Buffer.from("video bytes");
+  const runs = new HostRunRegistry({ now: () => 1_000 });
+  runs.begin({ runId: "stream-recording", chatId: "chat-1", origin: "remote" });
+  runs.begin({ runId: "stream-other", chatId: "chat-2", origin: "renderer" });
+  const live = recordingMessage(named).timeline!;
+  const running = { ...live, status: "running", finishedAt: undefined };
+  const recordings = {
+    read: async (id: string) => (id === named ? { mimeType: "video/mp4", data: video } : undefined),
+    namedByLiveRun: (chatId: string, id: string) => runs.chatRunNamesRecording(chatId, id),
+  };
+  // The turn stopped the recording and keeps working: only its user prompt is saved so far.
+  const { service } = fixture(chat({ messages: [] }), { browserRecordings: recordings });
+  await assert.rejects(service.browserRecording("chat-1", named), hasCode("not_found", 404));
+  runs.publish("stream-other", "chat:timeline", { streamId: "stream-other", timeline: { ...running, generationId: "stream-other" } });
+  await assert.rejects(service.browserRecording("chat-1", named), hasCode("not_found", 404), "another chat's run names it");
+  runs.publish("stream-recording", "chat:timeline", { streamId: "stream-recording", timeline: running });
+  assert.deepEqual(await service.browserRecording("chat-1", named), { bytes: video, mimeType: "video/mp4" });
 });
 
 test("chat projection omits visuals for a message without any", () => {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { parseAskUserQuestions } from "../../renderer/shared/ask-user-question.js";
 import { parseToolApprovalScope } from "../../renderer/shared/tool-approval-scope.js";
+import { isToolStep, parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import {
   boundedText,
   createRunProjectionState,
@@ -118,6 +119,11 @@ interface RunRecord {
   subscribers: Set<() => void>;
   /** The newest delta event while no `read` has returned it. */
   openDelta?: { sequence: number; openedAt: number };
+  /**
+   * Browser recordings this run's live timeline has named (revision 42), kept
+   * outside the trimmable journal: a phone may play one before the reply is saved.
+   */
+  recordingIds?: Set<string>;
 }
 
 interface PendingEvent {
@@ -546,8 +552,24 @@ export class HostRunRegistry {
           ? "needs_input"
           : "working";
     }
+    if (pending.type === "timeline") this.noteRecordings(run, pending.payload.timeline);
     this.append(run, pending);
     if (attentionChanged || run.state !== previousState) this.notifyChange(run, false);
+  }
+
+  private noteRecordings(run: RunRecord, value: unknown): void {
+    for (const step of parseGenerationTimeline(value)?.steps ?? []) {
+      if (isToolStep(step) && step.recording) (run.recordingIds ??= new Set()).add(step.recording.id);
+    }
+  }
+
+  /** Whether a run of this chat still held in memory has shown this recording in its timeline. */
+  chatRunNamesRecording(chatId: string, recordingId: string): boolean {
+    this.pruneExpired();
+    for (const run of this.runs.values()) {
+      if (run.chatId === chatId && run.recordingIds?.has(recordingId)) return true;
+    }
+    return false;
   }
 
   private append(run: RunRecord, pending: PendingEvent): void {

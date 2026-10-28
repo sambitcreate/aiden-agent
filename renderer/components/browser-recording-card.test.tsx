@@ -60,6 +60,22 @@ test("Play loads that recording's video from this computer and shows a player", 
   assert.deepEqual(revoked, ["blob:recording"]);
 });
 
+test("leaving the chat while a recording loads never keeps its video in memory", async () => {
+  const created: string[] = [];
+  URL.createObjectURL = () => {
+    created.push("blob:late");
+    return "blob:late";
+  };
+  let finish: (value: unknown) => void = () => undefined;
+  installBotTestIpc({ "browser:recording": () => new Promise((resolve) => (finish = resolve)) });
+  const { unmount } = render(<BrowserRecordingCard recording={RECORDING} />);
+  fireEvent.click(screen.getByRole("button", { name: "Play" }));
+  unmount();
+  finish({ mimeType: "video/mp4", data: new Uint8Array([0, 0, 0, 0x20]) });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(created, [], "a load that finishes after the card left makes no URL to leak");
+});
+
 test("a recording that was deleted says so instead of playing", async () => {
   installBotTestIpc({ "browser:recording": () => null });
   render(<BrowserRecordingCard recording={RECORDING} />);

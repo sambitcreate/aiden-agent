@@ -578,6 +578,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             browserRecordings: {
               read: async (recordingId: string) =>
                 (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
+              namedByLiveRun: (chatId: string, recordingId: string) =>
+                hostRunRegistry.chatRunNamesRecording(chatId, recordingId),
             },
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>

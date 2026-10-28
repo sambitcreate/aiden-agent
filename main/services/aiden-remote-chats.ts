@@ -1183,6 +1183,11 @@ export class AidenRemoteChatService {
        */
       browserRecordings?: {
         read(recordingId: string): Promise<{ mimeType: string; data: Buffer } | undefined>;
+        /**
+         * Whether a run of this chat that is still going has shown the
+         * recording: its reply is saved only when the whole turn ends.
+         */
+        namedByLiveRun?(chatId: string, recordingId: string): boolean;
       };
       /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
@@ -1859,8 +1864,9 @@ export class AidenRemoteChatService {
 
   /**
    * The video a completed `browser_recording_stop` step in this chat saved.
-   * Only a recording one of the chat's own timelines names can be read, so a
-   * device that may read one chat can't read another chat's recordings.
+   * Only a recording one of the chat's own timelines names can be read, saved
+   * or still running, so a device that may read one chat can't read another
+   * chat's recordings.
    */
   async browserRecording(chatId: string, recordingId: string): Promise<{ bytes: Buffer; mimeType: string }> {
     const recordings = this.options.browserRecordings;
@@ -1875,7 +1881,7 @@ export class AidenRemoteChatService {
         (step) => isToolStep(step) && step.recording?.id === recordingId,
       ),
     );
-    if (!named) throw unavailable();
+    if (!named && recordings.namedByLiveRun?.(chatId, recordingId) !== true) throw unavailable();
     const stored = await recordings.read(recordingId).catch(() => undefined);
     if (!stored) throw unavailable();
     return { bytes: stored.data, mimeType: stored.mimeType };
