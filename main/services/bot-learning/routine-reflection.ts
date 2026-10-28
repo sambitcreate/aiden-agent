@@ -69,7 +69,7 @@ export function reflectionMessage(input: { routineName: string; prompt: string; 
 
 const RECORD_TOOL: Tool = {
   name: "record_lesson",
-  description: "Propose one lesson for this routine.",
+  description: "Propose one lesson for this routine. verdict: helped (a change that would have made these runs better), or confounded / no_effect when the runs don't isolate a cause. Only helped becomes a suggestion.",
   parameters: Type.Object({
     cue: Type.String({ description: "The shape of situation it applies to." }),
     lesson: Type.String({ description: "The operation to perform, stated so it can be checked." }),
@@ -140,18 +140,32 @@ export function createRoutineReflection(deps: RoutineReflectionDependencies) {
               { systemPrompt: REFLECTION_SYSTEM_PROMPT, messages, tools: [RECORD_TOOL, RETIRE_TOOL] },
               { maxTokens: REFLECTION_MAX_TOKENS, signal },
             );
-          } finally {
+          } catch (error) {
             await reserved.settle(undefined);
+            throw error;
           }
+          await reserved.settle(answer.usage?.output);
           await deps.state.set(task.id, watermark);
           if (answer.stopReason === "error" || answer.stopReason === "aborted") return "failed";
           const ids = new Set(views.map((view) => view.runId));
-          const calls = answer.content.filter((part): part is ToolCall => part.type === "toolCall").slice(0, 2);
+          const fingerprintOf = new Map(views.map((view) => [view.runId, view.fingerprint] as const));
+          const calls = answer.content.filter((part): part is ToolCall => part.type === "toolCall");
+          // At most one of each, as the prompt says.
+          const seen = new Set<string>();
           let outcome: ReflectionOutcome = "no_entry";
           for (const call of calls) {
+            if (seen.has(call.name)) continue;
+            seen.add(call.name);
             const args = call.arguments as Record<string, unknown>;
-            const evidence = Array.isArray(args.evidence) ? args.evidence.filter((id): id is string => typeof id === "string") : [];
+            const evidence = Array.isArray(args.evidence) ? [...new Set(args.evidence.filter((id): id is string => typeof id === "string"))] : [];
             if (!evidence.length || evidence.some((id) => !ids.has(id))) continue;
+            // The host keeps the rules the docs promise: one run is not evidence,
+            // and runs on different setups can't isolate a cause.
+            const setups = new Set(evidence.map((id) => fingerprintOf.get(id) ?? ""));
+            if (evidence.length < 2 || setups.size > 1) {
+              outcome = "confounded";
+              continue;
+            }
             await admission.lease.revalidate();
             if (call.name === "record_lesson") {
               const verdict = args.verdict as BotLessonVerdict;

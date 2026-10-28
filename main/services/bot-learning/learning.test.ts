@@ -88,6 +88,20 @@ test("lessons: blocked text is refused, the seventh active routine lesson retire
   assert.equal(renderBotLessons([]), "");
 });
 
+test("keeping a proposed lesson respects the active cap, retiring the oldest", async () => {
+  const store = createBotLessonStore({ profileDir: fixedRoot() });
+  const scope = { kind: "routine" as const, routineId: "r1" };
+  const add = (lesson: string, status: "active" | "proposed") => store.add("bot-a", { scope, cue: "Mornings", lesson, component: "output_format", evidence: ["run-1", "run-2"], verdict: "helped", source: "reflection", status });
+  for (let index = 1; index <= 6; index += 1) assert.ok((await add(`Lead with item ${index}.`, "active")).ok);
+  const proposed = await add("Lead with the weather.", "proposed");
+  assert.ok(proposed.ok);
+  await store.setStatus("bot-a", proposed.lesson.id, "active");
+  const active = await store.list("bot-a", { scope, status: "active" });
+  assert.equal(active.length, 6);
+  assert.ok(active.some((lesson) => lesson.lesson === "Lead with the weather."));
+  assert.equal(active.some((lesson) => lesson.lesson === "Lead with item 1."), false);
+});
+
 test("a correction becomes one active Bot lesson with a Learned line; the same correction twice is one lesson", async () => {
   const store = createBotLessonStore({ profileDir: fixedRoot() });
   const entries: Array<{ kind: string; data: Record<string, unknown> }> = [];
@@ -160,6 +174,19 @@ test("a confounded verdict proposes nothing; NO_ENTRY advances the watermark", a
   assert.equal(await h.reflection.afterRun(h.task, fiveRuns[4]!), "confounded");
   assert.deepEqual(h.entries, []);
   assert.equal(await h.reflection.afterRun(h.task, fiveRuns[4]!), "skipped", "the same runs are not reviewed twice");
+});
+
+test("one cited run, or runs on different setups, is confounded however the model labels it; only one lesson per pass", async () => {
+  const lesson = (evidence: string[]) => ({ type: "toolCall", id: "t1", name: "record_lesson", arguments: { cue: "Mornings", lesson: "Lead with the calendar.", component: "output_format", evidence, verdict: "helped" } });
+  const single = reflectionHarness(() => ({ content: [lesson(["run-3"])] }) as never, fiveRuns);
+  assert.equal(await single.reflection.afterRun(single.task, fiveRuns[4]!), "confounded");
+  const mixedRuns = fiveRuns.map((entry, index) => ({ ...entry, fingerprint: (index < 3 ? "a" : "b").repeat(64) }));
+  const mixed = reflectionHarness(() => ({ content: [lesson(["run-1", "run-5"])] }) as never, mixedRuns);
+  assert.equal(await mixed.reflection.afterRun(mixed.task, mixedRuns[4]!), "confounded");
+  assert.deepEqual([...single.entries, ...mixed.entries], []);
+  const twice = reflectionHarness(() => ({ content: [lesson(["run-1", "run-2"]), { ...lesson(["run-3", "run-4"]), id: "t2" }] }) as never, fiveRuns);
+  assert.equal(await twice.reflection.afterRun(twice.task, fiveRuns[4]!), "proposed");
+  assert.equal((await twice.store.list("bot-a", { status: "proposed" })).length, 1);
 });
 
 test("the reflection input carries each run's failure, unverified steps and fingerprint, clipped", () => {

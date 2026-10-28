@@ -28,7 +28,6 @@ export interface BotLearningHandlerDependencies<Event = unknown> {
   overview(botId: string): Promise<BotLearningOverview>;
   undo(botId: string, changeId: string): Promise<{ ok: true } | { ok: false; code: string }>;
   undoLesson(botId: string, lessonId: string): Promise<void>;
-  undoNewestTidy(botId: string): Promise<{ ok: true } | { ok: false; code: string }>;
   respondLesson(botId: string, lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed">;
   removeLesson(botId: string, lessonId: string): Promise<void>;
 }
@@ -42,12 +41,13 @@ export function registerBotLearningHandlers<Event = unknown>(deps: BotLearningHa
   deps.handle("bots:learning:undoInChat", async (_event, input) => {
     const record = fields(input, ["botId", "target"]);
     const botId = parseBotId(record.botId);
-    const target = fields(record.target, ["kind", "lessonId"]);
+    const target = fields(record.target, ["kind", "lessonId", "changeId"]);
     if (target.kind === "lesson") {
       await deps.undoLesson(botId, id(target.lessonId));
       return { ok: true };
     }
-    if (target.kind === "memory_tidy") return deps.undoNewestTidy(botId);
+    // The line's own change: never whichever tidy happens to be newest.
+    if (target.kind === "change") return deps.undo(botId, id(target.changeId));
     throw new Error("Invalid learning request.");
   });
   deps.handle("bots:lessons:respond", async (_event, input) => {

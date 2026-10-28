@@ -1753,7 +1753,7 @@ export const botsApi = {
   learning: {
     get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
     undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
-    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "memory_tidy" } }) =>
+    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string } }) =>
       invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
     respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
       invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),

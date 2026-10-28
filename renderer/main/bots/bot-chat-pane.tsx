@@ -672,7 +672,7 @@ export function TranscriptEntries({
   /** Keep or decline a lesson from a routine's runs. */
   onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
   /** Undo a correction lesson or the newest memory tidy. */
-  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "memory_tidy" }): Promise<void>;
+  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
   /** Add or decline a proposed (or found) skill. */
   onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
   /** Connect cards' button text, e.g. where the connection is finished. */
@@ -814,8 +814,8 @@ export function TranscriptEntries({
               />
             ) : null;
           case "memory_tidy":
-            return onUndoLearning ? (
-              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "memory_tidy" })} />
+            return onUndoLearning && row.changeId ? (
+              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
             ) : null;
           case "skill_proposal":
             return onRespondToSkill ? (
@@ -1495,11 +1495,16 @@ export function BotChatPane({ botId }: { botId: string }) {
             }
           }}
           onUndoLearning={async (target) => {
+            let result: { ok: true } | { ok: false; code: string };
             try {
-              await botsApi.learning.undoInChat({ botId: current.id, target });
+              result = await botsApi.learning.undoInChat({ botId: current.id, target });
             } catch (error) {
               toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
               throw error;
+            }
+            if (!result.ok) {
+              toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
+              throw new Error(result.code);
             }
           }}
           onActOnIssue={actOnIssue}

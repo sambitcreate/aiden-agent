@@ -267,11 +267,6 @@ export function registerBotHandlers(): void {
     overview: async (botId) => (await learning()).botLearningOverview(botId),
     undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
     undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
-    undoNewestTidy: async (botId) => {
-      const module = await learning();
-      const newest = (await module.botLearningHistory.list(botId)).find((change) => change.kind === "memory_tidy" && !change.undoneAt && !change.undoOf);
-      return newest ? module.undoBotLearning(botId, newest.id) : { ok: false, code: "not_found" };
-    },
     respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
     removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
   });

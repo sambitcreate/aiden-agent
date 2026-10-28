@@ -42,6 +42,8 @@ export interface BotRoutineProposalRecord extends BotRoutineProposalEntryData {
   createdAt: number;
   decidedAt?: number;
   declineReason?: BotRoutineProposalDeclineReason;
+  /** Settled by the host (a follow-up that expired), not by the person: never counts as a decline. */
+  settledBy?: "host";
 }
 
 export type BotRoutineProposeResult =
@@ -64,7 +66,7 @@ export function proposalBackoff(
   now: number,
 ): { code: "cooling_off"; until: number } | { code: "declined_before" } | undefined {
   const settledNewestFirst = records
-    .filter((record) => record.status !== "pending" && record.decidedAt !== undefined)
+    .filter((record) => record.status !== "pending" && record.decidedAt !== undefined && record.settledBy !== "host")
     .sort((a, b) => b.decidedAt! - a.decidedAt!);
   const window = settledNewestFirst.slice(0, BOT_ROUTINE_PROPOSAL_COOLING.window);
   const dismissed = window.filter((record) => record.status === "dismissed");
@@ -219,6 +221,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     routineId?: string,
     append: Append = sessionAppend(botId),
     declineReason?: BotRoutineProposalDeclineReason,
+    settledBy?: "host",
   ): Promise<BotRoutineProposalRecord> {
     const record = records[index]!;
     const data: BotRoutineProposalStatusEntryData = {
@@ -227,12 +230,13 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
       ...(routineId !== undefined ? { routineId } : {}),
     };
     await append(BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND, { ...data });
-    const { routineId: _previous, declineReason: _reason, ...rest } = record;
+    const { routineId: _previous, declineReason: _reason, settledBy: _by, ...rest } = record;
     const next: BotRoutineProposalRecord = {
       ...rest,
       status,
       ...(routineId !== undefined ? { routineId } : {}),
       ...(status === "dismissed" && declineReason !== undefined ? { declineReason } : {}),
+      ...(status === "dismissed" && settledBy ? { settledBy } : {}),
       decidedAt: now(),
     };
     records[index] = next;
@@ -297,7 +301,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
     /** The newest answered suggestions, for the Bot's `routines list`. */
     async recentDecisions(botId: string): Promise<BotRoutineProposalDecisionSummary[]> {
       return (await load(botId))
-        .filter((record) => record.status !== "pending" && record.decidedAt !== undefined)
+        .filter((record) => record.status !== "pending" && record.decidedAt !== undefined && record.settledBy !== "host")
         .sort((a, b) => b.decidedAt! - a.decidedAt!)
         .slice(0, BOT_ROUTINE_PROPOSAL_COOLING.recent)
         .map((record) => ({
@@ -325,7 +329,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
      */
     propose(
       botId: string,
-      input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
+      input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean; hostFollowUp?: boolean },
       append: Append = sessionAppend(botId),
     ): Promise<BotRoutineProposeResult> {
       return serial(botId, async () => {
@@ -340,15 +344,17 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
           return { ok: false, code: "invalid", error: `The reason is at most ${BOT_ROUTINE_PROPOSAL_REASON_LIMIT} characters.` };
         }
         const records = await reconcile(botId, await load(botId), append);
-        // Back-off is for the Bot's own ideas: a routine the person asked for,
-        // or a follow-up the Bot promised them, always gets its card.
-        const backoff = input.requested ? undefined : proposalBackoff(records, parsed.name, now());
+        // Back-off is for the Bot's own ideas. A follow-up the host queued for a
+        // promise always gets its card. The model's own "the person asked"
+        // claim only gets past a same-name decline, never cooling off.
+        const found = input.hostFollowUp ? undefined : proposalBackoff(records, parsed.name, now());
+        const backoff = found?.code === "declined_before" && input.requested ? undefined : found;
         if (backoff?.code === "cooling_off") {
           return {
             ok: false,
             code: "cooling_off",
             until: backoff.until,
-            error: "The person declined most recent suggestions. Don't suggest new routines on your own for a while; if they asked for this one, propose it again with requested set to true.",
+            error: "The person declined most recent suggestions. Don't suggest routines for a while; the person can add one themselves in the Bot's profile.",
           };
         }
         if (backoff?.code === "declined_before") {
@@ -391,7 +397,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
      * entry. Once a routine exists for the proposal every answer, from any
      * device, settles as accepted; otherwise a repeat returns the settled status.
      */
-    respond(input: BotRoutineProposalRespondInput): Promise<BotRoutineProposalRespondResult> {
+    respond(input: BotRoutineProposalRespondInput & { settledBy?: "host" }): Promise<BotRoutineProposalRespondResult> {
       return serial(input.botId, async () => {
         const records = await load(input.botId);
         const index = records.findIndex((record) => record.proposalId === input.proposalId);
@@ -402,7 +408,7 @@ export function createBotRoutineProposalService(dependencies: BotRoutineProposal
         if (created) return settled(await settle(input.botId, records, index, "accepted", created.id));
         if (record.status !== "pending") return settled(record);
         if (input.decision === "dismiss") {
-          return settled(await settle(input.botId, records, index, "dismissed", undefined, sessionAppend(input.botId), input.reason));
+          return settled(await settle(input.botId, records, index, "dismissed", undefined, sessionAppend(input.botId), input.reason, input.settledBy));
         }
         const shown = await shownProposal(input.botId, record.proposalId);
         const routine = await dependencies.routines.create({ ...shown, sourceProposalId: record.proposalId });

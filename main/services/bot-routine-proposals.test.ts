@@ -418,11 +418,30 @@ test("the respond parser takes a reason only with dismiss", () => {
   assert.throws(() => parseBotRoutineProposalRespond({ ...base, decision: "dismiss", reason: "meh" }));
 });
 
-test("a routine the person asked for gets its card even while the Bot is cooling off", async () => {
+test("a requested routine gets past a same-name decline but never past cooling off", async () => {
   const h = harness();
   await decline(h, "One");
-  await decline(h, "Two");
-  await decline(h, "Three");
   assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, false);
   assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One", requested: true })).ok, true);
+
+  const cooled = harness();
+  await decline(cooled, "One");
+  await decline(cooled, "Two");
+  await decline(cooled, "Three");
+  const refused = await cooled.proposals.propose("bot-a", { ...dailyPlan, name: "Four", requested: true });
+  assert.equal(!refused.ok && refused.code, "cooling_off");
+  assert.equal((await cooled.proposals.propose("bot-a", { ...dailyPlan, name: "Four", hostFollowUp: true })).ok, true,
+    "a follow-up the host queued for a promise still gets its card");
+});
+
+test("follow-ups the host dismissed when they expired never count as declines", async () => {
+  const h = harness();
+  for (const name of ["One", "Two", "Three"]) {
+    const proposed = await h.proposals.propose("bot-a", { ...dailyPlan, name, hostFollowUp: true });
+    assert.ok(proposed.ok);
+    await h.proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "dismiss", settledBy: "host" });
+    h.clock.at += 60_000;
+  }
+  assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, true);
+  assert.deepEqual(await h.proposals.recentDecisions("bot-a"), []);
 });

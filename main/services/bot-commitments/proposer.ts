@@ -23,7 +23,7 @@ export interface BotCommitmentProposerDependencies {
   proposals: {
     propose(
       botId: string,
-      input: { name: string; schedule: unknown; prompt: string; reason?: string; requested?: boolean },
+      input: { name: string; schedule: unknown; prompt: string; reason?: string; hostFollowUp?: boolean },
     ): Promise<{ ok: true; proposal: { proposalId: string } } | { ok: false; code: string; error: string }>;
     pendingCount(botId: string): Promise<number>;
     /** Settle a still-open follow-up card whose day has passed. */
@@ -58,7 +58,7 @@ export function createBotCommitmentProposer(dependencies: BotCommitmentProposerD
       .sort((a, b) => a.createdAt - b.createdAt);
     for (const record of waiting) {
       if (free <= 0) break;
-      const outcome = await dependencies.proposals.propose(botId, { ...commitmentProposal(record), requested: true });
+      const outcome = await dependencies.proposals.propose(botId, { ...commitmentProposal(record), hostFollowUp: true });
       if (outcome.ok) {
         await dependencies.commitments.update(botId, record.id, { status: "proposed", proposalId: outcome.proposal.proposalId });
         free -= 1;

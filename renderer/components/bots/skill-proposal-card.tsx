@@ -8,7 +8,8 @@ import { BotNoticeCard } from "./bot-notice-card";
 import type { BotSkillProposalEntryData, BotSkillProposalStatus } from "../../shared/bot-skill-proposals";
 
 function DiffLines({ text }: { text: string }) {
-  const lines = text.split("\n").slice(0, 80);
+  // Every line: Add approves exactly this text, so none of it may be hidden.
+  const lines = text.split("\n");
   return (
     <pre className="mt-2 max-h-56 overflow-auto rounded-control bg-control p-2 text-mini leading-relaxed text-secondary" aria-label="What would load">
       {lines.map((line, index) => (

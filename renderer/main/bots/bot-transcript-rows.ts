@@ -64,7 +64,7 @@ export type BotTranscriptRow =
       lesson: import("../../shared/bot-lessons").BotLessonCardData;
       status: "pending" | "active" | "dismissed" | "retired";
     }
-  | { kind: "memory_tidy"; id: string }
+  | { kind: "memory_tidy"; id: string; changeId?: string }
   /** A "Needs you" issue the host raised; settles to one quiet line. */
   | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
@@ -166,7 +166,7 @@ export function botTranscriptRows(
           rows.push({ kind: entry.type, id: entry.id, lesson: entry.lesson, status: entry.status });
           break;
         case "memory_tidy":
-          rows.push({ kind: "memory_tidy", id: entry.id });
+          rows.push({ kind: "memory_tidy", id: entry.id, ...(entry.changeId ? { changeId: entry.changeId } : {}) });
           break;
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });

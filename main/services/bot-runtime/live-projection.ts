@@ -429,7 +429,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     }
     if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) continue;
     if (record.kind === "aiden.memory-tidy") {
-      mapped.push({ entry: { id, type: "memory_tidy" }, turn: null });
+      const data = record.data as { changeId?: unknown } | null;
+      const changeId = typeof data?.changeId === "string" ? data.changeId : undefined;
+      mapped.push({ entry: { id, type: "memory_tidy", ...(changeId ? { changeId } : {}) }, turn: null });
       continue;
     }
     if (record.kind === BOT_ISSUE_ENTRY_KIND) {

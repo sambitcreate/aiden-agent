@@ -373,6 +373,7 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       const requestId = botRoutineRequestId(task.id, trigger);
       const recovering = durableFire(trigger) && options.runId === requestId;
       let ports: BotRoutineExecutorPorts | undefined;
+      let fingerprint: string | undefined;
       let outcome: BotRoutineOutcome;
       try {
         if (recovering) {
@@ -422,6 +423,8 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
           if (recovering) throw new RoutineOutcomeUnknown(message(error));
           throw error;
         }
+        // The setup the run starts on, not whatever it changed into while running.
+        fingerprint = ports.fingerprint ? await ports.fingerprint(task.botId).catch(() => undefined) : undefined;
         const previous = trigger.kind === "catch_up"
           ? await dependencies.store.runById(task.id, requestId)
           : undefined;
@@ -460,9 +463,6 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
             : {}),
         };
       }
-      const fingerprint = ports?.fingerprint
-        ? await ports.fingerprint(task.botId).catch(() => undefined)
-        : undefined;
       // A scheduled fire skipped while the Bot was paused is recorded under
       // its own request id, so the catch-up after Resume submits that exact
       // id and any repeat of the catch-up dedupes against it.

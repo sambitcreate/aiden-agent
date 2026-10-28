@@ -104,11 +104,19 @@ export function createBotLessonStore(options: { profileDir(): string; now?(): nu
 
     setStatus(botId, id, status) {
       return serial(botId, async () => {
-        const lessons = await load(botId);
+        let lessons = await load(botId);
         const index = lessons.findIndex((lesson) => lesson.id === id);
         if (index < 0) return undefined;
         const next = { ...lessons[index]!, status, decidedAt: now() };
         lessons[index] = next;
+        // Activating (Keep this, or Undo of a removal) respects the same cap as add.
+        if (status === "active") {
+          const cap = next.scope.kind === "routine" ? BOT_LESSON_LIMITS.activePerRoutine : BOT_LESSON_LIMITS.activeBotWide;
+          const active = lessons.filter((entry) => entry.status === "active" && sameScope(entry.scope, next.scope) && entry.id !== id);
+          const over = active.length + 1 - cap;
+          const retire = new Set(active.slice(0, Math.max(0, over)).map((entry) => entry.id));
+          lessons = lessons.map((entry) => (retire.has(entry.id) ? { ...entry, status: "retired" as const, decidedAt: now() } : entry));
+        }
         await save(botId, lessons);
         return next;
       });

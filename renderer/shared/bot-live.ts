@@ -193,7 +193,7 @@ export type BotTranscriptEntry =
       status: "pending" | "active" | "dismissed" | "retired";
       at?: number;
     }
-  | { id: string; type: "memory_tidy"; at?: number }
+  | { id: string; type: "memory_tidy"; changeId?: string; at?: number }
   /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
   | {
       id: string;

@@ -59,7 +59,7 @@ test("an unapproved home skill is not admitted; approving its content admits it;
 
 test("a Bot's file tools cannot write into a skill folder", async () => {
   const root = tempRoot();
-  for (const target of [".aiden/skills/x/SKILL.md", ".aiden/skill/x/SKILL.md", ".claude/skills/x/SKILL.md", ".agents/x/SKILL.md"]) {
+  for (const target of [".aiden/skills/x/SKILL.md", ".aiden/skill/x/SKILL.md", ".claude/skills/x/SKILL.md", ".agents/x/SKILL.md", ".claude/Skills/x/SKILL.md", ".Agents/x/SKILL.md", ".AIDEN/skills/x/SKILL.md"]) {
     assert.equal(await writesIntoSkillDirectory(root, { path: target }), true, target);
   }
   assert.equal(await writesIntoSkillDirectory(root, { path: "notes/skills.md" }), false);

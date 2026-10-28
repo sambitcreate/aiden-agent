@@ -93,7 +93,8 @@ async function writesIntoProtectedRoot(
 }
 
 /** Skill folders the skill loaders read: `.aiden/skill(s)`, `.claude/skills`, `.agents`. */
-const SKILL_DIRECTORY = /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/u;
+// Case-insensitive: macOS volumes are, so `.claude/Skills` is `.claude/skills`.
+const SKILL_DIRECTORY = /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/iu;
 
 /**
  * Whether a write lands in a folder the skill loaders read. A Bot never

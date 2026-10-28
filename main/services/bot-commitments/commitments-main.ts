@@ -19,7 +19,7 @@ export const botCommitmentProposer = createBotCommitmentProposer({
     propose: async (botId, input) => (await import("../bot-routine-proposals-main.js")).botRoutineProposals.propose(botId, input),
     pendingCount: async (botId) => (await import("../bot-routine-proposals-main.js")).botRoutineProposals.pendingCount(botId),
     dismiss: async (botId, proposalId) => {
-      await (await import("../bot-routine-proposals-main.js")).botRoutineProposals.respond({ botId, proposalId, decision: "dismiss" });
+      await (await import("../bot-routine-proposals-main.js")).botRoutineProposals.respond({ botId, proposalId, decision: "dismiss", settledBy: "host" });
     },
   },
   pendingLimit: BOT_ROUTINE_PROPOSAL_PENDING_LIMIT,

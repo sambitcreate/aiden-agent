@@ -21,6 +21,8 @@ import { writeJsonAtomic } from "../durable-fs.js";
 import { validateBotSkillProposal, type BotSkillDraft } from "./validate.js";
 
 export const BOT_SKILL_PROPOSALS_FILE = "skill-proposals.json";
+/** A folder skill longer than this is never offered for approval (its card could not show it all). */
+export const FOLDER_SKILL_REVIEW_CHARS = 60_000;
 const SETTLED_KEPT = 50;
 
 interface StoredProposal extends BotSkillDraft {
@@ -136,9 +138,12 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
     /** A skill found in the Bot's folder that nobody approved: one card asking whether to use it. */
     reviewExisting(botId: string, skill: BotSkillDraft): Promise<void> {
       return serial(botId, async () => {
+        // Too large to show in full on a card: it stays unused rather than be approved unseen.
+        if (skill.instructions.length > FOLDER_SKILL_REVIEW_CHARS) return;
         const records = await load(botId);
         const fingerprint = botSkillContentFingerprint(skill);
-        if (records.some((record) => record.origin === "folder" && record.status === "pending" && botSkillContentFingerprint(record) === fingerprint)) return;
+        // Asked once per content: a "Not now" stays answered after a restart.
+        if (records.some((record) => record.origin === "folder" && botSkillContentFingerprint(record) === fingerprint)) return;
         const record: StoredProposal = {
           proposalId: newId(),
           origin: "folder",
@@ -154,7 +159,7 @@ export function createBotSkillProposalService(deps: BotSkillProposalDependencies
           name: record.name,
           description: record.description,
           origin: "folder",
-          preview: skill.instructions.slice(0, 4_000),
+          preview: skill.instructions,
           update: false,
         };
         await deps.appendEntry(botId, BOT_SKILL_PROPOSAL_ENTRY_KIND, { ...card });

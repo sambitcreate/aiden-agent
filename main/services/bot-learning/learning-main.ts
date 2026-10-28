@@ -93,7 +93,10 @@ export const botLearningHistory = createBotLearningHistory({
   async apply(botId, target, content) {
     if (target.kind === "memory") return restoreMemory(botId, content);
     if (target.kind === "lesson") {
-      await botLessons.setStatus(botId, target.lessonId, content === null ? "retired" : "active");
+      const status = content === null ? "retired" : "active";
+      await botLessons.setStatus(botId, target.lessonId, status);
+      // The chat's Learned line and lesson card follow the page.
+      await appendEntry(botId, BOT_LESSON_STATUS_ENTRY_KIND, { lessonId: target.lessonId, status }).catch(() => undefined);
       return;
     }
     const file = await skillFile(botId, target.name);
@@ -231,23 +234,26 @@ export async function maybeTidyMemory(botId: string): Promise<"not_needed" | "to
       return "failed";
     }
     try {
-      const before = memoryText(view);
       const target = targets[0]!;
       const operations = await proposeMemoryTidy(admission, view, target, AbortSignal.any([AbortSignal.timeout(60_000), admission.lease.signal]));
       await reserved.settle(undefined);
       if (!operations) return "unchanged";
       await admission.lease.revalidate();
-      const usedBefore = view[target].usedChars;
+      // The person may have edited memory during the model call: never tidy
+      // (or later undo) over their change. Abandon when it moved.
+      const fresh = await botMemory.view(botId);
+      if (fresh.revision !== view.revision) return "unchanged";
+      const usedBefore = fresh[target].usedChars;
       const result = await botMemory.apply(botId, target, operations);
       if (!result.ok) return "unchanged";
       const after = await botMemory.view(botId);
       if (after[target].usedChars >= usedBefore) {
-        // Not smaller: put it back.
-        await restoreMemory(botId, before);
+        // Not smaller: put back exactly what was there a moment ago.
+        await restoreMemory(botId, memoryText(fresh));
         return "unchanged";
       }
-      await botLearningHistory.record({ botId, kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before, after: memoryText(after) });
-      await appendEntry(botId, "aiden.memory-tidy", { targets: [target] }).catch(() => undefined);
+      const change = await botLearningHistory.record({ botId, kind: "memory_tidy", summary: "Tidied memory", target: { kind: "memory" }, before: memoryText(fresh), after: memoryText(after) });
+      await appendEntry(botId, "aiden.memory-tidy", { targets: [target], changeId: change.id }).catch(() => undefined);
       return "tidied";
     } finally {
       admission.lease.release();
