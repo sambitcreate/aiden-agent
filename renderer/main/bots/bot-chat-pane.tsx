@@ -43,7 +43,8 @@ import {
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotRoutineProposalDecision,
+  BotRoutineProposalDeclineReason, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
 import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -659,6 +660,7 @@ export function TranscriptEntries({
   onRespondToProposal?(
     proposalId: string,
     decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
   ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
@@ -779,7 +781,7 @@ export function TranscriptEntries({
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
-                onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
+                onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
               />
             ) : null;
           case "issue":
@@ -1240,9 +1242,15 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  const respondToProposal = async (proposalId: string, decision: BotRoutineProposalDecision) => {
+  const respondToProposal = async (
+    proposalId: string,
+    decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
+  ) => {
     try {
-      const result = await botsApi.routineProposals.respond({ botId: current.id, proposalId, decision });
+      const result = await botsApi.routineProposals.respond({
+        botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
+      });
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
       return result.status;
     } catch (error) {

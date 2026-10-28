@@ -34,16 +34,16 @@ test("turning quiet hours off saves enabled false and hides the times", () => {
   const saved: BotInterruptions[] = [];
   render(<Harness initial={DEFAULT_BOT_INTERRUPTIONS} saved={saved} />);
   fireEvent.click(screen.getByRole("switch", { name: "Quiet hours" }));
-  assert.equal(saved.at(-1)?.quietHours.enabled, false);
+  assert.equal(saved[saved.length - 1]?.quietHours.enabled, false);
   assert.equal(screen.queryByLabelText("Quiet from"), null);
-  assert.equal(botInterruptionsSummary(saved.at(-1)), "5 a day");
+  assert.equal(botInterruptionsSummary(saved[saved.length - 1]), "5 a day");
 });
 
 test("the limit stepper stays within 0 and 20", () => {
   const saved: BotInterruptions[] = [];
   render(<Harness initial={{ ...DEFAULT_BOT_INTERRUPTIONS, dailyLimit: 1 }} saved={saved} />);
   fireEvent.click(screen.getByRole("button", { name: "Fewer notifications" }));
-  assert.equal(saved.at(-1)?.dailyLimit, 0);
+  assert.equal(saved[saved.length - 1]?.dailyLimit, 0);
   assert.equal((screen.getByRole("button", { name: "Fewer notifications" }) as HTMLButtonElement).disabled, true);
   cleanup();
   const top: BotInterruptions[] = [];
@@ -55,5 +55,5 @@ test("changing a time saves the new window", () => {
   const saved: BotInterruptions[] = [];
   render(<Harness initial={DEFAULT_BOT_INTERRUPTIONS} saved={saved} />);
   fireEvent.change(screen.getByLabelText("Quiet from"), { target: { value: "21:30" } });
-  assert.deepEqual(saved.at(-1)?.quietHours, { enabled: true, start: "21:30", end: "07:00" });
+  assert.deepEqual(saved[saved.length - 1]?.quietHours, { enabled: true, start: "21:30", end: "07:00" });
 });

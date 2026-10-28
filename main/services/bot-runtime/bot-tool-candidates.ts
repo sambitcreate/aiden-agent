@@ -208,13 +208,14 @@ export function routinesCandidate(
       botId: string,
       input: Parameters<BotRoutinesToolDependencies["propose"]>[1],
       append: (kind: string, data: Record<string, unknown>) => Promise<void>,
-    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+    ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string; until?: number }>;
   },
 ): BotToolCandidate {
   const build = (append: (kind: string, data: Record<string, unknown>) => Promise<void>) =>
     createBotRoutinesTool(botId, {
       list: dependencies.list,
       pause: dependencies.pause,
+      ...(dependencies.recentDecisions ? { recentDecisions: dependencies.recentDecisions } : {}),
       propose: (id, input) => dependencies.propose(id, input, append),
     });
   return {

@@ -740,6 +740,7 @@
         "main/handlers/bot-health.test.ts",
         "renderer/main/bots/bot-health-section.test.tsx",
         "renderer/main/bots/bot-interruptions-page.test.tsx",
+        "renderer/components/bots/routine-proposal-card.test.tsx",
         "renderer/components/bots/bot-issue-card.test.tsx",
         "renderer/components/follow-through-chips.test.tsx",
         "renderer/components/settings/harness-runtime-section.test.tsx",

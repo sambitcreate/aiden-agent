@@ -139,6 +139,7 @@ const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
     const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
+  recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
 const lazyRoutineNotes = {
