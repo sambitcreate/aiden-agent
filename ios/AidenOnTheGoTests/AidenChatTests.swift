@@ -5649,6 +5649,8 @@ final class AidenChatTests: XCTestCase {
             case .questionnaire: return "questionnaire"
             case .extraction: return "extraction"
             case .visual(let visual): return "visual:\(visual.id)"
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
             }
         }
         XCTAssertEqual(rows.map(describe), [
@@ -5682,6 +5684,64 @@ final class AidenChatTests: XCTestCase {
             AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline)?.map(describe),
             ["text:Before.", "tool:call-1", "text:After."]
         )
+    }
+
+    func testChronologicalRowsDrawEachImageBeneathTheStepThatProducedIt() throws {
+        // Revision 44: an assistant image names the step that made it.
+        let message = try AidenRemoteJSONDecoder.decode(AidenChatMessage.self, from: Data(#"""
+        {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+         "attachments":[
+           {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+           {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+           {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+           {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"}],
+         "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+           {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+           {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """#.utf8))
+        let attachments = try XCTUnwrap(message.attachments)
+        XCTAssertEqual(attachments.map(\.toolCallId), ["call-2", "call-1", nil, nil], "a malformed step id is dropped, not the image")
+
+        let images = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: message.text, reasoning: "", timeline: message.timeline, images: images
+        ))
+        func describe(_ row: AidenChronologicalRow) -> String {
+            switch row.kind {
+            case .text: return "text:\(row.text)"
+            case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
+            default: return "other"
+            }
+        }
+        XCTAssertEqual(rows.map(describe), [
+            "text:Before.", "tool:call-1", "images:shown", "text:Middle.", "tool:call-2", "images:shared_a", "text:After.",
+        ])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        // Only images without a step are left for the strip after the reply.
+        XCTAssertEqual(AidenChronologicalProjection.placedImageIDs(in: rows), ["shown", "shared_a"])
+        // The offline transcript cache keeps the step.
+        XCTAssertEqual(try JSONDecoder().decode(AidenChatMessage.self, from: JSONEncoder().encode(message)), message)
+
+        // While the reply streams, a generate_image placeholder sits beneath its
+        // step, split from the next step exactly as its image will be once the
+        // reply commits, so nothing moves at the hand-off.
+        let live = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Generate image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_search","label":"Search","status":"running","startedAt":1100,"updatedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        let liveRows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, imageSlots: ["call-1", "call-7"]
+        ))
+        XCTAssertEqual(liveRows.map(describe), ["text:Before.", "tool:call-1", "slot:call-1", "tool:call-2", "text:Here it is."])
+        XCTAssertEqual(AidenChronologicalProjection.placedImageSlots(in: liveRows), ["call-1"], "a slot without its step stays after the reply")
+        let generated = try JSONDecoder().decode(AidenMessageAttachment.self, from: Data(
+            #"{"id":"generated","name":"Image.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"}"#.utf8
+        ))
+        let committed = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, images: [generated]
+        ))
+        XCTAssertEqual(committed.map(describe), ["text:Before.", "tool:call-1", "images:generated", "tool:call-2", "text:Here it is."])
     }
 
     func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
@@ -14181,8 +14241,8 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertEqual(other, ["generation-0"])
     }
 
-    private func image(_ id: String) -> AidenMessageAttachment {
-        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10)
+    private func image(_ id: String, call: String? = nil) -> AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10, toolCallId: call)
     }
 
     private func settledMessage(
@@ -14227,6 +14287,26 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: displayOnly))
         let failed = settledMessage(steps: [imageStep(.failed)], attachments: [image("other")])
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: failed))
+    }
+
+    func testImagesThatNameTheirStepRevealOnlyTheGeneratedOne() {
+        // Revision 44: each image names its call, so the generated image is
+        // found even after a shared image and beside a displayed one.
+        let placed = settledMessage(
+            steps: [
+                imageStep(.completed, index: 1, toolName: "share_image"),
+                imageStep(.completed, index: 2),
+                imageStep(.completed, index: 3, toolName: "display_image"),
+            ],
+            attachments: [image("shared_a", call: "call-1"), image("generated", call: "call-2"), image("shown", call: "call-3")]
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: placed), "generated")
+        // A placed reply whose generated image never arrived reveals nothing.
+        let missing = settledMessage(
+            steps: [imageStep(.completed, index: 1, toolName: "share_image"), imageStep(.completed, index: 2)],
+            attachments: [image("shared_a", call: "call-1")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: missing))
     }
 
     func testElapsedTimeUsesHostTimestampsNotThePhoneClock() {

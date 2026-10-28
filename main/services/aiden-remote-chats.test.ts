@@ -1147,6 +1147,48 @@ function visualsMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   };
 }
 
+function imageStep(id: string, toolCallId: string, order: number, toolName: string, contentOffset: number) {
+  return {
+    id, order, kind: "tool" as const, toolCallId, toolName, label: toolName,
+    status: "completed" as const, startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset,
+  };
+}
+
+function shownImage(id: string, name: string) {
+  return { id, name, mimeType: "image/png", kind: "image" as const, size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG };
+}
+
+test("chat projection tells phones which step produced each assistant image (revision 44)", () => {
+  const timeline = {
+    version: 3 as const, generationId: "stream-images", status: "completed" as const, startedAt: 1_000, finishedAt: 2_000,
+    steps: [
+      imageStep("tool-1", "call-1", 0, "display_image", 7),
+      imageStep("tool-2", "call-2", 1, "generate_image", 15),
+      imageStep("tool-3", "call-3", 2, "share_image", 15),
+    ],
+  };
+  const placed: ChatMessage = {
+    id: "assistant-placed", role: "assistant", content: "First. Second. Third.", createdAt: 2_000, timeline,
+    attachments: [shownImage("shared_a", "Shared.png"), shownImage("shown", "Shown.png"), shownImage("generated", "Generated.png")],
+    imagePlacements: [
+      { attachmentId: "shown", toolCallId: "call-1" },
+      { attachmentId: "generated", toolCallId: "call-2" },
+      { attachmentId: "shared_a", toolCallId: "call-3" },
+    ],
+  };
+  // Saved before every image recorded its call: each source pairs in order.
+  const legacy: ChatMessage = { ...placed, id: "assistant-legacy", imagePlacements: [{ attachmentId: "generated", toolCallId: "call-2" }] };
+  const user: ChatMessage = { id: "user-1", role: "user", content: "Look", createdAt: 1_000, attachments: [shownImage("upload", "Upload.png")] };
+  const projection = projectAidenRemoteChat(chat({ messages: [user, placed, legacy] }));
+  const calls = (index: number) =>
+    Object.fromEntries((projection.messages[index]!.attachments ?? []).map((attachment) => [attachment.name, attachment.toolCallId]));
+  const expected = { "Shared.png": "call-3", "Shown.png": "call-1", "Generated.png": "call-2" };
+  assert.deepEqual(calls(1), expected);
+  assert.deepEqual(calls(2), expected);
+  assert.deepEqual(calls(0), { "Upload.png": undefined }, "a sent image belongs to no step");
+  assertNoForbiddenWireKeys(projection, "chat projection");
+});
+
 test("chat projection lists each inline visual with its snapshot and no private markup", () => {
   const projection = projectAidenRemoteChat(chat({ messages: [visualsMessage()] }));
   const message = projection.messages[0]!;

@@ -809,6 +809,17 @@ A Bot can hand a step back to the person ("Your turn: Enter the 2FA code your ba
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botHandoffs`: a session waiting on a hand-off, its frames, the answer, open-on-Mac, pause and unpause shapes, paused session, summary, detail and refusal, and the same moments as a device without `bot:handoffs` sees them (`legacy`). The desktop parser reads the section only when `contractRevision` is 37 or newer.
 
+## Image placement, revision 44
+
+The host keeps the revision in one constant (`AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION`). Revision 44 is provisional: it is re-claimed as the next free revision when the change merges.
+
+An assistant message's image attachment may carry `toolCallId`, the public `call-N` id (`^call-[1-9][0-9]*$`) of the timeline tool step that produced it: `display_image`, `share_image` or `generate_image`. It is display-only and needs no capability. User attachments and text attachments never carry it.
+
+- The host sends the placement it stored with the reply. For a reply saved before every image recorded its call, it pairs unplaced images with their completed calls in order, per source: `shared_` ids with `share_image` calls and other images with `display_image` calls. A source pairs only when its images and calls match one for one, and shown images are not paired while any `generate_image` call has no placed image; an unpaired image gets no `toolCallId`.
+- An image whose `toolCallId` names no step on the message's projected timeline, or that has none, trails the reply as before.
+
+**Clients.** The desktop transcript draws each placed image after the activity row that holds its step. Aiden On The Go for iOS and Android split a run of same-offset steps there instead, as they already do for visuals, so the image sits right beneath its own step line. Every client keeps only unplaced images in the strip after the reply. A malformed `toolCallId`, or one of the wrong type, is dropped without dropping the image. Older clients ignore the key. Images still reach phones only when the reply is saved, not while it streams; while it streams, the phones draw a running `generate_image` call's placeholder beneath its step, split the same way, so the image takes the placeholder's spot. With revision 44 the phones' arrival reveal plays on the image a `generate_image` call produced, found by its `toolCallId`.
+
 ## Web page extract recap, revision 38
 
 The host keeps the revision in one constant (`AIDEN_REMOTE_WEB_EXTRACT_CONTRACT_REVISION`).

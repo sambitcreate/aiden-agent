@@ -8575,6 +8575,11 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "toolCallId": {
+            "type": "string",
+            "pattern": "^call-[1-9][0-9]*$",
+            "description": "Contract revision 44: on an assistant image, the timeline tool step that produced it. Clients draw the image at that step; an image without it trails the reply."
           }
         },
         "additionalProperties": false
