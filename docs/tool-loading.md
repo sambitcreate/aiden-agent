@@ -9,7 +9,7 @@ Skills are listed once, in `<available_skills>` in the system prompt, and loaded
 - The tool loads only skills the model may invoke in that chat. A workspace skill is unavailable under **No access**, and a skill that turned off its model invocation is never listed.
 - Turning Skills off in Settings applies from the next `skill` call, as before.
 - A Bot's `skill` tool loads only the skills granted to that Bot. The requested name is checked against the Bot's current grants when the call is made, so taking a skill away stops it at once.
-- The per-skill key (`skillToolKey`) is still each skill's internal identity for grants and slash commands; it is no longer a tool name.
+- The per-skill key (`skillToolKey`) is still each skill's internal identity for grants and slash commands; it is no longer a tool name. The tool matches a listed name first and a key only when no name matches.
 
 The CLI keeps Pi's own skill loading and its `skill_aiden_app` tool; CLI-hosted Bots keep their own per-skill tools.
 

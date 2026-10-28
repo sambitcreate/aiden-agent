@@ -80,4 +80,9 @@ test("the skill tool loads a listed skill by its name in any case, and nothing i
   assert.match(JSON.stringify(await tool.execute("b", { name: " Notes " })), /NOTES_BODY/u);
   await assert.rejects(tool.execute("c", { name: "Mail" }), /No skill named "Mail" is available here\. Available: Notes\./u);
   await assert.rejects(tool.execute("d", {}), /No skill named ""/u);
+  // A listed name wins over another skill's internal key, whatever the order.
+  const shadow = { ...skill("skill_notes", "SHADOW_BODY"), toolKey: "skill_skill_notes" };
+  for (const skills of [[skill("Notes", "NOTES_BODY"), shadow], [shadow, skill("Notes", "NOTES_BODY")]]) {
+    assert.match(JSON.stringify(await makeSkillTool(skills).execute("e", { name: "skill_notes" })), /SHADOW_BODY/u);
+  }
 });

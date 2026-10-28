@@ -348,7 +348,8 @@ export function modelInvocableSkills(
 
 /**
  * The skill the `skill` tool's `name` argument means: its listed name (any
- * case or Unicode form) or its internal tool key. Undefined when none matches.
+ * case or Unicode form), else its internal tool key. A listed name always
+ * wins, so another skill's key can never shadow it. Undefined when none matches.
  */
 export function findSkillByName<T extends Pick<RegisteredSkill, "name" | "toolKey">>(
   skills: readonly T[],
@@ -361,14 +362,14 @@ export function findSkillByName<T extends Pick<RegisteredSkill, "name" | "toolKe
   } catch {
     canonical = undefined;
   }
-  return skills.find((skill) => {
-    if (skill.toolKey === value) return true;
+  const byName = canonical === undefined ? undefined : skills.find((skill) => {
     try {
-      return canonical !== undefined && canonicalSkillIdentity(skill.name) === canonical;
+      return canonicalSkillIdentity(skill.name) === canonical;
     } catch {
       return false;
     }
   });
+  return byName ?? skills.find((skill) => skill.toolKey === value);
 }
 
 /** The internal key of the model-invocable skill `requested` names, if any. */

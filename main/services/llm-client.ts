@@ -3235,22 +3235,16 @@ export const llmClient = {
       };
       // Freeze only the already-admitted MCP inventory. The provider sees the
       // discovery/script tools; nested calls still use the ordinary host gates.
-      const { declared, deferred: deferredMcpTools } = partitionPiCodemodeTools(modelContributions.tools);
+      const { declared, deferred: deferredTools } = partitionPiCodemodeTools(modelContributions.tools);
       // Workspace chats with codemode declare rarely used built-in tools only
       // once the model loads them; scripts can still call the ones they could.
       const onDemandTools = !preparedBotContext && declared.some((tool) => tool.name === "codemode")
         ? createOnDemandTools(declared)
         : undefined;
-      const withOnDemandDeferred = (initial: readonly AgentTool[]) => {
-        if (!onDemandTools) return deferredMcpTools;
-        const declaredNames = new Set(initial.map(({ name }) => name));
-        return [
-          ...deferredMcpTools,
-          ...onDemandTools.onDemand.filter((tool) => !declaredNames.has(tool.name) && isPiCodemodeCallable(tool)),
-        ];
-      };
+      // Held-back tools a script can call join the callable inventory the way
+      // late MCP tools do, so loading one later never collides with the frozen deferred set.
+      const onDemandCallable = onDemandTools?.onDemand.filter((tool) => isPiCodemodeCallable(tool)) ?? [];
       let runtimeTools: AgentTool[] = onDemandTools ? onDemandTools.initialTools([]) : declared;
-      let deferredTools = withOnDemandDeferred(runtimeTools);
       const runtimeContributions = {
         ...modelContributions,
         tools: runtimeTools,
@@ -3424,9 +3418,7 @@ export const llmClient = {
       if (onDemandTools) {
         // Tools this chat already loaded or called stay declared from the start.
         runtimeTools = onDemandTools.initialTools(initialMessages);
-        deferredTools = withOnDemandDeferred(runtimeTools);
         generationContextOptions.tools = runtimeTools;
-        generationContextOptions.deferredTools = deferredTools;
       }
       const head = createInitialSystemMessage(systemPrompt, runtimeTools.map(toToolDeclaration));
       if (head) initialMessages = [head, ...initialMessages];
@@ -3510,7 +3502,12 @@ export const llmClient = {
         // Servers that finished discovery after the turn started stay behind
         // codemode / tool_search too, under the same exclusions.
         ...(runtimeTools.some((tool) => tool.name === "codemode")
-          ? { lateDeferredTools: () => lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)) }
+          ? {
+              lateDeferredTools: () => [
+                ...lateMcpDiscovery.tools().filter((tool) => !options.excludeToolNames?.has(tool.name)),
+                ...onDemandCallable,
+              ],
+            }
           : {}),
         models: runtime.models,
         identity: {
