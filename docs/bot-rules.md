@@ -103,6 +103,10 @@ reach cards, the Bot's own computer or browser, routines or subagents.
   the Bot's own screen: on the Mac it offers "Open in <Bot>’s browser" or
   "Open <Bot>’s computer" (never the person's own browser), and on a phone
   (a device holding `bot:handoff-on-mac`) Finish on your Mac opens it there.
+  The Mac's Bot panel then shows that browser tab or the Computer tab, once
+  per card and without moving keyboard focus. A browser step that names no
+  page holds the tab the Bot is on, as it is; with no tab open, only the
+  chat comes forward.
 - Each turn's answer is its own transcript row, even when a provider reuses
   the same tool-call id in every turn.
 

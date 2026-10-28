@@ -516,8 +516,9 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   from the phone brings the Bot's chat forward on the Mac and opens the page
   on the Bot's computer there, with the person in control. Once the Mac's
   window sees the person holding the computer for that card, its panel shows
-  the Computer tab, once per card and without moving keyboard focus. No new
-  remote fields are involved.
+  the Computer tab, once per card and without moving keyboard focus. A Bot's
+  `hand_off` step on its computer (`where: "computer"`) is revealed the same
+  way. No new remote fields are involved.
 - **Confirming on a Mac.** Open from the card takes the computer over, Safari
   opens at the site (`/usr/bin/open -b com.apple.Safari` over SSH reaching the
   logged-in session), the driver's processes are gone, and answering gives the

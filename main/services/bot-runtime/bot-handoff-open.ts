@@ -5,6 +5,7 @@
 // |----------------------------|---------------------------------------------|-----------------------------------------|
 // | sign-in                    | the Bot's computer or browser, by `target`  | the Bot's chat, then the same opener    |
 // | action on the Bot's screen | the Bot's browser or computer, by `target`  | the Bot's chat, then the same opener    |
+//   (without a link, the Bot's browser holds and shows the tab it is on)
 // | action with a link         | the Bot's browser, else the system browser  | the Bot's chat (the phone opens it)     |
 // | a rule's, with a link      | the Bot's browser only                      | the Bot's chat (the phone gets no link) |
 // | action without a link      | nothing                                     | the Bot's chat                          |
@@ -32,8 +33,11 @@ export interface BotHandoffOpeners {
   external(url: string): Promise<void>;
   /** Bring Aiden forward on the Bot's chat. */
   focusChat(botId: string): Promise<void>;
-  /** Open `url` in the Bot's own browser, holding the tab for the person; false when the Bot has none. */
-  botBrowser?(botId: string, waitId: string, url: string, hold: "handoff" | "sign_in"): Promise<boolean>;
+  /**
+   * Open `url` in the Bot's own browser, holding the tab for the person, or
+   * without one hold the Bot's current tab as it is; false when the Bot has none.
+   */
+  botBrowser?(botId: string, waitId: string, url: string | undefined, hold: "handoff" | "sign_in"): Promise<boolean>;
   /** Hand the Bot's own computer to the person, opening `url` there if given; false when the Bot has none. */
   botComputer?(botId: string, waitId: string, url: string | undefined): Promise<boolean>;
   /** The Bot's browser or computer failed, and the card fell back (the system browser, or the chat). */
@@ -47,8 +51,11 @@ async function openSignIn(prompt: BotPendingHandoff, url: string, openers: BotHa
   return (await openers.botBrowser?.(prompt.botId, prompt.waitId, url, "sign_in")) === true ? "browser" : "none";
 }
 
-/** The Bot's browser for an action's link: false when it has none or couldn't open it. */
-async function openInBotBrowser(prompt: BotPendingHandoff, url: string, openers: BotHandoffOpeners): Promise<boolean> {
+/**
+ * The Bot's browser for an action: its link, or the Bot's current tab without
+ * one. False when it has none or couldn't open it.
+ */
+async function openInBotBrowser(prompt: BotPendingHandoff, url: string | undefined, openers: BotHandoffOpeners): Promise<boolean> {
   try {
     return (await openers.botBrowser?.(prompt.botId, prompt.waitId, url, "handoff")) === true;
   } catch (error) {
@@ -71,7 +78,6 @@ async function openOnBotScreen(
   if (target === "computer") {
     return (await openers.botComputer?.(prompt.botId, prompt.waitId, link)) === true ? "computer" : "none";
   }
-  if (link === undefined) return openers.botBrowser ? "browser" : "none";
   return (await openInBotBrowser(prompt, link, openers)) ? "browser" : "none";
 }
 

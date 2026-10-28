@@ -105,8 +105,18 @@ test("a step on the Bot's own screen opens there, never in the system browser, f
   );
   assert.deepEqual(
     await open(card({ target: "browser" }), "desktop", { browser: true }),
-    { opened: "browser", calls: [] },
-    "without a page, Open shows the Bot's browser as it is",
+    { opened: "browser", calls: ["browser bot:ada w-1 undefined handoff"] },
+    "without a page, Open holds the Bot's tab as it is",
+  );
+  assert.deepEqual(
+    await open(card({ target: "browser" }), "phone", { browser: true }),
+    { opened: "browser", calls: ["chat bot:ada", "browser bot:ada w-1 undefined handoff"] },
+    "a phone's Finish on your Mac does the same on the Mac",
+  );
+  assert.deepEqual(
+    await open(card({ target: "browser" }), "phone", { browser: false }),
+    { opened: "focused", calls: ["chat bot:ada", "browser bot:ada w-1 undefined handoff"] },
+    "with no tab to hold, only the chat comes forward",
   );
   assert.deepEqual(await open(inBrowser, "phone", { browser: true }), {
     opened: "browser",
