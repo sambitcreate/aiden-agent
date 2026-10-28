@@ -952,8 +952,8 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await row.focus();
   await page.keyboard.press("Shift+F10");
   const menu = page.getByRole("menu");
-  await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
 
@@ -964,7 +964,7 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(more).toHaveAccessibleName("More for Repeated palette title");
   await expect(more).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
   // ⌘K reaches chat actions and places.
