@@ -94,6 +94,8 @@ export const BOT_ROUTINE_FAILED_PREVIEW = "I couldn't finish this routine.";
 export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   /** The notes this routine kept from earlier runs, rendered; "" when none. */
   routineNotes?(botId: string, taskId: string): Promise<string>;
+  /** True once when the stuck-run watchdog stopped this Bot's current run. */
+  consumeStall?(botId: string): boolean;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -283,6 +285,14 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     } catch (error) {
       if (durableFire(trigger)) throw new RoutineOutcomeUnknown(message(error));
       throw error;
+    }
+    // The watchdog stopped a run that made no progress: a retryable stall,
+    // not the person's Stop.
+    if (outcome.kind !== "completed" && ports.consumeStall?.(task.botId)) {
+      throw new RoutineFailure(
+        "The routine stopped making progress.",
+        { kind: "stalled", code: "no_progress" },
+      );
     }
     if (outcome.kind === "failed") {
       // Pi's reason code alone ("model_error") says nothing a person can act on.

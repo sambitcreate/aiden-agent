@@ -52,6 +52,7 @@ import { telegramBotBindingAuthority, telegramBotBindings } from "../telegram/te
 import { botApprovals } from "./bot-approvals-main.js";
 import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -487,6 +488,93 @@ wireBotAttention({
 // listen to the same emitter (`aiden-remote-service-main.ts`).
 wireBotLiveTurnIntents({ intents: botTurnIntents, projection: botLiveProjection });
 
+// Stuck-run watchdog (spec §5 S4). Progress is any live event for the running
+// turn (a new entry, streamed text, an activity change); the run's start counts
+// as the first. Whether a run is a routine comes from its durable request id.
+interface WatchedRun {
+  submissionId: string;
+  at: number;
+  quiet: boolean | null;
+  unsubscribe?: () => void;
+}
+const watchedRuns = new Map<string, WatchedRun>();
+const RUN_STALL_ISSUE_KEY = "run_stalled";
+
+function watchRun(botId: string, state: BotSessionState): void {
+  const current = watchedRuns.get(botId);
+  if (state.kind !== "running") {
+    if (!current) return;
+    current.unsubscribe?.();
+    watchedRuns.delete(botId);
+    void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "fixed").catch(() => undefined);
+    return;
+  }
+  if (current?.submissionId === state.submissionId) return;
+  current?.unsubscribe?.();
+  const run: WatchedRun = { submissionId: state.submissionId, at: Date.now(), quiet: null };
+  watchedRuns.set(botId, run);
+  void botSessionRuntime()
+    .then((service) => service.quietInputs(botId, [run.submissionId]))
+    .then((quiet) => {
+      run.quiet = quiet.get(run.submissionId) ?? null;
+    })
+    .catch(() => undefined);
+  void botLiveProjection()
+    .subscribe(botId, { send: () => { run.at = Date.now(); } })
+    .then((subscription) => {
+      if (watchedRuns.get(botId) === run) run.unsubscribe = () => subscription.unsubscribe();
+      else subscription.unsubscribe();
+    })
+    .catch((error: unknown) => logger.warn("bots", `Bot ${botId} run watch did not start.`, error));
+}
+stateListeners.add(watchRun);
+
+const runWatchdog = createBotRunWatchdog({
+  running: () => [...watchedRuns.keys()],
+  lastProgressAt: (botId) => watchedRuns.get(botId)?.at,
+  // Unknown until the request id is read; an unknown run is never stopped.
+  runKind: (botId) => {
+    const quiet = watchedRuns.get(botId)?.quiet;
+    return quiet === true ? "routine" : quiet === false ? "attended" : null;
+  },
+  isWaitingOnPerson: (botId) =>
+    botHandoffs.pending(botId).length > 0 ||
+    botApprovals.pending(botId).length > 0 ||
+    botQuestions.pending(botId).length > 0,
+  stopForStall: async (botId) => {
+    botRunStalls.mark(botId);
+    try {
+      await (await botSessionRuntime()).stop(botId);
+    } catch (error) {
+      botRunStalls.consume(botId);
+      throw error;
+    }
+  },
+  raiseStall: async (botId) => {
+    await botIssues.raise({
+      botId,
+      kind: "run_stalled",
+      dedupeKey: RUN_STALL_ISSUE_KEY,
+      title: "Still working?",
+      body: "This reply hasn't moved in 10 minutes.",
+      actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
+    });
+  },
+  now: Date.now,
+  setInterval: (fn, ms) => {
+    const timer = setInterval(fn, ms);
+    timer.unref?.();
+    return { cancel: () => clearInterval(timer) };
+  },
+  onError: (botId, error) => logger.warn("bots", `Bot ${botId} stuck-run check failed.`, error),
+});
+
+/** Keep waiting on a stuck-run card: another full window before asking again. */
+export function snoozeBotRunWatchdog(botId: string): void {
+  runWatchdog.snooze(botId);
+  void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "dismissed").catch(() => undefined);
+}
+
 /** The process-wide live projection that renderer windows subscribe to. */
 export function botLiveProjection(): BotLiveProjection {
   liveProjection ??= createBotLiveProjection({
@@ -601,6 +689,7 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   initialized = undefined;
   await liveProjection?.close();
   memoryReview.shutdown();
+  runWatchdog.dispose();
   await import("../bot-health/health-main.js").then(({ stopBotHealth }) => stopBotHealth()).catch(() => undefined);
   await service?.shutdown();
   await toolSources.shutdown();

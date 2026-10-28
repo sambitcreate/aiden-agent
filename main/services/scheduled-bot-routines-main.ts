@@ -3,6 +3,7 @@ import { botApplicationService } from "./bot-application-service-main.js";
 import { createBotRoutineNotesStore } from "./bot-routine-notes.js";
 import { scheduleService } from "./schedule-service.js";
 import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { botRunStalls } from "./bot-runtime/bot-run-watchdog.js";
 import {
   createBotRoutineCatchUp,
   createBotRoutineCatchUpTrigger,
@@ -28,6 +29,7 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     awaitReply: (botId, submissionId, signal) => runtime.awaitReply(botId, submissionId, signal),
     markSilent: (botId, submissionId) => runtime.markSilent(botId, submissionId),
     routineNotes: (botId, taskId) => botRoutineNotes.render(botId, taskId),
+    consumeStall: (botId) => botRunStalls.consume(botId),
   };
 }
 

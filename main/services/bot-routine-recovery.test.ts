@@ -112,7 +112,9 @@ function harness() {
   const replies: BotRoutineSubmissionOutcome[] = [];
   const sends: string[] = [];
   const submissions = new Map<string, string>();
-  const session: BotRoutinePorts = {
+  const stalled = new Set<string>();
+  const session: BotRoutinePorts & { consumeStall(botId: string): boolean } = {
+    consumeStall: (botId) => stalled.delete(botId),
     async state() { return { kind: "idle" }; },
     async submissionForRequest(_botId, requestId) { return submissions.get(requestId); },
     async send(_botId, input) {
@@ -164,7 +166,7 @@ function harness() {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved };
+  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -280,5 +282,16 @@ test("a retry that is not due yet does not run", async (t) => {
   await h.scheduler.start();
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(await h.store.runById(routine.id, `${failed.id}:retry-1`), undefined);
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.filter((entry) => entry.retry).length, 1);
+});
+
+test("a stalled routine records stalled and gets a retry", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
+  h.replies.push({ kind: "interrupted", settled: true });
+  h.stalled.add("bot-1");
+  const failed = await fire(h, routine.id, Date.now() - 1_000);
+  assert.equal(failed.result, "error");
+  assert.deepEqual(failed.failure, { kind: "stalled", code: "no_progress" });
   assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.filter((entry) => entry.retry).length, 1);
 });

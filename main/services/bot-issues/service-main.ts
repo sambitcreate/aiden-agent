@@ -55,8 +55,10 @@ export const botIssues = createBotIssueService({
       // Same path as the Stop button, so every open chat says "Stopping" too.
       await stopWithIntents(botTurnIntents, botId, async () => (await botSessionRuntime()).stop(botId));
     },
-    // Plan A has no watchdog yet; a later task replaces this with its snooze.
-    snoozeStall: () => undefined,
+    // Keep waiting on a stuck-run card: the watchdog waits another window.
+    snoozeStall: (botId) => {
+      void import("../bot-runtime/bot-session-main.js").then(({ snoozeBotRunWatchdog }) => snoozeBotRunWatchdog(botId));
+    },
     openSettings: (botId, section) => {
       void requestAppPath(botIssueSettingsPath(botId, section)).catch((error: unknown) =>
         logger.warn("bots", `Bot ${botId} issue settings navigation failed.`, error),
