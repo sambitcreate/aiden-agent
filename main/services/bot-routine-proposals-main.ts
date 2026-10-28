@@ -45,8 +45,8 @@ export const botRoutineProposals = createBotRoutineProposalService({
       commitmentProposalSettled(botId, proposalId, status));
   },
   // A revised follow-up card keeps its follow-up.
-  onRevised(botId, replacedId, proposalId) {
+  onRevised(botId, replacedId, replacement) {
     void import("./bot-commitments/commitments-main.js").then(({ commitmentProposalRevised }) =>
-      commitmentProposalRevised(botId, replacedId, proposalId));
+      commitmentProposalRevised(botId, replacedId, replacement));
   },
 });

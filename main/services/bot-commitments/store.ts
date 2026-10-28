@@ -25,6 +25,8 @@ export interface BotCommitment {
   createdAt: number;
   status: BotCommitmentStatus;
   proposalId?: string;
+  /** Its card was revised into a repeating schedule or a trigger: no date expires it. */
+  openEnded?: true;
 }
 
 export type BotCommitmentAddResult =
@@ -71,6 +73,7 @@ function parseRecord(value: unknown, botId: string): BotCommitment | undefined {
     createdAt: record.createdAt,
     status: record.status as BotCommitmentStatus,
     ...(typeof record.proposalId === "string" ? { proposalId: record.proposalId } : {}),
+    ...(record.openEnded === true ? { openEnded: true as const } : {}),
   };
 }
 
@@ -144,12 +147,18 @@ export function createBotCommitmentStore(options: { profileDir(): string; now?()
 
     list: (botId: string) => load(botId),
 
-    update(botId: string, id: string, patch: Partial<Pick<BotCommitment, "status" | "proposalId">>): Promise<void> {
+    update(
+      botId: string,
+      id: string,
+      patch: Partial<Pick<BotCommitment, "status" | "proposalId" | "dueDate" | "dueTime" | "openEnded">>,
+    ): Promise<void> {
       return serial(botId, async () => {
         const records = await load(botId);
         const index = records.findIndex((record) => record.id === id);
         if (index < 0) return;
-        records[index] = { ...records[index]!, ...patch };
+        const next = { ...records[index]!, ...patch };
+        if (next.openEnded === undefined) delete next.openEnded;
+        records[index] = next;
         await save(botId, records);
       });
     },
