@@ -3,6 +3,10 @@ import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import {
+  parseAidenRemoteChatContextPressure,
+  projectAidenRemoteContextPressure,
+} from "./aiden-remote-protocol.js";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
@@ -555,6 +559,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
     "/chats/{chatId}/agents/{agentId}/interrupt",
+    "/chats/{chatId}/context",
     "/chats/{chatId}/skills",
     "/chats/{chatId}/progress/events",
     "/chats/{chatId}/turns",
@@ -2876,4 +2881,100 @@ test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the
   assert.equal(summary({ ...section.pausedSummary, paused: false }), false);
   assert.equal(handoff({ ...section.session.handoff, extra: true }), false);
   assert.equal(handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }), false);
+});
+
+test("context pressure crosses the wire as counts only, and schema and parser refuse the same shapes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const { chatContextPressure } = await json("fixtures/contract.json") as {
+    chatContextPressure: { chatId: string; pressure: Record<string, unknown> };
+  };
+  const ajv = new Ajv2020({ strict: false });
+  const schema = ajv.compile({ $ref: "#/components/schemas/ChatContextPressure", components: spec.components });
+  const accepts = (value: unknown) => {
+    try {
+      parseAidenRemoteChatContextPressure(value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  assert.equal(schema(chatContextPressure), true);
+  assert.deepEqual(parseAidenRemoteChatContextPressure(chatContextPressure), chatContextPressure);
+  const unknown = { chatId: chatContextPressure.chatId, pressure: null };
+  assert.equal(schema(unknown), true);
+  assert.deepEqual(parseAidenRemoteChatContextPressure(unknown), unknown);
+
+  const pressure = chatContextPressure.pressure;
+  const without = (key: string) => Object.fromEntries(Object.entries(pressure).filter(([name]) => name !== key));
+  const refused: Record<string, unknown> = {
+    "a breakdown": { ...pressure, breakdown: { categories: [{ id: "mcp-tools", tokens: 18_000 }], deferred: [] } },
+    "a prompt cache": { ...pressure, promptCache: { ttlMs: 300_000, lastRequestAt: 1 } },
+    "history detail": { ...pressure, compressibleHistoryMessages: 4 },
+    "a negative count": { ...pressure, messageTokens: -1 },
+    "an empty window": { ...pressure, contextWindow: 0 },
+    "an unknown source": { ...pressure, source: "guessed" },
+    "a string count": { ...pressure, contextTokens: "48250" },
+    "no source": without("source"),
+    "no computedAt": without("computedAt"),
+  };
+  for (const [label, candidate] of Object.entries(refused)) {
+    assert.equal(schema({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
+    assert.equal(accepts({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
+  }
+  for (const [label, envelope] of Object.entries({
+    "no pressure key": { chatId: chatContextPressure.chatId },
+    "a path-shaped chat id": { chatId: "../chat", pressure: null },
+    "an extra key": { ...chatContextPressure, draftText: "hello" },
+  })) {
+    assert.equal(schema(envelope), false, label);
+    assert.equal(accepts(envelope), false, label);
+  }
+  // JSON cannot carry a non-finite number, so only the parser sees one.
+  assert.equal(accepts({ chatId: "chat-1", pressure: { ...pressure, percentOfWindow: Number.NaN } }), false);
+});
+
+test("the host's full context projection is reduced to the documented counts", () => {
+  const desktop = {
+    contextTokens: 9_000,
+    contextWindow: 128_000,
+    inputBudgetTokens: 100_000,
+    reservedTokens: 28_000,
+    percentOfWindow: 7.03,
+    percentOfUsableInput: 9,
+    shouldCompact: false,
+    messageTokens: 3_000,
+    staticTokens: 6_000,
+    providerUsageTokens: 8_500,
+    addedAfterUsageAnchorTokens: 500,
+    compressibleHistoryMessages: 2,
+    source: "provider-anchored",
+    computedAt: 1_787_166_120_000,
+    breakdown: {
+      categories: [{ id: "mcp-tools", tokens: 6_000 }],
+      deferred: [{ id: "mcp-tools", tokens: 400, count: 1, servers: [{ name: "Acme internal tracker", count: 1, tokens: 400 }] }],
+    },
+    promptCache: { ttlMs: 300_000, lastRequestAt: 1_787_166_000_000 },
+  };
+  const wire = projectAidenRemoteContextPressure(desktop);
+  assert.deepEqual(Object.keys(wire).sort(), [
+    "computedAt",
+    "contextTokens",
+    "contextWindow",
+    "inputBudgetTokens",
+    "messageTokens",
+    "percentOfUsableInput",
+    "percentOfWindow",
+    "reservedTokens",
+    "shouldCompact",
+    "source",
+    "staticTokens",
+  ]);
+  assert.equal(JSON.stringify(wire).includes("Acme"), false);
+  assert.equal(wire.contextTokens, 9_000);
+  assert.equal(wire.source, "provider-anchored");
+  // A projection missing a counted field is refused rather than sent half-filled.
+  const { staticTokens: _staticTokens, ...partial } = desktop;
+  assert.throws(() => projectAidenRemoteContextPressure(partial));
 });
