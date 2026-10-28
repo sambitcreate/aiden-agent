@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { setBotFileToolProtectedRoots } from "../../../main/services/bot-file-tool-router.js";
+import { cliBotProtectedRoots } from "../../../main/services/bot-protected-settings.js";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { createBotSessionService } from "../../../main/services/bot-runtime/bot-session-service.js";
@@ -70,7 +71,8 @@ export function cliDurableBotToolContext(entries: readonly EntryRecord[], identi
 }
 
 export async function createCliDurableBots(profileDir: string, ports: CliDurableBotPorts) {
-  setBotFileToolProtectedRoots(() => [join(profileDir, "bots")]);
+  // Like the desktop, a Bot's file tools cannot edit Aiden's settings files.
+  setBotFileToolProtectedRoots(() => cliBotProtectedRoots(profileDir));
   const models = createBotRuntimeModels();
   const imageInputs = new Map<string, boolean>();
   const approvals = createBotApprovals({ publish: () => {} });

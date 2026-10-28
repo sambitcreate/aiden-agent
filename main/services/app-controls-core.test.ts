@@ -12,7 +12,7 @@ import {
   parseAppControlPanels,
   parseAppControlOperation,
 } from "../../renderer/shared/app-controls.js";
-import { readAidenHelp } from "./aiden-app-knowledge.js";
+import { aidenAppGuidance, readAidenHelp } from "./aiden-app-knowledge.js";
 
 function fixture() {
   const state: AppControlState = {
@@ -196,6 +196,38 @@ test("offline product help is bounded and cannot read arbitrary paths", () => {
   assert.equal(readAidenHelp("unknown product topic").topics.length, 0);
   assert.throws(() => readAidenHelp("../../secrets"), /topic/u);
   assert.throws(() => readAidenHelp("a".repeat(257)), /topic/u);
+});
+test("product help finds topics from everyday wording, not only exact words", () => {
+  const first = (query: string) => readAidenHelp(query).topics[0]?.id;
+  assert.equal(first("Turn on dark mode please"), "appearance");
+  assert.equal(first("how do I change the text size"), "appearance");
+  assert.equal(first("what do you remember about me"), "memory");
+  assert.equal(first("which model am I using"), "models");
+  assert.equal(first("can you turn on voice dictation"), "voice");
+  assert.equal(first("set up a bot routine"), "bots");
+  // "mode" is not "model": matching is by whole word.
+  assert.ok(!readAidenHelp("dark mode").topics.some((topic) => topic.id === "models"));
+  // A miss still tells the agent which topics exist.
+  const miss = readAidenHelp("unknown product topic");
+  assert.deepEqual(miss.topics, []);
+  assert.ok(miss.available.includes("changing-settings"));
+  assert.match(readAidenHelp("changing-settings").topics[0].text, /Everything else stays in Settings/u);
+});
+test("app guidance only describes the app tools a chat really has", () => {
+  const full = aidenAppGuidance(
+    new Set(["aiden_help", "aiden_get_state", "aiden_show_controls", "aiden_set_preference", "aiden_open"]),
+  );
+  assert.match(full, /only settings you can change are the rows aiden_get_state returns/u);
+  assert.match(full, /aiden_open/u);
+  // A phone chat has help and panels only.
+  const phone = aidenAppGuidance(new Set(["aiden_help", "aiden_show_controls"]));
+  assert.doesNotMatch(phone, /aiden_get_state|aiden_set_preference|aiden_open/u);
+  assert.match(phone, /cannot read live values or change settings yourself in this chat; show the controls/u);
+  // Reading without changing: told to read live values, and only that it cannot change them.
+  const readOnly = aidenAppGuidance(new Set(["aiden_help", "aiden_get_state"]));
+  assert.match(readOnly, /aiden_get_state before stating a value/u);
+  assert.match(readOnly, /cannot change settings yourself in this chat\./u);
+  assert.doesNotMatch(readOnly, /cannot read live values/u);
 });
 
 test("authorization is rechecked after the durable intent and unknown policy fails closed", async () => {
