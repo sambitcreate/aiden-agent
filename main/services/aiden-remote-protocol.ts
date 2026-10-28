@@ -124,7 +124,7 @@ export const AIDEN_REMOTE_SCHEDULE_CARDS_CONTRACT_REVISION = 39 as const;
  */
 export const AIDEN_REMOTE_BOT_HANDOFF_NOTE_CONTRACT_REVISION = 40 as const;
 /**
- * Contract revision 44 (provisional; re-claim the next revision after `main`'s
+ * Contract revision 41 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_CONTRACT_REVISION`):
  * `GET /chats/{chatId}/context` (`chat-context-pressure-v1`, announced to
  * paired desktops only) returns the next-request context projection the
