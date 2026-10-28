@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createScheduleServiceCore } from "../schedule-service-core.js";
 import { createScheduleStore } from "../schedule-store.js";
-import { createBotRoutineService } from "../scheduled-bot-routines.js";
+import { createBotRoutineCatchUp, createBotRoutineService } from "../scheduled-bot-routines.js";
+import type { ScheduledRun } from "../types.js";
 import { BOT_WAKE_UP_ENTRY_KIND, botWakeUpWhen } from "../../../renderer/shared/bot-wake-ups.js";
 import { createWakeUpTool, type BotWakeUpEntryData } from "./wake-up-tool.js";
 import { createBotWakeUps, resolveBotWakeUpTime } from "./wake-ups.js";
@@ -23,7 +24,7 @@ class MemoryPersistence<T> {
 const MINUTE = 60_000;
 
 /** A real schedule store and Bot routine service; nothing ever fires. */
-function harness() {
+function harness(options: { routineDeleted?: (botId: string, routineId: string) => Promise<void> } = {}) {
   const store = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
   const scheduler = createScheduleServiceCore({
     store,
@@ -46,6 +47,7 @@ function harness() {
     isPaused: async () => false,
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
+    ...(options.routineDeleted ? { routineDeleted: options.routineDeleted } : {}),
   });
   const switches = new Map<string, boolean>();
   const wakeUps = createBotWakeUps({
@@ -70,7 +72,7 @@ test("in_minutes is bounded to 1 through 1440 and lands on a whole minute ahead 
   const late = await h.wakeUps.set("bot-chef", { when: { inMinutes: 1440 }, note: "Ask how the bake went." });
   assert.ok(soon.ok && late.ok);
   assert.equal(soon.wakeUp.fireAt % MINUTE, 0);
-  assert.ok(soon.wakeUp.fireAt > before && soon.wakeUp.fireAt <= before + MINUTE + 1_000);
+  assert.ok(soon.wakeUp.fireAt >= before + 30_000 && soon.wakeUp.fireAt <= Date.now() + MINUTE + 30_000);
   assert.ok(late.wakeUp.fireAt <= Date.now() + 1440 * MINUTE && late.wakeUp.fireAt > before + 1439 * MINUTE - 1_000);
   assert.deepEqual(
     (await h.routines.list("bot-chef")).map((routine) => [routine.name, routine.wakeUp !== undefined, routine.enabled]),
@@ -95,6 +97,27 @@ test("a local time means its next occurrence within a day, in the host's zone", 
   for (const at of ["24:00", "9:00", "3:10 PM", "tomorrow", ""]) {
     assert.equal(resolveBotWakeUpTime({ at }, now, "UTC"), undefined, at);
   }
+});
+
+test("in_minutes never lands on a minute less than 30 seconds away", () => {
+  const now = Date.UTC(2026, 9, 28, 14, 0, 45);
+  assert.equal(resolveBotWakeUpTime({ inMinutes: 1 }, now, "UTC")?.fireAt, Date.UTC(2026, 9, 28, 14, 2));
+  assert.equal(resolveBotWakeUpTime({ inMinutes: 1 }, Date.UTC(2026, 9, 28, 14, 0, 20), "UTC")?.fireAt, Date.UTC(2026, 9, 28, 14, 1));
+});
+
+test("a delay into the repeated hour of a daylight-saving change is refused instead of firing an hour early", () => {
+  // 00:45 EDT on the night New York falls back: 01:00-01:59 happens twice.
+  const now = Date.UTC(2026, 10, 1, 4, 45);
+  // 105 minutes is 06:30Z, the second 01:30 (EST); the schedule would fire at the first (05:30Z).
+  assert.equal(resolveBotWakeUpTime({ inMinutes: 105 }, now, "America/New_York"), undefined);
+  assert.deepEqual(resolveBotWakeUpTime({ inMinutes: 45 }, now, "America/New_York"), {
+    fireAt: Date.UTC(2026, 10, 1, 5, 30),
+    schedule: { kind: "once", date: "2026-11-01", time: "01:30" },
+  });
+  assert.deepEqual(resolveBotWakeUpTime({ inMinutes: 135 }, now, "America/New_York"), {
+    fireAt: Date.UTC(2026, 10, 1, 7, 0),
+    schedule: { kind: "once", date: "2026-11-01", time: "02:00" },
+  });
 });
 
 test("the note is required and at most 500 characters", async (t) => {
@@ -150,7 +173,7 @@ test("two wake-ups set at once cannot both slip past the cap", async (t) => {
   assert.equal((await h.wakeUps.pending("bot-chef")).length, 3);
 });
 
-test("with the Bot's switch off nothing is set, and turning it off cancels only pending wake-ups", async (t) => {
+test("with the Bot's switch off nothing is set, and turning it off cancels its wake-ups but not its routines", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
   const routine = await h.routines.create({
@@ -172,6 +195,79 @@ test("with the Bot's switch off nothing is set, and turning it off cancels only 
   const off = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check again." });
   assert.equal(off.ok ? "ok" : off.code, "off");
   assert.deepEqual(await h.wakeUps.pending("bot-chef"), []);
+});
+
+test("turning the switch off also removes a wake-up that fired while the Bot was paused, so Resume can't run it", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const set = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check the oven." });
+  assert.ok(set.ok);
+  // Its fire was claimed while the Bot was paused: spent, skipped, owed a catch-up.
+  const skippedAt = Date.now();
+  await h.store.updateRuntime(set.wakeUp.id, { enabled: false, nextRunAt: undefined, lastRunAt: skippedAt, lastResult: "skipped" });
+  const caughtUp: string[] = [];
+  const catchUp = createBotRoutineCatchUp({
+    store: {
+      list: () => h.store.list(),
+      runs: async () => [{ id: "run-1", result: "skipped", reason: "bot_paused", startedAt: skippedAt } as ScheduledRun],
+    },
+    scheduler: {
+      catchUp: (id) => {
+        caughtUp.push(id);
+        return Promise.resolve({} as ScheduledRun);
+      },
+    },
+  });
+  assert.equal((await catchUp.catchUp("bot-chef")).length, 1, "while the switch is on, Resume would run it");
+
+  h.switches.set("bot-chef", false);
+  assert.equal(await h.wakeUps.cancelAll("bot-chef"), 1);
+  caughtUp.length = 0;
+  assert.deepEqual(await catchUp.catchUp("bot-chef"), []);
+  assert.deepEqual(caughtUp, []);
+  assert.equal(await h.store.get(set.wakeUp.id), undefined);
+});
+
+test("the Bot's own cancel and set return while a removed wake-up's cleanup waits for the Bot's chat", async (t) => {
+  // The cleanup settles the wake-up's issues by appending to the Bot's chat,
+  // which waits until the calling tool's turn ends.
+  let release!: () => void;
+  const chatFree = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const cleaned: string[] = [];
+  const h = harness({
+    routineDeleted: async (_botId, routineId) => {
+      await chatFree;
+      cleaned.push(routineId);
+    },
+  });
+  t.after(() => h.scheduler.stop());
+  const withinTurn = <T>(work: Promise<T>) =>
+    Promise.race([work, new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 1_000))]);
+
+  const old = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Long ago." });
+  const current = await h.wakeUps.set("bot-chef", { when: { inMinutes: 30 }, note: "Soon." });
+  assert.ok(old.ok && current.ok);
+  // The old one fired eight days ago, past the catch-up window: the next set prunes it.
+  await h.store.updateRuntime(old.wakeUp.id, {
+    enabled: false,
+    nextRunAt: undefined,
+    lastRunAt: Date.now() - 8 * 24 * 60 * MINUTE,
+    lastResult: "success",
+  });
+
+  const tool = createWakeUpTool("bot-chef", h.wakeUps, async () => undefined);
+  const cancelled = await withinTurn(run(tool, { action: "cancel", id: current.wakeUp.id }));
+  assert.notEqual(cancelled, "stuck");
+  const again = await withinTurn(run(tool, { action: "set", in_minutes: 45, note: "Later." }));
+  assert.notEqual(again, "stuck");
+  assert.equal(await h.store.get(old.wakeUp.id), undefined, "the spent wake-up was pruned");
+  assert.deepEqual(cleaned, []);
+
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(cleaned.sort(), [current.wakeUp.id, old.wakeUp.id].sort(), "each removed wake-up still settles");
 });
 
 function run(tool: ReturnType<typeof createWakeUpTool>, params: Record<string, unknown>) {

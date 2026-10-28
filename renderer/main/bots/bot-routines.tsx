@@ -142,7 +142,8 @@ export function BotRoutines({
                       </span>
                       <span className="mt-0.5 block truncate text-small text-secondary">{routine.prompt}</span>
                     </span>
-                    {routine.enabled ? (
+                    {/* A wake-up turned off before it fired can still be cancelled; one mid-fire can't. */}
+                    {routine.enabled || routine.pendingFireCount === 0 ? (
                       <Button size="small" variant="filled" onClick={() => void cancelWakeUp(routine)}>
                         Cancel
                       </Button>

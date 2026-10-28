@@ -19,6 +19,7 @@ A Bot can also come back to its chat on its own, for example "I'll check whether
 - `set` takes either `in_minutes` (1 to 1440) or a local `at` time (`HH:MM`, its next occurrence within 24 hours in this Mac's timezone), plus a note of at most 500 characters saying what to do.
 - A Bot can have at most 3 wake-ups waiting. A fourth is refused with the three that are pending, so the Bot can cancel one or fold the work into an existing one.
 - `list` shows the pending wake-ups, and `cancel` removes one by id.
+- A delay that lands in the hour a daylight-saving change repeats (for example the second 1:30 AM on the night clocks fall back) is refused, because the routine would fire at the first one; the Bot picks a time after it.
 
 The tool is offered only in turns the person started: from the desktop chat, the paired phone or a bound Telegram chat. A routine run, an event routine, a catch-up or a wake-up itself cannot set another wake-up, so a Bot cannot keep itself awake in a loop. Repeated checking belongs in a routine the person accepts.
 
@@ -26,7 +27,7 @@ A wake-up is saved as a one-time routine named **Wake-up**. It fires through the
 
 The chat shows each wake-up as one line, **Wake-up at 3:10 PM · Cancel**, and the Bot's profile lists it among its routines with the note and a **Cancel** button. Cancel deletes the wake-up. The paired phone sees it as an ordinary one-time routine named Wake-up; no Remote contract changed.
 
-Each Bot has **Let <Bot> set its own wake-ups** in **Advanced → Chat**, on by default. Turning it off stops offering the tool and cancels every wake-up still waiting, so nothing the Bot set fires after the person said no. The person's own routines stay. Turning it back on does not restore the cancelled wake-ups.
+Each Bot has **Let <Bot> set its own wake-ups** in **Advanced → Chat**, on by default. Turning it off stops offering the tool and removes every wake-up the Bot set, including one that came due while the Bot was paused and would otherwise catch up on Resume, so nothing the Bot set fires after the person said no. The person's own routines stay. Turning it back on does not restore the cancelled wake-ups.
 
 ## When a routine fails
 

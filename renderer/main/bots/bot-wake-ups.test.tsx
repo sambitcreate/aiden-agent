@@ -172,6 +172,30 @@ test("the profile lists a wake-up with its note and when, and Cancel removes it 
   );
 });
 
+test("a wake-up turned off before it fired can still be cancelled from the profile, but not one mid-fire", async () => {
+  const calls = installBotTestIpc({
+    "bots:list": () => [botFixture()],
+    "bots:get": () => botFixture(),
+    ...routinesIpc([
+      wakeUpRoutine({ id: "wake-off", prompt: "Turned off early.", enabled: false, nextRunAt: undefined }),
+      wakeUpRoutine({ id: "wake-firing", prompt: "Firing now.", enabled: false, nextRunAt: undefined, pendingFireCount: 1 }),
+    ]),
+  });
+  await mountWithBotRouter(<BotsView />, { initialPath: "/bots/bot-1" });
+
+  const list = await screen.findByRole("list", { name: "Routines" });
+  assert.ok(within(list).getByText("Firing now."));
+  const cancels = within(list).getAllByRole("button", { name: "Cancel" });
+  assert.equal(cancels.length, 1);
+  fireEvent.click(cancels[0]!);
+  await waitFor(() =>
+    assert.deepEqual(
+      callsTo(calls, "bots:routines:delete").map((call) => call.args),
+      [[{ botId: "bot-1", id: "wake-off" }]],
+    ),
+  );
+});
+
 test("Advanced has a switch, on by default, that turns the Bot's own wake-ups off at once", async () => {
   let bot: BotDefinition = botFixture();
   const updates: BotUpdateInput[] = [];

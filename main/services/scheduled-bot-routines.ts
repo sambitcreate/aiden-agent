@@ -959,12 +959,20 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
       return { runId };
     },
 
-    async delete(input: BotRoutineDeleteInput): Promise<void> {
+    /**
+     * `cleanup: "background"` (main-only) returns once the routine is gone and
+     * lets what belonged to it settle afterwards. A Bot's own tool needs it:
+     * that settlement appends to the Bot's chat, which waits for the tool's
+     * turn to end, so awaiting it inside the tool could never finish.
+     */
+    async delete(input: BotRoutineDeleteInput, options: { cleanup?: "await" | "background" } = {}): Promise<void> {
       const existing = await owned(input.botId, input.id);
       await dependencies.service.remove(existing.id, {
         expectedUpdatedAt: input.expectedUpdatedAt ?? existing.updatedAt,
       });
-      await dependencies.routineDeleted?.(input.botId, existing.id);
+      const cleanup = dependencies.routineDeleted?.(input.botId, existing.id);
+      if (options.cleanup === "background") void cleanup?.catch(() => undefined);
+      else await cleanup;
       dependencies.notifyChanged({ botId: input.botId, routineId: existing.id, removed: true });
     },
 

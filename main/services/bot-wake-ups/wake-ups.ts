@@ -9,7 +9,7 @@ import {
   BOT_WAKE_UP_LIMITS,
   BOT_WAKE_UP_ROUTINE_NAME,
 } from "../../../renderer/shared/bot-wake-ups.js";
-import type { BotRoutineSchedule } from "../../../renderer/shared/bot-routine-schedule.js";
+import { botRoutineCron, type BotRoutineSchedule } from "../../../renderer/shared/bot-routine-schedule.js";
 import { nextScheduledRun } from "../schedule-store-core.js";
 import { BOT_ROUTINE_CATCH_UP_WINDOW_MS, isSpentBotWakeUp, type BotRoutineService } from "../scheduled-bot-routines.js";
 import type { ScheduledTask } from "../types.js";
@@ -48,6 +48,8 @@ export interface BotWakeUpDependencies {
 }
 
 const MINUTE = 60_000;
+/** A fire is never set closer than this, so the minute can't pass while the routine is saved. */
+const HEADWAY_MS = 30_000;
 const AT_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/u;
 
 function localParts(timestamp: number, zone: string): { date: string; time: string } {
@@ -67,8 +69,11 @@ function localParts(timestamp: number, zone: string): { date: string; time: stri
 /**
  * The minute a wake-up fires and the one-time schedule that names it, or
  * `undefined` when `when` is out of bounds. `in_minutes` rounds down to a whole
- * minute but never to the current one; `at` is the next time the local clock
- * reads that time (today, or tomorrow when it has passed).
+ * minute but never to one less than 30 seconds away; `at` is the next time the
+ * local clock reads that time (today, or tomorrow when it has passed). A time
+ * the schedule can't name is refused: the second pass through an hour a
+ * daylight-saving change repeats reads the same as the first, and the routine
+ * would fire at the first.
  */
 export function resolveBotWakeUpTime(
   when: BotWakeUpWhen,
@@ -86,7 +91,7 @@ export function resolveBotWakeUpTime(
       return undefined;
     }
     fireAt = Math.floor((now + minutes * MINUTE) / MINUTE) * MINUTE;
-    if (fireAt <= now) fireAt += MINUTE;
+    if (fireAt - now < HEADWAY_MS) fireAt += MINUTE;
   } else {
     const match = AT_PATTERN.exec(when.at.trim());
     if (!match) return undefined;
@@ -99,7 +104,13 @@ export function resolveBotWakeUpTime(
     if (fireAt - now > (BOT_WAKE_UP_LIMITS.maxMinutes + 60) * MINUTE) return undefined;
   }
   const local = localParts(fireAt, zone);
-  return { fireAt, schedule: { kind: "once", date: local.date, time: local.time } };
+  const schedule = { kind: "once" as const, date: local.date, time: local.time };
+  try {
+    if (nextScheduledRun(botRoutineCron(schedule), zone, new Date(now)) !== fireAt) return undefined;
+  } catch {
+    return undefined;
+  }
+  return { fireAt, schedule };
 }
 
 function projectWakeUp(task: ScheduledTask, zone: string): BotWakeUp {
@@ -114,10 +125,12 @@ function projectWakeUp(task: ScheduledTask, zone: string): BotWakeUp {
   };
 }
 
-/** Whether `task` is a wake-up of `botId` that has not fired yet. */
+/** Whether `task` is a wake-up of `botId` still waiting for its time. */
 function isPendingWakeUp(task: ScheduledTask, botId: string): boolean {
   return task.botId === botId && task.wakeUp !== undefined && task.enabled && task.nextRunAt !== undefined;
 }
+
+const INVALID_TIME_MESSAGE = `Pick in_minutes from ${BOT_WAKE_UP_LIMITS.minMinutes} to ${BOT_WAKE_UP_LIMITS.maxMinutes}, or a local time "HH:MM" within the next 24 hours. A time in the hour a daylight-saving change repeats can't be set; pick one after it.`;
 
 export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
   const now = dependencies.now ?? Date.now;
@@ -149,7 +162,7 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
     const cutoff = now() - BOT_ROUTINE_CATCH_UP_WINDOW_MS;
     for (const task of await dependencies.store.list()) {
       if (task.botId !== botId || !isSpentBotWakeUp(task) || (task.lastRunAt ?? 0) >= cutoff) continue;
-      await dependencies.routines.delete({ botId, id: task.id }).catch(() => undefined);
+      await dependencies.routines.delete({ botId, id: task.id }, { cleanup: "background" }).catch(() => undefined);
     }
   };
 
@@ -178,7 +191,7 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
           return {
             ok: false,
             code: "invalid_time",
-            message: `Pick in_minutes from ${BOT_WAKE_UP_LIMITS.minMinutes} to ${BOT_WAKE_UP_LIMITS.maxMinutes}, or a local time "HH:MM" within the next 24 hours.`,
+            message: INVALID_TIME_MESSAGE,
           };
         }
         await prune(botId);
@@ -191,14 +204,20 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
             pending: current,
           };
         }
-        const routine = await dependencies.routines.create({
-          botId,
-          name: BOT_WAKE_UP_ROUTINE_NAME,
-          schedule: resolved.schedule,
-          prompt: note,
-          timezone: zone,
-          wakeUp: { setAt: at },
-        });
+        let routine: Awaited<ReturnType<BotWakeUpDependencies["routines"]["create"]>>;
+        try {
+          routine = await dependencies.routines.create({
+            botId,
+            name: BOT_WAKE_UP_ROUTINE_NAME,
+            schedule: resolved.schedule,
+            prompt: note,
+            timezone: zone,
+            wakeUp: { setAt: at },
+          });
+        } catch {
+          // The minute passed while the routine was saved (an `at` set for the next minute).
+          return { ok: false, code: "invalid_time", message: INVALID_TIME_MESSAGE };
+        }
         const wakeUp: BotWakeUp = {
           id: routine.id,
           fireAt: routine.nextRunAt ?? resolved.fireAt,
@@ -214,18 +233,30 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
       return serial(botId, async () => {
         const task = (await pendingTasks(botId)).find((candidate) => candidate.id === id);
         if (!task) return { ok: false, code: "not_found", message: "No pending wake-up has that id.", pending: await pending(botId) };
-        await dependencies.routines.delete({ botId, id: task.id, expectedUpdatedAt: task.updatedAt });
+        // In the background: settling the wake-up's issues appends to this
+        // Bot's chat, which waits for the calling tool's turn to end.
+        await dependencies.routines.delete(
+          { botId, id: task.id, expectedUpdatedAt: task.updatedAt },
+          { cleanup: "background" },
+        );
         return { ok: true, cancelled: projectWakeUp(task, dependencies.timezone()) };
       });
     },
 
-    /** Cancel every pending wake-up (the person turned the switch off). Returns how many. */
+    /**
+     * Remove every wake-up the Bot set (the person turned the switch off),
+     * including one that fired while the Bot was paused and is still owed a
+     * catch-up, or one whose fire is still being recovered. Returns how many
+     * had not run yet.
+     */
     async cancelAll(botId: string): Promise<number> {
       return serial(botId, async () => {
         let cancelled = 0;
-        for (const task of await pendingTasks(botId)) {
+        for (const task of await dependencies.store.list()) {
+          if (task.botId !== botId || task.wakeUp === undefined) continue;
+          const ran = isSpentBotWakeUp(task) && task.lastResult !== "skipped";
           await dependencies.routines.delete({ botId, id: task.id });
-          cancelled += 1;
+          if (!ran) cancelled += 1;
         }
         return cancelled;
       });
