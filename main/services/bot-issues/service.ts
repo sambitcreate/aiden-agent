@@ -300,14 +300,17 @@ export function createBotIssueService(dependencies: BotIssueServiceDependencies)
       if (inFlight) return inFlight;
       const attempt = deliverRaise(input);
       raising.set(key, attempt);
-      const settle = () => {
+      const clear = () => {
         if (raising.get(key) === attempt) raising.delete(key);
       };
-      void attempt.then(settle, settle);
+      void attempt.then(clear, clear);
       return attempt;
     },
 
     resolve(botId, dedupeKey, resolution) {
+      // A raise after this resolve is a new problem: it must not join an
+      // attempt that is about to deliver the issue being settled.
+      raising.delete(raiseKeyOf(botId, dedupeKey));
       return settle(botId, dedupeKey, resolution);
     },
 

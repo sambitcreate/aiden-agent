@@ -44,3 +44,9 @@ test("Check now calls back once and shows the checking state", () => {
   const button = screen.getByRole("button", { name: /Checking/u }) as HTMLButtonElement;
   assert.equal(button.disabled, true);
 });
+
+test("the one status reads Needs you when something waits on the person", () => {
+  render(<BotHealthGroup report={REPORT} status="needs_you" checking={false} onCheck={() => undefined} />);
+  assert.ok(screen.getByText("Status"));
+  assert.equal(screen.getAllByText("Needs you").length, 2, "the status and the connection");
+});

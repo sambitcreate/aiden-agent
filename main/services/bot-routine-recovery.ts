@@ -114,33 +114,54 @@ export interface BotRoutineRecoveryDependencies {
 }
 
 export interface BotRoutineRecovery {
-  afterRun(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<void>;
+  /** `retrying`: a retry was queued, so this attempt is not delivered. */
+  afterRun(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<{ retrying: boolean }>;
+  /** The person turned the routine back on: its pause card is answered. */
+  resumed(botId: string, routineId: string): Promise<void>;
+}
+
+/** Pre-fire cards a successful run proves wrong. */
+const RESOLVED_BY_SUCCESS = ["preflight:bot_state", "preflight:model", "preflight:provider_auth"];
+
+/** Only fires with a durable id can be retried; a Run now has no pending entry to ride. */
+function retriable(trigger: ScheduledRunTrigger): boolean {
+  return trigger.kind === "automatic" || trigger.kind === "retry" || trigger.kind === "catch_up";
 }
 
 export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDependencies): BotRoutineRecovery {
   return {
+    async resumed(botId, routineId) {
+      await dependencies.issues.resolve(botId, routinePausedKey(routineId), "fixed");
+    },
+
     async afterRun(task, run, trigger) {
       const botId = task.botId;
-      if (!botId) return;
+      if (!botId) return { retrying: false };
       const name = task.name?.trim() || "This routine";
       if (run.result === "success" && run.failure?.kind !== "tool_error") {
         await dependencies.issues.resolve(botId, routineFailedKey(task.id), "fixed");
-        await dependencies.issues.resolve(botId, routinePausedKey(task.id), "fixed");
-        return;
+        // A Run now while the routine is off does not answer its pause card.
+        if (task.enabled) await dependencies.issues.resolve(botId, routinePausedKey(task.id), "fixed");
+        for (const key of RESOLVED_BY_SUCCESS) await dependencies.issues.resolve(botId, key, "fixed");
+        return { retrying: false };
       }
-      if (run.result !== "error" && run.failure?.kind !== "tool_error") return;
+      if (run.result !== "error" && run.failure?.kind !== "tool_error") return { retrying: false };
       const failure: BotRoutineFailure = run.failure ?? { kind: "other", code: "run_failed" };
 
-      const plan = retryPlan({
-        failure,
-        attempt: trigger.kind === "retry" ? trigger.attempt : 0,
-        finishedAt: run.finishedAt,
-        ...(task.nextRunAt !== undefined ? { nextRunAt: task.nextRunAt } : {}),
-      });
+      const plan = retriable(trigger)
+        ? retryPlan({
+          failure,
+          attempt: trigger.kind === "retry" ? trigger.attempt : 0,
+          finishedAt: run.finishedAt,
+          ...(task.nextRunAt !== undefined ? { nextRunAt: task.nextRunAt } : {}),
+        })
+        : undefined;
       // The fire is not final while a retry is queued; judge it after the retry.
       if (plan && (task.enabled || task.routineSchedule?.kind === "once")) {
         const failedRunId = trigger.kind === "retry" ? trigger.failedRunId : run.id;
-        if (await dependencies.store.addRoutineRetry(task.id, { failedRunId, attempt: plan.attempt, at: plan.at })) return;
+        if (await dependencies.store.addRoutineRetry(task.id, { failedRunId, attempt: plan.attempt, at: plan.at })) {
+          return { retrying: true };
+        }
       }
 
       const section = SETTINGS_SECTION[failure.kind];
@@ -155,12 +176,15 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
           routineId: task.id,
           actions,
         });
-        dependencies.afterPersonFailure?.(botId, task.id);
+        // A re-check only for causes it can see; it clears, never raises.
+        if (failure.kind === "sign_in" || failure.kind === "access_changed") dependencies.afterPersonFailure?.(botId, task.id);
       }
 
-      if (!task.enabled) return;
-      const streak = failureStreak(fireOutcomes(await dependencies.store.runs(task.id)));
-      if (streak.count < BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD || !streak.kind) return;
+      if (!task.enabled) return { retrying: false };
+      // Resuming starts a fresh count: only fires after the routine came back on.
+      const since = task.enabledAt ?? 0;
+      const streak = failureStreak(fireOutcomes((await dependencies.store.runs(task.id)).filter((entry) => entry.finishedAt > since)));
+      if (streak.count < BOT_ROUTINE_FAILURE_PAUSE_THRESHOLD || !streak.kind) return { retrying: false };
       await dependencies.routines.pause(botId, task.id);
       await dependencies.store.clearRoutineRetries(task.id);
       await dependencies.issues.resolve(botId, routineFailedKey(task.id), "superseded");
@@ -173,6 +197,7 @@ export function createBotRoutineRecovery(dependencies: BotRoutineRecoveryDepende
         routineId: task.id,
         actions: [{ kind: "resume_routine", routineId: task.id }],
       });
+      return { retrying: false };
     },
   };
 }

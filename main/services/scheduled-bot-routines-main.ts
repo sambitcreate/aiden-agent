@@ -45,6 +45,8 @@ export const botRoutineService = createBotRoutineService({
   defaultTimezone: systemTimezone,
   // Routine changes ride the existing Bot invalidation channel so Bot views refresh.
   notifyChanged: (payload) => ipcMain.broadcast("bots:changed", payload),
+  routineResumed: async (botId, routineId) =>
+    (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().resumed(botId, routineId),
   routineDeleted: async (botId, routineId) => {
     await botRoutineNotes.clear(botId, routineId);
     try {

@@ -132,7 +132,7 @@ export interface BotRoutineExecutorDependencies {
    * person must answer, pause a routine that keeps failing. Best effort: a
    * failure here never changes the run that was recorded.
    */
-  afterRun?(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<void>;
+  afterRun?(task: ScheduledTask, run: ScheduledRun, trigger: ScheduledRunTrigger): Promise<{ retrying?: boolean } | void>;
   now?: () => number;
 }
 
@@ -307,7 +307,8 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     }
     // The watchdog stopped a run that made no progress: a retryable stall,
     // not the person's Stop.
-    if (outcome.kind !== "completed" && ports.consumeStall?.(task.botId)) {
+    const stalled = ports.consumeStall?.(task.botId) === true;
+    if (outcome.kind !== "completed" && stalled) {
       throw new RoutineFailure(
         "The routine stopped making progress.",
         { kind: "stalled", code: "no_progress" },
@@ -474,12 +475,15 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
         ...(outcome.failure !== undefined ? { failure: outcome.failure } : {}),
         ...(outcome.claimCheck !== undefined ? { claimCheck: outcome.claimCheck } : {}),
       });
+      let retrying = false;
       try {
-        await dependencies.afterRun?.(task, run, trigger);
+        retrying = (await dependencies.afterRun?.(task, run, trigger))?.retrying === true;
       } catch {
         // Healing is advisory; the recorded run and its delivery stand.
       }
-      if (outcome.surface) {
+      // A failure that will be tried again is not the last word: only the
+      // final attempt (or the success) reaches the person.
+      if (outcome.surface && !retrying) {
         try {
           await dependencies.deliver?.({
             botId: task.botId,
@@ -707,6 +711,8 @@ export interface BotRoutineServiceDependencies {
   notifyChanged(payload: { botId: string; routineId: string; removed?: boolean }): void;
   /** A routine was deleted: forget what belonged to it alone (its notes). */
   routineDeleted?(botId: string, routineId: string): Promise<void>;
+  /** The person turned a routine back on (its "Paused" card is answered). */
+  routineResumed?(botId: string, routineId: string): Promise<void>;
   now?: () => number;
 }
 
@@ -743,7 +749,8 @@ export function projectBotRoutine(task: ScheduledTask & { botId: string }, now: 
     ...(task.lastRunAt !== undefined ? { lastRunAt: task.lastRunAt } : {}),
     ...(task.lastResult !== undefined ? { lastResult: task.lastResult } : {}),
     ...(task.lastError !== undefined ? { lastError: task.lastError } : {}),
-    pendingFireCount: task.pendingRoutineFires?.length ?? 0,
+    // A queued retry is not a fire waiting to finish.
+    pendingFireCount: task.pendingRoutineFires?.filter((fire) => !fire.retry).length ?? 0,
     ...(task.enabled && task.nextRunAt !== undefined && task.nextRunAt < now - 15 * 60_000
       ? { overdueSince: task.nextRunAt }
       : {}),
@@ -831,6 +838,7 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         },
         { expectedUpdatedAt: existing.updatedAt },
       );
+      if (!existing.enabled && task.enabled) await dependencies.routineResumed?.(input.botId, task.id).catch(() => undefined);
       dependencies.notifyChanged({ botId: input.botId, routineId: task.id });
       return projectBotRoutine(task as ScheduledTask & { botId: string }, now());
     },

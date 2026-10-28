@@ -52,7 +52,7 @@ async function harness(
   ports: { mac?(input: BotDeliveryInput): Promise<void>; telegram?(input: BotDeliveryInput): Promise<void> } = {},
 ) {
   const profile = await mkdtemp(path.join(os.tmpdir(), "aiden-bot-delivery-"));
-  const log = createBotDeliveryLog({ profileDir: () => profile });
+  const log = createBotDeliveryLog({ profileDir: () => profile, now: () => NOW });
   const calls = { mac: [] as BotDeliveryInput[], telegram: [] as BotDeliveryInput[] };
   const funnel = createBotDeliveryFunnel({
     log,
@@ -260,4 +260,21 @@ test("the first row over the daily limit leaves one note that more is in the cha
   assert.equal(await h.funnel.deliver(routineResult({ dedupeKey: "b" })), "suppressed");
   assert.deepEqual(h.calls.mac.map((input) => input.body), ["More updates are in the chat."]);
   assert.deepEqual((await h.log.due(undefined, NOW)).map((row) => row.class), ["digest"]);
+});
+
+test("two deliveries of one key at once send once", async (t) => {
+  const h = await harness();
+  t.after(h.cleanup);
+  const [first, second] = await Promise.all([h.funnel.deliver(routineResult()), h.funnel.deliver(routineResult())]);
+  assert.deepEqual([first, second].sort(), ["duplicate", "sent"]);
+  assert.equal(h.calls.mac.length, 1);
+});
+
+test("a delivery after the Bot is forgotten writes nothing and sends nothing", async (t) => {
+  const h = await harness();
+  t.after(h.cleanup);
+  await h.log.forgetBot("bot:scout");
+  assert.equal(await h.funnel.deliver(routineResult()), "duplicate");
+  assert.equal(h.calls.mac.length, 0);
+  assert.deepEqual(await h.log.list("bot:scout"), []);
 });

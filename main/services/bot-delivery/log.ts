@@ -54,7 +54,11 @@ export type BotDeliveryChannel = "mac" | "telegram";
 
 export interface BotDeliveryLog {
   /** Dedupes by `(botId, dedupeKey)`; a repeat returns the stored row. */
-  append(row: Omit<BotDeliveryRow, "id">): Promise<{ row: BotDeliveryRow; created: boolean }>;
+  /**
+   * `stampNow`: an immediate row takes its time inside the write, so a phone
+   * that read the feed while the gate was deciding can't step past it.
+   */
+  append(row: Omit<BotDeliveryRow, "id"> & { stampNow?: boolean }): Promise<{ row: BotDeliveryRow; created: boolean }>;
   /** The row already stored under this key, if any. */
   find(botId: string, dedupeKey: string): Promise<BotDeliveryRow | undefined>;
   /** Rows due at `now`, newest first, at most 100. `since` is exclusive. */
@@ -156,6 +160,8 @@ function parseFile(text: string, botId: string): BotDeliveryRow[] {
 export function createBotDeliveryLog(options: { profileDir(): string; now?(): number }): BotDeliveryLog {
   const now = options.now ?? Date.now;
   const serial = createKeyedSerial();
+  /** Deleted Bots: a delivery still in flight must not bring their file back. */
+  const forgotten = new Set<string>();
   const fileOf = (botId: string) => path.join(botSessionDirectory(options.profileDir(), botId), BOT_DELIVERIES_FILE);
 
   async function load(botId: string): Promise<BotDeliveryRow[]> {
@@ -174,15 +180,21 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
   return {
     append(input) {
       return serial(input.botId, async () => {
+        if (forgotten.has(input.botId)) {
+          // Answered as already delivered, so nothing is sent or written.
+          const { stampNow: _stamp, ...fields } = input;
+          return { row: { ...fields, id: "forgotten", sentAt: now() }, created: false };
+        }
         const rows = await load(input.botId);
         const existing = rows.find((row) => row.dedupeKey === input.dedupeKey);
         if (existing) return { row: existing, created: false };
-        const createdAt = Number.isFinite(input.createdAt) ? input.createdAt : now();
+        const { stampNow, ...fields } = input;
+        const createdAt = stampNow || !Number.isFinite(fields.createdAt) ? now() : fields.createdAt;
         const row: BotDeliveryRow = {
           id: randomUUID(),
-          ...input,
+          ...fields,
           createdAt,
-          deliverAfter: Number.isFinite(input.deliverAfter) ? input.deliverAfter : createdAt,
+          deliverAfter: stampNow || !Number.isFinite(fields.deliverAfter) ? createdAt : fields.deliverAfter,
         };
         await save(input.botId, [row, ...rows].slice(0, BOT_DELIVERIES_MAX));
         return { row, created: true };
@@ -210,6 +222,7 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
 
     markChannel(botId, id, channel, at) {
       return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
         const rows = await load(botId);
         const index = rows.findIndex((row) => row.id === id);
         if (index < 0) return;
@@ -223,6 +236,7 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
 
     markSent(botId, id, at) {
       return serial(botId, async () => {
+        if (forgotten.has(botId)) return;
         const rows = await load(botId);
         const index = rows.findIndex((row) => row.id === id);
         if (index < 0) return;
@@ -236,6 +250,7 @@ export function createBotDeliveryLog(options: { profileDir(): string; now?(): nu
     },
 
     forgetBot(botId) {
+      forgotten.add(botId);
       return serial(botId, async () => {
         await fs.rm(fileOf(botId), { force: true });
       });

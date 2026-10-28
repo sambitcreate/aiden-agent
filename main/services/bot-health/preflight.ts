@@ -64,6 +64,7 @@ export async function reconcileHealthIssues(
   issues: Pick<BotIssueService, "raise" | "resolve">,
   report: BotHealthReport,
   routineName: string | undefined,
+  options: { raise?: boolean } = {},
 ): Promise<void> {
   for (const result of report.results) {
     const dedupeKey = preflightIssueKey(result.id);
@@ -71,7 +72,9 @@ export async function reconcileHealthIssues(
       await issues.resolve(report.botId, dedupeKey, "fixed");
       continue;
     }
-    if (result.status !== "needs_you") continue;
+    if (result.status !== "needs_you" || options.raise === false) continue;
+    // Bots open in another window is not something a card here can fix.
+    if (result.failure?.code === "unavailable") continue;
     await issues.raise({
       botId: report.botId,
       kind: "preflight_failed",
@@ -94,21 +97,35 @@ export interface BotRoutinePreflightDependencies {
   onError?(error: unknown): void;
 }
 
+/** Timers are armed only this far ahead; the periodic rearm picks up the rest. */
+export const BOT_ROUTINE_PREFLIGHT_HORIZON_MS = 60 * 60_000;
+/** An unattended check never hangs a Bot's check chain. */
+export const BOT_ROUTINE_PREFLIGHT_TIMEOUT_MS = 60_000;
+const CHECKED_KEPT = 500;
+
 export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDependencies): { rearm(): Promise<void>; dispose(): void } {
-  const timers = new Map<string, { fireKey: string; timer: { cancel(): void } }>();
+  const timers = new Map<string, { timer: { cancel(): void } }>();
   const checked = new Set<string>();
   const running = new Map<string, Promise<void>>();
   const controller = new AbortController();
   let disposed = false;
 
+  function remember(fireKey: string): void {
+    checked.add(fireKey);
+    if (checked.size > CHECKED_KEPT) checked.delete(checked.values().next().value!);
+  }
+
   async function check(task: ScheduledTask & { botId: string }, fireKey: string): Promise<void> {
     if (disposed || checked.has(fireKey)) return;
-    checked.add(fireKey);
+    // The timer may wake late (sleep): never check a fire that is past or too close.
+    if (task.nextRunAt! - dependencies.now() < BOT_ROUTINE_PREFLIGHT_MIN_LEAD_MS) return;
+    remember(fireKey);
     // One check per Bot at a time; a second routine of the same Bot waits.
     const previous = running.get(task.botId) ?? Promise.resolve();
     const current = previous.then(async () => {
       if (disposed) return;
-      const report = await dependencies.run(task.botId, task.id, controller.signal);
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(BOT_ROUTINE_PREFLIGHT_TIMEOUT_MS)]);
+      const report = await dependencies.run(task.botId, task.id, signal);
       dependencies.reports.set(report);
       await reconcileHealthIssues(dependencies.issues, report, task.name?.trim() || undefined);
     }).catch((error: unknown) => dependencies.onError?.(error));
@@ -121,30 +138,26 @@ export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDepen
     async rearm() {
       if (disposed) return;
       const now = dependencies.now();
-      const due = new Map<string, ScheduledTask & { botId: string }>();
+      // Re-timed on every rearm: a timer armed before sleep may be hours off.
+      for (const { timer } of timers.values()) timer.cancel();
+      timers.clear();
       for (const task of await dependencies.routines()) {
         if (!task.botId || !task.enabled || task.nextRunAt === undefined) continue;
-        due.set(task.id, task as ScheduledTask & { botId: string });
-      }
-      for (const [id, entry] of timers) {
-        const task = due.get(id);
-        if (!task || `${id}:${task.nextRunAt}` !== entry.fireKey) {
-          entry.timer.cancel();
-          timers.delete(id);
-        }
-      }
-      for (const [id, task] of due) {
-        const fireKey = `${id}:${task.nextRunAt}`;
-        if (timers.has(id) || checked.has(fireKey)) continue;
-        const untilFire = task.nextRunAt! - now;
+        const fireKey = `${task.id}:${task.nextRunAt}`;
+        if (checked.has(fireKey)) continue;
+        const untilFire = task.nextRunAt - now;
         // Too close to the fire: checking now would only delay it.
         if (untilFire < BOT_ROUTINE_PREFLIGHT_MIN_LEAD_MS) continue;
         const delay = Math.max(0, untilFire - BOT_ROUTINE_PREFLIGHT_LEAD_MS);
+        // Far-off fires wait for a later rearm; this also keeps every delay
+        // well under the timer's 24.8-day limit, past which it fires at once.
+        if (delay > BOT_ROUTINE_PREFLIGHT_HORIZON_MS) continue;
+        const routine = task as ScheduledTask & { botId: string };
         const timer = dependencies.setTimer(() => {
-          timers.delete(id);
-          void check(task, fireKey);
+          timers.delete(task.id);
+          void check(routine, fireKey);
         }, delay);
-        timers.set(id, { fireKey, timer });
+        timers.set(task.id, { timer });
       }
     },
     dispose() {

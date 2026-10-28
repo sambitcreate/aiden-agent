@@ -3,7 +3,8 @@ import { RefreshCw } from "lucide-react";
 import { Button, Field, FieldSet, Text, toast } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
-import type { BotHealthCheckResult, BotHealthReport } from "../../shared/bot-health";
+import { BOT_HEALTH_LABELS, botHealthStatus, type BotHealthCheckResult, type BotHealthReport, type BotHealthStatus } from "../../shared/bot-health";
+import { useBotLiveSummary } from "./bot-sidebar-rows";
 import type { BotDefinition } from "../../shared/bots";
 
 const RESULT_WORDS: Record<BotHealthCheckResult["status"], string> = {
@@ -31,16 +32,26 @@ function checkedWhen(at: number): string {
  */
 export function BotHealthGroup({
   report,
+  status,
   checking,
   onCheck,
 }: {
   report: BotHealthReport | null;
+  /** The one status the Bot shows: Ready, Needs you or Paused. */
+  status?: BotHealthStatus;
   checking: boolean;
   onCheck(): void;
 }) {
   const shown = report?.results.filter((result) => result.status !== "skipped" || result.id !== "computer") ?? [];
   return (
     <FieldSet title="Health">
+      {status ? (
+        <Field label="Status">
+          <Text as="span" variant="small" color={status === "needs_you" ? "status-red" : "secondary"} className="justify-self-end">
+            {BOT_HEALTH_LABELS[status]}
+          </Text>
+        </Field>
+      ) : null}
       {shown.length ? (
         shown.map((result) => (
           <Field key={result.id} label={result.label}>
@@ -87,5 +98,14 @@ export function BotHealthSection({ bot }: { bot: Pick<BotDefinition, "id" | "nam
       setChecking(false);
     }
   };
-  return <BotHealthGroup report={report} checking={checking} onCheck={() => void check()} />;
+  const summary = useBotLiveSummary(bot.id).data;
+  const status = summary
+    ? botHealthStatus({
+        paused: summary.state.kind === "paused",
+        sessionState: summary.state.kind,
+        openIssues: summary.needsYou ? 1 : 0,
+        ...(report ? { report } : {}),
+      })
+    : undefined;
+  return <BotHealthGroup report={report} {...(status ? { status } : {})} checking={checking} onCheck={() => void check()} />;
 }

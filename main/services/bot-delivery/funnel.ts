@@ -107,7 +107,7 @@ export function createBotDeliveryFunnel(deps: {
   }
 
   /** Asks the gate and stores the row it decided for. */
-  async function record(input: BotDeliveryInput, at: number): Promise<BotDeliveryRow> {
+  async function record(input: BotDeliveryInput, at: number): Promise<{ row: BotDeliveryRow; now: boolean }> {
     const decision = await deps.gate.decide(input, at);
     if (decision.kind === "suppress" && decision.digestKey !== undefined) {
       // The first row held back today leaves one note that more is in the chat.
@@ -138,9 +138,12 @@ export function createBotDeliveryFunnel(deps: {
       createdAt: at,
       deliverAfter: decision.kind === "defer" ? decision.until : at,
       ...(decision.kind === "suppress" ? { suppressed: true } : {}),
+      ...(decision.kind === "now" ? { stampNow: true } : {}),
     });
-    return row;
+    return { row, now: decision.kind === "now" };
   }
+
+  const inFlight = new Map<string, Promise<"sent" | "deferred" | "suppressed" | "duplicate">>();
 
   async function flushBot(botId: string, at: number): Promise<number | undefined> {
     const rows = await deps.log.list(botId);
@@ -186,17 +189,35 @@ export function createBotDeliveryFunnel(deps: {
       return next;
     },
 
-    async deliver(input) {
+    deliver(input) {
+      // One delivery per key at a time: concurrent same-key calls would both
+      // miss the stored row and both send.
+      const key = `${input.botId}\0${input.dedupeKey}`;
+      const previous = inFlight.get(key) ?? Promise.resolve();
+      const next = previous.catch(() => undefined).then(() => deliverOnce(input));
+      inFlight.set(key, next);
+      void next.finally(() => {
+        if (inFlight.get(key) === next) inFlight.delete(key);
+      }).catch(() => undefined);
+      return next;
+    },
+  };
+
+  async function deliverOnce(input: BotDeliveryInput): Promise<"sent" | "deferred" | "suppressed" | "duplicate"> {
+    {
       const at = deps.now();
       // An existing row keeps its stored decision: asking the gate again would
       // count a retry against the cap and could hold back a row it already
       // released. The gate is asked once, when the row is created.
-      const row = (await deps.log.find(input.botId, input.dedupeKey)) ?? (await record(input, at));
+      const stored = await deps.log.find(input.botId, input.dedupeKey);
+      const created = stored ? undefined : await record(input, at);
+      const row = stored ?? created!.row;
       if (row.suppressed === true) return "suppressed";
       // Only a row that went out on every channel is a duplicate.
       if (row.sentAt !== undefined) return "duplicate";
-      if (row.deliverAfter > at) return "deferred";
+      // A row the gate just released goes now; a stored one waits for its time.
+      if (created ? !created.now : row.deliverAfter > at) return "deferred";
       return send(row, input, at);
-    },
-  };
+    }
+  }
 }

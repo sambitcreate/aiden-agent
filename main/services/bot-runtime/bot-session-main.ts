@@ -498,6 +498,8 @@ interface WatchedRun {
   submissionId: string;
   at: number;
   quiet: boolean | null;
+  /** The person's messages waiting behind this turn; a stop would withdraw them. */
+  queued: number;
   unsubscribe?: () => void;
 }
 const watchedRuns = new Map<string, WatchedRun>();
@@ -514,7 +516,9 @@ function watchRun(botId: string, state: BotSessionState): void {
   }
   if (current?.submissionId === state.submissionId) return;
   current?.unsubscribe?.();
-  const run: WatchedRun = { submissionId: state.submissionId, at: Date.now(), quiet: null };
+  // A new turn without going idle: an earlier turn's stall card is moot.
+  if (current) void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "fixed").catch(() => undefined);
+  const run: WatchedRun = { submissionId: state.submissionId, at: Date.now(), quiet: null, queued: 0 };
   watchedRuns.set(botId, run);
   void botSessionRuntime()
     .then((service) => service.quietInputs(botId, [run.submissionId]))
@@ -523,8 +527,15 @@ function watchRun(botId: string, state: BotSessionState): void {
     })
     .catch(() => undefined);
   void botLiveProjection()
-    .subscribe(botId, { send: () => { run.at = Date.now(); } })
+    .subscribe(botId, {
+      send: (event) => {
+        run.at = Date.now();
+        if (event.type === "queued") run.queued = event.queued.length;
+        if (event.type === "snapshot") run.queued = event.snapshot.queued.length;
+      },
+    })
     .then((subscription) => {
+      run.queued = subscription.snapshot.queued.length;
       if (watchedRuns.get(botId) === run) run.unsubscribe = () => subscription.unsubscribe();
       else subscription.unsubscribe();
     })
@@ -537,8 +548,10 @@ const runWatchdog = createBotRunWatchdog({
   lastProgressAt: (botId) => watchedRuns.get(botId)?.at,
   // Unknown until the request id is read; an unknown run is never stopped.
   runKind: (botId) => {
-    const quiet = watchedRuns.get(botId)?.quiet;
-    return quiet === true ? "routine" : quiet === false ? "attended" : null;
+    const run = watchedRuns.get(botId);
+    // A routine with the person's messages waiting is asked about, never stopped.
+    if (run?.quiet === true) return run.queued > 0 ? "attended" : "routine";
+    return run?.quiet === false ? "attended" : null;
   },
   isWaitingOnPerson: (botId) =>
     botHandoffs.pending(botId).length > 0 ||
@@ -589,8 +602,8 @@ export async function botTurnClaims(botId: string): Promise<{ stepIds: string[];
 
 /** Keep waiting on a stuck-run card: another full window before asking again. */
 export function snoozeBotRunWatchdog(botId: string): void {
+  // The card's own action settles it; this only waits another window.
   runWatchdog.snooze(botId);
-  void botIssues.resolve(botId, RUN_STALL_ISSUE_KEY, "dismissed").catch(() => undefined);
 }
 
 /** The process-wide live projection that renderer windows subscribe to. */

@@ -534,6 +534,8 @@ export interface ScheduledTask {
      */
     retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
+  /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
+  enabledAt?: number;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;

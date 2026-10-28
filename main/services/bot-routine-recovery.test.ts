@@ -141,10 +141,14 @@ function harness() {
     issues,
     now: () => Date.now(),
   });
+  const deliveries: string[] = [];
   const executor = createBotRoutineExecutor({
     store,
     ports: () => session,
-    deliver: async () => "sent",
+    deliver: async (input) => {
+      deliveries.push(input.dedupeKey);
+      return "sent";
+    },
     broadcast: () => undefined,
     afterRun: (task, recorded, trigger) => recovery.afterRun(task, recorded, trigger),
   });
@@ -171,7 +175,7 @@ function harness() {
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims };
+  return { store, scheduler, routines, executor, replies, sends, open, resolved, stalled, claims, deliveries, recovery };
 }
 
 const TIMEOUT: BotRoutineSubmissionOutcome = { kind: "failed", error: "model_error", reason: "model_error", detail: "503 Service Unavailable" };
@@ -325,4 +329,56 @@ test("three claim-flagged fires in a row pause the routine", async () => {
   }
   assert.equal((await h.store.get(routine.id))?.enabled, false);
   assert.equal(h.open.get(`routine_paused:${routine.id}`)?.body, "It failed 3 times in a row. A step it depends on didn't work.");
+});
+
+test("an attempt that will be retried is not delivered; the final one is", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
+  h.replies.push(TIMEOUT);
+  await fire(h, routine.id, Date.now() - 1_000);
+  assert.deepEqual(h.deliveries, [], "a passing failure with a retry queued does not reach the person");
+});
+
+test("resuming starts a fresh count, so one more failure does not pause again", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
+  const base = Date.now() - 10 * 86_400_000;
+  for (let day = 0; day < 3; day += 1) {
+    h.replies.push(SIGNED_OUT);
+    await fire(h, routine.id, base + day * 86_400_000);
+  }
+  const paused = (await h.store.get(routine.id))!;
+  assert.equal(paused.enabled, false);
+  await h.routines.update({ botId: "bot-1", id: routine.id, expectedUpdatedAt: paused.updatedAt, enabled: true });
+  await h.recovery.resumed("bot-1", routine.id);
+  assert.equal(h.open.has(`routine_paused:${routine.id}`), false, "turning it back on answers the pause card");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  h.replies.push(SIGNED_OUT);
+  await fire(h, routine.id, Date.now() - 1);
+  assert.equal((await h.store.get(routine.id))?.enabled, true, "one failure after Resume does not pause again");
+});
+
+test("a retry replayed after the next regular fire came due is dropped, not run", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
+  h.replies.push(TIMEOUT);
+  const failed = await fire(h, routine.id, Date.now() - 1_000);
+  await h.store.clearRoutineRetries(routine.id);
+  await h.store.addRoutineRetry(routine.id, { failedRunId: failed.id, attempt: 1, at: Date.now() - 1 });
+  await h.store.updateRuntime(routine.id, { nextRunAt: Date.now() - 500 });
+  await h.scheduler.start();
+  for (let attempt = 0; attempt < 100 && (await h.store.get(routine.id))?.pendingRoutineFires?.some((entry) => entry.retry); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(await h.store.runById(routine.id, `${failed.id}:retry-1`), undefined, "the stale retry never ran");
+});
+
+test("a failed Run now is not retried", async () => {
+  const h = harness();
+  const routine = await h.routines.create({ botId: "bot-1", name: "Briefing", schedule: { kind: "daily", time: "09:00" }, prompt: "Brief me." });
+  h.replies.push(TIMEOUT);
+  const task = (await h.store.get(routine.id))!;
+  await h.executor.run(task, { trigger: { kind: "manual", key: "now-1" }, signal: new AbortController().signal });
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0);
 });

@@ -358,6 +358,15 @@ export function createScheduleServiceCore(
           : undefined;
         if (options.automatic && options.recovery && !pendingFire)
           throw new UnclaimableScheduledFire(`Routine ${taskId} has no pending fire to recover.`);
+        // A retry replayed after the routine's next regular fire came due (the
+        // Mac slept, Aiden was closed) is stale: that fire replaces it.
+        if (
+          pendingFire?.retry &&
+          ((task.nextRunAt !== undefined && task.nextRunAt <= Date.now()) || (task.lastRunAt ?? 0) > pendingFire.fireTime)
+        ) {
+          await store.settleRoutineFire(task.id, pendingFire.requestId);
+          throw new UnclaimableScheduledFire(`Routine ${taskId}'s retry was replaced by its next fire.`);
+        }
         const claimed = options.automatic && !options.recovery
           ? await advanceBeforeRun(task, fireTime!, isCurrent)
           : task;

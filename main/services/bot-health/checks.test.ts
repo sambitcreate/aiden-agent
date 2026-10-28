@@ -60,10 +60,27 @@ test("a paused Bot is not checked further", async () => {
   assert.ok(report.results.every((result) => result.status === "skipped"));
 });
 
-test("an admission error reads as a model that changed", async () => {
-  const { deps: d } = deps({ refreshModelBinding: async () => { throw new Error("capability_changed"); } });
+test("a check that could not tell (offline, a passing error) raises nothing", async () => {
+  for (const override of [
+    { refreshModelBinding: async () => { throw new Error("socket hang up"); } },
+    { refreshModelBinding: async () => "unknown" as const },
+    { providerAuth: async () => "unknown" as const },
+  ]) {
+    const { deps: d } = deps(override);
+    const report = await runBotHealthChecks("bot-1", d, options);
+    assert.equal(report.results.some((result) => result.status === "needs_you"), false, JSON.stringify(report.results));
+  }
+});
+
+test("a drifted model needs the person", async () => {
+  const { deps: d } = deps({ refreshModelBinding: async () => "drifted" });
+  assert.equal(statusOf(await runBotHealthChecks("bot-1", d, options), "model"), "needs_you");
+});
+
+test("Bots open in another window is not a card", async () => {
+  const { deps: d } = deps({ sessionState: async () => "unavailable" });
   const report = await runBotHealthChecks("bot-1", d, options);
-  assert.equal(statusOf(report, "model"), "needs_you");
+  assert.equal(report.results.some((result) => result.status === "needs_you"), false);
 });
 
 test("botHealthStatus prefers paused, then needs_you", () => {

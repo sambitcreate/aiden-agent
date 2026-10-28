@@ -80,7 +80,7 @@ function setup(tasks: ScheduledTask[], reports: BotHealthReport[]) {
 }
 
 test("checks once 30 minutes before a fire", async () => {
-  const fire = 2 * HOUR;
+  const fire = 80 * 60_000;
   const h = setup([routine("r1", fire)], []);
   await h.preflight.rearm();
   await h.advance(fire - BOT_ROUTINE_PREFLIGHT_LEAD_MS - 1);
@@ -131,15 +131,29 @@ test("a later passing check resolves the issue as fixed", async () => {
 });
 
 test("editing the routine's time rearms the timer", async () => {
-  const tasks = [routine("r1", 5 * HOUR)];
+  const tasks = [routine("r1", 85 * 60_000)];
   const h = setup(tasks, []);
   await h.preflight.rearm();
-  tasks[0] = routine("r1", 2 * HOUR);
+  tasks[0] = routine("r1", 70 * 60_000);
   await h.preflight.rearm();
-  await h.advance(2 * HOUR - BOT_ROUTINE_PREFLIGHT_LEAD_MS);
+  await h.advance(70 * 60_000 - BOT_ROUTINE_PREFLIGHT_LEAD_MS);
   assert.deepEqual(h.runs, ["r1"]);
-  await h.advance(5 * HOUR - BOT_ROUTINE_PREFLIGHT_LEAD_MS);
+  await h.advance(85 * 60_000 - BOT_ROUTINE_PREFLIGHT_LEAD_MS);
   assert.deepEqual(h.runs, ["r1"], "the old timer was cancelled");
+});
+
+test("a fire weeks away arms no timer and checks nothing until a later rearm", async () => {
+  const h = setup([routine("monthly", 28 * 24 * HOUR)], []);
+  await h.preflight.rearm();
+  await h.advance(1);
+  assert.deepEqual(h.runs, [], "no check at start for a far fire");
+});
+
+test("a timer that wakes late, after the fire, checks nothing", async () => {
+  const h = setup([routine("r1", 50 * 60_000)], []);
+  await h.preflight.rearm();
+  await h.advance(60 * 60_000);
+  assert.deepEqual(h.runs, []);
 });
 
 test("a disabled routine is never checked", async () => {

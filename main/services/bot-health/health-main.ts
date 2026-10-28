@@ -8,6 +8,7 @@ import { BOT_DESKTOP_AUDIENCE_ID } from "../bot-runtime-authority-main.js";
 import { botCapabilityCatalog, botCapabilityStore } from "../bot-capability-services-main.js";
 import { setBotRoutineAfterPersonFailure } from "../bot-routine-recovery-main.js";
 import { scheduleStore } from "../schedule-store.js";
+import { providerFailureFromLegacyPiMessage } from "../provider-failure.js";
 import { runBotHealthChecks, type BotHealthCheckDeps } from "./checks.js";
 import { createBotHealthReports, createBotRoutinePreflight, reconcileHealthIssues } from "./preflight.js";
 
@@ -27,8 +28,8 @@ const checks: BotHealthCheckDeps = {
       await probeBotAdmission(botId);
       return "current";
     } catch (error) {
-      if (error instanceof Error && error.name === "BotRuntimeAuthorityError") return "drifted";
-      throw error;
+      // Only a real authority drift is the person's to fix; anything else is unknown.
+      return error instanceof Error && error.name === "BotRuntimeAuthorityError" ? "drifted" : "unknown";
     }
   },
   providerAuth: async (botId, signal) => {
@@ -36,13 +37,21 @@ const checks: BotHealthCheckDeps = {
       import("../bot-runtime/bot-session-main.js"),
       import("../model-runtime.js"),
     ]);
-    const { providerId, modelId } = await probeBotAdmission(botId);
+    let target: { providerId: string; modelId: string };
     try {
-      await preflightBotModelAuth(providerId, modelId, signal);
+      target = await probeBotAdmission(botId);
+    } catch {
+      return "unknown";
+    }
+    try {
+      await preflightBotModelAuth(target.providerId, target.modelId, signal);
       return "ok";
     } catch (error) {
       if (signal.aborted) throw error;
-      return "signed_out";
+      // Signed out only when the credential is gone or refused; offline is unknown.
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no longer configured/iu.test(message)) return "signed_out";
+      return providerFailureFromLegacyPiMessage(message)?.category === "authentication" ? "signed_out" : "unknown";
     }
   },
   // Only a Custom grant names the connections a Bot relies on. Under Full
@@ -86,7 +95,9 @@ export async function checkBotHealth(
   });
   botHealthReports.set(report);
   const routineName = routineId ? (await scheduleStore.get(routineId))?.name : undefined;
-  await reconcileHealthIssues(await issues(), report, routineName?.trim() || undefined);
+  // After a failure the routine's own card already says what's wrong: only
+  // clear what now passes, never raise a second card for the same cause.
+  await reconcileHealthIssues(await issues(), report, routineName?.trim() || undefined, { raise: trigger !== "after_failure" });
   return report;
 }
 

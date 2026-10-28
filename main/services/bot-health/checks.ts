@@ -10,9 +10,9 @@ import type { BotHealthCheckResult, BotHealthReport } from "../../../renderer/sh
 export interface BotHealthCheckDeps {
   sessionState(botId: string): Promise<string>;
   /** Admission repairs a model setting that only went stale; "drifted" needs the person. */
-  refreshModelBinding(botId: string, signal: AbortSignal): Promise<"current" | "repaired" | "drifted">;
-  /** May refresh an expired sign-in, which is the point of checking early. */
-  providerAuth(botId: string, signal: AbortSignal): Promise<"ok" | "refreshed" | "signed_out">;
+  refreshModelBinding(botId: string, signal: AbortSignal): Promise<"current" | "repaired" | "drifted" | "unknown">;
+  /** May refresh an expired sign-in, which is the point of checking early. "unknown": couldn't tell (offline). */
+  providerAuth(botId: string, signal: AbortSignal): Promise<"ok" | "refreshed" | "signed_out" | "unknown">;
   connections(botId: string, signal: AbortSignal): Promise<{ degraded: Array<{ id: string; label: string }> }>;
   /** Store reads only: a check never starts, clones or downloads a Bot computer. */
   computer(botId: string): Promise<"none" | "ready" | "stale">;
@@ -46,9 +46,9 @@ export async function runBotHealthChecks(
   if (BLOCKING_STATES.has(state)) {
     results.push({
       id: "bot_state",
-      status: "needs_you",
+      status: state === "unavailable" ? "skipped" : "needs_you",
       label: state === "unavailable" ? "Bots are open in another window" : "AI model",
-      failure: { kind: "model_setup", code: state },
+      ...(state === "unavailable" ? {} : { failure: { kind: "model_setup" as const, code: state } }),
     });
     skipRest(["model", "provider_auth", "connections", "computer"]);
     return report();
@@ -56,7 +56,13 @@ export async function runBotHealthChecks(
   results.push({ id: "bot_state", status: "ok", label: "Bot" });
 
   const model = await settle(() => deps.refreshModelBinding(botId, options.signal));
-  if (model === "drifted" || model instanceof Error) {
+  // A check that could not tell (offline, a passing error) says nothing.
+  if (model === "unknown" || model instanceof Error) {
+    results.push({ id: "model", status: "skipped", label: LABELS.model });
+    skipRest(["provider_auth", "connections", "computer"]);
+    return report();
+  }
+  if (model === "drifted") {
     results.push({ id: "model", status: "needs_you", label: LABELS.model, failure: { kind: "access_changed", code: "model_changed" } });
     skipRest(["provider_auth", "connections", "computer"]);
     return report();
@@ -64,7 +70,12 @@ export async function runBotHealthChecks(
   results.push({ id: "model", status: model === "repaired" ? "repaired" : "ok", label: LABELS.model });
 
   const auth = await settle(() => deps.providerAuth(botId, options.signal));
-  if (auth === "signed_out" || auth instanceof Error) {
+  if (auth === "unknown" || auth instanceof Error) {
+    results.push({ id: "provider_auth", status: "skipped", label: LABELS.provider_auth });
+    skipRest(["connections", "computer"]);
+    return report();
+  }
+  if (auth === "signed_out") {
     results.push({ id: "provider_auth", status: "needs_you", label: LABELS.provider_auth, failure: { kind: "sign_in", code: "signed_out" } });
     skipRest(["connections", "computer"]);
     return report();
