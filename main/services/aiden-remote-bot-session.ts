@@ -1159,7 +1159,12 @@ class BotLiveProjector {
     }
   }
 
-  private async publish(view: ConversationView): Promise<void> {
+  /**
+   * `snapshotChanges` sends any changed entry as a fresh snapshot instead of an
+   * entry event: a refresh can touch an old entry outside a phone's window,
+   * which an entry event would append at the bottom of its chat.
+   */
+  private async publish(view: ConversationView, { snapshotChanges = false } = {}): Promise<void> {
     if (this.closed) return;
     const next = await this.resolveEntries(projectBotSessionEntries(view.entries, await this.submissionsFor(view.entries)));
     const partial = projectBotSessionPartial(view);
@@ -1187,7 +1192,10 @@ class BotLiveProjector {
     // reorders shown history (a `[SILENT]` routine turn hiding its input) is a snapshot.
     const kept = previous.filter((entry) => nextIds.has(entry.id)).map((entry) => entry.id);
     const order = next.filter((entry) => previousById.has(entry.id)).map((entry) => entry.id);
-    const rewritten = kept.length !== previous.length || kept.some((id, index) => order[index] !== id);
+    const rewritten =
+      kept.length !== previous.length ||
+      kept.some((id, index) => order[index] !== id) ||
+      (snapshotChanges && next.some((entry) => previousById.get(entry.id) !== JSON.stringify(withoutSubmissionId(entry))));
 
     this.entries = next;
     if (rewritten) {
@@ -1253,6 +1261,13 @@ class BotLiveProjector {
       this.subscribers.delete(subscriber);
       this.armIdle();
     };
+  }
+
+  /** Re-reads the transcript's connect cards, so one finished on the Mac shows Connected. */
+  refreshCards(): Promise<void> {
+    return this.serial(async () => {
+      if (!this.closed && this.view) await this.publish(this.view, { snapshotChanges: true });
+    });
   }
 
   private armIdle(): void {
@@ -2145,6 +2160,14 @@ export class AidenRemoteBotSessionService {
     if (!owned) return;
     this.subscriptions.delete(deviceId);
     for (const handle of [...owned]) handle.close();
+  }
+
+  /** An app was connected or set up on the Mac: open Bot streams re-read their pending connect cards. */
+  async refreshConnectCards(): Promise<void> {
+    const projectors = await Promise.allSettled([...this.projectors.values()]);
+    await Promise.all(
+      projectors.map((result) => (result.status === "fulfilled" ? result.value.refreshCards().catch(() => undefined) : undefined)),
+    );
   }
 
   async close(): Promise<void> {

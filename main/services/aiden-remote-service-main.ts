@@ -1,3 +1,4 @@
+import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
@@ -427,6 +428,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeHostRuns: AidenRemoteHostRunService | undefined;
   let activeHostFeed: AidenRemoteHostFeedService | undefined;
   let activeBotSessions: AidenRemoteBotSessionService | undefined;
+  // A connect card a phone shows as pending turns Connected once the app is set up here.
+  mcpLiveStatus.subscribe(() => void activeBotSessions?.refreshConnectCards());
   let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
   const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
