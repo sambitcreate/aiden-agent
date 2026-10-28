@@ -3,14 +3,18 @@ package sbtbiswas.AidenOnTheGo.models
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.nullable
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
@@ -33,6 +37,24 @@ enum class AidenAttachmentKind {
 
 private val TOOL_CALL_ID = Regex("^call-[1-9][0-9]{0,15}$")
 
+/**
+ * Decodes an attachment's `toolCallId` without ever failing the message: a value
+ * of the wrong type becomes null, like a malformed one (see [AidenMessageAttachment.placedToolCallId]).
+ */
+object AidenAttachmentToolCallIdSerializer : KSerializer<String?> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor.nullable
+
+    override fun deserialize(decoder: Decoder): String? {
+        val json = decoder as? JsonDecoder ?: throw SerializationException("attachments decode from JSON only")
+        val value = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        return value.takeIf { it.isString }?.content
+    }
+
+    override fun serialize(encoder: Encoder, value: String?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeString(value)
+    }
+}
+
 @Serializable
 @Immutable
 data class AidenMessageAttachment(
@@ -45,6 +67,7 @@ data class AidenMessageAttachment(
      * Contract revision 44: on an assistant image, the timeline tool step that
      * produced it. Read through [placedToolCallId], which drops a malformed value.
      */
+    @Serializable(with = AidenAttachmentToolCallIdSerializer::class)
     val toolCallId: String? = null
 ) {
     /** The producing step's public `call-N` id, or null when absent or malformed. */
@@ -311,9 +334,11 @@ data class AidenChronologicalRow(
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
     val visual: AidenChatVisual? = null,
     /** Set on [Kind.IMAGES] rows: the images the step above produced (contract revision 44). */
-    val images: List<AidenMessageAttachment> = emptyList()
+    val images: List<AidenMessageAttachment> = emptyList(),
+    /** Set on [Kind.IMAGE_SLOT] rows: the live `generate_image` call whose placeholder sits here. */
+    val imageSlot: String? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL, IMAGES }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, VISUAL, IMAGES, IMAGE_SLOT }
 }
 
 object AidenChronologicalProjection {
@@ -323,14 +348,17 @@ object AidenChronologicalProjection {
      * visuals no step claims trail at the end. A live reply passes no visuals:
      * snapshots exist only once the reply commits. Each of [images] likewise
      * follows the step that produced it; an image no step claims gets no row
-     * and stays in the attachment strip after the reply ([placedImageIds]).
+     * and stays in the attachment strip after the reply ([placedImageIds]). [imageSlots]
+     * are the live reply's placeholder calls: each gets an [AidenChronologicalRow.Kind.IMAGE_SLOT]
+     * row beneath its step, split the same way its image will be once the reply commits.
      */
     fun rows(
         text: String,
         reasoning: String,
         timeline: AidenGenerationTimeline?,
         visuals: List<AidenChatVisual> = emptyList(),
-        images: List<AidenMessageAttachment> = emptyList()
+        images: List<AidenMessageAttachment> = emptyList(),
+        imageSlots: List<String> = emptyList()
     ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
@@ -382,6 +410,7 @@ object AidenChronologicalProjection {
                 val group = mutableListOf<AidenAgentStep>()
                 var drawn: List<AidenChatVisual> = emptyList()
                 var produced: List<AidenMessageAttachment> = emptyList()
+                var slot: String? = null
                 while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
                     steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
                 ) {
@@ -391,8 +420,9 @@ object AidenChronologicalProjection {
                     val fresh = callId != null && emittedCalls.add(callId)
                     drawn = if (fresh) visualsByCall[callId].orEmpty() else emptyList()
                     produced = if (fresh) imagesByCall[callId].orEmpty() else emptyList()
-                    // A step that drew a visual or produced an image closes its group.
-                    if (drawn.isNotEmpty() || produced.isNotEmpty()) break
+                    slot = callId?.takeIf { fresh && it in imageSlots }
+                    // A step that drew a visual, produced an image or holds a placeholder closes its group.
+                    if (drawn.isNotEmpty() || produced.isNotEmpty() || slot != null) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
                 // Values a page read in extract mode follow the line that read them.
@@ -405,6 +435,7 @@ object AidenChronologicalProjection {
                     }
                 }
                 emitVisuals(drawn)
+                slot?.let { result += AidenChronologicalRow("image-slot-$it", AidenChronologicalRow.Kind.IMAGE_SLOT, imageSlot = it) }
                 if (produced.isNotEmpty()) {
                     result += AidenChronologicalRow("images-${group.first().id}", AidenChronologicalRow.Kind.IMAGES, images = produced)
                 }
@@ -418,6 +449,10 @@ object AidenChronologicalProjection {
         emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
+
+    /** Placeholder calls [rows] drew beneath their steps; the rest stay after the reply. */
+    fun placedImageSlots(rows: List<AidenChronologicalRow>): Set<String> =
+        rows.mapNotNullTo(HashSet()) { it.imageSlot }
 
     /** Ids of the images [rows] drew beneath their steps; the attachment strip leaves them out. */
     fun placedImageIds(rows: List<AidenChronologicalRow>): Set<String> =

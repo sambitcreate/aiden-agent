@@ -564,22 +564,25 @@ function chatRevision(chat: Chat): string {
     updatedAt: chat.updatedAt,
     messages: chat.messages
       .filter((message) => message.role === "user" || message.role === "assistant")
-      .map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: remoteMessageText(message),
-        reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
-          ? message.reasoning : null,
-        createdAt: message.createdAt,
-        attachments: projectMessageAttachments(message),
-        htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
-          id: artifact.mediaId,
-          title: artifact.title,
-        })),
-        visuals: projectMessageVisuals(message, projectMessageAttachments(message)),
-        outcome: projectMessageOutcome(message) ?? null,
-        timeline: projectMessageTimeline(message) ?? null,
-      })),
+      .map((message) => {
+        const attachments = projectMessageAttachments(message);
+        return {
+          id: message.id,
+          role: message.role,
+          content: remoteMessageText(message),
+          reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
+            ? message.reasoning : null,
+          createdAt: message.createdAt,
+          attachments,
+          htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
+            id: artifact.mediaId,
+            title: artifact.title,
+          })),
+          visuals: projectMessageVisuals(message, attachments),
+          outcome: projectMessageOutcome(message) ?? null,
+          timeline: projectMessageTimeline(message) ?? null,
+        };
+      }),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }

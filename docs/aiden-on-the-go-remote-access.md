@@ -92,7 +92,7 @@ When the agent reads a page in extract mode, the Mac (contract revision 38) send
 
 ## Pictures in a reply
 
-When the agent shows, shares or generates a picture, Aiden On The Go for iPhone and Android draws it right beneath the step that made it, in the order the reply happened (contract revision 44). Pictures still arrive when the reply is saved, not while it streams. With an older Mac they stay at the end of the reply.
+When the agent shows, shares or generates a picture, Aiden On The Go for iPhone and Android draws it right beneath the step that made it, in the order the reply happened (contract revision 44). Pictures still arrive when the reply is saved, not while it streams; a picture being generated shows its placeholder in that same spot. With an older Mac they stay at the end of the reply.
 
 ## Paired-Mac voice input
 

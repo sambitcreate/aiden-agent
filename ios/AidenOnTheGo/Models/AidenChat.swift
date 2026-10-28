@@ -839,6 +839,9 @@ struct AidenChronologicalRow: Identifiable, Equatable {
         case text, reasoning, tool, questionnaire, extraction, visual(AidenChatVisual)
         /// Images a step produced (contract revision 44), drawn beneath it.
         case images([AidenMessageAttachment])
+        /// A live `generate_image` call's placeholder, beneath its step; the
+        /// value is the call's `toolCallId`.
+        case imageSlot(String)
     }
     let id: String
     let kind: Kind
@@ -852,13 +855,16 @@ enum AidenChronologicalProjection {
     /// live stream passes none, since snapshots exist only after commit.
     /// `images` likewise follow the tool row of the step that produced them;
     /// an image whose step is missing gets no row (the attachment strip after
-    /// the reply keeps it; see `placedImageIDs`).
+    /// the reply keeps it; see `placedImageIDs`). `imageSlots` are the live
+    /// stream's placeholder calls: each gets an `imageSlot` row beneath its
+    /// step, split the same way its image will be once the reply commits.
     static func rows(
         text: String,
         reasoning: String,
         timeline: AidenGenerationTimeline?,
         visuals: [AidenChatVisual] = [],
-        images: [AidenMessageAttachment] = []
+        images: [AidenMessageAttachment] = [],
+        imageSlots: [String] = []
     ) -> [AidenChronologicalRow]? {
         guard let timeline, timeline.version == 3,
               timeline.steps.allSatisfy({ $0.contentOffset != nil }),
@@ -881,8 +887,13 @@ enum AidenChronologicalProjection {
               reasoningValue.substring(from: reasoningCursor).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return nil }
         let steps = timeline.steps
-        let visualToolCalls = Set(visuals.compactMap(\.toolCallId)).union(images.compactMap(\.toolCallId))
+        let slotCalls = Set(imageSlots)
+        let visualToolCalls = Set(visuals.compactMap(\.toolCallId))
+            .union(images.compactMap(\.toolCallId))
+            .union(slotCalls)
         var placedVisuals = Set<Int>()
+        var placedImages = Set<String>()
+        var placedSlots = Set<String>()
         var result: [AidenChronologicalRow] = []
         var cursor = 0
         var index = 0
@@ -926,8 +937,15 @@ enum AidenChronologicalProjection {
                     placedVisuals.insert(visualIndex)
                     result.append(visualRow(visual, at: visualIndex))
                 }
-                let groupImages = images.filter { $0.toolCallId.map(groupCalls.contains) == true }
+                for call in group.compactMap(\.toolCallId) where slotCalls.contains(call) && !placedSlots.contains(call) {
+                    placedSlots.insert(call)
+                    result.append(.init(id: "image-slot-\(call)", kind: .imageSlot(call), text: "", steps: []))
+                }
+                let groupImages = images.filter {
+                    !placedImages.contains($0.id) && $0.toolCallId.map(groupCalls.contains) == true
+                }
                 if !groupImages.isEmpty {
+                    placedImages.formUnion(groupImages.map(\.id))
                     result.append(.init(id: "images-\(group.first?.id ?? "")", kind: .images(groupImages), text: "", steps: []))
                 }
             }
@@ -943,6 +961,14 @@ enum AidenChronologicalProjection {
             result.append(visualRow(visual, at: visualIndex))
         }
         return result
+    }
+
+    /// Placeholder calls `rows` drew beneath their steps; the rest stay after the reply.
+    static func placedImageSlots(in rows: [AidenChronologicalRow]) -> Set<String> {
+        Set(rows.compactMap { row -> String? in
+            if case .imageSlot(let call) = row.kind { return call }
+            return nil
+        })
     }
 
     /// Ids of the images `rows` drew beneath their steps; the attachment strip leaves them out.
