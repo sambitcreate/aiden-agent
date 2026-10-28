@@ -21,6 +21,25 @@ const REARM_INTERVAL_MS = 5 * 60_000;
 
 export const botEventRoutines = createBotEventRoutineStore({ profileDir: () => app.getPath("userData") });
 
+/**
+ * The link a person can call for a webhook routine's token, from the Remote
+ * listener's address; null while Aiden On The Go is off. Shown to the person
+ * only, never to the Bot.
+ */
+export async function botRoutineWebhookLink(token: string): Promise<string | null> {
+  const { getAidenRemoteService } = await import("../aiden-remote-service-main.js");
+  const status = await (await getAidenRemoteService()).status().catch(() => undefined);
+  // Tailscale first: it reaches this Mac from anywhere the person's devices are.
+  const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
+  return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
+}
+
+/** A Bot's event routines changed: re-arm watches and refresh its views. */
+export function botEventRoutinesChanged(botId: string): void {
+  void rearmBotEventRoutines();
+  ipcMain.broadcast("bots:changed", { botId });
+}
+
 /** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
 export function eventRoutineTask(routine: BotEventRoutine): ScheduledTask {
   return {

@@ -47,3 +47,9 @@ export function commitmentProposalSettled(botId: string, proposalId: string, sta
   void botCommitmentProposer.onProposalSettled(botId, proposalId, status).catch((error: unknown) =>
     logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error));
 }
+
+/** A follow-up's card was revised: keep the follow-up on the card that replaced it. */
+export function commitmentProposalRevised(botId: string, replacedId: string, proposalId: string): void {
+  void botCommitmentProposer.onProposalRevised(botId, replacedId, proposalId).catch((error: unknown) =>
+    logger.warn("bots", `Bot ${botId} follow-up bookkeeping failed.`, error));
+}

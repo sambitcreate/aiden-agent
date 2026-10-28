@@ -2,6 +2,7 @@ import type { BotDefinition } from "../../renderer/shared/bots.js";
 import path from "node:path";
 import { BOT_ROUTINES_TOOL_NAME } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotManagedWorkspaceResolution } from "./bot-managed-workspace-core.js";
+import { botWakeSourceLines } from "./bot-wake-sources.js";
 
 /** Main-only file authority already resolved from the effective Bot policy. */
 export type BotWorkspacePromptAuthority =
@@ -38,7 +39,8 @@ export function botRoutineGuidance(offeredToolNames: ReadonlySet<string>): strin
     "For an explicit one-time or recurring request, call routines with action propose; the person accepts the Add routine card before it is saved.",
     "After acceptance, Aiden's scheduler submits the saved prompt to your durable conversation at its scheduled time; you can then reply without a new message from the person.",
     "Aiden must be running on an awake computer for the scheduled turn to fire. Do not claim that starting a future conversation is impossible when routines is available.",
-  ].join(" ");
+    "To change a card the person hasn't answered yet, call routines with action revise and its proposalId instead of proposing another.",
+  ].join(" ") + "\n" + botWakeSourceLines().join("\n");
 }
 
 /**
