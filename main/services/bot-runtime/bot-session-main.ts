@@ -54,6 +54,7 @@ import { wireBotAttention } from "./bot-attention.js";
 import { botQuestions } from "./bot-questions-main.js";
 import { botRunStalls, createBotRunWatchdog } from "./bot-run-watchdog.js";
 import { checkBotTurnClaims } from "./bot-claim-check.js";
+import { commitmentReviewExtras } from "../bot-commitments/commitments-main.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { stopBotLegacyChatWork } from "./bot-legacy-chat-pause.js";
 import { runBotPauseSteps } from "./bot-pause-steps.js";
@@ -222,6 +223,7 @@ const memoryReview = createBotMemoryReview({
   isIdle: async (botId) => (await (await botSessionRuntime()).state(botId)).kind === "idle",
   admit: admitMemoryWork,
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} memory review failed.`, error),
+  extras: (botId) => commitmentReviewExtras(botId),
 });
 
 const compactionSteering = createBotCompactionSteering({

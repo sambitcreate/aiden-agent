@@ -33,6 +33,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Api, AssistantMessage, Message, Model, Models, Tool, ToolCall } from "@earendil-works/pi-ai";
 import type { Conversation, EntryId, EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   BOT_MEMORY_REVIEW_ENTRY_KIND,
   type BotMemoryReviewEntryData,
@@ -136,6 +137,17 @@ export interface MemoryReviewRun {
   maxRounds: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  /**
+   * More add-only tools offered next to bot_memory (follow-ups, how-to
+   * lessons), each run behind the same authority fence, with the lines that
+   * tell the model when to use them.
+   */
+  extras?: MemoryReviewExtras;
+}
+
+export interface MemoryReviewExtras {
+  tools: readonly AgentTool[];
+  instructions: readonly string[];
 }
 
 export interface MemoryReviewResult {
@@ -173,6 +185,14 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
   // The store re-runs the fence under its write lock and right before it publishes.
   const tool = createBotMemoryTool(run.botId, run.memory, { addOnly: true, assertCurrent: fence });
   const declaration: Tool = { name: tool.name, description: tool.description, parameters: tool.parameters };
+  const extraTools = new Map((run.extras?.tools ?? []).map((extra) => [extra.name, extra] as const));
+  const declarations: Tool[] = [
+    declaration,
+    ...[...extraTools.values()].map((extra) => ({ name: extra.name, description: extra.description, parameters: extra.parameters })),
+  ];
+  const systemPrompt = run.extras?.instructions.length
+    ? `${REVIEW_SYSTEM_PROMPT}\n${run.extras.instructions.join("\n")}`
+    : REVIEW_SYSTEM_PROMPT;
   const view = await run.memory.view(run.botId);
   const messages: Message[] = [
     {
@@ -189,7 +209,7 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     try {
       answer = await run.model.models.completeSimple(
         run.model.model,
-        { systemPrompt: REVIEW_SYSTEM_PROMPT, messages, tools: [declaration] },
+        { systemPrompt, messages, tools: declarations },
         { maxTokens: REVIEW_MAX_TOKENS, signal },
       );
     } catch (error) {
@@ -206,6 +226,20 @@ export async function runMemoryReview(run: MemoryReviewRun): Promise<MemoryRevie
     const calls = answer.content.filter((part): part is ToolCall => part.type === "toolCall");
     if (calls.length === 0) break;
     for (const call of calls) {
+      const extra = extraTools.get(call.name);
+      if (extra) {
+        await fence();
+        const extraResult = await extra.execute(call.id, call.arguments as never, signal);
+        messages.push({
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: extraResult.content,
+          isError: (extraResult as { isError?: boolean }).isError === true,
+          timestamp: Date.now(),
+        });
+        continue;
+      }
       if (call.name !== BOT_MEMORY_TOOL_NAME) {
         messages.push({
           role: "toolResult",
@@ -496,6 +530,8 @@ export interface BotMemoryReviewDeps {
   admit(botId: string): Promise<BotMemoryAdmission>;
   /** Logged once per failed run. */
   onError?(botId: string, error: unknown): void;
+  /** Extra add-only tools for this Bot's review, built per run. */
+  extras?(botId: string): MemoryReviewExtras | undefined;
   delayMs?: number;
   interval?: number;
   timeoutMs?: number;
@@ -553,6 +589,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
       const window = reviewWindow(entries, await memoryProvenance(conversation, { floor: entries[0]?.id, signal }));
       if (window.personInputs < interval) return { kind: "skipped", reason: "too_soon" };
       let result: MemoryReviewResult;
+      const extras = deps.extras?.(botId);
       try {
         result = await runMemoryReview({
           botId,
@@ -563,6 +600,7 @@ export function createBotMemoryReview(deps: BotMemoryReviewDeps): BotMemoryRevie
           maxRounds: BOT_MEMORY_REVIEW_MAX_ROUNDS,
           timeoutMs: deps.timeoutMs ?? BOT_MEMORY_REVIEW_TIMEOUT_MS,
           signal: controller.signal,
+          ...(extras ? { extras } : {}),
         });
       } catch (error) {
         // Cancelled (delete, shutdown): the Bot's conversation may be gone, so no marker.
