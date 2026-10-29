@@ -549,6 +549,7 @@ export class AidenRemoteService {
   private operationTail: Promise<void> = Promise.resolve();
   private settleRemoteApi: (() => Promise<void>) | undefined;
   private tlsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private tlsRefresh: Promise<void> | null = null;
   private readonly now: () => number;
   private readonly hostname: string;
 
@@ -915,13 +916,17 @@ export class AidenRemoteService {
     if (this.tlsRefreshTimer) clearInterval(this.tlsRefreshTimer);
     const interval = this.options.tlsRefreshIntervalMs ?? TLS_REFRESH_INTERVAL_MS;
     this.tlsRefreshTimer = setInterval(() => {
-      void this.serialized(() => this.refreshTlsIdentity()).catch((error: unknown) => {
+      if (this.tlsRefresh) return;
+      const refresh = this.refreshTlsIdentity().catch((error: unknown) => {
         this.options.log?.({
           level: "warn",
           event: "tls_refresh_failed",
           details: { message: error instanceof Error ? error.message : String(error) },
         });
+      }).finally(() => {
+        if (this.tlsRefresh === refresh) this.tlsRefresh = null;
       });
+      this.tlsRefresh = refresh;
     }, interval);
     this.tlsRefreshTimer.unref?.();
   }
@@ -935,16 +940,21 @@ export class AidenRemoteService {
     const server = this.lanServer;
     const current = this.tlsIdentity;
     if (!server || !current) return;
+    // Renewal may run openssl. It writes through unique temporary files and an
+    // atomic rename, so it runs outside the lifecycle queue and a start or
+    // pairing change never waits on it; only the swap is serialized.
     const next = await this.options.loadTlsIdentity();
-    if (this.lanServer !== server || this.tlsIdentity !== current) return;
-    if (next.certificateChain === current.certificateChain) return;
-    if (next.serverSpkiSha256 !== current.serverSpkiSha256) {
-      this.options.log?.({ level: "warn", event: "tls_key_changed_restart_required" });
-      return;
-    }
-    server.setSecureContext({ key: next.privateKey, cert: next.certificateChain });
-    this.tlsIdentity = next;
-    this.options.log?.({ level: "info", event: "tls_certificate_reloaded", details: { validUntil: next.validUntil } });
+    await this.serialized(async () => {
+      if (this.lanServer !== server || this.tlsIdentity !== current) return;
+      if (next.certificateChain === current.certificateChain) return;
+      if (next.serverSpkiSha256 !== current.serverSpkiSha256) {
+        this.options.log?.({ level: "warn", event: "tls_key_changed_restart_required" });
+        return;
+      }
+      server.setSecureContext({ key: next.privateKey, cert: next.certificateChain });
+      this.tlsIdentity = next;
+      this.options.log?.({ level: "info", event: "tls_certificate_reloaded", details: { validUntil: next.validUntil } });
+    });
   }
 
   private async stopListeners(): Promise<void> {
@@ -979,6 +989,10 @@ export class AidenRemoteService {
 
   async stopAndSettle(): Promise<void> {
     await this.serialized(() => this.stopListeners());
+    // A renewal already running finishes its files; its swap then sees the
+    // stopped listener and does nothing. Awaited outside the queue, since the
+    // swap itself waits for the queue.
+    await this.tlsRefresh;
   }
 
   /**

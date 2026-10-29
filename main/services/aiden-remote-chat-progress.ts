@@ -564,7 +564,11 @@ export class AidenRemoteChatProgressService {
     // Idle subscriptions still lose access when the device grant, the chat or
     // its Workspace/Bot ownership changes. That check is cheap; snapshots are
     // rebuilt only when the chat publishes a change.
+    // A check slower than the heartbeat is never stacked by the next tick.
+    let revalidating = false;
     revalidate = setInterval(() => {
+      if (revalidating) return;
+      revalidating = true;
       void (async () => {
         try {
           if (grants.has("tasks:read")) await this.ports.authorize(deviceId, chatId, "tasks:read");
@@ -572,6 +576,8 @@ export class AidenRemoteChatProgressService {
           if (observesControls) await this.authorizeControls(deviceId, chatId);
         } catch {
           close();
+        } finally {
+          revalidating = false;
         }
       })();
     }, AIDEN_REMOTE_SSE_HEARTBEAT_MS);
