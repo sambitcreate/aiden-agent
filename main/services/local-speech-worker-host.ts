@@ -222,6 +222,8 @@ export class LocalSpeechWorkerHost {
   }
 
   private async launch(generation: number): Promise<LocalSpeechProcessClient> {
+    // Retired while waiting for an old worker to exit: forking now would only start a worker to kill.
+    if (generation !== this.generation) throw new Error("Local speech host was replaced.");
     const launched = await this.options.fork();
     const created: LocalSpeechProcessClient = attachUtilityProcess(launched, () => this.disposeIfCurrent(created));
     if (launched.stderr) {

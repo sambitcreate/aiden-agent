@@ -152,8 +152,23 @@ function harness(
   const spawned: FakeWorker[] = [];
   const signals: Array<{ pid: number; signal: string }> = [];
   let unloads = 0;
+  // A test can hold the next fork mid-flight to retire the host while it runs.
+  let forkGate: Promise<void> | null = null;
+  let forkEntered: () => void = () => {};
+  const holdNextFork = () => {
+    let release!: () => void;
+    forkGate = new Promise<void>((resolve) => (release = resolve));
+    const entered = new Promise<void>((resolve) => (forkEntered = resolve));
+    return { entered, release };
+  };
   const host = new LocalSpeechWorkerHost({
     fork: async () => {
+      if (forkGate) {
+        const gate = forkGate;
+        forkGate = null;
+        forkEntered();
+        await gate;
+      }
       const worker = fakeWorker(
         `w${spawned.length + 1}`,
         log,
@@ -178,7 +193,7 @@ function harness(
       worker.crash();
     },
   });
-  return { host, log, spawned, signals, unloads: () => unloads };
+  return { host, log, spawned, signals, unloads: () => unloads, holdNextFork };
 }
 
 test("switching models kills the old worker and waits for its exit before the new one loads", async () => {
@@ -298,12 +313,27 @@ test("a worker disposed after a hang or cancel must exit, or be SIGKILLed, befor
 });
 
 test("a worker that finishes forking after the host was retired still exits before the next fork", async () => {
-  const { host, log } = harness();
+  const { host, log, holdNextFork } = harness();
+  const fork = holdNextFork();
   const launching = host.acquire();
+  await fork.entered;
   host.shutDown();
+  fork.release();
   await assert.rejects(launching, /replaced/);
 
   await host.prepare(target(parakeet));
   assert.ok(log.includes("w1 kill"), "the orphaned worker is killed");
   assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"));
+});
+
+test("a launch retired while an old worker is still exiting never forks", async () => {
+  const { host, spawned } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+  const stuck = await host.prepare(target(parakeet));
+  host.disposeIfCurrent(stuck);
+  // This launch waits for the stubborn worker; shutdown retires it before that wait ends.
+  const waiting = host.acquire();
+  host.shutDown();
+  await assert.rejects(waiting, /replaced/);
+  assert.equal(spawned.length, 1, "no worker is forked only to be killed");
+  assert.equal(host.current(), null);
 });
