@@ -566,6 +566,26 @@ test("a receipt cancelled after the first write leaves a running scheduler's pau
   }
 });
 
+test("a creation receipt cancelled after the first write leaves no enabled task behind", async (t) => {
+  const { dir, workspace, model } = await scheduleToolFixture(t);
+  const scheduler = api.createCliScheduler(dir);
+  await scheduler.service.start();
+  t.after(() => scheduler.service.stopAndSettle());
+  const approved = { cwd: dir, action: "save", input: { workspaceId: workspace.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "receipt.json") };
+  approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
+  api.atomicJson(approved.approvalFile, approved.snapshot);
+  const inputFile = join(dir, "save-input.json");
+  api.atomicJson(inputFile, { name: "Daily review", cron: "0 9 * * *", timezone: "UTC", prompt: "Review this workspace", permission: "full", mode: "llm", enabled: true, workspaceId: workspace.id, providerId: model.provider, model: model.id });
+  const updateRuntime = scheduler.store.updateRuntime;
+  scheduler.store.updateRuntime = (...args) => { rmSync(approved.approvalFile, { force: true }); return updateRuntime(...args); };
+  await assert.rejects(scheduler.command(["save", inputFile, JSON.stringify(approved)]), /cancelled/);
+  assert.deepEqual(await api.scheduleCommand(dir, ["list"]), [], "the refused creation is gone");
+  const restarted = api.createCliScheduler(dir);
+  await restarted.service.start();
+  t.after(() => restarted.service.stopAndSettle());
+  assert.deepEqual(await restarted.store.list(), [], "a restart does not arm it");
+});
+
 test("a codemode script in a Full workspace still needs consent to save a scheduled task", async (t) => {
   const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
   const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
