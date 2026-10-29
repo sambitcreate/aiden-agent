@@ -6,6 +6,7 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
   let now = 0;
   let progress = 0;
   let waiting = options.waiting ?? false;
+  let limited = false;
   const stopped: string[] = [];
   const raised: string[] = [];
   const watchdog = createBotRunWatchdog({
@@ -13,6 +14,7 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
     lastProgressAt: () => progress,
     runKind: () => kind,
     isWaitingOnPerson: () => waiting,
+    isWaitingOnUsageLimit: () => limited,
     stopForStall: async (botId) => { stopped.push(botId); },
     raiseStall: async (botId) => { raised.push(botId); },
     now: () => now,
@@ -23,6 +25,7 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
     at: (value: number) => { now = value; },
     progressAt: (value: number) => { progress = value; },
     setWaiting: (value: boolean) => { waiting = value; },
+    setLimited: (value: boolean) => { limited = value; },
   };
 }
 
@@ -45,6 +48,26 @@ test("never stops or flags a run that waits on the person", async () => {
   attended.at(5 * BOT_RUN_STALL_MS);
   await attended.watchdog.check();
   assert.deepEqual([...h.stopped, ...h.raised, ...attended.stopped, ...attended.raised], []);
+});
+
+test("a run waiting out a usage limit is neither stopped nor flagged, and gets a full window once it clears", async () => {
+  const h = setup("routine");
+  const attended = setup("attended");
+  for (const run of [h, attended]) {
+    run.setLimited(true);
+    // A 30-minute reset, checked every minute.
+    for (let minute = 1; minute <= 30; minute += 1) {
+      run.at(minute * 60_000);
+      await run.watchdog.check();
+    }
+    run.setLimited(false);
+    run.at(30 * 60_000 + BOT_RUN_STALL_MS - 1);
+    await run.watchdog.check();
+  }
+  assert.deepEqual([...h.stopped, ...h.raised, ...attended.stopped, ...attended.raised], []);
+  h.at(30 * 60_000 + BOT_RUN_STALL_MS);
+  await h.watchdog.check();
+  assert.deepEqual(h.stopped, ["bot-1"], "a run that stays quiet after the limit clears is still stuck");
 });
 
 test("an attended run raises one issue and is not stopped", async () => {

@@ -2,6 +2,19 @@ import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from 
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import {
+  parseUsageLimitWaits,
+  USAGE_LIMITS_CHANGED_CHANNEL,
+  type UsageLimitWaitView,
+  type UsageLimitsChangedEvent,
+} from "../shared/usage-limits";
+import {
+  parseSpendingLimitUsd,
+  parseSpendingStatusView,
+  SPENDING_CHANGED_CHANNEL,
+  type SpendingChangedEvent,
+  type SpendingStatusView,
+} from "../shared/spending";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -545,6 +558,42 @@ export const imageGenerationApi = {
 export const modelPaceApi = {
   summaries: () => invoke<Record<string, ModelPaceSummary>>("modelPace:summaries"),
   clear: () => invoke<void>("modelPace:clear"),
+};
+
+/** Replies waiting for a provider usage limit to clear, on this Mac. */
+export const usageLimitsApi = {
+  list: async () => parseUsageLimitWaits(await invoke<unknown>("usageLimits:list")),
+  /** Send the waiting reply's test request now; false when it was tried in the last 30 seconds. */
+  retryNow: (ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string) =>
+    invoke<boolean>("usageLimits:retryNow", ownerKind, ownerId),
+  onChanged: (handler: (waits: UsageLimitWaitView[]) => void) =>
+    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) => handler(parseUsageLimitWaits(event?.waits))),
+};
+
+export type BotSpendingLimitChoice = { kind: "default" } | { kind: "none" } | { kind: "amount"; usd: number };
+
+function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
+  const choice = value as { kind?: unknown; usd?: unknown } | null;
+  if (choice?.kind === "none") return { kind: "none" };
+  const usd = choice?.kind === "amount" ? parseSpendingLimitUsd(choice.usd) : undefined;
+  return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
+}
+
+export const spendingApi = {
+  status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
+  /** Raise the chat's limit, or the Bot's month, by the limit once more. */
+  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
+  /** "default" follows Settings, null is no limit, a number is the Bot's own. */
+  setBotLimit: async (botId: string, choice: "default" | null | number) =>
+    parseBotSpendingLimitChoice(await invoke<unknown>("spending:setBotLimit", botId, choice)),
+  /** `ownerId` "*" means every chat or every Bot (the limits in Settings changed). */
+  onChanged: (handler: (event: SpendingChangedEvent) => void) =>
+    onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
+      if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
 };
 
 export const computerUseApi = {

@@ -45,6 +45,8 @@ export const INVOKE_PREFIXES = [
   "titleProviders:",
   "tts:",
   "usage:",
+  "usageLimits:",
+  "spending:",
   "voice:",
   "webSearch:",
   "workspaces:",
@@ -150,6 +152,9 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "terminal:exit",
   "telegram:model-selection-changed",
   "tts:event",
+  /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
+  "usageLimits:changed",
+  "spending:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */

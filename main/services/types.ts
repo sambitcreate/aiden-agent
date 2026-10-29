@@ -781,6 +781,10 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */

@@ -5479,6 +5479,7 @@ struct AidenChatDetailView: View {
     @State private var simulators = AidenChatSimulatorsModel()
     @State private var simulatorViewer: AidenSimulatorViewerModel?
     @State private var simulatorRefreshEpoch = 0
+    @State private var spending = AidenSpendingNoticeModel()
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5579,6 +5580,9 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: spendingOwner, transport: spendingTransport)
+        }
         .task(id: chatLoadEpoch) {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
@@ -5868,8 +5872,40 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
+    /// Revision 47: a Workspace chat's total, or a Bot chat's month.
+    private var spendingOwner: AidenSpendingOwner {
+        model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard let coordinator, coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    /// Re-read after each reply settles and after a send the Mac refused.
+    private var spendingRefreshKey: String {
+        [
+            model.chat.id,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.supportsSpendingLimits == true),
+            String(model.isStreaming),
+            String(model.chat.messages.count),
+            model.sendRecoveryMessage ?? "",
+        ].joined(separator: "|")
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            if let current = spending.spending, allowsMutations {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: nil,
+                    isAllowing: spending.isAllowing,
+                    canAllow: coordinator?.server?.capabilities.contains(model.chat.isBotChat ? .botWrite : .chatWrite) == true,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
+            }
             if let message = model.sendRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)

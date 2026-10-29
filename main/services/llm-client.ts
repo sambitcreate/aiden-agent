@@ -9,6 +9,11 @@ import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
+import { usageLimits } from "./usage-limit-main.js";
+import { withUsageLimitWait } from "./usage-limit-stream.js";
+import { spending } from "./spending-main.js";
+import { createSpendingMeter, spendCounts } from "./spending-service.js";
+import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
@@ -495,6 +500,10 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
+subagentRuntimeRegistry.setLimits({
+  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
+  spending,
+});
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
   logger.warn("subagents", `Pi child runtime fault (${source}).`);
 });
@@ -2381,6 +2390,12 @@ export const llmClient = {
       authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
         botStore.get(botId),
       );
+      // Over its spending limit, a chat (or a Bot's month) starts no reply.
+      const spendingRefusal = await spending.refusal(
+        authoritativeBot ? { kind: "bot", id: authoritativeBot.id } : { kind: "chat", id: chat.id },
+        authoritativeBot?.name,
+      );
+      if (spendingRefusal) throw new Error(spendingRefusal);
       if (authoritativeBot) {
         const canonical = selectCanonicalBotChat(await chatStore.listByBot(authoritativeBot.id));
         if (canonical?.id !== chat.id) {
@@ -2600,6 +2615,16 @@ export const llmClient = {
     // Agent-backed providers (ACP harnesses) own their conversation context:
     // Aiden neither trims nor compacts the transcript they receive.
     const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
+    // Each response's price counts toward the chat's limit (a Bot chat's, its
+    // month). A sign-in or a model on this Mac counts as $0.
+    const spendingOwner: SpendingOwner = authoritativeBot
+      ? { kind: "bot", id: authoritativeBot.id }
+      : { kind: "chat", id: params.chatId };
+    const spendingMeter = createSpendingMeter({
+      spending,
+      owner: spendingOwner,
+      counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+    });
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -3304,16 +3329,17 @@ export const llmClient = {
       };
       const compactionOptions = {
         engine: compactionEngine,
-        models: createPiCompactionModels(runtime, (message) =>
-          usageStore.record(
+        models: createPiCompactionModels(runtime, (message) => {
+          spendingMeter.count(message);
+          return usageStore.record(
             assistantUsageRecord({
               message,
               provider: runtime.provider,
               model,
               source: "compaction",
             }),
-          ),
-        ),
+          );
+        }),
         model,
         thinkingLevel,
         settings: {
@@ -3458,6 +3484,7 @@ export const llmClient = {
           },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
+            spendingMeter.count(message);
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
           // A warming read restarts the provider's cache lifetime without a
@@ -3484,7 +3511,16 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      const observedStream: typeof realStream = pace.wrap(warmedStream);
+      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
+      // a request turned away before any reply waits and sends again, same model.
+      const observedStream: typeof realStream = harnessProvider
+        ? pace.wrap(warmedStream)
+        : spendingMeter.wrap(
+            withUsageLimitWait(
+              pace.wrap(warmedStream),
+              usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+            ),
+          );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
@@ -3629,7 +3665,17 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        ...(attendedAssistant ? { finishTurn: endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested) } : {}),
+        finishTurn: async (turn) => {
+          if (attendedAssistant) {
+            const decision = endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)(turn);
+            if (decision) return decision;
+          }
+          // The step that crossed the spending limit has finished: end here, so
+          // the chat shows its limit notice rather than a failed reply.
+          if (harnessProvider) return undefined;
+          await spendingMeter.settled();
+          return (await spending.block(spendingOwner).catch(() => undefined)) ? { action: "end" } : undefined;
+        },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,

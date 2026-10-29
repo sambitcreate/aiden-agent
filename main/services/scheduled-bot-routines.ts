@@ -133,6 +133,8 @@ export interface BotRoutineExecutorPorts extends BotRoutinePorts {
   fingerprint?(botId: string): Promise<string | undefined>;
   /** The newest turn's claim check: a reply that says a failed step worked. */
   checkClaims?(botId: string): Promise<{ stepIds: string[]; toolNames: string[] } | undefined>;
+  /** Why a spending limit stopped the run serving `requestId`, if one did. */
+  spendingStop?(botId: string, requestId: string): string | undefined;
 }
 
 export interface BotRoutineExecutorDependencies {
@@ -369,6 +371,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
       );
     }
     if (outcome.kind === "interrupted") {
+      // A spending limit stopped this run after its step: it failed, and the
+      // next run starts fresh.
+      const spendingStop = outcome.settled ? ports.spendingStop?.(task.botId, requestId) : undefined;
+      if (spendingStop !== undefined) throw new Error(spendingStop);
       // Pi can report a paused submission without settling it. Keep the
       // automatic fire's receipt until the person resumes that same turn.
       if (replayable(trigger) && !outcome.settled)

@@ -5,7 +5,7 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
@@ -72,6 +72,11 @@ import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state
 import { botRoutinesKey } from "./bot-routines";
 import { WakeUpChip } from "../../components/bots/wake-up-chip";
 import { useConnectionSetup } from "./use-connection-setup";
+import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
+import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
+import { useSpendingStatus } from "../../lib/use-spending-status";
+import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
+import { spendingNotice } from "../../shared/spending";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -281,6 +286,40 @@ export function BotFailedTurnCard({
       }
     >
       {errorMessage ? <p className="whitespace-pre-wrap">{errorMessage}</p> : null}
+    </BotNoticeCard>
+  );
+}
+
+/** A reply waiting for a provider usage limit: when it tries again, and Retry now. */
+export function BotUsageLimitCard({
+  name,
+  wait,
+  now,
+  onRetryNow,
+}: {
+  name: string;
+  wait: UsageLimitWaitView;
+  now: number;
+  onRetryNow(): void;
+}) {
+  const provider = wait.providerLabel.trim() || "the provider";
+  const trying = wait.trying || wait.nextTryAt <= now;
+  return (
+    <BotNoticeCard
+      label={`${name} is waiting for a usage limit`}
+      icon={<Hourglass />}
+      title={trying ? `Trying ${provider} again…` : `Waiting for ${provider}’s usage limit`}
+      actions={
+        trying ? undefined : (
+          <Button variant="transparent" size="small" onClick={onRetryNow}>
+            Retry now
+          </Button>
+        )
+      }
+    >
+      {trying ? null : (
+        <p>{`Next try ${formatUsageLimitTime(wait.nextTryAt, now)}. ${name} keeps the same model and carries on when the limit clears.`}</p>
+      )}
     </BotNoticeCard>
   );
 }
@@ -957,6 +996,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [snapshot, morphing]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
+  const usageLimitWait = useUsageLimitWait("bot", botId);
+  const spending = useSpendingStatus("bot", botId);
+  const usageLimitNow = useUsageLimitNow(usageLimitWait);
   React.useEffect(() => {
     // The card hides for one interrupted turn; any other state (running, idle,
     // paused by the person, or a later interruption) clears that.
@@ -1000,6 +1042,8 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
+  // A Bot over its spending limit sends nothing until the person allows more.
+  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;
   const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
   // Memory, Files and Routines live in the side panel beside the chat (spec §8).
   const openMemory = () => panel.show("memory");
@@ -1495,7 +1539,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!noteRefused && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
@@ -1505,7 +1549,7 @@ export function BotChatPane({ botId }: { botId: string }) {
                   ? handoffSignInComposerText(current.name, handoff ?? undefined)
                   : noteRefused
                     ? handoffNoNoteComposerText(current.name)
-                    : undefined
+                    : spendingReached
           }
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
@@ -1627,6 +1671,22 @@ export function BotChatPane({ botId }: { botId: string }) {
           wording={chatActivity.wording}
           onStop={stop}
           onLayoutChange={setStatusLayout}
+        />
+      ) : null}
+      {running && usageLimitWait ? (
+        <BotUsageLimitCard
+          name={current.name}
+          wait={usageLimitWait}
+          now={usageLimitNow}
+          onRetryNow={() => void retryUsageLimitNow("bot", botId)}
+        />
+      ) : null}
+      {spending.status ? (
+        <SpendingLimitNotice
+          status={spending.status}
+          name={current.name}
+          allowing={spending.allowing}
+          onAllowMore={() => void spending.allowMore()}
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}

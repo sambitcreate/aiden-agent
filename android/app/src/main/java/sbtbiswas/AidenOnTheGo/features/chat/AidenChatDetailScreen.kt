@@ -96,6 +96,7 @@ import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.aidenActivityMarkForTool
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
@@ -237,6 +238,14 @@ fun AidenChatDetailScreen(
     val follow = rememberAidenTranscriptFollowState(listState)
 
     val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
+    // Revision 47: a Workspace chat's total, or a Bot chat's month, re-read after each reply
+    // settles and after a send the Mac refused.
+    val spending = remember(chatId) { AidenSpendingNoticeState() }
+    val spendingTransport = readAloudClient.takeIf { serverInfo?.supportsSpendingLimits == true }
+    val spendingOwner = chat?.botId?.let { AidenSpendingOwner.Bot(it) } ?: AidenSpendingOwner.Chat(chatId)
+    LaunchedEffect(spendingOwner, spendingTransport, isStreaming, chat?.messages?.size, sendRecoveryError) {
+        spending.refresh(spendingOwner, spendingTransport)
+    }
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
             readAloudClient != null && coordinator.client.value === readAloudClient
@@ -623,6 +632,19 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                spending.spending?.let { current ->
+                    AidenSpendingNotice(
+                        spending = current,
+                        botName = null,
+                        isAllowing = spending.isAllowing,
+                        canAllow = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(
+                            if (chat?.botId != null) AidenRemoteCapability.BOT_WRITE else AidenRemoteCapability.CHAT_WRITE
+                        ) == true,
+                        errorMessage = spending.errorMessage,
+                        onAllowMore = { scope.launch { spending.allowMore(spendingTransport) } },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."

@@ -36,6 +36,8 @@ import {
   AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION,
   AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION,
   AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION,
+  AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
+  parseAidenRemoteSpendingStatus,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
@@ -444,6 +446,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
+  delete revision19.spending;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -579,6 +582,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
     "/chats/{chatId}/attachments/{attachmentId}/content",
+    "/chats/{chatId}/spending",
+    "/chats/{chatId}/spending/allow-more",
     "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
@@ -595,6 +600,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/questions/{waitId}/answer",
     "/bots/{botId}/handoffs/{waitId}/answer",
     "/bots/{botId}/handoffs/{waitId}/open-on-mac",
+    "/bots/{botId}/spending",
+    "/bots/{botId}/spending/allow-more",
     "/bots/{botId}/issues/{issueId}/act",
     "/bots/{botId}/pause",
     "/bots/{botId}/routines",
@@ -1321,6 +1328,10 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/issues/{issueId}/act", "post", "200", "BotIssueActReceipt"],
     ["/bots/{botId}/pause", "post", "200", "BotSessionState"],
     ["/bots/{botId}/pause", "delete", "200", "BotSessionState"],
+    ["/chats/{chatId}/spending", "get", "200", "SpendingStatus"],
+    ["/chats/{chatId}/spending/allow-more", "post", "200", "SpendingStatus"],
+    ["/bots/{botId}/spending", "get", "200", "SpendingStatus"],
+    ["/bots/{botId}/spending/allow-more", "post", "200", "SpendingStatus"],
     ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
     ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
     ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
@@ -1410,6 +1421,8 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/scheduled-tasks/settings", "patch"],
     ["/scheduled-tasks/{taskId}/pause", "post"],
     ["/scheduled-tasks/{taskId}/resume", "post"],
+    ["/chats/{chatId}/spending/allow-more", "post"],
+    ["/bots/{botId}/spending/allow-more", "post"],
   ] as const) {
     assert(parameterRefs(route, method).includes("#/components/parameters/IfMatch"));
   }
@@ -2849,6 +2862,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
     new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.botHandoffs;
+  delete older.spending;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2862,6 +2876,43 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
+});
+
+test("spending fixtures need their own revision, parse strictly, and refuse with a code older phones know", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).spending!;
+  assert.equal(fixture.chat.spending?.state, "nearing");
+  assert.equal(fixture.chatAllowMore.response.spending?.allowedUsd, 10);
+  assert.equal(fixture.none.spending, null);
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.spending;
+  assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
+
+  const status = raw.spending.bot;
+  const bad = (change: (copy: any) => void) => {
+    const copy = structuredClone(status);
+    change(copy);
+    return () => parseAidenRemoteSpendingStatus(copy);
+  };
+  assert.deepEqual(parseAidenRemoteSpendingStatus(status), status);
+  assert.throws(bad((copy) => { copy.spending.costUsd = 1; }), /unsupported field/u);
+  assert.throws(bad((copy) => { copy.spending.state = "over"; }));
+  assert.throws(bad((copy) => { copy.spending.limitUsd = 0; }), /positive/u);
+  assert.throws(bad((copy) => { copy.spending.spentUsd = -1; }));
+  assert.throws(bad((copy) => { copy.spending.allowedUsd = 1; }), /below the limit/u);
+  assert.throws(bad((copy) => { delete copy.spending.periodEnd; }), /month/u);
+  assert.throws(bad((copy) => { copy.spending.period = "chat"; }), /month/u);
+
+  const wrongCode = structuredClone(raw);
+  wrongCode.spending.refusal.error.code = "spending_limit";
+  assert.throws(() => parseAidenRemoteContractFixture(wrongCode));
 });
 
 test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
@@ -2922,6 +2973,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
     new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.botImages;
+  delete older.spending;
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -2956,6 +3008,7 @@ test("browser recordings need their own revision, and a recording step carries o
     new RegExp(`require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.browserRecordings;
+  delete older.spending;
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });
