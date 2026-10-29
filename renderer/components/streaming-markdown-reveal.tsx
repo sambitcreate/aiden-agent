@@ -74,9 +74,9 @@ export function StreamingMarkdownReveal({
     return () => window.clearTimeout(timer);
   }, [content, complete, closed, reducedMotion]);
 
-  // The end of the turn and reduced motion show everything in this render.
-  const released =
-    complete || reducedMotion ? content : content.startsWith(gate.text) ? gate.text : "";
+  // The end of the turn shows everything in this render. Reduced motion shows
+  // all the text the gate has released, at the same cadence as the reveal.
+  const released = complete ? content : content.startsWith(gate.text) ? gate.text : "";
   const parserRef = React.useRef<StreamingRevealParser | null>(null);
   parserRef.current ??= new StreamingRevealParser();
   const parser = parserRef.current;
@@ -104,8 +104,10 @@ export function StreamingMarkdownReveal({
   // blocks. Blocks keep their elements as the text grows, so the finished
   // reply settles in place.
   // A tail the deadline released shows as written, even unfinished.
-  const source = complete || reducedMotion
+  const source = complete
     ? content
+    : reducedMotion
+    ? released
     : released.slice(
         0,
         Math.max(streamingRevealVisibleEnd(blocks, Number.POSITIVE_INFINITY), gate.flushed),
