@@ -68,26 +68,26 @@ export async function requestQuestionnaire(
 		const recommended = labels.filter((label) => parseRecommendedOptionLabel(label).recommended);
 		if (question.multiSelect === true) {
 			// Recommended options start picked, so Done (the first row) accepts them.
-			const selected: string[] = [...recommended];
+			// Every option stays listed with its tick, so a pick (a recommended one
+			// too) can be taken back; only Done or Skip ends the question.
+			const selected = new Set(recommended);
 			for (;;) {
-				const remaining = question.options
-					.map((option) => option.label)
-					.filter((label) => !selected.includes(label));
-				if (remaining.length === 0) {
-					if (selected.length > 0) answers.push({ questionIndex: index, kind: "multi", selected });
-					break;
-				}
+				const rows = labels.map((label) => `${selected.has(label) ? "[x]" : "[ ]"} ${label}`);
+				const picked = labels.filter((label) => selected.has(label));
 				const selection = await select(
-					`${title} — picked: ${selected.join(", ") || "none"}`,
-					["Done", "Skip question", ...remaining],
+					`${title} — picked: ${picked.join(", ") || "none"}`,
+					["Done", "Skip question", ...rows],
 				);
 				if (selection.kind !== "selected") return interrupted(selection);
 				if (selection.choice === "Skip question") break;
 				if (selection.choice === "Done") {
-					if (selected.length > 0) answers.push({ questionIndex: index, kind: "multi", selected });
+					if (picked.length > 0) answers.push({ questionIndex: index, kind: "multi", selected: picked });
 					break;
 				}
-				selected.push(selection.choice);
+				const label = labels[rows.indexOf(selection.choice)];
+				if (label === undefined) continue;
+				if (selected.has(label)) selected.delete(label);
+				else selected.add(label);
 			}
 		} else {
 			// The recommended option leads, so the starting row accepts it.

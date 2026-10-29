@@ -184,8 +184,10 @@ try {
 			timeouts.push(options?.timeout);
 			if (selectionCount <= 2) {
 				now += 10_000;
-				return selectionCount === 1 ? "Direct" : "Guided";
+				const label = selectionCount === 1 ? "Direct" : "Guided";
+				return _options.find((row) => row.endsWith(" " + label));
 			}
+			if (selectionCount === 3) return "Done";
 			now += options.timeout;
 			return undefined;
 		},
@@ -200,7 +202,7 @@ try {
 		],
 	};
 	const result = await request("call-one", [question, { ...question, multiSelect: false }], controller.signal, 30);
-	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000])) {
+	if (JSON.stringify(timeouts) !== JSON.stringify([30_000, 20_000, 10_000, 10_000])) {
 		throw new Error("per-question timeouts reset the deadline: " + JSON.stringify(timeouts));
 	}
 	if (
@@ -267,6 +269,43 @@ if (!shown[1].includes("picked: Lint (Recommended), Types (Recommended)")) {
 console.log("ask-user-recommended-ok");
 `);
 	assert.match(out, /ask-user-recommended-ok/);
+});
+
+test("CLI ask-user keeps every recommendation removable and waits for Done", () => {
+	const out = evalModule(`
+import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
+const shown = [];
+// The person unticks one recommendation, then presses Done.
+const steps = [(rows) => rows.find((row) => row.endsWith(" Lint (Recommended)")), () => "Done"];
+const request = createTerminalAskUserQuestionRequest(() => ({
+	select: async (_title, options) => {
+		shown.push(options);
+		const step = steps.shift();
+		if (!step) throw new Error("asked again after Done");
+		return step(options);
+	},
+}));
+const result = await request("call-one", [{
+	question: "Which checks?",
+	header: "Checks",
+	multiSelect: true,
+	options: [
+		{ label: "Lint (Recommended)", description: "Style." },
+		{ label: "Types (Recommended)", description: "Types." },
+	],
+}]);
+// Every option is recommended, yet the question still waits for the person.
+if (shown.length !== 2) throw new Error("the question did not wait for Done: " + shown.length);
+if (!shown[0].some((row) => row.endsWith(" Lint (Recommended)"))) {
+	throw new Error("a recommended pick was not offered for removal: " + JSON.stringify(shown[0]));
+}
+const expected = [{ questionIndex: 0, kind: "multi", selected: ["Types (Recommended)"] }];
+if (result.cancelled || JSON.stringify(result.answers) !== JSON.stringify(expected)) {
+	throw new Error("unticking a recommendation was lost: " + JSON.stringify(result));
+}
+console.log("ask-user-untick-ok");
+`);
+	assert.match(out, /ask-user-untick-ok/);
 });
 
 test("memory scope id matches the desktop SAFE_ID charset and is stable per folder", () => {
