@@ -18,6 +18,7 @@ import {
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { openCursorSse, type CursorSseHandle } from "./aiden-remote-sse.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteStreamEvent,
@@ -58,7 +59,6 @@ import {
 import type { DataStoreOptions } from "./data-store.js";
 
 const MAX_STREAMS = 256;
-const STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
@@ -1989,115 +1989,44 @@ export class AidenRemoteStreamService {
       );
       after = snapshot.sequence - 1;
     }
-    // The retained journal is also the pending-output queue. Never duplicate
-    // it into Node's writable buffer while a client is waiting for drain.
-    let closed = false;
-    let blocked = false;
-    let ending = false;
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(heartbeat);
-      clearTimeout(drainTimeout);
-      response.off("close", cleanup);
-      response.off("error", abort);
-      response.off("drain", onDrain);
-      response.off("finish", onFinish);
-      stream.subscribers.delete(subscriber);
+    // The retained journal is also the pending-output queue: the shared pump
+    // pulls one event at a time and stops while Node's writable buffer is
+    // blocked, so a slow client holds at most one frame past the high-water
+    // mark and never duplicates the journal into memory.
+    let handle: CursorSseHandle | undefined;
+    const subscriber: StreamSubscriber = {
+      flush: () => handle?.wake(),
+      close: () => handle?.close(),
     };
-    const abort = () => {
-      cleanup();
-      response.destroy();
-    };
-    const onFinish = () => {
-      cleanup();
-      // Only fully flushed terminal delivery can satisfy deferred eviction.
-      // Disconnect/error/timeout cleanup must leave replay available.
-      if (stream.evictAfterDelivery && stream.subscribers.size === 0 && this.streams.get(streamId) === stream) {
-        stream.owner.invalidate();
-        this.streams.delete(streamId);
-        this.persist();
-      }
-    };
-    const close = () => {
-      if (closed || ending) return;
-      ending = true;
-      response.once("finish", onFinish);
-      drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
-      drainTimeout.unref?.();
-      try {
-        response.end();
-      } catch {
-        abort();
-      }
-    };
-    const write = (frame: string): boolean => {
-      try {
-        if (response.destroyed || response.writableEnded) {
-          cleanup();
-          return false;
-        }
-        if (!response.write(frame)) {
-          blocked = true;
-          drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
-          drainTimeout.unref?.();
-        }
-      } catch {
-        abort();
-        return false;
-      }
-      return !blocked && !closed;
-    };
-    const flush = () => {
-      if (closed || blocked || ending) return;
-      const firstSequence = stream.events[0]?.sequence ?? 1;
-      if (after < firstSequence - 1) {
+    stream.subscribers.add(subscriber);
+    handle = openCursorSse(response, {
+      pull: () => {
+        const firstSequence = stream.events[0]?.sequence ?? 1;
         // The client fell behind retention. Reconnect uses the existing
         // snapshot recovery path instead of silently skipping events.
-        abort();
-        return;
-      }
-      for (let index = Math.max(0, after - firstSequence + 1); index < stream.events.length; index++) {
-        const event = stream.events[index]!;
+        if (after < firstSequence - 1) return { abort: true };
+        const event = stream.events[Math.max(0, after - firstSequence + 1)];
+        if (!event) return { frames: [], end: terminal(stream.state) };
         after = event.sequence;
         // Once sent, an event is final; later deltas take a new sequence.
         if (stream.openDelta?.sequence === event.sequence) stream.openDelta = undefined;
-        if (!write(sseFrame(event))) return;
-      }
-      if (terminal(stream.state)) close();
-    };
-    const onDrain = () => {
-      if (closed || ending) return;
-      blocked = false;
-      clearTimeout(drainTimeout);
-      drainTimeout = undefined;
-      flush();
-    };
-    const subscriber: StreamSubscriber = { flush, close: abort };
-    stream.subscribers.add(subscriber);
-    response.once("close", cleanup);
-    response.once("error", abort);
-    response.on("drain", onDrain);
-    try {
-      response.writeHead(200, {
-        "aiden-protocol-version": String(AIDEN_REMOTE_PROTOCOL_VERSION),
-        "cache-control": "no-store",
-        connection: "keep-alive",
-        "content-type": "text/event-stream; charset=utf-8",
-        "x-accel-buffering": "no",
-        "x-content-type-options": "nosniff",
-      });
-      flush();
-      if (!closed) {
-        heartbeat = setInterval(() => {
-          if (!closed && !blocked && !ending) write(": heartbeat\n\n");
-        }, 15_000);
-        heartbeat.unref?.();
-      }
-    } catch {
-      abort();
-    }
+        return { frames: [sseFrame(event)] };
+      },
+      onClose: (finished) => {
+        stream.subscribers.delete(subscriber);
+        // Only fully flushed terminal delivery can satisfy deferred eviction.
+        // Disconnect/error/timeout cleanup must leave replay available.
+        if (
+          finished &&
+          stream.evictAfterDelivery &&
+          stream.subscribers.size === 0 &&
+          this.streams.get(streamId) === stream
+        ) {
+          stream.owner.invalidate();
+          this.streams.delete(streamId);
+          this.persist();
+        }
+      },
+    });
   }
 }
