@@ -137,11 +137,15 @@ export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDepen
   return {
     async rearm() {
       if (disposed) return;
+      const routines = await dependencies.routines();
+      // From here on everything is synchronous, so overlapping rearms (the
+      // interval and a wake from sleep) can't leave a timer nothing cancels.
+      if (disposed) return;
       const now = dependencies.now();
       // Re-timed on every rearm: a timer armed before sleep may be hours off.
       for (const { timer } of timers.values()) timer.cancel();
       timers.clear();
-      for (const task of await dependencies.routines()) {
+      for (const task of routines) {
         if (!task.botId || !task.enabled || task.nextRunAt === undefined) continue;
         const fireKey = `${task.id}:${task.nextRunAt}`;
         if (checked.has(fireKey)) continue;

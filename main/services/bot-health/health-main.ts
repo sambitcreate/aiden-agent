@@ -137,9 +137,8 @@ export function startBotHealth(): void {
   });
 }
 
-export function stopBotHealth(): void {
-  void import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush());
-  void import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines());
+/** Resolves once the delivery flush and event routines it started have stopped too. */
+export async function stopBotHealth(): Promise<void> {
   preflight?.dispose();
   preflight = undefined;
   if (rearmTimer) clearInterval(rearmTimer);
@@ -147,4 +146,12 @@ export function stopBotHealth(): void {
   if (onResume) powerMonitor.removeListener("resume", onResume);
   onResume = undefined;
   setBotRoutineAfterPersonFailure(undefined);
+  // Awaited, so shutdown closes the stores only after nothing can still flush or rearm.
+  const stopped = await Promise.allSettled([
+    import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush()),
+    import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines()),
+  ]);
+  for (const result of stopped) {
+    if (result.status === "rejected") logger.warn("bots", "A Bot background service did not stop cleanly.", result.reason);
+  }
 }
