@@ -138,6 +138,19 @@ export function isSubagentRunViewStateActive(state: SubagentRunViewState): boole
   );
 }
 
+/** Stop applies to foreground runs that are still working, the same rule as the subagent detail. */
+export function subagentStoppableSnapshot(run: SubagentRunView): SubagentRunSnapshot | undefined {
+  const snapshot = run.snapshot;
+  if (!snapshot || !isSubagentRunViewStateActive(run.state)) return undefined;
+  return snapshot.version === 2 && snapshot.execution === "foreground" ? snapshot : undefined;
+}
+
+/** "Scout", "Reviewer"…, or null when the role is not known. */
+export function subagentRoleLabel(role: SubagentRunViewRole | undefined): string | null {
+  if (!role || role === "unknown") return null;
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 export function isSubagentRunSnapshotTerminal(snapshot: SubagentRunSnapshot): boolean {
   return snapshot.version === 2
     ? snapshot.state === "completed" ||
@@ -599,8 +612,15 @@ export function subagentElapsedMilliseconds(
   view: SubagentRunView,
   now = Date.now(),
 ): number | undefined {
-  const snapshot = view.snapshot;
-  if (!snapshot || !Number.isFinite(now)) return undefined;
+  return view.snapshot ? subagentSnapshotElapsedMilliseconds(view.snapshot, now) : undefined;
+}
+
+/** How long a run has worked: up to now while active, up to its finish once terminal. */
+export function subagentSnapshotElapsedMilliseconds(
+  snapshot: SubagentRunSnapshot,
+  now = Date.now(),
+): number | undefined {
+  if (!Number.isFinite(now)) return undefined;
   const end = isSubagentRunViewStateActive(snapshot.state)
     ? Math.max(now, snapshot.startedAt)
     : (snapshot.finishedAt ?? snapshot.updatedAt);
@@ -619,6 +639,19 @@ export function formatSubagentElapsed(milliseconds: number): string {
   if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+/** A batch's elapsed time: its longest-running member's, or nothing while none has a snapshot. */
+export function longestSubagentElapsedLabel(
+  snapshots: readonly (SubagentRunSnapshot | undefined)[],
+  now = Date.now(),
+): string | undefined {
+  let longest: number | undefined;
+  for (const snapshot of snapshots) {
+    const elapsed = snapshot ? subagentSnapshotElapsedMilliseconds(snapshot, now) : undefined;
+    if (elapsed !== undefined && (longest === undefined || elapsed > longest)) longest = elapsed;
+  }
+  return longest === undefined ? undefined : formatSubagentElapsed(longest);
 }
 
 export function subagentElapsedLabel(view: SubagentRunView, now = Date.now()): string | undefined {

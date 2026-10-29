@@ -65,6 +65,8 @@ export const queryKeys = {
   /** Every Bot's live summary (the sidebar rows); `botLiveSummary(id)` is one Bot's. */
   botLiveSummaries: ["bot-live-summary"] as const,
   botLiveSummary: (id: string) => ["bot-live-summary", id] as const,
+  /** One Bot's routines (the Routines panel); `["bot-routines"]` matches every Bot's. */
+  botRoutines: (id: string) => ["bot-routines", id] as const,
   botCapabilityCatalog: ["bot-capability-catalog"] as const,
   botAccess: (id: string | undefined) => ["bot-access", id ?? "none"] as const,
   botTelegramBinding: (id: string | undefined) => ["bot-telegram-binding", id ?? "none"] as const,
@@ -104,6 +106,7 @@ export const queryKeys = {
   localModels: ["localModels"] as const,
   voiceResolution: ["voiceResolution"] as const,
   workspaces: ["workspaces"] as const,
+  workspaceMemoryFacts: (workspaceId: string) => ["workspace-memory-facts", workspaceId] as const,
   git: (workspaceId: string | undefined) => ["git", workspaceId ?? "none"] as const,
   gitPullRequestStatus: (workspaceId: string | undefined) =>
     ["git-pull-request-status", workspaceId ?? "none"] as const,

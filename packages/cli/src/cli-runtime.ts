@@ -19,6 +19,7 @@ import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
 import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
+import { shouldDefaultToCodemode } from "./codemode-default.ts";
 
 /**
  * Extra Aiden theme presets shipped beside the bundle. pi only auto-loads
@@ -38,11 +39,11 @@ function bundledThemePaths(appDir: string): string[] {
 }
 
 /**
- * Mirrors pi's own resolution for where a tuiMode preference could be saved:
+ * Mirrors pi's own resolution for where a preference (tuiMode, defaultTools) could be saved:
  * the rebranded agent dir (env override, else <home>/<configDir>/agent) and
  * the current project's settings.
  */
-function tuiSettingsPaths(appDir: string): string[] {
+function settingsPaths(appDir: string): string[] {
 	let configDir = ".aiden";
 	let appName = "aiden";
 	try {
@@ -87,8 +88,13 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 	for (const themePath of bundledThemePaths(appDir)) {
 		argv.push("--theme", themePath);
 	}
-	if (shouldDefaultToFullscreenTui(argv, tuiSettingsPaths(appDir))) {
+	const savedSettings = settingsPaths(appDir);
+	if (shouldDefaultToFullscreenTui(argv, savedSettings)) {
 		argv.push("--tui-mode", "fullscreen");
+	}
+	// Codemode is on by default, as on the desktop; an explicit tool choice wins.
+	if (shouldDefaultToCodemode(argv, savedSettings)) {
+		argv.push("--tools", "+codemode");
 	}
 	try {
 		const extensionFactories = await createAidenInlineExtensions();

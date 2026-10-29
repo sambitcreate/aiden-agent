@@ -61,6 +61,10 @@ import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.j
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
 import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
+import { spending } from "../services/spending-main.js";
+import { usageLimits } from "../services/usage-limit-main.js";
 
 
 const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
@@ -425,6 +429,15 @@ export function registerProviderHandlers(): void {
       if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
+    if (p.usageLimitWaitHours !== undefined) {
+      if (!isUsageLimitWaitHours(p.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      next.usageLimitWaitHours = p.usageLimitWaitHours;
+    }
+    if (p.spendingLimits !== undefined) {
+      const limits = parseSpendingLimitsSettings(p.spendingLimits);
+      if (limits === undefined) throw new Error("Invalid spending limits.");
+      next.spendingLimits = limits;
+    }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (p.computerUseAlwaysAllow !== undefined) {
       if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
@@ -454,6 +467,8 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     await applySettingsEffects(saved, next);
+    if (next.spendingLimits !== undefined) spending.settingsChanged();
+    if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();
     return saved;
   });
 }

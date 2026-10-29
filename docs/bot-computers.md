@@ -233,6 +233,10 @@ the screen keeps working.
   `lume run` process's arguments could also open the screen on `127.0.0.1`.
   Whether macOS shows those arguments to other accounts is checked under
   "Confirming on a Mac"; passing the password another way needs a Lume change.
+  This is an accepted limit (owner decision, 2026-10-22): a program that can
+  already read this Mac's process list runs as you, and the password lasts
+  only until the computer stops. Aiden revisits it when a pinned Lume can take
+  the password another way.
 - **SSH.** Aiden reaches the guest with its own key, kept in Aiden's data
   folder, and the guest's pinned host key (one per base Aiden built; a Bot
   computer presents the key of the base it was copied from). Password login is turned off in the
@@ -367,8 +371,10 @@ marked assumed until they are recorded on an Apple-silicon Mac:
 - **The VNC-lane gap.** Clicks are only coordinates, so the rules depend on the
   Bot's own description of each step. The tool's guidance tells the Bot to
   call `hand_off` for passwords, codes and payments and let the person do those
-  steps, and the rules editor says so. A rule's hand-off card has no Open
-  button in this lane.
+  steps, and the rules editor says so. A rule's hand-off card in this lane
+  offers "Open <Bot>’s computer", which takes the computer over for the person,
+  and the Bot can hand a step over there itself with `hand_off`'s
+  `where: "computer"`.
 - **Routines and Telegram.** Unlike the Bot's browser, which those turns never
   get, the Bot may use its own computer on routine runs and Telegram turns,
   where nobody is watching, and without asking per step as Computer Use on the
@@ -510,8 +516,9 @@ Bot computers on this Mac, a computer given to the Bot, and an attended turn.
   from the phone brings the Bot's chat forward on the Mac and opens the page
   on the Bot's computer there, with the person in control. Once the Mac's
   window sees the person holding the computer for that card, its panel shows
-  the Computer tab, once per card and without moving keyboard focus. No new
-  remote fields are involved.
+  the Computer tab, once per card and without moving keyboard focus. A Bot's
+  `hand_off` step on its computer (`where: "computer"`) is revealed the same
+  way. No new remote fields are involved.
 - **Confirming on a Mac.** Open from the card takes the computer over, Safari
   opens at the site (`/usr/bin/open -b com.apple.Safari` over SSH reaching the
   logged-in session), the driver's processes are gone, and answering gives the

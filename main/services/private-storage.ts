@@ -14,8 +14,13 @@ function verifyOwner(info: Stats, target: string): void {
 
 /** Reject ancestors another local user could use to replace the directory. */
 function verifyAncestors(target: string): void {
+  verifyDirectoryChain(dirname(realpathSync(target)));
+}
+
+/** Check `directory` itself and every ancestor above it. */
+function verifyDirectoryChain(directory: string): void {
   if (process.platform === "win32") return;
-  let parent = dirname(realpathSync(target));
+  let parent = directory;
   for (;;) {
     const info = lstatSync(parent);
     // A sticky directory such as /tmp protects an owned child from other users.
@@ -27,10 +32,23 @@ function verifyAncestors(target: string): void {
   }
 }
 
+/**
+ * A dedicated root may be a symlink (for example one a dotfile manager made) when the link
+ * itself, the folder it sits in and the folder it points to all belong to this user. The
+ * protection then applies to the folder the link points to.
+ */
 export function ensurePrivateDirectory(target: string, existing: "harden" | "reject" = "harden"): void {
-  const absolute = resolve(target);
-  if (absolute === dirname(absolute) || absolute === resolve(homedir())) throw unsafe(target);
-  mkdirSync(absolute, { recursive: true, mode: 0o700 });
+  const requested = resolve(target);
+  if (requested === dirname(requested) || requested === resolve(homedir())) throw unsafe(target);
+  mkdirSync(requested, { recursive: true, mode: 0o700 });
+  const link = lstatSync(requested);
+  let absolute = requested;
+  if (link.isSymbolicLink()) {
+    verifyOwner(link, target);
+    verifyDirectoryChain(realpathSync(dirname(requested)));
+    absolute = realpathSync(requested);
+    if (absolute === dirname(absolute)) throw unsafe(target);
+  }
   const before = lstatSync(absolute);
   if (!before.isDirectory() || before.isSymbolicLink()) throw unsafe(target);
   verifyOwner(before, target);
@@ -50,6 +68,8 @@ export function ensurePrivateDirectory(target: string, existing: "harden" | "rej
     }
     const after = lstatSync(absolute);
     if (after.isSymbolicLink() || after.dev !== opened.dev || after.ino !== opened.ino) throw unsafe(target);
+    // A link retargeted while this ran must not leave the old folder treated as the root.
+    if (absolute !== requested && realpathSync(requested) !== absolute) throw unsafe(target);
   } finally { closeSync(fd); }
 }
 

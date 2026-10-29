@@ -221,6 +221,7 @@ Gate: one shared contract matrix runs against every adapter, with credentialed T
 ### 6C. Approval-controlled writes
 
 - The agent may call memory tools as needed, including when the user explicitly asks in chat; there is no separate manual memory editor.
+- Update (2026-10-27): Settings → Memory → **What Aiden remembers** lists a workspace's active, unexpired facts (newest first, with who saved them, Always included and expiry) and deletes one for good after a confirmation, through `workspaces:memoryFacts` and `workspaces:deleteMemoryFact`. It reads the same workspace scope chats recall from. There is still no manual add or edit; Bot memory stays on each Bot's page.
 - Model-proposed writes and deletions are suggestions only. Show the exact fact or citation, scope, provenance, replacement/expiry behavior where applicable, and require owner approval before commit.
 - Use Aiden's own bounded, fail-closed approval contract. Mirror the permission-system lesson that child-originated asks must forward to the owning attended surface; never let a headless child or Telegram transport silently convert `ask` into `allow`.
 - A compaction cycle may produce memory suggestions once, after a successful checkpoint, but summary success never implies memory approval. Failure or cancellation commits neither a checkpoint nor suggestions.

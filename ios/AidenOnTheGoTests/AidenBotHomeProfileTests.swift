@@ -580,9 +580,12 @@ final class AidenBotInstantEditTests: XCTestCase {
         )
         saver.adopt(try detail())
         let (one, two) = (try AidenBotIdentityPatch(name: "Scout II"), try AidenBotIdentityPatch(name: "Scout III"))
-        async let first = saver.save(one)
-        async let second = saver.save(two)
-        let outcomes = await [first, second]
+        // Two `async let`s may reach the saver in either order, so the second
+        // starts only once the first has taken its place in line.
+        let first = Task { await saver.save(one) }
+        while saver.inFlight == 0 && sent.isEmpty { await Task.yield() }
+        let second = Task { await saver.save(two) }
+        let outcomes = [await first.value, await second.value]
         XCTAssertEqual(sent.map(\.1), ["bot_revision_7", "rev_8"], "the second waits and goes on the first's revision")
         XCTAssertEqual(outcomes, [.saved(try detail(revision: "rev_8", name: "Scout II")), .saved(try detail(revision: "rev_9", name: "Scout III"))])
     }

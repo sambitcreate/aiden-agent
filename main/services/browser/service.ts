@@ -98,6 +98,8 @@ import {
 } from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
+import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
+import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -1962,9 +1964,9 @@ export class BrowserService {
             canvas.height=${Math.max(1, Math.min(1080, bounds.height))};
             const context=canvas.getContext('2d');
             const stream=canvas.captureStream(${fps});
-            const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
-            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000});
-            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null};
+            const mime=['video/mp4;codecs=avc1.42E01E','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type))||'video/webm';
+            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000,...(mime.startsWith('video/mp4')?{videoKeyFrameIntervalDuration:1000}:{})});
+            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null,type:mime.startsWith('video/mp4')?'video/mp4':'video/webm'};
             media.ondataavailable=e=>{
               if(!e.data.size)return;
               state.bytes+=e.data.size;
@@ -1989,6 +1991,8 @@ export class BrowserService {
         signal,
       );
       // Hidden renderers may not composite a changed canvas until explicitly captured.
+      // The MP4 muxer writes nothing until a keyframe, so MP4 asks for one each
+      // second: the first frame shows up as bytes and the size limit keeps working.
       // Readiness is encoded data, not elapsed time: immediate Stop must yield a video.
       const firstFrameDeadline = Date.now() + 5_000;
       while (true) {
@@ -2090,27 +2094,30 @@ export class BrowserService {
       await this.send(tab, "Page.stopScreencast").catch(() => {});
       await recording.pending;
       if (recording.failed) throw new Error(recording.failed);
-      const base64 = await browserDeadline(
+      const encoded: unknown = await browserDeadline(
         recording.recorder.webContents.executeJavaScript(
-          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:'video/webm'}); return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); })()`,
+          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:state.type}); const data=await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); return {type:state.type,data}; })()`,
         ),
         15_000,
       );
-      if (typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
+      const output = (encoded ?? {}) as { type?: unknown; data?: unknown };
+      const mimeType = output.type === "video/mp4" ? "video/mp4" : output.type === "video/webm" ? "video/webm" : undefined;
+      const base64 = output.data;
+      if (!mimeType || typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
         throw new Error("Recording output is invalid or too large.");
       const bytes = Buffer.from(base64, "base64");
-      if (bytes.length < 16 || !bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
+      if (bytes.length < 16 || !browserRecordingBytesMatch(bytes, mimeType))
         throw new Error(
           "The browser did not produce a video frame. Wait for the page to render and record again.",
         );
-      const folder = path.join(app.getPath("userData"), "browser", "recordings");
+      const folder = browserRecordingsFolder(app.getPath("userData"));
       await fs.mkdir(folder, { recursive: true, mode: 0o700 });
-      const target = path.join(folder, `${recording.id}.webm`);
+      const target = path.join(folder, `${recording.id}.${browserRecordingExtension(mimeType)}`);
       await fs.writeFile(target, bytes, { mode: 0o600 });
       const result = {
         id: recording.id,
         path: target,
-        mimeType: "video/webm",
+        mimeType,
         durationMs: Date.now() - recording.started,
         sizeBytes: bytes.length,
       };
@@ -2470,7 +2477,9 @@ export class BrowserService {
         break;
       }
       case "reveal_recording": {
-        const recording = this.recordings.get(command.recordingId);
+        // A recording from an earlier launch is still on disk, under its id.
+        const recording = this.recordings.get(command.recordingId)
+          ?? await findBrowserRecording(app.getPath("userData"), command.recordingId);
         if (!recording) throw new Error("This recording is no longer available.");
         shell.showItemInFolder(recording.path);
         break;

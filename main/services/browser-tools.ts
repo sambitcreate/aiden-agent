@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { StringEnum, Type, validateToolArguments } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { parseBrowserRecordingRecap, type BrowserRecordingRecapV1 } from "../../renderer/shared/browser-recording.js";
 import {
   BROWSER_VIEWPORT_PRESETS,
   resolveBrowserAgentAccess,
@@ -223,7 +224,8 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
         const signal = callSignal ? AbortSignal.any([context.signal, callSignal]) : context.signal;
         const ensureLive = () => { if (signal.aborted) throw signal.reason ?? new Error("Browser generation was cancelled."); };
         const admittedRevision = queueRevision;
-        const operation = async (): Promise<AgentToolResult<null>> => {
+        // Only a recording stop carries details: the recap its step shows (revision 46).
+        const operation = async (): Promise<AgentToolResult<null | { recording: BrowserRecordingRecapV1 }>> => {
           ensureLive();
           if (admittedRevision !== queueRevision) throw new Error("A previous browser action failed or was interrupted. Inspect a fresh snapshot before retrying queued actions.");
           await context.revalidate?.();
@@ -340,7 +342,18 @@ export function createBrowserAgentTools(context: BrowserToolContext): AgentTool[
           if (name === "browser_set_appearance") return text({ tabId: selected, colorScheme: updated?.appearance });
           if (name === "browser_evaluate") return text(result.value);
           if (name === "browser_recording_start") return text({ tabId: selected, recording: updated?.recording ?? false });
-          if (name === "browser_recording_stop") return text({ tabId: selected, ...result.recording });
+          if (name === "browser_recording_stop") {
+            // The model gets the saved file; the step carries a display-only recap so the
+            // transcript, here and on paired phones, can play the video (Remote revision 46).
+            const response = text({ tabId: selected, ...result.recording });
+            const recap = parseBrowserRecordingRecap(result.recording && {
+              id: result.recording.id,
+              mimeType: result.recording.mimeType,
+              durationMs: result.recording.durationMs,
+              sizeBytes: result.recording.sizeBytes,
+            });
+            return recap ? { ...response, details: { recording: recap } } : response;
+          }
           if (name === "browser_snapshot") {
             if (!result.snapshot) throw new Error("Browser snapshot was unavailable.");
             const { image, ...page } = boundBrowserSnapshot(result.snapshot);

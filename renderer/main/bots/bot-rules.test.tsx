@@ -168,7 +168,7 @@ test("rules Aiden can't read say the Bot won't take the steps they check, until 
   const list = await mount();
   assert.match(
     (await screen.findByRole("alert")).textContent ?? "",
-    /Planner’s saved rules couldn’t be read, so Planner won’t take any step its rules check\. Change a rule below to start again from these defaults\./u,
+    /Planner’s saved rules couldn’t be read, so Planner won’t take any step its rules check\. Change a rule below to start again from these defaults\. Aiden keeps a copy of the damaged file, rules\.json\.unreadable, in Planner’s folder\./u,
   );
   assert.ok(within(row(list, "Permanently delete something")).getByText("Ask first"), "the editor shows what a change starts from");
   await assert.rejects(store.rules(bot.id), "the Bot's calls still can't read them");

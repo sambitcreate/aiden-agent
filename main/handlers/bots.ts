@@ -15,6 +15,7 @@ import {
   botLiveProjection,
   botSessionRuntime,
   dismissBotConnection,
+  grantBotConnection,
 } from "../services/bot-runtime/bot-session-main.js";
 import { botStarter } from "../services/bot-runtime/bot-starter-main.js";
 import { stopWithIntents } from "../services/bot-runtime/bot-turn-intents.js";
@@ -27,6 +28,11 @@ import { registerBotLiveHandlers } from "./bot-live.js";
 import { registerBotPauseHandlers } from "./bot-pause.js";
 import { registerBotQuestionHandlers } from "./bot-questions.js";
 import { registerBotHandoffHandlers } from "./bot-handoffs.js";
+import { registerBotIssueHandlers } from "./bot-issues.js";
+import { registerBotHealthHandlers } from "./bot-health.js";
+import { registerBotEventRoutineHandlers } from "./bot-event-routines.js";
+import { registerBotLearningHandlers } from "./bot-learning.js";
+import { botHealthReports } from "../services/bot-health/health-main.js";
 import { botExistsIn, registerBotMemoryHandlers } from "./bot-memory.js";
 import { registerBotRuleHandlers } from "./bot-rules.js";
 import { botRules } from "../services/bot-rules/store-main.js";
@@ -36,6 +42,7 @@ import { registerBotFileHandlers } from "./bot-files.js";
 import { listWorkspaceFiles, readWorkspaceFile } from "../services/workspace-files.js";
 import { botQuestions } from "../services/bot-runtime/bot-questions-main.js";
 import { botHandoffs } from "../services/bot-runtime/bot-handoffs-main.js";
+import { botIssues } from "../services/bot-issues/service-main.js";
 import { botBrowserWorkspace } from "../services/bot-runtime/bot-browser-main.js";
 import { openBotHandoffById } from "../services/bot-runtime/bot-handoff-open-main.js";
 import { botApprovals } from "../services/bot-runtime/bot-approvals-main.js";
@@ -164,6 +171,11 @@ export function registerBotHandlers(): void {
     // The create flow's one-time self-intro; deduped per Bot by the runtime.
     return botStarter().introduce(parseBotId(id));
   });
+  ipcMain.handle("bots:connections:grant", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
+    const botId = parseBotId(rawBotId);
+    const pluginId = parseConnectionPluginId(rawPluginId);
+    await grantBotConnection(botId, pluginId);
+  });
   ipcMain.handle("bots:connections:dismiss", async (_event, rawBotId: unknown, rawPluginId: unknown) => {
     const botId = parseBotId(rawBotId);
     const pluginId = parseConnectionPluginId(rawPluginId);
@@ -212,6 +224,57 @@ export function registerBotHandlers(): void {
       return openBotHandoffById(botId, waitId, "desktop", owner);
     },
   });
+  // "Needs you" issues: the card's actions and the Bot's open list.
+  registerBotIssueHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    issues: botIssues,
+  });
+  // Profile → When something happens: event routines and their links.
+  registerBotEventRoutineHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    store: {
+      list: async (botId) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.list(botId),
+      create: async (botId, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.create(botId, input),
+      update: async (botId, id, input) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.update(botId, id, input),
+      remove: async (botId, id) => {
+        const sources = await import("../services/bot-routine-events/sources-main.js");
+        const removed = await sources.botEventRoutines.remove(botId, id);
+        if (removed) await sources.forgetBotEventRoutine(botId, id);
+        return removed;
+      },
+      rotateToken: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.rotateToken(botId, id),
+    },
+    linkFor: async (token) => (await import("../services/bot-routine-events/sources-main.js")).botRoutineWebhookLink(token),
+    changed: (botId) => {
+      void import("../services/bot-routine-events/sources-main.js").then(({ botEventRoutinesChanged }) => botEventRoutinesChanged(botId));
+    },
+  });
+  // Skill cards: Add writes and approves the exact content; Not now leaves it unused.
+  ipcMain.handle("bots:skillProposals:respond", async (_event, input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid skill response.");
+    const fields = input as Record<string, unknown>;
+    if (Object.keys(fields).some((key) => key !== "botId" && key !== "proposalId" && key !== "decision")) throw new Error("Invalid skill response.");
+    if (fields.decision !== "add" && fields.decision !== "dismiss") throw new Error("Invalid skill response.");
+    if (typeof fields.proposalId !== "string" || !/^[0-9a-f-]{36}$/iu.test(fields.proposalId)) throw new Error("Invalid skill response.");
+    const { botSkillProposals } = await import("../services/bot-skills/skill-proposals-main.js");
+    return botSkillProposals.respond({ botId: parseBotId(fields.botId), proposalId: fields.proposalId, decision: fields.decision });
+  });
+  // Profile → What I've learned, and the chat's lesson cards and Undo lines.
+  const learning = () => import("../services/bot-learning/learning-main.js");
+  registerBotLearningHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    overview: async (botId) => (await learning()).botLearningOverview(botId),
+    undo: async (botId, changeId) => (await learning()).undoBotLearning(botId, changeId),
+    undoLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+    respondLesson: async (botId, lessonId, decision) => (await learning()).respondToLesson(botId, lessonId, decision),
+    removeLesson: async (botId, lessonId) => (await learning()).removeLesson(botId, lessonId),
+  });
+  // Profile → Health: the newest check, and Check now.
+  registerBotHealthHandlers<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    report: (botId) => botHealthReports.get(botId),
+    check: async (botId) => (await import("../services/bot-health/health-main.js")).checkBotHealth(botId, "manual"),
+  });
   // The Bot store answers null for a Bot it doesn't have.
   const botExists = botExistsIn(botApplicationService);
   // Profile → Memory: view, edit, delete and erase what the Bot remembers.
@@ -241,8 +304,15 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });
-  ipcMain.handle("bots:update", async (_event, input: unknown) => {
-    return botApplicationService.updateBot(parseBotUpdate(input));
+  ipcMain.handle("bots:update", async (_event, raw: unknown) => {
+    const input = parseBotUpdate(raw);
+    const updated = await botApplicationService.updateBot(input);
+    // Turning "Let <Bot> set its own wake-ups" off also cancels the ones still pending.
+    if (input.selfWakeUps === false) {
+      const { botWakeUps } = await import("../services/bot-wake-ups/wake-ups-main.js");
+      await botWakeUps.cancelAll(updated.id);
+    }
+    return updated;
   });
   registerBotTelegramHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

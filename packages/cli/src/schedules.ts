@@ -53,7 +53,7 @@ export function createCliScheduler(agentDir: string) {
   const routineExecutor = createBotRoutineExecutor({ store, ports: () => {
     if (!botPorts) throw new Error("Durable Bot routines are unavailable on this host.");
     return botPorts;
-  }, notify: () => {}, broadcast: () => {} });
+  }, broadcast: () => {} });
   const service = createScheduleServiceCore({ store,
     globallyEnabled: async () => readJson<{ scheduledTasksEnabled?: boolean }>(join(agentDir, "aiden.json"), {}).scheduledTasksEnabled !== false,
     broadcast: () => {}, warn: (message) => process.stderr.write(message + "\n"), error: (message, error) => process.stderr.write(`${message} ${String(error)}\n`),
