@@ -234,6 +234,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `POST /chats/{chatId}/attachments`: validate and stage one bounded image or UTF-8 text attachment.
 - `DELETE /chats/{chatId}/attachments/{attachmentId}`: discard an unused staged attachment.
 - `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
+- `GET /chats/{chatId}/recordings/{recordingId}` (contract revision 46, announced by `chat-browser-recordings-v1`): the video a `browser_recording_stop` step in this chat saved. Needs `chat:read` and read access to the chat. See "Browser recordings, revision 46".
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
@@ -973,3 +974,26 @@ The bytes never travel in the session. A device without `bot:images` gets, under
 **Clients.** Aiden On The Go for iOS and Android ask for `bot:images` only when the host lists it, in a call of its own, and treat a `400` or `404` as a host that does not offer it. They draw the image on the Bot's side of the chat, read its bytes when it is drawn, keep them in memory while the chat is open (never on disk) within a 32 MiB budget, least recently drawn first out, and only while the transcript still shows them, and read a dropped image or a failed read again the next time the image is drawn. Android's picture cache is app-wide and entry ids repeat across Bots and Macs, so its viewer id for a shared image also names the Mac and Bot (`bot-image:<scope>:<entryId>`); the image route still takes the entry id. Tapping it opens the same full-screen viewer as chat photos. A paired Mac opening another Mac's Bot does not take the grant and shows the line.
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botImages`: the capability, a holder's `entry`, the `legacyEntry` other devices get, and the `imagePath`. The desktop parser reads the section only when `contractRevision` is 45 or newer.
+
+## Browser recordings, revision 46 (`chat-browser-recordings-v1`)
+
+The host keeps it in one constant (`AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`; provisional, re-claimed at merge after whatever `main` holds then).
+
+The agent can record a browser tab with `browser_recording_start` and `browser_recording_stop`. The Mac saves the video in Aiden's own folder (`userData/browser/recordings/`) as H.264 MP4, or WebM when H.264 encoding is unavailable, and shows it in the chat under the "Stopped browser recording" line. Before this revision a paired device saw only the activity line.
+
+**The step.** A completed `browser_recording_stop` tool step in a chat's generation timeline (v3) carries `recording` with exact keys:
+
+| Key | Notes |
+| --- | --- |
+| `id` | `recording-` followed by a lowercase UUID; names the video in the route below |
+| `mimeType` | `video/mp4` or `video/webm` |
+| `durationMs` | Integer, 0 to 360000 (the recorder stops itself at five minutes) |
+| `sizeBytes` | Integer, 1 to 128 MiB (the recorder stops itself at that size) |
+
+The recap is display-only. It never holds the video, the file's path, the page or its address. Any other tool, a step that is not completed, or a recap with another key or value is dropped by every client while the step still shows as an activity line. Clients before revision 46 ignore the field.
+
+**Bytes.** `GET /chats/{chatId}/recordings/{recordingId}` answers the video with its own `Content-Type` (`video/mp4` or `video/webm`), `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It needs `chat:read` and read access to the chat (`403 capability_denied` otherwise). The host serves only a recording that one of this chat's own timeline steps names, in a saved reply or in a turn of this chat that is still running (its reply is saved only when the whole turn ends, and the phones show Play as soon as the recording stops), and only a regular file in its recordings folder whose bytes match its type: a malformed id is `400 invalid_request`, and a recording the chat does not name or that is gone is `404 not_found` with "This recording is no longer on the Mac." A host without the in-app browser (the CLI) does not wire the route, does not announce `chat-browser-recordings-v1`, and answers `404 not_found`.
+
+**Clients.** The desktop chat shows a card with the length and size, **Play**, and **Show in Finder** (**Show in folder** on Linux); the video loads only when Play is pressed. Aiden On The Go for iOS and Android show the same card when the host announces the feature, download the video when Play is tapped and play it full screen. iOS cannot play WebM, so a WebM recording there says to watch it on the Mac.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `browserRecordings`: a completed recording `step` and the `recordingPath` that names it. The desktop parser reads the section only when `contractRevision` is 46 or newer.

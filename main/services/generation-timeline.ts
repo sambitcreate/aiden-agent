@@ -24,6 +24,7 @@ import {
   parseAskUserQuestionRecap,
 } from "../../renderer/shared/ask-user-question.js";
 import { WEB_FETCH_TOOL_NAME, parseWebExtractRecap } from "../../renderer/shared/web-extract.js";
+import { BROWSER_RECORDING_STOP_TOOL_NAME, parseBrowserRecordingRecap } from "../../renderer/shared/browser-recording.js";
 
 const MAX_TOOL_NAME_LENGTH = 80;
 const MAX_TARGET_LENGTH = 240;
@@ -821,6 +822,10 @@ export class GenerationTimelineProjector {
         if (step.toolName === WEB_FETCH_TOOL_NAME) {
           const extraction = parseWebExtractRecap(resultDetails);
           if (extraction) step.extraction = extraction;
+        }
+        if (step.toolName === BROWSER_RECORDING_STOP_TOOL_NAME) {
+          const recording = parseBrowserRecordingRecap(record(resultDetails).recording);
+          if (recording) step.recording = recording;
         }
       } else {
         const issue = safeToolIssue(resultDetails);
