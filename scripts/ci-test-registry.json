@@ -521,6 +521,7 @@
         "main/services/bot-runtime/bot-sign-in-tool.test.ts",
         "main/services/bot-runtime/bot-computer-tools.test.ts",
         "main/services/bot-runtime/bot-computer-candidates.test.ts",
+        "main/services/bot-runtime/bot-file-candidates.test.ts",
         "main/services/bot-runtime/bot-computer-handoff.test.ts",
         "main/services/renderer-document-owner.test.ts",
         "main/services/bot-runtime/bot-session-service.test.ts",
