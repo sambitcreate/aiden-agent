@@ -66,47 +66,56 @@ async function socketInodes(pid: number): Promise<string[]> {
   return inodes;
 }
 
-async function linuxListeningPorts(pids: readonly number[]): Promise<number[]> {
+async function linuxListeningPorts(pids: readonly number[]): Promise<Map<number, number[]>> {
+  const byProcess = new Map<number, number[]>();
   const tables = await Promise.all(
     ["/proc/net/tcp", "/proc/net/tcp6"].map((file) => fsp.readFile(file, "utf8").catch(() => "")),
   );
   const listening = new Map<string, number>();
   for (const table of tables) for (const [inode, port] of parseProcNetTcp(table)) listening.set(inode, port);
-  if (!listening.size) return [];
+  if (!listening.size) return byProcess;
   const own = new Set(await socketInodes(process.pid));
-  const ports: number[] = [];
   for (const pid of pids) {
     if (pid === process.pid) continue;
+    const ports: number[] = [];
     for (const inode of await socketInodes(pid)) {
       const port = own.has(inode) ? undefined : listening.get(inode);
       if (port !== undefined) ports.push(port);
     }
+    if (ports.length) byProcess.set(pid, ports);
   }
-  return ports;
+  return byProcess;
 }
 
-function macListeningPorts(pids: readonly number[]): Promise<number[]> {
+function macListeningPorts(pids: readonly number[]): Promise<Map<number, number[]>> {
   return new Promise((resolve) => {
     execFile(
       "/usr/sbin/lsof",
       ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-p", [...pids, process.pid].join(","), "-Fpn"],
       { timeout: LSOF_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
       // lsof exits 1 when nothing matched; its output is still what it found.
-      (_error, stdout) =>
-        resolve(typeof stdout === "string" ? portsOfProcesses(parseLsofListening(stdout), pids, process.pid) : []),
+      (_error, stdout) => {
+        if (typeof stdout !== "string") return resolve(new Map());
+        const found = parseLsofListening(stdout);
+        resolve(new Map(pids.map((pid) => [pid, portsOfProcesses(found, [pid], process.pid)])));
+      },
     );
   });
 }
 
+/** The TCP ports each of these processes listens on, from one lookup for all of them. */
+export async function defaultListeningPortsByProcess(pids: readonly number[]): Promise<Map<number, number[]>> {
+  const valid = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 1);
+  if (!valid.length) return new Map();
+  return process.platform === "linux"
+    ? linuxListeningPorts(valid)
+    : process.platform === "darwin"
+      ? macListeningPorts(valid)
+      : new Map();
+}
+
 /** The TCP ports these processes listen on, lowest first, without repeats. */
 export async function defaultListeningPorts(pids: readonly number[]): Promise<number[]> {
-  const valid = pids.filter((pid) => Number.isSafeInteger(pid) && pid > 1);
-  if (!valid.length) return [];
-  const ports =
-    process.platform === "linux"
-      ? await linuxListeningPorts(valid)
-      : process.platform === "darwin"
-        ? await macListeningPorts(valid)
-        : [];
+  const ports = [...(await defaultListeningPortsByProcess(pids)).values()].flat();
   return [...new Set(ports)].sort((left, right) => left - right);
 }

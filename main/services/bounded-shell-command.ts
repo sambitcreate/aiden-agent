@@ -33,7 +33,8 @@ export interface BoundedShellCommandResult {
   leftoverProcessGroup?: number;
   /**
    * With `releaseLeftoversAfterMs`: the output the leftovers still write to.
-   * The caller must keep reading (or resume) both, or the leftovers block.
+   * Both are paused so nothing is lost before the caller attaches; it must
+   * read and resume both (or just resume them), or the leftovers block.
    */
   leftoverOutput?: { stdout: Readable; stderr: Readable };
 }
@@ -136,6 +137,9 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
           signal?.removeEventListener("abort", abort);
           child.stdout.off("data", captureStdout);
           child.stderr.off("data", captureStderr);
+          // Held until whoever takes the leftovers reads or drains them.
+          child.stdout.pause();
+          child.stderr.pause();
           resolve({
             stdout: Buffer.concat(stdout).toString("utf-8"),
             stderr: Buffer.concat(stderr).toString("utf-8"),

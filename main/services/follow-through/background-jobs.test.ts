@@ -8,7 +8,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import {
+  BackgroundJobLimitError,
   BackgroundJobs,
+  defaultProcessGroupMembers,
   defaultProcessStartTime,
   describeJobEnd,
   newBackgroundJobId,
@@ -477,4 +479,92 @@ test("quitting stops what commands left running, like any job", { skip }, async 
   await cleanUp(jobs, dir);
   assert.equal(jobs.get("chat-1", id)?.state, "stopped");
   assert.equal(jobs.get("chat-1", id)?.endReason, "app-quit");
+});
+
+test("Stop on a job a command left running ends only the processes carrying its marker", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir, { listeningPorts: null });
+  const id = newBackgroundJobId();
+  const pidFile = path.join(dir, "unmarked.pid");
+  // The server starts a helper in its own process group without the marker.
+  const result = await leaveServerRunning(
+    dir,
+    id,
+    `const { spawn } = require("node:child_process");
+const env = { ...process.env };
+delete env.AIDEN_BACKGROUND_JOB;
+const helper = spawn("sleep", ["60"], { env, stdio: "ignore" });
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(helper.pid));
+setInterval(() => {}, 1_000);
+`,
+  );
+  let unmarked = 0;
+  t.after(async () => {
+    if (unmarked) process.kill(unmarked, "SIGKILL");
+    await cleanUp(jobs, dir);
+  });
+  await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).length > 0, "the helper to start");
+  unmarked = Number(await fs.readFile(pidFile, "utf8"));
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  const stopped = await jobs.stop("chat-1", id, "person");
+  assert.equal(stopped.state, "stopped");
+  assert.ok(alive(unmarked), "a process in the group without the marker is left alone");
+});
+
+test("a Stop that cannot see the processes leaves the job running, and a later Stop ends it", { skip }, async (t) => {
+  const dir = await tempDir();
+  let lookupsFail = false;
+  const { jobs } = harness(dir, {
+    listeningPorts: null,
+    processGroupMembers: async (pgid) => {
+      if (lookupsFail) throw new Error("ps timed out");
+      return defaultProcessGroupMembers(pgid);
+    },
+  });
+  t.after(() => cleanUp(jobs, dir));
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setInterval(() => {}, 1_000);\n");
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  lookupsFail = true;
+  const unconfirmed = await jobs.stop("chat-1", id, "person");
+  assert.equal(unconfirmed.state, "running", "it is not shown as stopped while it may still run");
+  assert.equal(jobs.runningCount("chat-1"), 1);
+  lookupsFail = false;
+  assert.equal((await jobs.stop("chat-1", id, "person")).state, "stopped");
+});
+
+test("what a command leaves running is not taken over past the chat's job limit", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, start } = harness(dir, { listeningPorts: null, maxRunningPerChat: 1 });
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setInterval(() => {}, 1_000);\n");
+  t.after(async () => {
+    try {
+      process.kill(-result.leftoverProcessGroup!, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    await cleanUp(jobs, dir);
+  });
+  start("sleep 30");
+  await assert.rejects(
+    jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }),
+    BackgroundJobLimitError,
+  );
+  assert.equal(jobs.list("chat-1").length, 1, "only the job that was already running is listed");
+  // Another chat still has room.
+  assert.ok(await jobs.adopt({ id, chatId: "chat-2", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+});
+
+test("a straggler that exits right after the command is not listed as a job", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir, { listeningPorts: null, adoptSettleMs: 400 });
+  t.after(() => cleanUp(jobs, dir));
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setTimeout(() => {}, 100);\n");
+  assert.equal(
+    await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }),
+    undefined,
+  );
+  assert.deepEqual(jobs.list("chat-1"), []);
 });

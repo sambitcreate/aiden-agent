@@ -1,25 +1,20 @@
 package sbtbiswas.AidenOnTheGo.features.chat
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -30,12 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,7 +37,6 @@ import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobCopy
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobsState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenUi
 import java.time.Instant
 
 const val AIDEN_BACKGROUND_JOBS_CHIP_TAG = "aiden-background-jobs-chip"
@@ -55,27 +45,14 @@ const val AIDEN_BACKGROUND_JOBS_CHIP_TAG = "aiden-background-jobs-chip"
 @Composable
 fun AidenBackgroundJobsChip(running: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val title = AidenBackgroundJobCopy.chip(running) ?: return
-    val palette = AidenTheme.palette
-    val description = AidenBackgroundJobCopy.chipDescription(running)
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = CircleShape,
-        modifier = modifier
-            .heightIn(min = AidenUi.MinimumTouchTarget)
-            .shadow(elevation = 2.dp, shape = CircleShape, ambientColor = Color.Black.copy(alpha = 0.08f), spotColor = Color.Black.copy(alpha = 0.08f))
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics {
-                role = Role.Button
-                contentDescription = description
-            }
-            .testTag(AIDEN_BACKGROUND_JOBS_CHIP_TAG)
-    ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Terminal, contentDescription = null, tint = palette.accent, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(7.dp))
-            Text(title, style = MaterialTheme.typography.labelLarge, color = palette.foreground)
-        }
-    }
+    AidenProgressChip(
+        icon = Icons.Default.Terminal,
+        label = title,
+        description = title,
+        onClick = onClick,
+        modifier = modifier.testTag(AIDEN_BACKGROUND_JOBS_CHIP_TAG),
+        accessibilityLabel = AidenBackgroundJobCopy.chipDescription(running)
+    )
 }
 
 /** The chat's jobs, how long each has run or how it ended, the addresses it serves on the Mac, and Stop. */

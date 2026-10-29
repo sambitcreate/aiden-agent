@@ -20,7 +20,7 @@ import {
   type BackgroundJobView,
 } from "../../../renderer/shared/background-jobs.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
-import { defaultListeningPorts } from "./listening-ports.js";
+import { defaultListeningPortsByProcess } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
 export const MAX_RUNNING_JOBS = 20;
@@ -38,6 +38,16 @@ export const JOB_SETTLED_PORT_SCAN_MS = 30_000;
 const JOB_PORT_SETTLE_AGE_MS = 60_000;
 /** How often an adopted job's process group is checked for having ended. */
 export const ADOPTED_JOB_POLL_MS = 1_000;
+/**
+ * How long what a command left behind must keep running before it is taken
+ * over, so a straggler that is already exiting is not listed as a job.
+ */
+export const ADOPT_SETTLE_MS = 500;
+/**
+ * Ports a dev tool opens beside the address a person would open: the Node
+ * inspector and Vite's hot-reload socket. They are never listed.
+ */
+const UNLISTED_PORTS = new Set([9229, 24678]);
 /** The environment entry that marks a job's processes, so cleanup never touches anything else. */
 export const BACKGROUND_JOB_MARKER = "AIDEN_BACKGROUND_JOB";
 const ADOPTED_JOB_NOTE =
@@ -64,14 +74,20 @@ export interface BackgroundJobsOptions {
   maxRunning?: number;
   /** Reads a process's start time so a later launch can tell it from a reused pid. */
   processStartTime?: (pid: number) => Promise<string | undefined>;
-  /** Lists the processes in a process group. */
+  /** Every process group and its processes, from one look; rejects when it could not look. */
+  processGroups?: () => Promise<Map<number, number[]>>;
+  /** Lists the processes in a process group; rejects when it could not look. */
   processGroupMembers?: (pgid: number) => Promise<number[]>;
-  /** Whether a process was started with this `NAME=value` in its environment. */
+  /**
+   * Whether a process was started with this `NAME=value` in its environment.
+   * Rejects when the process still runs but could not be read.
+   */
   processHasEnvironment?: (pid: number, entry: string) => Promise<boolean>;
-  /** TCP ports the given processes listen on; null turns port lookups off. */
-  listeningPorts?: ((pids: readonly number[]) => Promise<number[]>) | null;
+  /** The TCP ports each of the given processes listens on; null turns port lookups off. */
+  listeningPorts?: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
   portScanMs?: number;
   adoptedPollMs?: number;
+  adoptSettleMs?: number;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -116,7 +132,8 @@ interface JobRecord {
   /** An adopted job: the process group a command left running, with no child handle. */
   adoptedGroup?: number;
   adoptedTimer?: ReturnType<typeof setInterval>;
-  adoptedStop?: Promise<void>;
+  /** Resolves true once the adopted job has ended, false when its end could not be confirmed. */
+  adoptedStop?: Promise<boolean>;
   adoptedOutput?: { stdout: Readable; stderr: Readable };
   settleExited?: () => void;
   nextPortScanAt?: number;
@@ -150,33 +167,60 @@ export function defaultProcessStartTime(pid: number): Promise<string | undefined
   });
 }
 
-export function defaultProcessGroupMembers(pgid: number): Promise<number[]> {
-  return new Promise((resolve) => {
+export function defaultProcessGroups(): Promise<Map<number, number[]>> {
+  return new Promise((resolve, reject) => {
     execFile("ps", ["-A", "-o", "pid=,pgid="], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      if (error || typeof stdout !== "string") return resolve([]);
-      const members: number[] = [];
+      if (error || typeof stdout !== "string") return reject(error ?? new Error("ps printed nothing."));
+      const groups = new Map<number, number[]>();
       for (const line of stdout.split("\n")) {
         const [pid, group] = line.trim().split(/\s+/u).map(Number);
-        if (group === pgid && Number.isSafeInteger(pid) && pid! > 1) members.push(pid!);
+        if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(group) || pid! <= 1) continue;
+        const members = groups.get(group!) ?? [];
+        members.push(pid!);
+        groups.set(group!, members);
       }
-      resolve(members);
+      resolve(groups);
     });
   });
 }
 
+export async function defaultProcessGroupMembers(pgid: number): Promise<number[]> {
+  return (await defaultProcessGroups()).get(pgid) ?? [];
+}
+
+/** Gone, or a zombie: ended but not yet reaped. */
+async function linuxProcessEnded(pid: number): Promise<boolean> {
+  const stat = await fsp.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+  // The state follows the command name, which is in parentheses and may hold spaces.
+  return !stat || stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) === "Z";
+}
+
 export function defaultProcessHasEnvironment(pid: number, entry: string): Promise<boolean> {
+  // A process that has gone carries nothing; one that still runs but could
+  // not be read is unknown, never "not ours".
+  const unreadable = (error: unknown) => (processExists(pid) ? Promise.reject(error) : Promise.resolve(false));
   if (process.platform === "linux") {
-    return fsp
-      .readFile(`/proc/${pid}/environ`, "utf8")
-      .then((environment) => environment.split("\0").includes(entry))
-      .catch(() => false);
+    return fsp.readFile(`/proc/${pid}/environ`, "utf8").then(
+      (environment) => environment.split("\0").includes(entry),
+      // An ended process that nothing has reaped yet has no environment to read.
+      async (error: unknown) => ((await linuxProcessEnded(pid)) ? false : unreadable(error)),
+    );
   }
-  return new Promise((resolve) => {
+  return new Promise<boolean>((resolve, reject) => {
     // macOS prints the environment a process started with after its command.
     execFile("ps", ["-E", "-ww", "-o", "command=", "-p", String(pid)], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      resolve(!error && typeof stdout === "string" && stdout.split(/\s+/u).includes(entry));
+      if (!error && typeof stdout === "string") return resolve(stdout.split(/\s+/u).includes(entry));
+      unreadable(error).then(resolve, reject);
     });
   });
+}
+
+/** A chat, or Aiden, already runs as many background jobs as it may. */
+export class BackgroundJobLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BackgroundJobLimitError";
+  }
 }
 
 function signalEach(pids: readonly number[], signal: NodeJS.Signals): void {
@@ -227,11 +271,13 @@ export class BackgroundJobs {
   private readonly maxRunningPerChat: number;
   private readonly maxRunning: number;
   private readonly processStartTime: (pid: number) => Promise<string | undefined>;
+  private readonly processGroups: () => Promise<Map<number, number[]>>;
   private readonly processGroupMembers: (pgid: number) => Promise<number[]>;
   private readonly processHasEnvironment: (pid: number, entry: string) => Promise<boolean>;
-  private readonly listeningPorts: ((pids: readonly number[]) => Promise<number[]>) | null;
+  private readonly listeningPorts: ((pids: readonly number[]) => Promise<Map<number, number[]>>) | null;
   private readonly portScanMs: number;
   private readonly adoptedPollMs: number;
+  private readonly adoptSettleMs: number;
   private portTimer?: ReturnType<typeof setInterval>;
   private portScanRunning = false;
   private recordWrite: Promise<void> = Promise.resolve();
@@ -246,11 +292,14 @@ export class BackgroundJobs {
     this.maxRunningPerChat = options.maxRunningPerChat ?? MAX_RUNNING_JOBS_PER_CHAT;
     this.maxRunning = options.maxRunning ?? MAX_RUNNING_JOBS;
     this.processStartTime = options.processStartTime ?? defaultProcessStartTime;
-    this.processGroupMembers = options.processGroupMembers ?? defaultProcessGroupMembers;
+    this.processGroups = options.processGroups ?? defaultProcessGroups;
+    this.processGroupMembers =
+      options.processGroupMembers ?? (async (pgid) => (await this.processGroups()).get(pgid) ?? []);
     this.processHasEnvironment = options.processHasEnvironment ?? defaultProcessHasEnvironment;
-    this.listeningPorts = options.listeningPorts === undefined ? defaultListeningPorts : options.listeningPorts;
+    this.listeningPorts = options.listeningPorts === undefined ? defaultListeningPortsByProcess : options.listeningPorts;
     this.portScanMs = options.portScanMs ?? JOB_PORT_SCAN_MS;
     this.adoptedPollMs = options.adoptedPollMs ?? ADOPTED_JOB_POLL_MS;
+    this.adoptSettleMs = options.adoptSettleMs ?? ADOPT_SETTLE_MS;
   }
 
   start(input: StartBackgroundJobInput): BackgroundJobView {
@@ -259,15 +308,7 @@ export class BackgroundJobs {
     const command = input.command.trim();
     if (!command) throw new Error("Give the command to run.");
     if (command.length > MAX_JOB_COMMAND_CHARS) throw new Error("The command is too long.");
-    const running = [...this.jobs.values()].filter((job) => job.view.state === "running");
-    if (running.filter((job) => job.view.chatId === input.chatId).length >= this.maxRunningPerChat) {
-      throw new Error(
-        `This chat already has ${this.maxRunningPerChat} background jobs running. Stop one before starting another.`,
-      );
-    }
-    if (running.length >= this.maxRunning) {
-      throw new Error(`Aiden already has ${this.maxRunning} background jobs running. Stop one before starting another.`);
-    }
+    this.assertRoomFor(input.chatId);
     fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
     const id = newBackgroundJobId();
     const logPath = path.join(this.options.logDir, `${id}.log`);
@@ -341,19 +382,40 @@ export class BackgroundJobs {
     return { ...view };
   }
 
+  private assertRoomFor(chatId: string): void {
+    const running = [...this.jobs.values()].filter((job) => job.view.state === "running");
+    if (running.filter((job) => job.view.chatId === chatId).length >= this.maxRunningPerChat) {
+      throw new BackgroundJobLimitError(
+        `This chat already has ${this.maxRunningPerChat} background jobs running. Stop one before starting another.`,
+      );
+    }
+    if (running.length >= this.maxRunning) {
+      throw new BackgroundJobLimitError(
+        `Aiden already has ${this.maxRunning} background jobs running. Stop one before starting another.`,
+      );
+    }
+  }
+
   /**
    * Track what a `run_command` call left running (a server started with a
    * trailing `&`) as a job of the chat, so it is listed, can be stopped, and
    * ends with the chat or with Aiden. Only processes in that group carrying
    * the command's marker count; nothing is adopted without one. Adopted jobs
-   * have no output or exit code, and their end is not announced to the chat.
+   * have no exit code, and their end is not announced to the chat. What is
+   * still exiting after a short wait is not taken over. Throws
+   * `BackgroundJobLimitError` when the chat or Aiden has no room for another
+   * job; nothing is adopted then.
    */
   async adopt(input: AdoptBackgroundJobInput): Promise<BackgroundJobView | undefined> {
     if (this.closed || process.platform === "win32") return undefined;
     const group = input.processGroup;
     if (!isBackgroundJobId(input.id) || this.jobs.has(input.id)) return undefined;
     if (!Number.isSafeInteger(group) || group <= 1 || !groupExists(group)) return undefined;
+    if (this.adoptSettleMs > 0) await new Promise((resolve) => setTimeout(resolve, this.adoptSettleMs));
+    if (this.closed || this.jobs.has(input.id) || !groupExists(group)) return undefined;
     if (!(await this.markedMembers(group, input.id)).length) return undefined;
+    if (this.closed || this.jobs.has(input.id)) return undefined;
+    this.assertRoomFor(input.chatId);
     const command = oneLine(input.command, MAX_JOB_COMMAND_CHARS);
     const description = input.description ? oneLine(input.description, MAX_JOB_DESCRIPTION_CHARS) : "";
     const view: BackgroundJobView = {
@@ -391,6 +453,9 @@ export class BackgroundJobs {
       const capture = (chunk: Buffer) => this.capture(record, chunk);
       input.output.stdout.on("data", capture);
       input.output.stderr.on("data", capture);
+      // The command paused them when it returned, so nothing is lost meanwhile.
+      input.output.stdout.resume();
+      input.output.stderr.resume();
     }
     this.jobs.set(input.id, record);
     record.adoptedTimer = setInterval(() => {
@@ -514,18 +579,14 @@ export class BackgroundJobs {
         continue;
       }
       if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
-      const marked = () => this.markedMembers(entry.pid, entry.id);
-      let left = await marked();
-      if (!left.length) continue;
-      signalEach(left, "SIGTERM");
-      const asked = left;
-      await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
-      for (let round = 0; (left = await marked()).length && round < FORCED_REAP_ROUNDS; round += 1) {
-        const forced = left;
-        signalEach(forced, "SIGKILL");
-        await this.waitUntil(() => forced.every((pid) => !processExists(pid)), FORCED_REAP_WAIT_MS);
+      // A look that failed keeps the job for the next launch rather than counting it as gone.
+      const left = await this.endMarked(entry.pid, entry.id).catch(() => undefined);
+      if (left === undefined) {
+        survivors.push(entry);
+        continue;
       }
-      if (left.length) survivors.push(entry);
+      if (left.signalled === 0) continue;
+      if (left.remaining) survivors.push(entry);
       else stopped += 1;
     }
     this.carriedOver = survivors;
@@ -543,6 +604,26 @@ export class BackgroundJobs {
       await this.recordWrite;
     }
     return stopped;
+  }
+
+  /**
+   * Ends the processes in the group that carry this job's marker: politely,
+   * then forced, looking again each round for any they started meanwhile.
+   * Rejects when a look failed, since that proves nothing ended.
+   */
+  private async endMarked(group: number, jobId: string): Promise<{ signalled: number; remaining: number }> {
+    let left = await this.markedMembers(group, jobId);
+    const signalled = left.length;
+    if (!signalled) return { signalled, remaining: 0 };
+    signalEach(left, "SIGTERM");
+    const asked = left;
+    await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
+    for (let round = 0; (left = await this.markedMembers(group, jobId)).length && round < FORCED_REAP_ROUNDS; round += 1) {
+      const forced = left;
+      signalEach(forced, "SIGKILL");
+      await this.waitUntil(() => forced.every((pid) => !processExists(pid)), FORCED_REAP_WAIT_MS);
+    }
+    return { signalled, remaining: left.length };
   }
 
   /** Processes in the group that carry this job's marker. */
@@ -586,8 +667,9 @@ export class BackgroundJobs {
     if (job.view.state !== "running") return job.exited;
     job.stopRequested ??= reason;
     if (job.adoptedGroup !== undefined) {
-      job.adoptedStop ??= this.stopAdopted(job, job.adoptedGroup);
-      return job.exited;
+      const stopping = (job.adoptedStop ??= this.stopAdopted(job, job.adoptedGroup));
+      // A stop that could not confirm the end leaves the job running.
+      return stopping.then((ended) => (ended ? job.exited : undefined));
     }
     const pid = job.child?.pid;
     if (!pid) return job.exited;
@@ -607,18 +689,20 @@ export class BackgroundJobs {
     return job.exited;
   }
 
-  /** Polite, then forced, and only ever to processes carrying the job's marker. */
-  private async stopAdopted(job: JobRecord, group: number): Promise<void> {
-    let left = await this.markedMembers(group, job.view.id);
-    signalEach(left, "SIGTERM");
-    const asked = left;
-    await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
-    for (let round = 0; (left = await this.markedMembers(group, job.view.id)).length && round < FORCED_REAP_ROUNDS; round += 1) {
-      const forced = left;
-      signalEach(forced, "SIGKILL");
-      await this.waitUntil(() => forced.every((pid) => !processExists(pid)), FORCED_REAP_WAIT_MS);
+  /**
+   * Polite, then forced, and only ever to processes carrying the job's marker.
+   * The job ends only once its group is gone or a look finds none of them
+   * left; otherwise it stays running and listed, and Stop can be tried again.
+   */
+  private async stopAdopted(job: JobRecord, group: number): Promise<boolean> {
+    const left = groupExists(group) ? await this.endMarked(group, job.view.id).catch(() => undefined) : { remaining: 0 };
+    if (!groupExists(group) || left?.remaining === 0) {
+      this.finishAdopted(job);
+      return true;
     }
-    this.finishAdopted(job);
+    this.options.log?.("An adopted background job could not be confirmed stopped; it stays listed.");
+    job.adoptedStop = undefined;
+    return false;
   }
 
   private finishAdopted(job: JobRecord): void {
@@ -665,14 +749,23 @@ export class BackgroundJobs {
         this.portTimer = undefined;
         return;
       }
-      for (const job of running) {
-        const now = this.now();
-        if ((job.nextPortScanAt ?? 0) > now) continue;
+      const now = this.now();
+      const due = running.filter((job) => (job.nextPortScanAt ?? 0) <= now && (job.adoptedGroup ?? job.child?.pid));
+      if (!due.length) return;
+      for (const job of due) {
         job.nextPortScanAt =
           now + (now - job.view.startedAt < JOB_PORT_SETTLE_AGE_MS ? 0 : JOB_SETTLED_PORT_SCAN_MS);
-        const group = job.adoptedGroup ?? job.child?.pid;
-        if (!group) continue;
-        const ports = (await lookUp(await this.processGroupMembers(group))).slice(0, MAX_BACKGROUND_JOB_PORTS);
+      }
+      // One look at the process table and one port lookup for every job due.
+      const groups = await this.processGroups();
+      const members = new Map(due.map((job) => [job, groups.get((job.adoptedGroup ?? job.child?.pid)!) ?? []]));
+      const byProcess = await lookUp([...new Set([...members.values()].flat())]);
+      for (const job of due) {
+        const found = (members.get(job) ?? []).flatMap((pid) => byProcess.get(pid) ?? []);
+        const ports = [...new Set(found)]
+          .filter((port) => !UNLISTED_PORTS.has(port))
+          .sort((left, right) => left - right)
+          .slice(0, MAX_BACKGROUND_JOB_PORTS);
         if (job.view.state !== "running") continue;
         const before = job.view.ports ?? [];
         if (ports.length === before.length && ports.every((port, index) => port === before[index])) continue;

@@ -5584,7 +5584,9 @@ struct AidenChatDetailView: View {
         .toolbar { chatToolbar }
         .task(id: backgroundJobsRefreshKey) {
             // Not pushed: read after each reply settles, and every few seconds
-            // while something runs or the list is open.
+            // while something runs or the list is open. Only while the app
+            // is in front: a backgrounded app never polls the Mac.
+            guard scenePhase == .active else { return }
             await backgroundJobs.refresh(chatId: model.chat.id, transport: backgroundJobsTransport)
             while !Task.isCancelled, backgroundJobsTransport != nil,
                   backgroundJobs.runningCount > 0 || showsBackgroundJobs {
@@ -5918,6 +5920,7 @@ struct AidenChatDetailView: View {
             String(model.chat.messages.count),
             String(chatLoadEpoch),
             String(showsBackgroundJobs),
+            String(scenePhase == .active),
         ].joined(separator: "|")
     }
 

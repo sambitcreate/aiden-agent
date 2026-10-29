@@ -68,6 +68,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ensureActive
@@ -252,7 +253,11 @@ fun AidenChatDetailScreen(
     val backgroundJobs = remember(chatId) { AidenBackgroundJobsState() }
     var showsBackgroundJobs by rememberSaveable(chatId) { mutableStateOf(false) }
     val backgroundJobsTransport = readAloudClient.takeIf { chat?.botId == null && serverInfo?.supportsBackgroundJobs == true }
-    LaunchedEffect(chatId, backgroundJobsTransport, isStreaming, chat?.messages?.size, showsBackgroundJobs) {
+    // Only while the chat is on screen: a backgrounded app never polls the Mac.
+    val backgroundJobsLifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val backgroundJobsVisible = backgroundJobsLifecycle.isAtLeast(Lifecycle.State.STARTED)
+    LaunchedEffect(chatId, backgroundJobsTransport, isStreaming, chat?.messages?.size, showsBackgroundJobs, backgroundJobsVisible) {
+        if (!backgroundJobsVisible) return@LaunchedEffect
         backgroundJobs.refresh(chatId, backgroundJobsTransport)
         while (backgroundJobsTransport != null && (backgroundJobs.runningCount > 0 || showsBackgroundJobs)) {
             delay(if (showsBackgroundJobs) 3_000 else 10_000)

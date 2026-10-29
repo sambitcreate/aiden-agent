@@ -3046,8 +3046,11 @@ test("run_command hands what a command leaves running to the chat, whether or no
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-leftovers-"));
   const groups: number[] = [];
   try {
-    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => console.log("still up"), 200);');
-    const adoptions: Array<{ group: number; marker: string; hasOutput: boolean; firstOutput?: string }> = [];
+    await fs.writeFile(
+      path.join(root, "server.cjs"),
+      'let tick = 0; console.log("server up"); setInterval(() => console.log(`tick ${++tick}`), 40);',
+    );
+    const adoptions: Array<{ group: number; marker: string; hasOutput: boolean; laterOutput?: string }> = [];
     let marker = "";
     const runCommand = buildCodingTools(root, undefined, {
       leftovers: {
@@ -3058,10 +3061,17 @@ test("run_command hands what a command leaves running to the chat, whether or no
             env: { AIDEN_BACKGROUND_JOB: current },
             adopt: async (group, _command, _description, output) => {
               groups.push(group);
-              const firstOutput = output
-                ? await new Promise<string>((resolve) => output.stdout.once("data", (chunk: Buffer) => resolve(String(chunk))))
-                : undefined;
-              adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(firstOutput ? { firstOutput } : {}) });
+              let laterOutput: string | undefined;
+              if (output) {
+                // Taking over takes a moment (a real adopter looks the processes up first).
+                await new Promise((resolve) => setTimeout(resolve, 400));
+                laterOutput = "";
+                output.stdout.on("data", (chunk: Buffer) => (laterOutput += String(chunk)));
+                output.stdout.resume();
+                output.stderr.resume();
+                await new Promise((resolve) => setTimeout(resolve, 300));
+              }
+              adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(laterOutput !== undefined ? { laterOutput } : {}) });
               return `adopted ${current}`;
             },
           };
@@ -3088,7 +3098,12 @@ test("run_command hands what a command leaves running to the chat, whether or no
     assert.equal(inherited.isError, undefined);
     assert.equal(adoptions[1]?.hasOutput, true);
     assert.match(text(inherited), /server up/u, "what it printed before returning is in the result");
-    assert.match(adoptions[1]?.firstOutput ?? "", /still up/u, "what it prints later reaches the adopter");
+    // Nothing it printed between the command returning and the adopter reading is lost.
+    const ticks = (value: string) => [...value.matchAll(/tick (\d+)/gu)].map((match) => Number(match[1]));
+    const beforeReturn = ticks(text(inherited));
+    const afterReturn = ticks(adoptions[1]?.laterOutput ?? "");
+    assert.ok(afterReturn.length > 0, "what it prints later reaches the adopter");
+    assert.equal(afterReturn[0], (beforeReturn[beforeReturn.length - 1] ?? 0) + 1, "the adopter reads on from the last line the result showed");
     // Each command carried its own marker.
     assert.notEqual(adoptions[0]?.marker, adoptions[1]?.marker);
   } finally {

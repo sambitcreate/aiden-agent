@@ -440,7 +440,11 @@ export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as con
  */
 export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
 
-/** Every opt-in a paired device may persist: display changes, never authority. */
+/**
+ * Every opt-in a paired device may persist. Each changes what a device is
+ * shown; `chat:jobs` also opens its two routes, which still need the chat
+ * grant (`chat:read`, `chat:write`) and so widen nothing that grant allows.
+ */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,

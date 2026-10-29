@@ -8,7 +8,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../../platform.js";
 import { agentNotice, fenceAsData, tailText, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
-import type { BackgroundJobOutput } from "../../../renderer/shared/background-jobs.js";
+import type { BackgroundJobOutput, BackgroundJobView } from "../../../renderer/shared/background-jobs.js";
 import {
   emptyChatFollowThrough,
   type ChatFollowThroughV1,
@@ -25,6 +25,7 @@ import type { HostRunSummary } from "../host-run-registry.js";
 import { llmClient } from "../llm-client.js";
 import {
   BACKGROUND_JOB_MARKER,
+  BackgroundJobLimitError,
   BackgroundJobs,
   describeJobEnd,
   formatDuration,
@@ -231,14 +232,20 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
       return {
         env: { [BACKGROUND_JOB_MARKER]: id },
         adopt: async (processGroup, command, description, output) => {
-          const job = await backgroundJobs.adopt({
-            id,
-            ...input,
-            command,
-            ...(description ? { description } : {}),
-            processGroup,
-            ...(output ? { output } : {}),
-          });
+          let job: BackgroundJobView | undefined;
+          try {
+            job = await backgroundJobs.adopt({
+              id,
+              ...input,
+              command,
+              ...(description ? { description } : {}),
+              processGroup,
+              ...(output ? { output } : {}),
+            });
+          } catch (error) {
+            if (!(error instanceof BackgroundJobLimitError)) throw error;
+            return `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself, for example with kill.]`;
+          }
           if (!job) return undefined;
           return [
             `[Aiden: this command left processes running. They are now background job ${job.id}: the person sees it beside the chat with a Stop button, and it stops when the chat is deleted or Aiden quits.`,
