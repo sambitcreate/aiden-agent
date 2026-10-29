@@ -4801,6 +4801,67 @@ final class AidenRemoteClientTests: XCTestCase {
         }
     }
 
+    /// Contract revision 48: `chat:jobs` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and the phone keeps the grant.
+    @MainActor
+    func testCoordinatorAsksForChatJobsAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-jobs", deviceId: "device-jobs", credential: "credential-jobs"),
+                trust: makeSystemTrust(),
+                name: "Jobs Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-jobs",
+                        "name": "Jobs Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["chat:jobs"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["chat:jobs"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .chatJobs), offered)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.chatJobs), offered)
+        }
+    }
+
     /// Contract revision 39: `schedule:cards` is asked for only when the Mac
     /// offers it, alone and after every other opt-in, and a Mac that answers
     /// 400 or 404 leaves the device's other grants in place.

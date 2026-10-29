@@ -1300,7 +1300,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
             .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
             .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
-            .appControlsRead, .appControlsRespond, .scheduleCards,
+            .appControlsRead, .appControlsRespond, .scheduleCards, .chatJobs,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
