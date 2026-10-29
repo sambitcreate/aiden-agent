@@ -12261,6 +12261,33 @@ extension AidenChatTests {
         ])
     }
 
+    func testRecommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended)") == ("(Recommended)", false))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres") == ("(Recommended) Postgres", false))
+
+        let questions = [
+            questionFixture(options: [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm (Recommended)", description: "Heavy."),
+                AidenRemoteQuestionOption(label: "2.0 mm (Recommended)", description: "Heavier."),
+            ]),
+            questionFixture(multiSelect: true, options: [
+                AidenRemoteQuestionOption(label: "Top (Recommended)", description: "Top edge."),
+                AidenRemoteQuestionOption(label: "Side", description: "Side edge."),
+                AidenRemoteQuestionOption(label: "Bottom (Recommended)", description: "Bottom edge."),
+            ]),
+            questionFixture(),
+        ]
+        let draft = AidenQuestionComposerDraft(questions: questions)
+        // Accepting them sends the full labels, which are the options' identities.
+        XCTAssertEqual(draft.answers(for: questions), [
+            .option(questionIndex: 0, answer: "1.0 mm (Recommended)"),
+            .multi(questionIndex: 1, selected: ["Top (Recommended)", "Bottom (Recommended)"]),
+        ])
+    }
+
     func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
         let questions = [questionFixture(), questionFixture(multiSelect: true)]
         let answers = AidenQuestionAnswerDraft.answers(

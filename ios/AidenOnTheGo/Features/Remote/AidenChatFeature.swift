@@ -8679,7 +8679,19 @@ struct AidenQuestionCard: View {
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
-    @State private var draft = AidenQuestionComposerDraft()
+    @State private var draft: AidenQuestionComposerDraft
+
+    init(
+        model: AidenChatViewModel? = nil,
+        prompt: AidenPendingQuestion,
+        onSubmit: @escaping (AidenQuestionRespondRequest) -> Void
+    ) {
+        self.model = model
+        self.prompt = prompt
+        self.onSubmit = onSubmit
+        // Callers key the card by prompt id, so a new prompt starts fresh.
+        _draft = State(initialValue: AidenQuestionComposerDraft(questions: prompt.questions))
+    }
 
     var stopButton: AidenChatStopButton? { model.map { AidenChatStopButton(model: $0) } }
 
@@ -8761,6 +8773,7 @@ struct AidenQuestionCard: View {
 
                         ForEach(question.options, id: \.label) { option in
                             let selected = draft.selections[index]?.contains(option.label) == true
+                            let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
                             Button {
                                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                                     draft.toggle(option.label, questions: prompt.questions)
@@ -8775,9 +8788,19 @@ struct AidenQuestionCard: View {
                                         .frame(width: 20)
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(option.label)
-                                            .font(.callout)
-                                            .foregroundStyle(palette.foreground)
+                                        HStack(spacing: 6) {
+                                            Text(label.text)
+                                                .font(.callout)
+                                                .foregroundStyle(palette.foreground)
+                                            if label.recommended {
+                                                Text("Recommended")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(palette.accent)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(palette.accent.opacity(0.12), in: Capsule())
+                                            }
+                                        }
                                         Text(option.description)
                                             .font(.caption)
                                             .foregroundStyle(palette.secondary)
@@ -8794,7 +8817,9 @@ struct AidenQuestionCard: View {
                                 selected ? palette.accent.opacity(0.10) : palette.canvas,
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                             )
-                            .accessibilityLabel(option.label)
+                            .accessibilityLabel(label.recommended
+                                ? String(localized: "\(label.text), recommended")
+                                : label.text)
                             .accessibilityValue(selected
                                 ? String(localized: "Selected")
                                 : String(localized: "Not selected"))

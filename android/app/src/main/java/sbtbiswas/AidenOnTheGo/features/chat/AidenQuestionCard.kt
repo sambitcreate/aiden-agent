@@ -78,7 +78,10 @@ fun AidenQuestionCard(
     var activeIndex by remember(prompt.id) { mutableStateOf(0) }
     val customAnswerDescription = stringResource(R.string.chat_question_custom_answer_cd)
     val typeSomethingDescription = stringResource(R.string.chat_question_type_something_cd)
-    var selections by remember(prompt.id) { mutableStateOf(mapOf<Int, Set<String>>()) }
+    // Options the agent recommends start selected.
+    var selections by remember(prompt.id) {
+        mutableStateOf(AidenQuestionAnswerDraft.recommendedSelections(prompt.questions))
+    }
     var customDrafts by remember(prompt.id) { mutableStateOf(mapOf<Int, String>()) }
     var customOpen by remember(prompt.id) { mutableStateOf(setOf<Int>()) }
 
@@ -177,6 +180,7 @@ fun AidenQuestionCard(
                 ) {
                     question.options.forEachIndexed { optionIndex, option ->
                         val selected = selections[index]?.contains(option.label) == true
+                        val (labelText, recommended) = AidenQuestionAnswerDraft.recommendedLabel(option.label)
                         val interaction = remember { MutableInteractionSource() }
                         AidenGroupCard(
                             index = optionIndex,
@@ -216,11 +220,26 @@ fun AidenQuestionCard(
                                 modifier = Modifier.size(20.dp)
                             )
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = option.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = palette.foreground
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = labelText,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = palette.foreground,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                    if (recommended) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.chat_question_recommended),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = palette.accent,
+                                            modifier = Modifier
+                                                .background(palette.accent.copy(alpha = 0.12f), RoundedCornerShape(50))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                                 Text(
                                     text = option.description,
                                     style = MaterialTheme.typography.bodySmall,

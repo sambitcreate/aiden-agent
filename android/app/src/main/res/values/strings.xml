@@ -1031,6 +1031,7 @@
     <string name="chat_question_multi_hint">Answer what you can — unanswered questions are skipped.</string>
     <string name="chat_question_single_hint">Choose an option or type your own answer.</string>
     <string name="chat_question_select_all">Select all that apply</string>
+    <string name="chat_question_recommended">Recommended</string>
     <string name="chat_question_custom_answer_cd">Custom answer</string>
     <string name="chat_question_custom_placeholder">Type your answer</string>
     <string name="chat_question_type_something_cd">Type something. Shows a field for a custom answer</string>

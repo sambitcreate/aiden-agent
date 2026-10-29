@@ -518,6 +518,8 @@ Progress updates are complete authoritative projections, never deltas. Within on
 
 When a stream reports `waiting_for_approval`, clients fetch its separate approval snapshot. This additive endpoint preserves the closed v1 stream-status contract while making reconnect authoritative. It returns approval, stream, and chat IDs; a safe summary; tool identity; expiry; and whether the mobile client may offer Allow. Exact privileged command, path, and external-mutation details remain host-only, so mobile renders those requests as deny-only. The snapshot becomes `null` as soon as the approval resolves, expires, is cancelled, or the stream terminates.
 
+An `ask_user_question` option whose label ends in "(Recommended)" (any case) is the agent's recommendation. Clients start with it selected (the first marked option of a single choice, every marked option of a multi-select), show the label without the marker beside a "Recommended" tag, and still answer with the full label, which is the option's identity. Questionnaire recaps and Bot answer summaries carry the label without the marker. This is presentation only; the wire shape is unchanged.
+
 A pending `ask_user_question` prompt reuses the same `waiting_for_approval` stream status so the closed status vocabulary stays backward compatible. Capable clients distinguish the wait through the `question_required` event or the `GET /streams/{streamId}/question` snapshot; the snapshot is `null` as soon as the prompt resolves, expires, is cancelled, or the stream terminates, and resolution emits a `status` event returning the stream to `running` (or `reconciling` when the host declined settlement).
 
 ## 7. Idempotency, revisions, and operation ownership

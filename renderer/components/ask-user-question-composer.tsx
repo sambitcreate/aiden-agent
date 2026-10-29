@@ -1,12 +1,14 @@
 import * as React from "react";
 import { Check, Pencil, X } from "lucide-react";
-import { Button } from "./ui";
+import { Badge, Button } from "./ui";
 import { cn } from "../lib/ui-utils";
 import {
   ASK_USER_QUESTION_VERSION,
   type AskUserQuestionAnswerV1,
   type AskUserQuestionPromptV1,
   type AskUserQuestionResponseV1,
+  parseRecommendedOptionLabel,
+  recommendedAskUserAnswers,
 } from "../shared/ask-user-question";
 
 export function AskUserQuestionComposer({
@@ -19,8 +21,9 @@ export function AskUserQuestionComposer({
   onRespond(response: AskUserQuestionResponseV1): void | Promise<void>;
 }) {
   const [activeIndex, setActiveIndex] = React.useState(0);
+  // Options the agent recommends start selected, so Enter accepts them.
   const [answers, setAnswers] = React.useState<ReadonlyMap<number, AskUserQuestionAnswerV1>>(
-    () => new Map(),
+    () => recommendedAskUserAnswers(prompt.questions),
   );
   const [customOpen, setCustomOpen] = React.useState(false);
   const [customDrafts, setCustomDrafts] = React.useState<ReadonlyMap<number, string>>(
@@ -35,7 +38,7 @@ export function AskUserQuestionComposer({
 
   React.useEffect(() => {
     setActiveIndex(0);
-    setAnswers(new Map());
+    setAnswers(recommendedAskUserAnswers(prompt.questions));
     setCustomDrafts(new Map());
     setCustomOpen(false);
   }, [prompt.promptId]);
@@ -43,10 +46,18 @@ export function AskUserQuestionComposer({
   // Advancing replaces the focused row when the next question's labels differ, and
   // closing the custom field removes it, so focus would fall to the body and the
   // card's shortcuts would stop working. Focus already in the card is left alone.
+  // A preselected row takes focus so Enter accepts it.
+  const selectedRow = question.options.findIndex((option) =>
+    answer?.kind === "option"
+      ? answer.answer === option.label
+      : answer?.kind === "multi" && answer.selected.includes(option.label),
+  );
+  const focusRow = React.useRef(0);
+  focusRow.current = Math.max(0, selectedRow);
   React.useEffect(() => {
     const frame = requestAnimationFrame(() => {
       if (cardRef.current?.contains(document.activeElement)) return;
-      (customRef.current ?? optionRefs.current[0])?.focus({ preventScroll: true });
+      (customRef.current ?? optionRefs.current[focusRow.current])?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
   }, [prompt.promptId, activeIndex, customOpen]);
@@ -215,6 +226,7 @@ export function AskUserQuestionComposer({
             const selected =
               (answer?.kind === "option" && answer.answer === option.label) ||
               (answer?.kind === "multi" && answer.selected.includes(option.label));
+            const label = parseRecommendedOptionLabel(option.label);
             return (
               <Button variant="transparent"
                 key={option.label}
@@ -259,7 +271,10 @@ export function AskUserQuestionComposer({
                   {selected ? <Check className="size-4" /> : optionIndex + 1}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-strong font-medium text-primary">{option.label}</span>
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-strong font-medium text-primary">{label.text}</span>
+                    {label.recommended ? <Badge color="blue">Recommended</Badge> : null}
+                  </span>
                   {selected && !question.multiSelect ? (
                     <span className="sr-only">, current answer</span>
                   ) : null}
