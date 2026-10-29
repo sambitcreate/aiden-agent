@@ -370,3 +370,19 @@ test("a remount at stream handoff reuses the cached preview and height", async (
   );
   assert.ok(screen.getByRole("figure", { name: visual.title }));
 });
+
+test("the preview cache keeps the visuals used most recently and fetches an evicted one again", () => {
+  const fetches = () => calls.filter((call) => call.channel === "chats:htmlArtifactSrcdoc").length;
+  const reused = artifact();
+  const unseen = artifact();
+  primeInlineVisualPreview("chat-lru", reused, PREVIEW);
+  primeInlineVisualPreview("chat-lru", unseen, PREVIEW);
+  render(<HtmlArtifactFrame chatId="chat-lru" artifact={reused} />).unmount();
+  for (let index = 0; index < 63; index += 1) primeInlineVisualPreview("chat-lru", artifact(), PREVIEW);
+
+  const before = fetches();
+  render(<HtmlArtifactFrame chatId="chat-lru" artifact={reused} />).unmount();
+  assert.equal(fetches(), before);
+  render(<HtmlArtifactFrame chatId="chat-lru" artifact={unseen} />);
+  assert.equal(fetches(), before + 1);
+});
