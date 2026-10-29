@@ -77,6 +77,21 @@ export class GitServiceError extends Error {
   }
 }
 
+/** Waits for a queued mutation, but lets a cancelled read leave the queue at once. */
+function waitUnlessAborted(pending: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) return pending;
+  const cancelled = () => new GitServiceError("aborted", "Git operation was cancelled.");
+  if (signal.aborted) return Promise.reject(cancelled());
+  return new Promise<void>((resolve, reject) => {
+    const onAbort = () => reject(cancelled());
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      () => { signal.removeEventListener("abort", onAbort); resolve(); },
+      () => { signal.removeEventListener("abort", onAbort); resolve(); },
+    );
+  });
+}
+
 export class GitManagedWorktreeDeleteError extends GitServiceError {
   constructor(
     error: GitServiceError,
@@ -1535,7 +1550,7 @@ export class GitService {
         throw new GitServiceError("aborted", "Git operation was cancelled.");
       }
       const active = this.mutations.get(repo.commonDir);
-      if (active) await active;
+      if (active) await waitUnlessAborted(active, signal);
       const epoch = this.mutationEpochs.get(repo.commonDir) ?? 0;
       const value = await operation();
       if (signal?.aborted) {
