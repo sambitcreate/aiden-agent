@@ -9,13 +9,14 @@ Branch `claude/audit-fix-shell-git` (from main `a0f1dd747`), fixing audit report
 - F4: `write_file` streams the preimage (hash + line count, text kept only up to 16 MiB), refuses existing files over 256 MiB with a clear message (the native mutator's own cap, which it reported as "conflict"); `edit_file` refuses files over 64 MiB before reading.
 - F5: terminal close sends SIGHUP, then SIGKILL to the shell's group after 2 s if the PTY has not exited.
 - F6: a workspace's remembered PTY session ID is dropped on exit only after `audit-session` confirms the session is empty (deviation: the audit suggested dropping it on every exit, which would hide surviving jobs from the removal audit).
-- F7: Git metadata watchers close when a workspace or worktree is removed (quit-time dispose not wired; `main/index.ts` was out of scope).
+- F7: Git metadata watchers close when a workspace or worktree is removed, and at quit (`disposeWorkspaceGitWatchers()` in `cleanupApplication()`).
 - F8: a cancelled stable Git read stops waiting behind a mutation.
 - F9: Git resolution on Linux uses absolute PATH entries.
 - F10 (reduced): the Ghostty snapshot was already incremental; only the accessible-text rebuild was skipped when no row changed.
 - F11: capped Git output drops a cut trailing UTF-8 character instead of U+FFFD.
 
-## Owner decisions
-- Drain-then-stop policy (1 s) for run_command and schedule scripts.
-- New 64 MiB `edit_file` cap.
-- F5 reaches only the shell's own process group; job-control jobs in other groups rely on the removal audit.
+## Owner decisions (resolved)
+- Keep the 1 s drain for run_command, schedule scripts and gh. When it stops a job, results carry `backgroundStopped` and run_command tells the model (use background_job or redirect output).
+- Keep the 64 MiB `edit_file` cap (pi and opencode have none). The read buffer is sized to the file, not the cap.
+- Closing a terminal kills only the shell's own process group; detached nohup/setsid jobs survive and the workspace-removal audit guards them.
+- Git watchers close at quit.
