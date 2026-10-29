@@ -199,7 +199,8 @@ test("a recorder that exits by itself settles, and an empty file fails", async (
 test("a failed recording nobody discarded is deleted with its file after an hour; a ready one waits to be saved", async () => {
   const h = harness();
   const failed = await start(h, "chat-1");
-  const failedFile = h.spawned[0]!.args.at(-1)!;
+  const failedArgs = h.spawned[0]!.args;
+  const failedFile = failedArgs[failedArgs.length - 1]!;
   // The recorder wrote part of a file, then died while the device viewer was closed.
   h.files.set(failedFile, 4096);
   h.spawned[0]!.child.exit(1);

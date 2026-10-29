@@ -163,7 +163,7 @@ test("audio worklet posts mono 100 ms chunks and flushes trailing frames before 
     chunks.flatMap((chunk) => Array.from(chunk)),
     Array.from({ length: 303 }, (_, index) => index),
   );
-  assert.deepEqual(posted.at(-1), { type: "flushed" });
+  assert.deepEqual(posted[posted.length - 1], { type: "flushed" });
   // A drained worklet stops processing, so no audio follows the acknowledgement.
   assert.equal(processor.process([[ramp(0)]]), false);
 });
