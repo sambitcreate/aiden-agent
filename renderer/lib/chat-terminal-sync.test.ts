@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { mock } from "node:test";
+import test from "node:test";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -1034,45 +1034,4 @@ test("settlement waits keep waiting while main reports busy but give up when the
     }),
     "deleted",
   );
-});
-
-test("a fallback handoff that keeps failing stops retrying and releases the draining chat", async () => {
-  mock.timers.enable({ apis: ["setTimeout"] });
-  const channels = fakeStreamChannels();
-  let attempts = 0;
-  const unsubscribe = subscribeDetachedTerminalChats(
-    channels.subscribe,
-    () => undefined,
-    () => {
-      attempts += 1;
-      return Promise.reject(new Error("cache unavailable"));
-    },
-  );
-  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-  try {
-    const owner = detached("fallback-gives-up", "chat-gives-up", "workspace-1");
-    rememberDetachedLifecycleStream(owner);
-    assert.equal(fallbackDetachedLifecycleStream(owner.streamId), true);
-    await settle();
-    assert.equal(attempts, 1);
-    // The first retry waits the base delay, not less.
-    mock.timers.tick(99);
-    await settle();
-    assert.equal(attempts, 1);
-    mock.timers.tick(1);
-    await settle();
-    assert.equal(attempts, 2);
-    for (let tick = 0; tick < 40 && attempts < MAX_RECONCILIATION_ATTEMPTS; tick += 1) {
-      mock.timers.tick(5_000);
-      await settle();
-    }
-    assert.equal(attempts, MAX_RECONCILIATION_ATTEMPTS);
-    assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
-    mock.timers.tick(60_000);
-    await settle();
-    assert.equal(attempts, MAX_RECONCILIATION_ATTEMPTS);
-  } finally {
-    unsubscribe();
-    mock.timers.reset();
-  }
 });

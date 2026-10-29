@@ -46,9 +46,6 @@ const terminalSettlementInFlight = new Set<string>();
 const chatReadReconciliations = new Map<string, ChatReadReconciliation>();
 const chatReadReconciliationInFlight = new Set<string>();
 const registryListeners = new Set<() => void>();
-/** Failed fallback / read-reconciliation settlements per retained owner key. */
-const fallbackRetryAttempts = new Map<string, number>();
-const chatReadReconciliationRetryAttempts = new Map<string, number>();
 const fallbackListeners = new Set<(owner: DetachedLifecycleStreamOwner) => void | Promise<void>>();
 const chatReadReconciliationListeners = new Set<
   (owner: ChatReadReconciliation) => void | Promise<void>
@@ -248,23 +245,15 @@ function requestFallback(owner: DetachedLifecycleStreamOwner): void {
     fallbackSettlementInFlight.delete(owner.streamId);
     if (results.some((result) => result.status === "rejected")) {
       // A rejected renderer/cache handoff is not settlement. Retain the drain
-      // marker and retry, backing off, while this exact owner is still pending.
-      if (fallbackLifecycleStreams.get(owner.streamId) !== owner) {
-        fallbackRetryAttempts.delete(owner.streamId);
-        emitRegistryChange();
-        return;
+      // marker and retry while this exact owner is still pending. The shell's
+      // listener never rejects (it bounds its own reads and gives up with
+      // "failed"), so this only guards a listener that throws.
+      if (fallbackLifecycleStreams.get(owner.streamId) === owner) {
+        globalThis.setTimeout(() => requestFallback(owner), FALLBACK_RETRY_DELAY_MS);
       }
-      const attempt = (fallbackRetryAttempts.get(owner.streamId) ?? 0) + 1;
-      if (attempt < MAX_RECONCILIATION_ATTEMPTS) {
-        fallbackRetryAttempts.set(owner.streamId, attempt);
-        globalThis.setTimeout(() => requestFallback(owner), reconciliationRetryDelayMs(attempt));
-        emitRegistryChange();
-        return;
-      }
-      // Out of attempts: release the drain marker so the composer recovers;
-      // the chat's own read (and its error state) takes over.
+      emitRegistryChange();
+      return;
     }
-    fallbackRetryAttempts.delete(owner.streamId);
     fallbackLifecycleStreams.delete(owner.streamId);
     deleteDetachedProjection(owner.streamId);
     emitRegistryChange();
@@ -773,19 +762,10 @@ function requestChatReadReconciliation(owner: ChatReadReconciliation): void {
       results.some((result) => result.status === "rejected") &&
       chatReadReconciliations.get(key) === owner
     ) {
-      const attempt = (chatReadReconciliationRetryAttempts.get(key) ?? 0) + 1;
-      if (attempt < MAX_RECONCILIATION_ATTEMPTS) {
-        chatReadReconciliationRetryAttempts.set(key, attempt);
-        globalThis.setTimeout(
-          () => requestChatReadReconciliation(owner),
-          reconciliationRetryDelayMs(attempt),
-        );
-        emitRegistryChange();
-        return;
-      }
-      // Out of attempts: drop the marker rather than keep the chat draining.
+      globalThis.setTimeout(() => requestChatReadReconciliation(owner), FALLBACK_RETRY_DELAY_MS);
+      emitRegistryChange();
+      return;
     }
-    chatReadReconciliationRetryAttempts.delete(key);
     if (chatReadReconciliations.get(key) === owner) {
       chatReadReconciliations.delete(key);
       emitRegistryChange();
