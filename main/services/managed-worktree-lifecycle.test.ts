@@ -1023,6 +1023,43 @@ test("a failed restore keeps the folder when something was written into it meanw
   assert.equal(await git(repository, ["rev-parse", "aiden/edited"]), branchHead, "the branch is kept");
 });
 
+test("a failed restore never deletes an ignored file written while it was undoing itself", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/backup");
+  await fs.writeFile(path.join(created.path, ".gitignore"), "editor-backup.txt\n");
+  await git(created.path, ["add", ".gitignore"]);
+  await git(created.path, ["commit", "-m", "Ignore editor backups"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  // An editor saves an ignored backup right after the rollback has looked at
+  // the folder and found it clean.
+  let armed = false;
+  let backupWritten = false;
+  const run = service["run"].bind(service);
+  service["run"] = async (...args) => {
+    const result = await run(...args);
+    if (armed && args[1].includes("status") && args[1].includes("--ignored=matching")) {
+      armed = false;
+      backupWritten = await fs.writeFile(path.join(created.path, "editor-backup.txt"), "backup\n").then(() => true, () => false);
+    }
+    return result;
+  };
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/backup", created.worktreeGitDir, created.ownershipToken, "",
+      async () => {
+        armed = true;
+        throw new Error("disk full");
+      },
+    ),
+  );
+  assert.equal(armed, false, "the rollback looked at the folder");
+  if (backupWritten) {
+    assert.equal(await fs.readFile(path.join(created.path, "editor-backup.txt"), "utf8"), "backup\n", "the backup survives");
+  }
+});
+
 test("a deleted worktree whose branch now needs a checkout filter is not restored", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

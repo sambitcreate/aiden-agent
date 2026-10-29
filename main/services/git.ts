@@ -6902,6 +6902,7 @@ export class GitService {
       });
       // The folder this call made, so a rollback never touches a replacement.
       const added = await fs.lstat(target).catch(() => undefined);
+      let owned: { gitDir: string; token: string } | undefined;
       try {
         const registered = (await this.inspectWorktrees(repo, target)).find(
           (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
@@ -6913,6 +6914,7 @@ export class GitService {
         const newGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDirResult.stdout.trim()));
         const newToken = randomUUID();
         await this.persistWorktreeOwnership(newGitDir, newToken);
+        owned = { gitDir: newGitDir, token: newToken };
         const checkout = await fs.lstat(registered.path);
         if (!checkout.isDirectory() || checkout.isSymbolicLink()) {
           throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
@@ -6934,41 +6936,41 @@ export class GitService {
         // Remove only the checkout this call just added, and only while it
         // still holds nothing but the branch's committed files: the folder is
         // visible at once, so an editor may already have written into it.
-        // Anything changed or new keeps the folder. The branch always stays.
+        // The folder is moved aside before it is checked, so nothing written
+        // after the check can be deleted with it. Anything changed, new or
+        // ignored keeps the folder in place. The branch always stays.
         let kept: GitServiceError | undefined;
         try {
-          const registration = (await this.inspectWorktrees(repo, repo.cwd)).find(
-            (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
-          );
-          if (registration) {
-            const now = await fs.lstat(target).catch(() => undefined);
-            const same = added !== undefined && now !== undefined && now.dev === added.dev && now.ino === added.ino;
-            const status = same
-              ? parseGitStatus(
-                  (
-                    await this.run(target, [
-                      "status",
-                      "--porcelain=v2",
-                      "--branch",
-                      "-z",
-                      "--untracked-files=all",
-                      "--ignored=matching",
-                    ])
-                  ).stdout,
-                )
-              : undefined;
-            if (!status || status.uncommitted > 0 || status.ignored > 0) {
+          const now = await fs.lstat(target).catch(() => undefined);
+          const same = added !== undefined && now !== undefined && now.dev === added.dev && now.ino === added.ino;
+          if (now !== undefined && (!same || owned === undefined)) {
+            kept = new GitServiceError(
+              "dirty_worktree",
+              "Restoring the worktree failed, and Aiden kept the folder it had made. Delete the folder, then choose Restore again.",
+              error,
+            );
+          } else if (now !== undefined && added !== undefined && owned !== undefined) {
+            try {
+              await this.quarantineAndRemoveManagedWorktree(
+                repo,
+                target,
+                owned.gitDir,
+                owned.token,
+                added.dev,
+                added.ino,
+                branch,
+                head,
+                normalizedDeletionPolicy(undefined),
+                undefined,
+                () => undefined,
+              );
+            } catch (removalError) {
+              if (!(removalError instanceof GitServiceError && removalError.code === "dirty_worktree")) throw removalError;
               kept = new GitServiceError(
                 "dirty_worktree",
                 "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",
                 error,
               );
-            } else {
-              // No --force: Git refuses too if a change lands meanwhile.
-              await this.run(repo.cwd, ["worktree", "remove", "--", registration.path], {
-                hooksDisabled: true,
-                mutation: true,
-              });
             }
           }
         } catch (rollbackError) {
