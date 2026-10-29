@@ -20,9 +20,36 @@ function transcriptOf(element: HTMLElement | null): HTMLElement | null {
   return element?.closest("[data-scroll-area]")?.querySelector<HTMLElement>("[data-scroll-content]") ?? null;
 }
 
-function revealMatch(range: Range | undefined): void {
-  const element = range?.startContainer.parentElement;
-  element?.scrollIntoView?.({ block: "center" });
+function scrollportOf(transcript: HTMLElement | null): HTMLElement | null {
+  return transcript?.parentElement ?? null;
+}
+
+function scrolls(element: HTMLElement, axis: "x" | "y"): boolean {
+  const overflow = getComputedStyle(element)[axis === "y" ? "overflowY" : "overflowX"];
+  const room = axis === "y" ? element.scrollHeight > element.clientHeight : element.scrollWidth > element.clientWidth;
+  return room && (overflow === "auto" || overflow === "scroll");
+}
+
+/**
+ * Centre the match itself, not its element: one text node can be a whole
+ * code block, taller than the conversation. Inner scrollers (a wide code
+ * block) move first, then each one out to the conversation's scrollport.
+ */
+function revealMatch(range: Range | undefined, scrollport: HTMLElement | null): void {
+  if (!range || typeof range.getBoundingClientRect !== "function") return;
+  for (let element = range.startContainer.parentElement; element; element = element.parentElement) {
+    const scrollY = scrolls(element, "y");
+    const scrollX = scrolls(element, "x");
+    if (scrollY || scrollX) {
+      const match = range.getBoundingClientRect();
+      const box = element.getBoundingClientRect();
+      element.scrollBy({
+        top: scrollY ? match.top - box.top - (box.height - match.height) / 2 : 0,
+        left: scrollX ? match.left - box.left - (box.width - match.width) / 2 : 0,
+      });
+    }
+    if (element === scrollport) return;
+  }
 }
 
 export function ChatFindBar({ request, onClose }: { request: number; onClose(): void }) {
@@ -50,16 +77,21 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
       setMatches(found);
       if (reveal) {
         setCurrent(0);
-        revealMatch(found[0]);
+        revealMatch(found[0], scrollportOf(transcript));
       } else {
         setCurrent((index) => Math.min(index, Math.max(found.length - 1, 0)));
       }
     };
     search(true);
+    // At most one refresh pending: a reply streaming faster than the delay
+    // still refreshes every REFRESH_DELAY_MS rather than only when it pauses.
     let timer: ReturnType<typeof setTimeout> | undefined;
     const observer = new MutationObserver(() => {
-      clearTimeout(timer);
-      timer = setTimeout(() => search(false), REFRESH_DELAY_MS);
+      if (timer !== undefined) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        search(false);
+      }, REFRESH_DELAY_MS);
     });
     observer.observe(transcript, { childList: true, subtree: true, characterData: true });
     return () => {
@@ -75,7 +107,7 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
     if (matches.length === 0) return;
     const next = (current + direction + matches.length) % matches.length;
     setCurrent(next);
-    revealMatch(matches[next]);
+    revealMatch(matches[next], scrollportOf(transcriptOf(barRef.current)));
   };
   const close = () => {
     const target = returnFocusRef.current;

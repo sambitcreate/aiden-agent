@@ -36,6 +36,11 @@ test("matches ignore case and skip text a reader can't see", () => {
     ["Release", "RELEASE", "release"],
   );
   assert.equal(findChatMatches(root, "   ").length, 0, "spaces alone find nothing");
+  // Lowercasing İ adds a combining dot; matches still cover the original text.
+  const dotted = document.createElement("div");
+  dotted.textContent = "İx and İ";
+  assert.deepEqual(findChatMatches(dotted, "x").map(String), ["x"]);
+  assert.deepEqual(findChatMatches(dotted, "İ").map(String), ["İ", "İ"]);
   assert.equal(findChatMatches(root, "release", 2).length, 2, "stops at the limit");
 });
 
@@ -69,6 +74,22 @@ test("a reply that arrives while the bar is open is counted too", async () => {
   await waitFor(() => assert.equal(status(), "1 of 2"));
   rerender(<Conversation extra={["See you Friday."]} />);
   await waitFor(() => assert.equal(status(), "1 of 3"));
+});
+
+test("a reply that keeps streaming faster than the refresh delay is still counted as it grows", async () => {
+  const lines: string[] = [];
+  const { rerender } = render(<Conversation />);
+  fireEvent.change(search(), { target: { value: "friday" } });
+  await waitFor(() => assert.equal(status(), "1 of 2"));
+  // A new matching line every 25 ms; the bar must catch up before the stream stops.
+  let counted = false;
+  for (let line = 0; line < 20 && !counted; line += 1) {
+    lines.push(`Friday line ${line}`);
+    rerender(<Conversation extra={[...lines]} />);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 25)));
+    counted = status() !== "1 of 2";
+  }
+  assert.ok(counted, "the count moved while the reply was still streaming");
 });
 
 test("Esc closes the bar and gives focus back to what had it", async () => {

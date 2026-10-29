@@ -1037,6 +1037,66 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await expect(message).toBeFocused();
 });
 
+test("Find in chat brings each match into view, even far apart in one tall code block", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  const workspaceId = await page.evaluate(() => localStorage.getItem("aiden-agent.workspaceId"));
+  await app.evaluate(({ ipcMain }, workspaceId) => {
+    const lines = Array.from({ length: 150 }, (_, index) => `line ${index + 1}`);
+    lines[1] = "needle near the top";
+    lines[148] = "needle near the bottom";
+    const chat = {
+      id: "find-tall-block",
+      workspaceId,
+      title: "Tall code block",
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_000_000,
+      messages: [
+        { id: "find-u1", role: "user", content: "Show the log", createdAt: 1_800_000_000_000 },
+        { id: "find-a1", role: "assistant", content: `Here it is:\n\n\`\`\`\n${lines.join("\n")}\n\`\`\``, createdAt: 1_800_000_000_001 },
+      ],
+    };
+    ipcMain.removeHandler("chats:list");
+    ipcMain.handle("chats:list", () => [chat]);
+    ipcMain.removeHandler("chats:get");
+    ipcMain.handle("chats:get", () => ({
+      chat,
+      imageArtifactRecoveryPending: false,
+      imageArtifactRecoveryUnavailable: false,
+      reconciliation: null,
+    }));
+  }, workspaceId);
+  await page.reload();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(page.getByText("line 75", { exact: false }).first()).toBeAttached();
+
+  // True when the painted current match sits inside the visible conversation.
+  const currentMatchVisible = () =>
+    page.evaluate(() => {
+      const highlight = (CSS as unknown as { highlights: Map<string, Set<Range>> }).highlights.get("aiden-find-current");
+      const range = highlight ? [...highlight][0] : undefined;
+      const scrollport = document.querySelector<HTMLElement>('[data-focus-region="chat"]');
+      if (!range || !scrollport) return false;
+      const match = range.getBoundingClientRect();
+      const box = scrollport.getBoundingClientRect();
+      return match.height > 0 && match.top >= box.top && match.bottom <= box.bottom;
+    });
+
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+f`);
+  const find = page.getByRole("searchbox", { name: "Find in chat" });
+  await find.fill("needle");
+  const status = page.getByRole("search", { name: "Find in chat" }).getByRole("status");
+  await expect(status).toHaveText("1 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+  await find.press("Enter");
+  await expect(status).toHaveText("2 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+  await find.press("Shift+Enter");
+  await expect(status).toHaveText("1 of 2");
+  await expect.poll(currentMatchVisible).toBe(true);
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {

@@ -12,6 +12,35 @@ export const CHAT_FIND_CURRENT_HIGHLIGHT = "aiden-find-current";
 // Text a reader can't see, and the bar's own text, are never matches.
 const SKIPPED = "script, style, [hidden], [aria-hidden='true'], [data-chat-find-skip]";
 
+interface FoldedText {
+  text: string;
+  /** For each code unit of `text`, where its character starts and ends in the original. */
+  starts: number[] | null;
+  ends: number[] | null;
+}
+
+// Lowercasing can lengthen a character (İ becomes i + a combining dot), so
+// offsets in the folded text are mapped back to the original's.
+function foldCase(original: string): FoldedText {
+  const lower = original.toLocaleLowerCase();
+  if (lower.length === original.length) return { text: lower, starts: null, ends: null };
+  let text = "";
+  const starts: number[] = [];
+  const ends: number[] = [];
+  for (let at = 0; at < original.length; ) {
+    const character = String.fromCodePoint(original.codePointAt(at)!);
+    const next = at + character.length;
+    const folded = character.toLocaleLowerCase();
+    for (let unit = 0; unit < folded.length; unit += 1) {
+      starts.push(at);
+      ends.push(next);
+    }
+    text += folded;
+    at = next;
+  }
+  return { text, starts, ends };
+}
+
 export function findChatMatches(root: Node, query: string, limit = CHAT_FIND_MATCH_LIMIT): Range[] {
   const needle = query.toLocaleLowerCase();
   if (!needle.trim()) return [];
@@ -22,11 +51,12 @@ export function findChatMatches(root: Node, query: string, limit = CHAT_FIND_MAT
   });
   const ranges: Range[] = [];
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const haystack = (node.nodeValue ?? "").toLocaleLowerCase();
-    for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) {
+    const haystack = foldCase(node.nodeValue ?? "");
+    for (let at = haystack.text.indexOf(needle); at >= 0; at = haystack.text.indexOf(needle, at + needle.length)) {
+      const last = at + needle.length - 1;
       const range = document.createRange();
-      range.setStart(node, at);
-      range.setEnd(node, at + needle.length);
+      range.setStart(node, haystack.starts ? haystack.starts[at]! : at);
+      range.setEnd(node, haystack.ends ? haystack.ends[last]! : last + 1);
       ranges.push(range);
       if (ranges.length >= limit) return ranges;
     }
