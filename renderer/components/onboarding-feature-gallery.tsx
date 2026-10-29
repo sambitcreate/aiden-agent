@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { Text } from "./ui";
 import { onboardingModelDescription } from "../lib/onboarding-provider";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import type { KeyboardPlatform } from "../shared/keybindings";
 import {
   FeatureArt,
@@ -376,6 +377,7 @@ export function OnboardingFeatureGallery({
                 return (
                   <article
                     key={feature.id}
+                    ref={pauseWhenUnseen}
                     tabIndex={0}
                     aria-label={`${feature.title}. ${feature.description}`}
                     data-onboarding-feature={feature.id}
