@@ -171,7 +171,7 @@ final class AidenRemotePhase0Tests: XCTestCase {
             from: data
         )
 
-        XCTAssertEqual(fixture.contractRevision, 46)
+        XCTAssertEqual(fixture.contractRevision, 47)
         XCTAssertEqual(fixture.scheduleCards?.capability, .scheduleCards)
         XCTAssertEqual(fixture.botIssues?.capability, .botIssues)
         // Revision 19 run-control losers learn the winning decision; phones keep

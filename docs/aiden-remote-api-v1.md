@@ -234,6 +234,7 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
 - `POST /chats/{chatId}/attachments`: validate and stage one bounded image or UTF-8 text attachment.
 - `DELETE /chats/{chatId}/attachments/{attachmentId}`: discard an unused staged attachment.
 - `GET /chats/{chatId}/attachments/{attachmentId}/content`: return one authenticated, chat-scoped canonical PNG or JPEG for preview.
+- `GET /chats/{chatId}/recordings/{recordingId}` (contract revision 46, announced by `chat-browser-recordings-v1`): the video a `browser_recording_stop` step in this chat saved. Needs `chat:read` and read access to the chat. See "Browser recordings, revision 46".
 - `GET /streams/{streamId}`
 - `GET /streams/{streamId}/events`: SSE replay via `Last-Event-ID` or `after`.
 - `POST /streams/{streamId}/cancel`: request cancellation of the authenticated parent turn stream. This is not a child/subtree control endpoint; any internal child shutdown is a Mac-owned consequence of cancelling the parent and is never separately addressable by mobile.
@@ -312,7 +313,7 @@ These routes were frozen as contract in Phase 1 and implemented in Phase 4 throu
 - `POST /bots/{botId}/handoffs/{waitId}/answer`, `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`, and `POST` / `DELETE /bots/{botId}/pause` (contract revision 37): need `bot:read`, `bot:write` and `bot:handoffs`, plus an `Idempotency-Key`. See "Bot hand-offs and pause, revision 37".
 - `POST /bots/{botId}/issues/{issueId}/act` (contract revision 42): needs `bot:read`, `bot:write` and `bot:issues`, plus an `Idempotency-Key`. See "Bot issues on phones, revision 42".
 - `GET /bots/{botId}/session/images/{entryId}` (contract revision 45): the bytes of an image the Bot shared, while it is in the Bot's current conversation. Needs `bot:read`, `chat:read` and `bot:images`. See "Bot shared images, revision 45".
-- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 46, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 46".
+- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 47, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 47".
 
 An authorized archived Bot remains readable but read-only until restored: list/detail, conversation/history, existing attachment and managed-home file reads, access views, and the current canonical avatar remain available. Chat open-or-create, new turns, uploads, writes, approval effects, identity/access/avatar mutations, and attempts to add the archived Bot to favorites return `bot_archived`; restore remains allowed. Archiving atomically removes favorite membership. Bot reads without `bot:read`, mutations without the full conjunctive grant, cross-Bot/chat references, corrupt bindings, unavailable records, and unknown IDs retain the same non-inferential unavailable classification. Catalog or policy revision drift returns `revision_conflict` with only the current safe revision; invalid/removed opaque selections fail closed and never fall back to Full. Authoritative Custom views may retain selected catalog tombstones marked `available: false` so drift is visible, but new mutations may select only entries currently marked available.
 
@@ -975,9 +976,32 @@ The bytes never travel in the session. A device without `bot:images` gets, under
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botImages`: the capability, a holder's `entry`, the `legacyEntry` other devices get, and the `imagePath`. The desktop parser reads the section only when `contractRevision` is 45 or newer.
 
-## Spending limits, revision 46 (`spending-limits-v1`, provisional)
+## Browser recordings, revision 46 (`chat-browser-recordings-v1`)
 
-Revision 46 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
+The host keeps it in one constant (`AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`; provisional, re-claimed at merge after whatever `main` holds then).
+
+The agent can record a browser tab with `browser_recording_start` and `browser_recording_stop`. The Mac saves the video in Aiden's own folder (`userData/browser/recordings/`) as H.264 MP4, or WebM when H.264 encoding is unavailable, and shows it in the chat under the "Stopped browser recording" line. Before this revision a paired device saw only the activity line.
+
+**The step.** A completed `browser_recording_stop` tool step in a chat's generation timeline (v3) carries `recording` with exact keys:
+
+| Key | Notes |
+| --- | --- |
+| `id` | `recording-` followed by a lowercase UUID; names the video in the route below |
+| `mimeType` | `video/mp4` or `video/webm` |
+| `durationMs` | Integer, 0 to 360000 (the recorder stops itself at five minutes) |
+| `sizeBytes` | Integer, 1 to 128 MiB (the recorder stops itself at that size) |
+
+The recap is display-only. It never holds the video, the file's path, the page or its address. Any other tool, a step that is not completed, or a recap with another key or value is dropped by every client while the step still shows as an activity line. Clients before revision 46 ignore the field.
+
+**Bytes.** `GET /chats/{chatId}/recordings/{recordingId}` answers the video with its own `Content-Type` (`video/mp4` or `video/webm`), `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It needs `chat:read` and read access to the chat (`403 capability_denied` otherwise). The host serves only a recording that one of this chat's own timeline steps names, in a saved reply or in a turn of this chat that is still running (its reply is saved only when the whole turn ends, and the phones show Play as soon as the recording stops), and only a regular file in its recordings folder whose bytes match its type: a malformed id is `400 invalid_request`, and a recording the chat does not name or that is gone is `404 not_found` with "This recording is no longer on the Mac." A host without the in-app browser (the CLI) does not wire the route, does not announce `chat-browser-recordings-v1`, and answers `404 not_found`.
+
+**Clients.** The desktop chat shows a card with the length and size, **Play**, and **Show in Finder** (**Show in folder** on Linux); the video loads only when Play is pressed. Aiden On The Go for iOS and Android show the same card when the host announces the feature, download the video when Play is tapped and play it full screen. iOS cannot play WebM, so a WebM recording there says to watch it on the Mac.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `browserRecordings`: a completed recording `step` and the `recordingPath` that names it. The desktop parser reads the section only when `contractRevision` is 46 or newer.
+
+## Spending limits, revision 47 (`spending-limits-v1`, provisional)
+
+Revision 47 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
 
 **Negotiation.** The host lists `spending-limits-v1` in `/server` `features` for phones while its spending ledger is wired. Paired desktops are not offered it. A phone calls the routes only on a host that lists it.
 
@@ -990,4 +1014,4 @@ Revision 46 is provisional and is re-claimed at merge, after whatever `main` hol
 
 **Clients.** Aiden On The Go for iOS and Android read the status when a workspace chat or Bot chat opens, after a run settles, when the message count changes and after a send error. They show a quiet line at `nearing` and a card with **Allow $X more** at `reached`, in the same words as the Mac; the limits themselves are changed on the Mac. A tap that gets `409 revision_conflict` re-reads instead of adding twice.
 
-**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 46 or newer.
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 47 or newer.

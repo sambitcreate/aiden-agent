@@ -1582,7 +1582,7 @@
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 46. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "description": "Contract revision 47. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
         "responses": {
           "200": {
             "description": "The spending status",
@@ -1613,7 +1613,7 @@
         "operationId": "allowMoreChatSpending",
         "x-aiden-capability": "chat:write",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 46. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "description": "Contract revision 47. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -2518,7 +2518,7 @@
         "operationId": "getBotSpending",
         "x-aiden-capability": "bot:read",
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 46. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "description": "Contract revision 47. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
         "responses": {
           "200": {
             "description": "The spending status",
@@ -2553,7 +2553,7 @@
           "bot:write"
         ],
         "x-aiden-feature": "spending-limits-v1",
-        "description": "Contract revision 46. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "description": "Contract revision 47. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IfMatch"
@@ -6853,6 +6853,70 @@
           }
         }
       }
+    },
+    "/chats/{chatId}/recordings/{recordingId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "recordingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "description": "The id a recording recap on one of this chat's timelines names."
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatBrowserRecording",
+        "description": "Contract revision 46: the video a browser_recording_stop step in this chat saved. Announced by `chat-browser-recordings-v1`. Only a recording the chat's own timelines name can be read; 404 not_found when it is no longer on the Mac or on a host without the in-app browser.",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-browser-recordings-v1",
+        "responses": {
+          "200": {
+            "description": "Authenticated browser recording",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              },
+              "video/webm": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9085,6 +9149,9 @@
           },
           "extraction": {
             "$ref": "#/components/schemas/WebExtractRecap"
+          },
+          "recording": {
+            "$ref": "#/components/schemas/BrowserRecordingRecap"
           }
         },
         "allOf": [
@@ -9170,6 +9237,27 @@
                 },
                 "toolName": {
                   "const": "web_fetch"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "recording"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "browser_recording_stop"
                 }
               }
             }
@@ -14132,7 +14220,7 @@
         "required": [
           "spending"
         ],
-        "description": "Contract revision 46 (spending-limits-v1).",
+        "description": "Contract revision 47 (spending-limits-v1).",
         "properties": {
           "spending": {
             "oneOf": [
@@ -18017,6 +18105,39 @@
             "maxLength": 500
           }
         }
+      },
+      "BrowserRecordingRecap": {
+        "type": "object",
+        "description": "Contract revision 46: the video a completed browser_recording_stop step saved. Display-only; the bytes are read from GET /chats/{chatId}/recordings/{recordingId}.",
+        "required": [
+          "id",
+          "mimeType",
+          "durationMs",
+          "sizeBytes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mimeType": {
+            "enum": [
+              "video/mp4",
+              "video/webm"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 360000
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 134217728
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

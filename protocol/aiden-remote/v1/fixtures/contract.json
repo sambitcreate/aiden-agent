@@ -1,5 +1,5 @@
 {
-  "contractRevision": 46,
+  "contractRevision": 47,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 46,
+    "contractRevision": 47,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3101,6 +3101,10 @@
       "text": "I shared an image: weekly-sales.png. Open this chat on your Mac to see it."
     },
     "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
+  },
+  "browserRecordings": {
+    "step": { "id": "tool-5", "order": 0, "kind": "tool", "toolCallId": "call-5", "toolName": "browser_recording_stop", "label": "Stop browser recording", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079672400, "finishedAt": 1787079672400, "contentOffset": 0, "recording": { "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", "mimeType": "video/mp4", "durationMs": 12400, "sizeBytes": 1048576 } },
+    "recordingPath": "/chats/chat_fixture_01/recordings/recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
   },
   "botIssues": {
     "capability": "bot:issues",

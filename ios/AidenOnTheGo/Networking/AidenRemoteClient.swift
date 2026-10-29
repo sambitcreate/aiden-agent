@@ -138,7 +138,11 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
-    /// Contract revision 46: a chat's or Bot's spending limit, and Allow more
+    /// Contract revision 46: a completed `browser_recording_stop` step's video
+    /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
+    /// step's `recording` recap is additive; the token alone gates Play.
+    static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
+    /// Contract revision 47: a chat's or Bot's spending limit, and Allow more
     /// once it is reached.
     static let spendingLimitsFeature = "spending-limits-v1"
 
@@ -324,7 +328,11 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
-    /// The chat and Bot screens show the spending notice with Allow more (revision 46).
+    /// The Mac serves the agent's browser recordings (revision 46).
+    var supportsChatBrowserRecordings: Bool {
+        features.contains(Self.chatBrowserRecordingsFeature)
+    }
+    /// The chat and Bot screens show the spending notice with Allow more (revision 47).
     var supportsSpendingLimits: Bool {
         features.contains(Self.spendingLimitsFeature)
     }
@@ -605,7 +613,7 @@ enum AidenSpendingOwner: Equatable, Hashable, Sendable {
     case bot(String)
 }
 
-/// Revision 46 (`spending-limits-v1`). Amounts are US dollars.
+/// Revision 47 (`spending-limits-v1`). Amounts are US dollars.
 struct AidenSpending: Codable, Equatable, Sendable {
     enum Period: String, Codable, Sendable { case chat, month }
     enum State: String, Codable, Sendable { case under, nearing, reached }
@@ -1319,7 +1327,7 @@ final class AidenRemoteClient: @unchecked Sendable {
                        headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
     }
 
-    /// Revision 46: the chat's or Bot's spending limit, or `spending: nil` without one.
+    /// Revision 47: the chat's or Bot's spending limit, or `spending: nil` without one.
     func spending(owner: AidenSpendingOwner) async throws -> AidenSpendingStatus {
         try await send(method: "GET", path: try spendingPath(owner))
     }
@@ -1689,6 +1697,43 @@ final class AidenRemoteClient: @unchecked Sendable {
               let html = String(data: data, encoding: .utf8)
         else { try rejectContractResponse() }
         return html
+    }
+
+    /// Revision 46 (`chat-browser-recordings-v1`): the video a completed
+    /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
+    /// most the recorder's 128 MiB limit, with the no-store and nosniff
+    /// headers, is accepted.
+    func browserRecording(chatId: String, recordingId: String) async throws -> AidenBrowserRecordingContent {
+        try validateRemoteIdentifier(chatId)
+        guard AidenBrowserRecordingRecap.isRecordingID(recordingId) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var request = try makeRequest(
+            method: "GET",
+            path: ["chats", chatId, "recordings", recordingId],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("video/mp4, video/webm", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenBrowserRecordingRecap.maxSizeBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              let mimeType = AidenBrowserRecordingRecap.MimeType(rawValue: contentType),
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              !data.isEmpty else {
+            try rejectContractResponse()
+        }
+        return AidenBrowserRecordingContent(data: data, mimeType: mimeType)
     }
 
     func moveChat(

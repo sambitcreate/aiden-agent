@@ -222,7 +222,11 @@ data class AidenServer(
     val supportsChatVisualViewer: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
 
-    /** The chat and Bot screens show the spending notice with Allow more (revision 46). */
+    /** A browser recording's Play reads the video from the Mac (revision 46). */
+    val supportsBrowserRecordings: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_BROWSER_RECORDINGS_FEATURE)
+
+    /** The chat and Bot screens show the spending notice with Allow more (revision 47). */
     val supportsSpendingLimits: Boolean
         get() = features.contains(AidenRemoteProtocol.SPENDING_LIMITS_FEATURE)
 

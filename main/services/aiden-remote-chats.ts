@@ -12,9 +12,11 @@ import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
+  isToolStep,
   parseGenerationTimeline,
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
+import { isBrowserRecordingId } from "../../renderer/shared/browser-recording.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
@@ -1227,6 +1229,18 @@ export class AidenRemoteChatService {
         render(source: VisualViewerSource, appearance: VisualViewerAppearance): Promise<string>;
       };
       /**
+       * Revision 46: reads a browser recording the agent saved, by its id. Absent
+       * on hosts without the in-app browser (the CLI).
+       */
+      browserRecordings?: {
+        read(recordingId: string): Promise<{ mimeType: string; data: Buffer } | undefined>;
+        /**
+         * Whether a run of this chat that is still going has shown the
+         * recording: its reply is saved only when the whole turn ends.
+         */
+        namedByLiveRun?(chatId: string, recordingId: string): boolean;
+      };
+      /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
        * is rejected with `capability_denied` unless the device negotiated the
        * grant; omission of this option fails closed the same way.
@@ -1901,6 +1915,36 @@ export class AidenRemoteChatService {
       }
     }
     throw unavailable();
+  }
+
+  /** Whether this host serves the agent's browser recordings (revision 46). */
+  get supportsBrowserRecordings(): boolean {
+    return this.options.browserRecordings !== undefined;
+  }
+
+  /**
+   * The video a completed `browser_recording_stop` step in this chat saved.
+   * Only a recording one of the chat's own timelines names can be read, saved
+   * or still running, so a device that may read one chat can't read another
+   * chat's recordings.
+   */
+  async browserRecording(chatId: string, recordingId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    const recordings = this.options.browserRecordings;
+    if (!recordings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    if (!isBrowserRecordingId(recordingId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The recording identifier is invalid.", 400);
+    }
+    const chat = await this.chat(chatId);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+    const named = chat.messages.some((message) =>
+      parseGenerationTimeline(message.timeline, message.content.length)?.steps.some(
+        (step) => isToolStep(step) && step.recording?.id === recordingId,
+      ),
+    );
+    if (!named && recordings.namedByLiveRun?.(chatId, recordingId) !== true) throw unavailable();
+    const stored = await recordings.read(recordingId).catch(() => undefined);
+    if (!stored) throw unavailable();
+    return { bytes: stored.data, mimeType: stored.mimeType };
   }
 
   /** Whether this host projects context pressure (`chat-context-pressure-v1`). */

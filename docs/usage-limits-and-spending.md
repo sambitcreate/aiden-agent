@@ -74,9 +74,9 @@ Amounts are picked from $1, $2, $5, $10, $25, $50, $100, $250 and $500, or set t
 
 The ledger is saved in `userData/spending.json` (chat ids, Bot ids, recent routine run ids and dollar amounts only), so a routine run resumed after a restart keeps what it already spent.
 
-### On a phone (Remote revision 46)
+### On a phone (Remote revision 47)
 
-Aiden On The Go for iPhone and Android shows the same 80% line and reached notice in a workspace chat and a Bot chat, with **Allow $X more**, when the Mac announces `spending-limits-v1`. The phone reads the status when the chat opens, after a reply settles and after a refused send. Allow more uses the status's revision, so a tap that crossed one on another device (or on the Mac) adds nothing and the phone shows what the Mac has now. Changing the limits themselves happens on the Mac. Older phones need nothing new: a send over the limit is refused with the same line. See [Spending limits, revision 46](aiden-remote-api-v1.md#spending-limits-revision-46-spending-limits-v1-provisional).
+Aiden On The Go for iPhone and Android shows the same 80% line and reached notice in a workspace chat and a Bot chat, with **Allow $X more**, when the Mac announces `spending-limits-v1`. The phone reads the status when the chat opens, after a reply settles and after a refused send. Allow more uses the status's revision, so a tap that crossed one on another device (or on the Mac) adds nothing and the phone shows what the Mac has now. Changing the limits themselves happens on the Mac. Older phones need nothing new: a send over the limit is refused with the same line. See [Spending limits, revision 47](aiden-remote-api-v1.md#spending-limits-revision-47-spending-limits-v1-provisional).
 
 ## Code map
 

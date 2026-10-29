@@ -27,11 +27,13 @@ import {
   activityTimelineFragment,
   assistantPresentationRows,
   isExtractionStep,
+  isRecordingStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
 import { WebExtractRecap } from "./web-extract-recap";
+import { BrowserRecordingCard } from "./browser-recording-card";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -294,6 +296,9 @@ function AssistantResponse({
           ...(timeline?.steps.filter(isExtractionStep).map((step) => (
             <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
           )) ?? []),
+          ...(timeline?.steps.filter(isRecordingStep).map((step) => (
+            <BrowserRecordingCard key={`recording-${step.id}`} recording={step.recording} />
+          )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
           )) ?? []),
@@ -360,6 +365,9 @@ function AssistantResponse({
         }
         if (row.kind === "extraction") {
           return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
+        }
+        if (row.kind === "recording") {
+          return <BrowserRecordingCard key={row.key} recording={row.step.recording} />;
         }
         if (row.kind === "activity") {
           return (

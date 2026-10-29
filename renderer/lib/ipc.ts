@@ -1076,6 +1076,10 @@ export const browserApi = {
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
   openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+  /** A video the agent recorded, by the id its chat step names; null once it is gone. */
+  recording: (recordingId: string) =>
+    invoke<{ mimeType: string; data: Uint8Array } | null>("browser:recording", recordingId),
+  revealRecording: (recordingId: string) => invoke<void>("browser:reveal-recording", recordingId),
 };
 
 async function botComputersStatus(channel: string): Promise<BotComputersStatus> {

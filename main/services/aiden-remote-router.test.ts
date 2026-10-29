@@ -105,6 +105,7 @@ async function fixture(options: {
   speechAvailable?: boolean;
   /** The host ships the phone visual viewer (contract revision 35). */
   visualViewer?: boolean;
+  browserRecordings?: boolean;
   /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
   /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
@@ -112,7 +113,7 @@ async function fixture(options: {
   botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
-  /** The host's spending ledger (contract revision 46). */
+  /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
 } = {}) {
   const logs: unknown[] = [];
@@ -452,6 +453,16 @@ async function fixture(options: {
               calls.push(`visual-document:${id}:${visualId}:${appearance.scheme}:${appearance.preset}`);
               if (visualId === "missing") throw new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
               return `<!DOCTYPE html><title>${visualId}</title>${"<p>chart</p>".repeat(400)}`;
+            },
+          }
+        : {}),
+      ...(options.browserRecordings
+        ? {
+            supportsBrowserRecordings: true,
+            browserRecording: async (id: string, recordingId: string) => {
+              calls.push(`browser-recording:${id}:${recordingId}`);
+              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+              return { bytes: Buffer.from("fake mp4"), mimeType: "video/mp4" };
             },
           }
         : {}),
@@ -1214,6 +1225,44 @@ test("visual documents are served to chat readers as revalidatable, compressible
     assert.equal(unavailable.status, 404);
   } finally {
     await older.close();
+  }
+});
+
+test("browser recordings are served to chat readers as no-store video", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const recording = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const app = await fixture({ capabilities: ["server:read", "chat:read"], browserRecordings: true });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-browser-recordings-v1"), true);
+    const response = await fetch(`${app.base}/chats/chat-1/recordings/${recording}`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "video/mp4");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(Buffer.from(await response.arrayBuffer()).toString(), "fake mp4");
+    assert.ok(app.calls.includes(`browser-recording:chat-1:${recording}`));
+    const missing = await fetch(`${app.base}/chats/chat-1/recordings/elsewhere`, { headers });
+    assert.equal(missing.status, 404);
+  } finally {
+    await app.close();
+  }
+
+  const unreadable = await fixture({ capabilities: ["server:read"], browserRecordings: true });
+  try {
+    assert.equal((await fetch(`${unreadable.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 403);
+    assert.equal(unreadable.calls.some((call) => call.startsWith("browser-recording:")), false);
+  } finally {
+    await unreadable.close();
+  }
+
+  const cli = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${cli.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-browser-recordings-v1"), false);
+    assert.equal((await fetch(`${cli.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 404);
+  } finally {
+    await cli.close();
   }
 });
 
