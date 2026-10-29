@@ -135,5 +135,18 @@ export function createBroadcastReceivers<Key>() {
       }
       return targets;
     },
+    /**
+     * Sends `payload` to every receiver for `channel`. A window whose send
+     * throws (mid-teardown, say) is reported and skipped; the rest still get it.
+     */
+    deliver(channel: string, payload: unknown, onError: (error: unknown) => void): void {
+      for (const receiver of this.targets(channel)) {
+        try {
+          receiver.send(channel, payload);
+        } catch (error) {
+          onError(error);
+        }
+      }
+    },
   };
 }

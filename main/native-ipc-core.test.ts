@@ -119,3 +119,21 @@ test("a recreated window replaces its earlier registration", () => {
   assert.deepEqual(receivers.targets("dictation:state"), []);
   assert.deepEqual(receivers.targets("voice:stream-text"), [second]);
 });
+
+test("a window whose send throws does not stop the broadcast reaching the others", () => {
+  const receivers = createBroadcastReceivers<string>();
+  const failing = new FakeReceiver();
+  failing.send = () => {
+    throw new Error("Render frame was disposed");
+  };
+  const main = new FakeReceiver();
+  receivers.register("closing", failing);
+  receivers.register("main", main);
+  const errors: unknown[] = [];
+
+  receivers.deliver("chat:delta", { text: "hi" }, (error) => errors.push(error));
+
+  assert.deepEqual(main.received, [["chat:delta", { text: "hi" }]]);
+  assert.equal(errors.length, 1);
+  assert.match(String(errors[0]), /Render frame was disposed/u);
+});

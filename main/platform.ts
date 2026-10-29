@@ -107,13 +107,9 @@ function broadcast(channel: NotificationChannel, payload: unknown): void {
       logger.warn("ipc", `A ${channel} observer failed.`, error);
     }
   }
-  for (const receiver of broadcastReceivers.targets(channel)) {
-    try {
-      receiver.send(channel, payload);
-    } catch (error) {
-      logger.warn("ipc", `Could not deliver ${channel} notification.`, error);
-    }
-  }
+  broadcastReceivers.deliver(channel, payload, (error) => {
+    logger.warn("ipc", `Could not deliver ${channel} notification.`, error);
+  });
 }
 
 export const ipcMain = {
