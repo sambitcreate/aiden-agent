@@ -287,7 +287,7 @@ Primary files: diagnostics-contract.ts, main/shared/redaction.ts, renderer/share
 
 These changes follow the first security deliveries and require packaged evidence.
 
-October 27 implementation candidate: AppImage readiness now requires the installer's online GitHub certificate policy, with the verified subject SHA-256 checked over the bytes copied before atomic replacement. Production Vite HTML removes only development script/style origins; build and both package verifiers inspect emitted/archived HTML. Focused behavioral tests and the actual renderer build passed locally. Hosted release, Linux installation and candidate packaged runtime acceptance remain open. [Trust policy, connection inventory and V2 evidence](../distribution-hardening.md) record the limits. The [custom-protocol/fuse migration](renderer-protocol-compatibility-plan.md) is explicitly deferred as a separate compatibility change.
+October 27 implementation candidate: AppImage readiness now requires the installer's online GitHub certificate policy, with the verified subject SHA-256 checked over the bytes copied before atomic replacement. Production Vite HTML removes only development script/style origins; build and both package verifiers inspect emitted/archived HTML. Focused behavioral tests and the actual renderer build passed locally. Hosted release, Linux installation and candidate packaged runtime acceptance remain open. October 29 owner decision: the in-app AppImage verifier is removed from #614 (it required the GitHub CLI); AppImage updates keep the feed SHA-512 check and the CSP change ships. [Trust policy, connection inventory and V2 evidence](../distribution-hardening.md) record the limits. The [custom-protocol/fuse migration](renderer-protocol-compatibility-plan.md) is explicitly deferred as a separate compatibility change.
 
 AppImage authenticity:
 
@@ -406,7 +406,7 @@ After a slice lands, update this plan and its index row with the PR/head and out
 
 ## Execution record
 
-- W12 real provenance acceptance: v0.61.0 x86_64 release AppImage verified under the new online gh policy; a one-byte-forged copy was rejected. Neither was executed or installed. Fresh independent distribution review found no actionable issues. Candidate packaged/Linux installation and entitlement necessity gates remain separate.
+- W12 real provenance acceptance: v0.61.0 x86_64 release AppImage verified under the new online gh policy; a one-byte-forged copy was rejected. Neither was executed or installed. Fresh independent distribution review found no actionable issues. Candidate packaged/Linux installation and entitlement necessity gates remain separate. 2026-10-29: the in-app verifier was dropped by owner decision (no GitHub CLI requirement); the same policy remains in install.sh and the manual command.
 
 - W11 diagnostics candidate: reproduced a bare Replicate-token leak, shared the bounded self-identifying credential grammar and omitted arbitrary provider/provider-hook detail from the private journal. Existing assignment redaction remains covered; diagnostics/subagent suites and root types pass. See docs/security/diagnostic-redaction-2026-10-27.md. Fresh independent review found and closed early control normalization that concealed split credentials; hosted CI pending.
 

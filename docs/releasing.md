@@ -123,9 +123,7 @@ gh attestation verify "$artifact" \
 Require successful verification before trusting the downloaded bytes. A checksum
 alone is not publisher authentication. Existing releases without these attestations
 will not pass this policy. Verification may access GitHub and Sigstore trust data;
-the installer invokes it during installation, and the AppImage updater invokes
-it for each downloaded update before reporting readiness. Ordinary renderer and
-model-catalog reads do not invoke it. See
+this is an explicit operator action, not app startup or background traffic. See
 [GitHub CLI verification policy](https://cli.github.com/manual/gh_attestation_verify).
 
 This authenticates a build's artifact digest and workflow identity. It does not
@@ -136,15 +134,11 @@ packages and feeds, then confirm that modified bytes, a wrong source commit, and
 an attestation from a different workflow or ref are rejected. Local workflow tests
 cannot substitute for that hosted signing acceptance.
 
-The AppImage updater applies the same certificate policy with the selected release
-record's exact source/signer commit. It binds the verified subject SHA-256 to the
-bytes copied before atomic replacement, in addition to feed SHA-512. A trusted
-local `gh` 2.68+ and online verification are required; failures never downgrade
-to checksum-only installation. See [distribution verification](distribution-hardening.md)
-for trust rotation, rollback limits, renderer CSP checks and remaining packaged
-acceptance. Production build and package verification also reject localhost
-script/style sources in shipped renderer HTML. The renderer file-protocol fuse
-and existing macOS entitlements remain under separate compatibility validation.
+In-app AppImage updates check only the feed's SHA-512 digest; they do not run
+this verification (owner decision, October 29, 2026). Production build and package
+verification reject localhost script/style sources in shipped renderer HTML. See
+[distribution verification](distribution-hardening.md) for the renderer CSP checks,
+the macOS entitlement inventory and remaining packaged acceptance.
 
 ## A signed app that never opens on macOS 27 beta
 

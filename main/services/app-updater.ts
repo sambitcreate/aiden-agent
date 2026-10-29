@@ -1,5 +1,4 @@
 import { appImageIdentity, canUpdateLinuxAppImage, replaceAppImageAtomically, type AppImageIdentity } from "./app-updater-linux.js";
-import { verifyAppImageProvenance, type VerifiedAppImage } from "./app-updater-linux-provenance.js";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -43,14 +42,10 @@ function electronUpdaterModule(): ElectronUpdaterModule {
 function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule) {
   return class GuardedAppImageUpdater extends AppImageUpdater {
     private originalImage: AppImageIdentity | undefined;
-    private verifiedImage: VerifiedAppImage | undefined;
     private readonly installHandoff = new AppUpdateInstallHandoff();
 
     override install(isSilent = false, isForceRunAfter = false): boolean {
-      // Refuse before BaseUpdater marks its one-shot installation flag. A
-      // normal quit during verification cannot consume a later valid handoff.
-      return this.installHandoff.recordInstall(() => this.verifiedImage?.installer === this.installerPath
-        ? super.install(isSilent, isForceRunAfter) : false);
+      return this.installHandoff.recordInstall(() => super.install(isSilent, isForceRunAfter));
     }
 
     quitAndInstallWithResult(): boolean {
@@ -61,31 +56,14 @@ function defineGuardedAppImageUpdater({ AppImageUpdater }: ElectronUpdaterModule
       this.originalImage = appImageIdentity(process.env.APPIMAGE!);
     }
 
-    clearPendingVerification(): void {
-      this.verifiedImage = undefined;
-    }
-
-    async verifyDownloadedUpdate(version: string, signal: AbortSignal): Promise<void> {
-      this.verifiedImage = undefined;
-      const installer = this.installerPath;
-      if (!installer || !supportsAppUpdates()) throw new Error("AppImage update verification is unavailable.");
-      const verified = await verifyAppImageProvenance({ installer, version, arch: process.arch, signal });
-      if (signal.aborted || !supportsAppUpdates() || this.installerPath !== installer) {
-        throw new Error("AppImage update changed or verification was cancelled.");
-      }
-      this.verifiedImage = verified;
-    }
-
     protected override doInstall(options: { isForceRunAfter: boolean }): boolean {
       if (!this.originalImage || !this.installerPath) return false;
       const sha512 = this.downloadedUpdateHelper?.downloadedFileInfo?.sha512;
-      const verified = this.verifiedImage;
-      if (!sha512 || !verified || verified.installer !== this.installerPath) return false;
+      if (!sha512) return false;
       const destination = replaceAppImageAtomically({
         current: this.originalImage,
         installer: this.installerPath,
         sha512,
-        verifiedSha256: verified.sha256,
         eligible: () => process.env.APPIMAGE === this.originalImage?.path && supportsAppUpdates(),
       });
       // Upstream download/checksum behavior is retained; replace without shell tools
@@ -148,7 +126,6 @@ export class AppUpdateService {
   private retryTimer: NodeJS.Timeout | null = null;
   private downloadStallTimer: NodeJS.Timeout | null = null;
   private activeDownloadCancellation: UpdaterCancellationToken | null = null;
-  private activeVerificationAbort: AbortController | null = null;
   private retryAttempt = 0;
   private checkPromise: Promise<AppUpdateCheckResult> | null = null;
   private manualResultPending = false;
@@ -335,9 +312,7 @@ export class AppUpdateService {
         message: downloadFailed
           ? "Aiden Agent couldn’t finish downloading the update."
           : "Aiden Agent couldn’t reach its update feed.",
-        detail: process.platform === "linux" && downloadFailed
-          ? "Check your internet connection and install a trusted GitHub CLI 2.68 or newer so Aiden can verify the release. Then try again from Settings → About."
-          : "Check your internet connection and try again from Settings → About.",
+        detail: "Check your internet connection and try again from Settings → About.",
         buttons: ["OK"],
         defaultId: 0,
         noLink: true,
@@ -347,31 +322,14 @@ export class AppUpdateService {
 
   private async downloadUpdateWithWatchdog(): Promise<unknown> {
     const cancellation = new (electronUpdaterModule().CancellationToken)();
-    const verificationAbort = new AbortController();
     this.activeDownloadCancellation = cancellation;
-    this.activeVerificationAbort = verificationAbort;
-    guardedAppImageUpdater?.clearPendingVerification();
     this.armDownloadStallWatchdog();
     try {
-      const downloaded = await updater().downloadUpdate(cancellation);
-      if (guardedAppImageUpdater) {
-        const snapshot = this.snapshot();
-        if (this.disposed || cancellation.cancelled || snapshot.status !== "downloading") throw new Error("AppImage download cancelled.");
-        await guardedAppImageUpdater.verifyDownloadedUpdate(snapshot.version, verificationAbort.signal);
-        if (this.disposed || cancellation.cancelled || verificationAbort.signal.aborted) {
-          guardedAppImageUpdater.clearPendingVerification();
-          throw new Error("AppImage update verification cancelled.");
-        }
-      }
-      return downloaded;
-    } catch (error) {
-      guardedAppImageUpdater?.clearPendingVerification();
-      throw error;
+      return await updater().downloadUpdate(cancellation);
     } finally {
       this.clearDownloadStallWatchdog();
       if (this.activeDownloadCancellation === cancellation) {
         this.activeDownloadCancellation = null;
-        this.activeVerificationAbort = null;
       }
     }
   }
@@ -386,8 +344,6 @@ export class AppUpdateService {
         `Update download made no progress for ${DOWNLOAD_STALL_TIMEOUT_MS / 1_000} seconds; retrying.`,
       );
       this.activeDownloadCancellation?.cancel();
-      this.activeVerificationAbort?.abort();
-      guardedAppImageUpdater?.clearPendingVerification();
     }, DOWNLOAD_STALL_TIMEOUT_MS);
     this.downloadStallTimer.unref();
   }
@@ -422,12 +378,7 @@ export class AppUpdateService {
     this.retryTimer = null;
     this.clearDownloadStallWatchdog();
     this.activeDownloadCancellation?.cancel();
-    this.activeVerificationAbort?.abort();
-    // Protected shutdown installs after service disposal. Keep a completed
-    // proof, but never let verification still in flight authorize an install.
-    if (this.snapshot().status !== "ready") guardedAppImageUpdater?.clearPendingVerification();
     this.activeDownloadCancellation = null;
-    this.activeVerificationAbort = null;
     if (this.started && loadedAutoUpdater) {
       const autoUpdater = loadedAutoUpdater;
       autoUpdater.off("download-progress", this.downloadProgressHandler);
