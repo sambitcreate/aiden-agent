@@ -2607,11 +2607,16 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         transport.queueSession(.success(try session(.idle, seq: 30, entries: newer)))
         await second.load()
         XCTAssertEqual(bubbles("Also add a shopping list.", in: second), 0, "nothing on the Mac shows it: no Sent bubble")
+        second.release()
 
-        // The Mac lists it after all: its own bubble shows it.
+        // Open again before its grace ran out: it stays hidden while connecting.
+        let third = model(transport, key: key, cache: cache)
+        XCTAssertEqual(third.outgoing, [])
+        // The Mac lists it after all: its own Queued bubble shows it, once.
         let onMac = AidenBotQueuedMessage(submissionId: "17", mode: .queue, text: "Also add a shopping list.")
-        _ = await second.apply(event(seq: 31, .queued([onMac])))
-        XCTAssertEqual(bubbles("Also add a shopping list.", in: second), 1)
+        transport.queueSession(.success(try session(.running, seq: 31, activity: reading, queued: [onMac])))
+        await third.load()
+        XCTAssertEqual(bubbles("Also add a shopping list.", in: third), 1)
     }
 
     /// R21: a request frozen while the cached capability said Steer/Queue goes

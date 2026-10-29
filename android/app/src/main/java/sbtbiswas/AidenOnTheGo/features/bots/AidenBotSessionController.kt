@@ -1043,7 +1043,8 @@ class AidenBotSessionController(
             echoEntryId = null,
             echoSubmissionId = null,
             queuedId = null,
-            unheld = false
+            unheld = false,
+            takenBeforeVisit = false
         )
         setOutbox(_state.value.outbox.map { if (it.id == id) again else it })
         flushNow()

@@ -2345,12 +2345,20 @@ class AidenBotSessionControllerTest {
         next.refetch()
         runCurrent()
         assertTrue("nothing on the Mac shows it: no Sent bubble", next.state.value.outgoing.isEmpty())
+        next.stopFollowing()
+        runCurrent()
 
-        // The Mac lists it after all: its own Queued bubble stands for it.
+        // Open again before its grace ran out: it stays hidden while connecting.
+        val third = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        assertTrue(third.state.value.outgoing.isEmpty())
+        // The Mac lists it after all: its own Queued bubble stands for it, with no copy beside it.
         val queued = AidenBotQueuedMessage("21", AidenStreamInputMode.QUEUE, "Plan lunch")
-        next.handle(snapshotOf(runningSession.copy(seq = runningSession.seq + 1, queued = listOf(queued))))
-        assertEquals("21", next.state.value.outbox.single().queuedId)
-        assertEquals(listOf(queued), next.state.value.queued)
+        third.handle(snapshotOf(runningSession.copy(seq = runningSession.seq + 1, queued = listOf(queued))))
+        assertEquals("21", third.state.value.outbox.single().queuedId)
+        assertEquals(listOf(queued), third.state.value.queued)
+        assertTrue(third.state.value.outgoing.isEmpty())
     }
 
     // Controller polish: a frozen request refused for the Bot's state keeps its key for Try again.

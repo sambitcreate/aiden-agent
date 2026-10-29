@@ -93,10 +93,13 @@ data class AidenBotOutgoingMessage(
     fun expired(): AidenBotOutgoingMessage =
         copy(status = AidenBotOutgoingStatus.FAILED, keepsKey = frozen, deferred = false, echoed = false)
 
-    /** As another visit or launch finds it: what that run saw is stale. */
+    /**
+     * As another visit finds it: what that run saw is stale, except that one unheld when last seen
+     * stays hidden until the Mac shows it again (its grace starts over).
+     */
     fun adopted(nowMs: Long): AidenBotOutgoingMessage {
         val fresh = copy(
-            deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null, unheld = false,
+            deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null,
             takenBeforeVisit = submissionId != null
         )
         return if (fresh.status == AidenBotOutgoingStatus.SENDING && fresh.isExpired(nowMs)) fresh.expired() else fresh

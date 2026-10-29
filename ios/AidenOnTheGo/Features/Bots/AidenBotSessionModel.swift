@@ -1312,7 +1312,8 @@ final class AidenBotSessionModel {
         message.deferred = false
         message.dropEcho()
         message.queuedID = nil
-        message.unheldSince = nil
+        // Unheld when last seen stays hidden until the Mac shows it again; its grace starts over.
+        message.unheldSince = message.unheldSince == nil ? nil : now
         message.takenBeforeVisit = message.submissionId != nil
         if message.status == .sending, isExpired(message, now: now) { message.expire() }
         return message
