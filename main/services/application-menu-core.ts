@@ -14,6 +14,35 @@ export function parseMenuCommandIds(value: unknown): ReadonlySet<string> | null 
   return new Set(value.filter((id): id is string => typeof id === "string" && known.has(id)));
 }
 
+type MenuClickEvent = Partial<
+  Record<"triggeredByAccelerator" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey", boolean>
+>;
+
+/**
+ * Whether a menu item was fired by its own shortcut rather than chosen. Electron
+ * marks every activation that isn't a mouse click as `triggeredByAccelerator`,
+ * Return in an open menu included, so the shortcut is told apart by the
+ * modifiers held: every shortcut has one, and choosing from a menu needs none.
+ */
+export function firedByItsKey(
+  event: MenuClickEvent | undefined,
+  binding: string | null | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  if (!event?.triggeredByAccelerator || !binding) return false;
+  const parts = new Set(binding.split("+"));
+  const mac = platform === "darwin";
+  const held = {
+    Command: Boolean(mac ? event.metaKey : event.ctrlKey),
+    Control: Boolean(mac ? event.ctrlKey : event.metaKey),
+    Alt: Boolean(event.altKey),
+    Shift: Boolean(event.shiftKey),
+  };
+  return (Object.keys(held) as Array<keyof typeof held>).every(
+    (modifier) => held[modifier] === parts.has(modifier),
+  );
+}
+
 export function platformMenuAccelerator(
   binding: string | null | undefined,
   platform: NodeJS.Platform,
@@ -48,14 +77,14 @@ export function applicationMenuTemplate({
   // what is open (a text field, the terminal, the browser). So the menu shows
   // the key without taking it. On Linux and Windows the key is not registered.
   // macOS still fires the item for a key the page left alone (or never saw,
-  // from inside a frame), so a click the key triggered is ignored.
+  // from inside a frame), so that press is ignored (see `firedByItsKey`).
   const shownItem = (label: string, commandId: string): MenuItemConstructorOptions => ({
     label,
     accelerator: platformMenuAccelerator(bindings[commandId], platform),
     registerAccelerator: false,
     enabled: !available || available.has(commandId),
     click: (_item, _window, event) => {
-      if (event?.triggeredByAccelerator) return;
+      if (firedByItsKey(event, bindings[commandId], platform)) return;
       actions.deliverCommand(commandId);
     },
   });

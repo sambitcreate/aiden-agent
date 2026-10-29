@@ -100,11 +100,30 @@ test("menu items for in-app keys show the key as set, without taking it from the
   assert.equal(find.accelerator, "CommandOrControl+Shift+G");
   assert.equal(find.registerAccelerator, false, "the page keeps the key");
   assert.equal(item(chat, "Stop Reply").accelerator, undefined);
-  // A click runs the command. The key firing the item (macOS does, for a key
-  // the page left alone, as in the terminal) runs nothing.
   find.click?.({} as never, undefined, { triggeredByAccelerator: false } as never);
-  find.click?.({} as never, undefined, { triggeredByAccelerator: true } as never);
   assert.deepEqual(delivered, ["chat.find"]);
+});
+
+test("on a Mac a menu item runs when chosen, by mouse or Return, but not when its key fires it", () => {
+  const delivered: string[] = [];
+  const menu = applicationMenuTemplate({
+    platform: "darwin",
+    appName: "Aiden Agent",
+    bindings: { "chat.find": "Command+Shift+G", "model.change": null },
+    actions: { ...actions, deliverCommand: (commandId) => delivered.push(commandId) },
+  });
+  const chat = submenu(menu, "Chat");
+  const press = (label: string, event: Record<string, boolean>) =>
+    item(chat, label).click?.({} as never, undefined, event as never);
+  press("Find in Chat", { triggeredByAccelerator: false });
+  // Return in the open menu is also reported as not a mouse click.
+  press("Find in Chat", { triggeredByAccelerator: true });
+  press("Change Model…", { triggeredByAccelerator: true });
+  assert.deepEqual(delivered, ["chat.find", "chat.find", "model.change"]);
+  // ⇧⌘G that the page left alone (the terminal keeps it) or never saw (an
+  // artifact frame) comes back as the item's key, and runs nothing.
+  press("Find in Chat", { triggeredByAccelerator: true, metaKey: true, shiftKey: true });
+  assert.deepEqual(delivered, ["chat.find", "chat.find", "model.change"]);
 });
 
 test("menu items grey out while the app can't run them, once it has said what it can run", () => {
