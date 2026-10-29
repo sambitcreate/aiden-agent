@@ -213,6 +213,9 @@ test("journal redaction inspects control-split credentials before normalizing co
     "Loader failure r8_Replica\u0000teCredentialValue123456789",
     "Loader failure gsk_Groq\u000bCredentialValue123456789",
     "Loader failure r8_Replica%00teCredentialValue123456789",
+    // Multiline values whose opening line carries a control character.
+    "api_key: |\u0000\n  opaque-private-first-line\n  opaque-private-second-line\nLoader failed",
+    "-----BEGIN OPENSSH PRIVATE KEY-----\u0000\nopaque-private-key-body\n-----END OPENSSH PRIVATE KEY-----\nLoader failed",
   ];
   try {
     initSubagentRuntimeDiagnostics(target);
@@ -222,10 +225,11 @@ test("journal redaction inspects control-split credentials before normalizing co
     });
     await flushSubagentRuntimeDiagnostics();
     const raw = await readFile(target, "utf8");
-    assert.doesNotMatch(raw, /Replica|Groq|CredentialValue123456789/u);
+    assert.doesNotMatch(raw, /Replica|Groq|CredentialValue123456789|opaque-private/u);
     const records = raw.trim().split("\n").map(line => JSON.parse(line));
     assert.equal(records.length, probes.length);
     for (const record of records) assert.equal(record.diagnostics[0].code, "pre_ready_exit");
+    for (const record of records.slice(-2)) assert.match(record.diagnostics[0].detail, /Loader failed/u, "the unrelated loader line survives");
     assert.match(sanitizeSubagentDiagnosticText("Module\u0000loader failed"), /Module loader failed/u);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
