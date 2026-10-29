@@ -9,7 +9,10 @@ import {
   ATOMIC_PASTE_SCRIPT,
   createSecureInputPrefetch,
   detectMacSecureInput,
+  KEYSTROKE_SENT_MARKER,
+  PasteAfterKeystrokeError,
   pasteTranscript,
+  runAtomicMacPaste,
   runJxa,
   SECURE_INPUT_PROBE_SCRIPT,
   type PasteDeps,
@@ -139,6 +142,33 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
     message: "Check the field — transcript copied.",
   });
   assert.equal(subject.clipboard(), "hello world");
+});
+
+test("a transaction killed after sending ⌘V restores the clipboard instead of copying the transcript again", async () => {
+  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: `${KEYSTROKE_SENT_MARKER}\n` });
+  const restores: string[] = [];
+  const subject = harness({
+    pasteWithPreservedClipboard: (text) => runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
+    saveClipboard: (text) => () => restores.push(text),
+  });
+  const before = subject.clipboard();
+  assert.deepEqual(await pasteTranscript("hello world", subject.deps), { outcome: "pasted" });
+  assert.equal(subject.clipboard(), before, "the transcript is not written over the person's clipboard");
+  assert.deepEqual(restores, ["hello world"]);
+});
+
+test("a transaction killed before sending ⌘V still leaves the transcript on the clipboard", async () => {
+  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: "" });
+  const restores: string[] = [];
+  const subject = harness({
+    pasteWithPreservedClipboard: (text) => runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
+    saveClipboard: (text) => () => restores.push(text),
+  });
+  const result = await pasteTranscript("hello world", subject.deps);
+  assert.equal(result.outcome, "copied");
+  assert.equal(subject.clipboard(), "hello world");
+  assert.deepEqual(restores, []);
+  await assert.rejects(runAtomicMacPaste("x", async () => Promise.reject(timedOut)), (error) => !(error instanceof PasteAfterKeystrokeError));
 });
 
 test("active Secure Input keeps the transcript on the clipboard without sending a keystroke", async () => {

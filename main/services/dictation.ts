@@ -43,6 +43,30 @@ function canAutoPaste(): boolean {
   return dictationPlatformBehavior().accessibilityPaste && systemPreferences.isTrustedAccessibilityClient(false);
 }
 
+/**
+ * The common clipboard representations, saved before an auto-paste so a
+ * transaction that dies after ⌘V can put them back. The native transaction
+ * restores the full pasteboard record itself; this is only its fallback.
+ */
+function saveClipboardForPaste(transcript: string): () => void {
+  const formats = clipboard.availableFormats();
+  const saved = {
+    text: clipboard.readText(),
+    html: clipboard.readHTML(),
+    rtf: clipboard.readRTF(),
+    image: formats.some((format) => format.startsWith("image/")) ? clipboard.readImage() : undefined,
+  };
+  return () => {
+    if (clipboard.readText() !== transcript) return;
+    clipboard.write({
+      ...(saved.text ? { text: saved.text } : {}),
+      ...(saved.html ? { html: saved.html } : {}),
+      ...(saved.rtf ? { rtf: saved.rtf } : {}),
+      ...(saved.image && !saved.image.isEmpty() ? { image: saved.image } : {}),
+    });
+  };
+}
+
 function livePasteDeps(): PasteDeps {
   const behavior = dictationPlatformBehavior();
   return {
@@ -56,8 +80,9 @@ function livePasteDeps(): PasteDeps {
       ? () => secureInput.isSecureInputActive()
       : async () => false,
     pasteWithPreservedClipboard: behavior.accessibilityPaste
-      ? runAtomicMacPaste
+      ? (text) => runAtomicMacPaste(text)
       : async () => false,
+    saveClipboard: behavior.accessibilityPaste ? saveClipboardForPaste : undefined,
     log: (message, error) => logger.warn("dictation", message, error),
   };
 }

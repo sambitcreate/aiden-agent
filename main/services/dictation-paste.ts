@@ -23,10 +23,30 @@ export interface PasteDeps {
    */
   isSecureInputActive: () => Promise<boolean>;
   pasteWithPreservedClipboard: (text: string) => Promise<boolean>;
+  /**
+   * Saves the clipboard before the paste and returns a restore. It is used only
+   * when the paste transaction dies after sending ⌘V (an osascript timeout),
+   * before its own restore step ran. The restore must leave a clipboard that no
+   * longer holds the transcript untouched.
+   */
+  saveClipboard?: (text: string) => () => void;
   log?: (message: string, error?: unknown) => void;
 }
 
 export const SECURE_INPUT_COPIED_MESSAGE = "Transcript copied — press ⌘V to paste.";
+
+/**
+ * Written to stderr (AppleScript `log`, unbuffered) right after ⌘V is sent, so
+ * a transaction killed by its timeout says whether the paste may have landed.
+ */
+export const KEYSTROKE_SENT_MARKER = "aiden-paste:keystroke-sent";
+
+/** The paste transaction failed after it sent ⌘V: the text may already be in the field. */
+export class PasteAfterKeystrokeError extends Error {
+  constructor(readonly original: unknown) {
+    super(`The paste transaction failed after sending the keystroke: ${String(original)}`);
+  }
+}
 
 export const ATOMIC_PASTE_SCRIPT = `on run argv
 	set transcriptText to item 1 of argv
@@ -71,6 +91,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 			return "copied"
 		end try
 	end tell
+	log "${KEYSTROKE_SENT_MARKER}"
 	set quietWindow to 0.2
 	set elapsed to 0
 	repeat while elapsed is less than 8
@@ -179,16 +200,28 @@ export function runOsascript(script: string, args: string[] = []): Promise<strin
       "/usr/bin/osascript",
       ["-e", script, "--", ...args],
       { timeout: 5_000 },
-      (error, stdout) => {
-        if (error) reject(error);
+      (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { stderr: String(stderr ?? "") }));
         else resolve(stdout.trim());
       },
     );
   });
 }
 
-export async function runAtomicMacPaste(text: string): Promise<boolean> {
-  return (await runOsascript(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
+export type RunOsascript = (script: string, args: string[]) => Promise<string>;
+
+/**
+ * Runs the paste transaction. A failure after ⌘V was sent (the timeout killed
+ * osascript before its restore step) becomes PasteAfterKeystrokeError.
+ */
+export async function runAtomicMacPaste(text: string, run: RunOsascript = runOsascript): Promise<boolean> {
+  try {
+    return (await run(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown } | null)?.stderr;
+    if (typeof stderr === "string" && stderr.includes(KEYSTROKE_SENT_MARKER)) throw new PasteAfterKeystrokeError(error);
+    throw error;
+  }
 }
 
 /**
@@ -221,6 +254,7 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
       message: SECURE_INPUT_COPIED_MESSAGE,
     };
   }
+  const restoreClipboard = deps.saveClipboard?.(text);
   try {
     return (await deps.pasteWithPreservedClipboard(text))
       ? { outcome: "pasted" }
@@ -230,6 +264,18 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
           message: "Check the field — transcript copied.",
         };
   } catch (error) {
+    if (error instanceof PasteAfterKeystrokeError) {
+      // ⌘V already went to the validated field. Copying the transcript again
+      // would overwrite the person's clipboard and invite a second paste, so
+      // put their clipboard back instead.
+      deps.log?.("Dictation paste timed out after the keystroke; clipboard restored.", error.original);
+      try {
+        restoreClipboard?.();
+      } catch (restoreError) {
+        deps.log?.("Could not restore the clipboard after the paste.", restoreError);
+      }
+      return { outcome: "pasted" };
+    }
     deps.writeClipboard(text);
     deps.log?.("Dictation paste failed; transcript left on the clipboard.", error);
     return {
