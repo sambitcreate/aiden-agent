@@ -270,6 +270,49 @@ test("the Bot's own cancel and set return while a removed wake-up's cleanup wait
   assert.deepEqual(cleaned.sort(), [current.wakeUp.id, old.wakeUp.id].sort(), "each removed wake-up still settles");
 });
 
+test("turning the switch off returns while the removed wake-ups' cleanup waits, and a call queued behind it answers off", async (t) => {
+  // The cleanup appends to the Bot's chat, which a Pause can hold until the
+  // Bot's current tool call ends, and that call can be queued behind the switch.
+  let release!: () => void;
+  const chatFree = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const cleaned: string[] = [];
+  const h = harness({
+    routineDeleted: async (_botId, routineId) => {
+      await chatFree;
+      cleaned.push(routineId);
+    },
+  });
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef",
+    name: "Morning check",
+    schedule: { kind: "daily", time: "09:00" },
+    prompt: "Anything due today?",
+  });
+  const first = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check the oven." });
+  const second = await h.wakeUps.set("bot-chef", { when: { inMinutes: 45 }, note: "Ask about dessert." });
+  assert.ok(first.ok && second.ok);
+
+  h.switches.set("bot-chef", false);
+  const tool = createWakeUpTool("bot-chef", h.wakeUps, async () => undefined);
+  const stuck = new Promise<"stuck">((resolve) => setTimeout(() => resolve("stuck"), 1_000));
+  const [switchedOff, queued] = await Promise.all([
+    Promise.race([h.wakeUps.cancelAll("bot-chef"), stuck]),
+    Promise.race([run(tool, { action: "set", in_minutes: 20, note: "Check again." }), stuck]),
+  ]);
+  assert.equal(switchedOff, 2);
+  assert.notEqual(queued, "stuck");
+  if (queued !== "stuck") assert.equal(queued.body.code, "off");
+  assert.deepEqual((await h.routines.list("bot-chef")).map((each) => each.id), [routine.id]);
+  assert.deepEqual(cleaned, []);
+
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(cleaned.sort(), [first.wakeUp.id, second.wakeUp.id].sort(), "each removed wake-up still settles");
+});
+
 function run(tool: ReturnType<typeof createWakeUpTool>, params: Record<string, unknown>) {
   return tool.execute("call-1", params as never, undefined).then((outcome) => ({
     isError: (outcome as { isError?: boolean }).isError === true,
