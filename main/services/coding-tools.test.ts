@@ -1554,7 +1554,7 @@ test("write_file streams a large existing file and refuses one past the replace 
     await fs.truncate(huge, 600 * 1024 * 1024);
     await assert.rejects(
       write.execute("huge", { path: "huge.log", content: "x" }),
-      /huge\.log is larger than write_file's \d+ MB limit for replacing a file/u,
+      /huge\.log is larger than write_file's 256 MiB limit for replacing a file/u,
     );
     assert.equal((await fs.stat(huge)).size, 600 * 1024 * 1024);
   } finally {
@@ -1581,27 +1581,83 @@ test("write_file counts lines of a large pre-image exactly as it does for a smal
   }
 });
 
-test("edit_file refuses a file too large to edit in memory and leaves it untouched", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-huge-"));
+async function fileHead(target: string, bytes: number): Promise<string> {
+  const head = Buffer.alloc(bytes);
+  const handle = await fs.open(target, "r");
   try {
-    const target = path.join(root, "huge.log");
-    await fs.writeFile(target, "before\n");
-    await fs.truncate(target, 600 * 1024 * 1024);
+    await handle.read(head, 0, bytes, 0);
+  } finally {
+    await handle.close();
+  }
+  return head.toString("utf8");
+}
+
+test("edit_file edits a file of exactly its size limit and refuses one byte more, untouched", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-huge-"));
+  const limit = 64 * 1024 * 1024;
+  try {
     const edit = buildPinnedCodingTools(root).find((tool) => tool.name === "edit_file");
     assert.ok(edit);
+    const atLimit = path.join(root, "at-limit.log");
+    await fs.writeFile(atLimit, "before\n");
+    await fs.truncate(atLimit, limit);
+    await edit.execute("at-limit", { path: "at-limit.log", old_string: "before", new_string: "after!" });
+    assert.equal(await fileHead(atLimit, 7), "after!\n");
+    assert.equal((await fs.stat(atLimit)).size, limit);
+
+    const over = path.join(root, "huge.log");
+    await fs.writeFile(over, "before\n");
+    await fs.truncate(over, limit + 1);
     await assert.rejects(
       edit.execute("huge", { path: "huge.log", old_string: "before", new_string: "after" }),
-      /huge\.log is larger than edit_file's \d+ MB limit; use write_file or run_command/u,
+      /huge\.log is larger than edit_file's 64 MiB limit; use write_file or run_command/u,
     );
-    const head = Buffer.alloc(7);
+    assert.equal(await fileHead(over, 7), "before\n");
+    assert.equal((await fs.stat(over)).size, limit + 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("edit_file reads what a file grew to after its size check, and refuses growth past the limit", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-growth-"));
+  try {
+    const target = path.join(root, "growing.log");
+    let growTo = 0;
+    const grow = async () => {
+      const handle = await fs.open(target, "a");
+      try {
+        // Appended after the check: the edit must still see the tail.
+        await handle.write(Buffer.concat([Buffer.alloc(growTo - "head\n".length - "tail\n".length), Buffer.from("tail\n")]));
+      } finally {
+        await handle.close();
+      }
+    };
+    const edit = buildPinnedCodingTools(root, { afterFileStat: grow }).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+
+    await fs.writeFile(target, "head\n");
+    growTo = 3 * 1024 * 1024;
+    await edit.execute("grown", { path: "growing.log", old_string: "tail", new_string: "TAIL" });
+    const grownSize = (await fs.stat(target)).size;
+    assert.equal(grownSize, growTo);
     const handle = await fs.open(target, "r");
     try {
-      await handle.read(head, 0, 7, 0);
+      const tail = Buffer.alloc(5);
+      await handle.read(tail, 0, 5, grownSize - 5);
+      assert.equal(tail.toString("utf8"), "TAIL\n");
     } finally {
       await handle.close();
     }
-    assert.equal(head.toString("utf8"), "before\n");
-    assert.equal((await fs.stat(target)).size, 600 * 1024 * 1024);
+
+    await fs.writeFile(target, "head\n");
+    growTo = 64 * 1024 * 1024 + 1;
+    await assert.rejects(
+      edit.execute("too-big", { path: "growing.log", old_string: "tail", new_string: "TAIL" }),
+      /growing\.log is larger than edit_file's 64 MiB limit/u,
+    );
+    assert.equal((await fs.stat(target)).size, growTo);
+    assert.equal(await fileHead(target, 5), "head\n");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

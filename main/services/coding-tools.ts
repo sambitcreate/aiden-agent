@@ -211,11 +211,22 @@ async function readWritePreimage(
   };
 }
 
-/** Reads at most `limit` bytes; undefined when the file is larger. */
-async function readAtMost(handle: fs.FileHandle, limit: number): Promise<Buffer | undefined> {
-  const buffer = Buffer.allocUnsafe(limit + 1);
+/**
+ * Reads at most `limit` bytes; undefined when the file is larger. The buffer
+ * starts at the size the file had when it was checked and grows only if the
+ * file grew since, so a small edit never allocates the whole limit.
+ */
+async function readAtMost(handle: fs.FileHandle, limit: number, expectedSize: number): Promise<Buffer | undefined> {
+  // One spare byte shows whether the file ends where stat said it would.
+  let buffer = Buffer.allocUnsafe(Math.min(limit, expectedSize) + 1);
   let length = 0;
   for (;;) {
+    if (length === buffer.length) {
+      // The file grew while being read; length <= limit here.
+      const grown = Buffer.allocUnsafe(Math.min(limit + 1, length + Math.max(length, FILE_READ_CHUNK_BYTES)));
+      buffer.copy(grown, 0, 0, length);
+      buffer = grown;
+    }
     const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
     if (bytesRead === 0) return buffer.subarray(0, length);
     length += bytesRead;
@@ -1186,7 +1197,7 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
           // The native writer refuses to replace anything larger; say why up front.
           if (stat.size > BigInt(MAX_PARENT_EDIT_BYTES)) {
             throw new Error(
-              `${p} is larger than write_file's ${MAX_PARENT_EDIT_BYTES / 1024 / 1024} MB limit for replacing a file; remove or truncate it with run_command first.`,
+              `${p} is larger than write_file's ${MAX_PARENT_EDIT_BYTES / 1024 / 1024} MiB limit for replacing a file; remove or truncate it with run_command first.`,
             );
           }
           const source = await readWritePreimage(handle, signal);
@@ -1304,12 +1315,13 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
         if (!stat.isFile() || stat.nlink !== 1n) {
           throw new Error(`Path "${p}" is not an exclusively linked regular file.`);
         }
+        await workspace.testObserver?.afterFileStat?.(full);
         const bounded = stat.size > BigInt(MAX_EDIT_SOURCE_BYTES)
           ? undefined
-          : await readAtMost(handle, MAX_EDIT_SOURCE_BYTES);
+          : await readAtMost(handle, MAX_EDIT_SOURCE_BYTES, Number(stat.size));
         if (!bounded) {
           throw new Error(
-            `${p} is larger than edit_file's ${MAX_EDIT_SOURCE_BYTES / 1024 / 1024} MB limit; use write_file or run_command for files this large.`,
+            `${p} is larger than edit_file's ${MAX_EDIT_SOURCE_BYTES / 1024 / 1024} MiB limit; use write_file or run_command for files this large.`,
           );
         }
         source = bounded;
