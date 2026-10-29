@@ -556,9 +556,13 @@ export function createUsageStore(
         } else if (!record.local) {
           bucket.unpricedHostedRequests += 1;
         }
-        dirty = true;
-        if (saveDelayMs === 0) await saveIfDirty();
-        else scheduleSave();
+        if (saveDelayMs === 0) {
+          // Without a delay every record waits for its own save, as before.
+          await persistence.save(database);
+        } else {
+          dirty = true;
+          scheduleSave();
+        }
       });
       mutationQueue = task.catch(() => undefined);
       return task;
