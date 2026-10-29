@@ -59,7 +59,3 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
-
-## Telegram pairing
-
-Settings → Telegram uses its existing grouped setup rows. After Connect, an unpaired profile offers Start pairing. A read-only, accessible command field with Copy command and Cancel pairing shows the five-minute proof only in local component state. Profile changes, completion, expiry and unmount clear it. Status queries expose expiry without the secret. The workspace selector and connection review disclose unattended Full automation in Ask workspaces and the No Access ceiling. See [Telegram control](telegram.md).
