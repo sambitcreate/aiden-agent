@@ -23,6 +23,7 @@ interface MessageActionsProps {
 export function MessageActions({ copyText, readAloud, hidden, footer, fork }: MessageActionsProps) {
   return (
     <div
+      data-message-actions
       className={`group/actions flex items-center gap-0.5 ${hidden ? "invisible" : ""}`}
       aria-hidden={hidden}
     >

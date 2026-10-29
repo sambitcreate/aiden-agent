@@ -4,7 +4,8 @@ Aiden's desktop app aims to be fully usable without a mouse. This page lists
 the keys that exist today. Keys are shown with Mac symbols; on Linux and
 Windows, `⌘` is `Ctrl`, `⌥` is `Alt` and `⇧` is `Shift`.
 
-Every key in the tables below, except the approval keys and `/`, lives in the
+Every key in the tables below, except the fixed keys (the approval keys, `/`,
+`F6`, the arrow keys and `↑` in the message box), lives in the
 one command catalog (`renderer/shared/keybindings.ts`), so it can be changed
 or turned off in **Settings → Keyboard shortcuts**, and the native menus and button tooltips
 show the current choice. Keys added in a later release never take a shortcut
@@ -18,8 +19,8 @@ one starts unassigned.
 | `⌘K` | Command palette: commands, chats, models, providers, Settings, appearance, Bots |
 | `⌘N` / `⇧⌘N` | New chat / New chat in… |
 | `⇧⌘F` | Search chats |
-| `⌘1`–`⌘9` | Open the chat with that number (hold `⌘` to see the numbers) |
-| `⇧⌘[` / `⇧⌘]` | Previous / next chat |
+| `⌘1`–`⌘9` | Open the chat with that number (hold `⌘` to see the numbers); on the Bots page, the Bot on that row |
+| `⇧⌘[` / `⇧⌘]` | Previous / next chat, or Bot on the Bots page |
 | `⌘[` / `⌘]` | Go back / go forward |
 | `⇧⌘M` | Change model |
 | `⌘,` | Open Settings |
@@ -27,6 +28,26 @@ one starts unassigned.
 | `⌘O` / `⇧⌘O` | Open workspace in preferred editor / Open folder… |
 | `⌘J` / `⇧⌘E` | Toggle terminal / Toggle Environment |
 | `⌘S` | Save file (Files editor) |
+
+## Moving around the window
+
+| Key | Does |
+| --- | --- |
+| `F6` / `⇧F6` | Move to the next / previous area: sidebar, conversation, message box, side panel |
+| `↑` `↓` | Move between chats or Bots in the sidebar |
+| `Home` / `End` | First / last row in the sidebar |
+| `←` / `→` | In the sidebar, close / open a project folder; `←` on a chat goes to its folder |
+
+`F6` lands on the sidebar's open chat, on the conversation itself (scroll it
+with the arrow keys, Page Up and Page Down), in the message box, or on the
+side panel's selected tab. Areas that are hidden or closed are skipped, and
+`F6` does nothing while a menu or dialog is open. The sidebar list is a
+single `Tab` stop: `Tab` reaches the open chat (and its `•••`), then leaves the
+list. ⌘K also has **Focus sidebar**, **Focus conversation** and **Focus side
+panel**, which can be given their own keys in Settings.
+
+The chat keys (`⌘1`–`⌘9`, `⇧⌘[` / `⇧⌘]`) also work while typing in the
+message box.
 
 Global keys (`⌥⌘Space` focus composer, `⇧⌘D` dictation, `⌥⌘A` open Aiden)
 work while Aiden is in the background.
@@ -37,9 +58,21 @@ work while Aiden is in the background.
 | --- | --- |
 | `⌘.` | Stop the reply (`Esc` also works from the message box) |
 | `⌘U` | Attach files |
+| `⌘F` | Find in this chat: `↩` / `⇧↩` (or `⌘G` / `⇧⌘G`) next / previous match, `Esc` closes |
+| `↑` | In an empty message box, bring back your last message to fix and send again |
+| `⌥↑` / `⌥↓` | Step to the previous / next reply and its Copy and Fork buttons |
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
+
+`↑` works like **Edit in fork**: it forks the chat just before your last
+message and puts that message back in the box, so the original chat stays as
+it was. It needs that message to have a finished reply, and does nothing while
+a reply is coming, in a Bot chat, or when the box holds anything. `⌥↑` works
+from the conversation or an empty message box; `⌥↓` past the latest reply
+returns to the message box. Find in chat searches the conversation on screen,
+ignoring case, and keeps counting as replies stream in. A word split by
+formatting (half bold) is not found.
 
 The approval keys are fixed rather than set in Settings. They act only on the
 open chat's approval (the first one in a Bot chat), and only from the message

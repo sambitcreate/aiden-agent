@@ -531,7 +531,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
   const row = (
     // Hovering anywhere on a reply reveals the action row at its end.
-    <div className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}>
+    <div
+      data-transcript-reply={assistant ? "" : undefined}
+      className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
+    >
       {live ? (
         <AssistantResponse {...live} streaming />
       ) : !message ? null : message.role === "assistant" ? (
