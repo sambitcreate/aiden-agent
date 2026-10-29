@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
@@ -70,6 +70,7 @@ import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-p
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
+import { WakeUpChip } from "../../components/bots/wake-up-chip";
 import { useConnectionSetup } from "./use-connection-setup";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
 import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
@@ -700,6 +701,8 @@ export function TranscriptEntries({
   onRespondToLesson,
   onUndoLearning,
   onActOnIssue,
+  wakeUpPending,
+  onCancelWakeUp,
   connectLabel,
   connecting,
 }: {
@@ -737,6 +740,10 @@ export function TranscriptEntries({
   onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
   /** Add or decline a proposed (or found) skill. */
   onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
+  /** Whether a wake-up the Bot set still waits; `undefined` while that is unknown. */
+  wakeUpPending?(wakeUpId: string): boolean | undefined;
+  /** Cancel on a wake-up chip; rejects (after saying why) when it couldn't. */
+  onCancelWakeUp?(wakeUpId: string): Promise<void>;
   /** Connect cards' button text, e.g. where the connection is finished. */
   connectLabel?: string;
   /** A connection request is being sent. */
@@ -883,6 +890,15 @@ export function TranscriptEntries({
             return onUndoLearning && row.changeId ? (
               <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
             ) : null;
+          case "wake_up":
+            return (
+              <WakeUpChip
+                key={row.id}
+                fireAt={row.fireAt}
+                pending={wakeUpPending?.(row.wakeUpId)}
+                {...(onCancelWakeUp ? { onCancel: () => onCancelWakeUp(row.wakeUpId) } : {})}
+              />
+            );
           case "skill_proposal":
             return onRespondToSkill ? (
               <SkillProposalCard
@@ -996,6 +1012,33 @@ export function BotChatPane({ botId }: { botId: string }) {
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
+
+  // The Bot's routines, read only when its chat shows a wake-up chip.
+  const hasWakeUps = snapshot?.entries.some((entry) => entry.type === "wake_up") ?? false;
+  const routines = useQuery({
+    queryKey: botRoutinesKey(botId),
+    queryFn: () => botsApi.routines.list(botId),
+    enabled: hasWakeUps,
+  });
+  const wakeUpPending = (wakeUpId: string): boolean | undefined => {
+    if (!routines.data) return undefined;
+    return routines.data.some((routine) => routine.id === wakeUpId && routine.wakeUp !== undefined && routine.enabled);
+  };
+  /** Cancel on a wake-up chip: gone from the routines at once, back if main refuses. */
+  const cancelWakeUp = async (wakeUpId: string) => {
+    const key = botRoutinesKey(botId);
+    const before = qc.getQueryData<typeof routines.data>(key);
+    qc.setQueryData<typeof routines.data>(key, (rows) => rows?.filter((routine) => routine.id !== wakeUpId));
+    try {
+      await botsApi.routines.delete({ botId, id: wakeUpId });
+    } catch (error) {
+      qc.setQueryData(key, before);
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t cancel that wake-up."));
+      throw error;
+    } finally {
+      void qc.invalidateQueries({ queryKey: key });
+    }
+  };
 
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
@@ -1580,6 +1623,8 @@ export function BotChatPane({ botId }: { botId: string }) {
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
+          wakeUpPending={wakeUpPending}
+          onCancelWakeUp={cancelWakeUp}
           onRespondToProposal={respondToProposal}
           onNewRoutineLink={newRoutineLink}
           onRespondToSkill={respondToSkill}
