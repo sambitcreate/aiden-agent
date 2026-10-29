@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Contract revision 44: a picture the agent shows, shares or generates now sits right under the step that made it, in the order the reply happened, instead of piling up after the whole reply. Older replies get the same order when the Mac can tell which step showed which picture. Older Macs keep the pictures at the end.
 - Bot inbox search works with spaces, accents and symbols. The iPhone now sends a space as `+`, which every Mac reads, instead of `%20`, which the Mac refused, so a search such as "plan week" worked nowhere before. A search with an accent, `&`, `#` or `+` needs a Mac on contract revision 41; an older one still refuses it.
 - Contract revision 42 (`bot:issues`): when the paired Mac offers it, the iPhone asks for it in a call of its own, and a Bot's **Needs you** cards appear in its chat: what happened in plain words (a routine paused after repeated failures, a sign-in that lapsed, a run that stopped making progress) with up to two actions (**Resume routine**, **Stop**, **Keep waiting**, **Open chat**). A card whose only action opens the Mac's own settings reads "Open on your Mac". The Bots list shows how many open cards a Bot has, and an issue that arrived while the app was in the background posts one notification that opens the chat. Older Macs send no cards.
 - A message sent in a Bot chat now looks sent the moment you press Send, instead of faded until the Mac accepts it. "Sending…" shows under it only when it has waited more than 2 seconds (offline, or a slow Mac); Queued and "Couldn’t send · Try again" are unchanged.

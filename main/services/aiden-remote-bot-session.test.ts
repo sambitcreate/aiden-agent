@@ -1512,7 +1512,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; issues?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -3493,6 +3493,93 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
     await asked;
     assert.deepEqual(await notices(), []);
   } finally {
+    await service.close();
+  }
+});
+
+// --- Contract revision 45: images a Bot shares reach phones -------------------------
+
+/** A 1×1 PNG, as `share_image` stores it. */
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const sharedImage = (id: number, name: string, data = PNG_BASE64, mimeType = "image/png"): RawEntry => ({
+  id,
+  kind: "aiden.bot-shared-image",
+  data: { id: `img-${id}`, name, mimeType, size: Buffer.from(data, "base64").length, data },
+});
+
+test("an image the Bot shares reaches bot:images phones as the shared fixture shows it, other devices as a line pointing to the Mac, and its bytes read back exactly", async () => {
+  const fixture = (await contractFixture()).botImages;
+  const driven = drivenConversation([
+    user(1, "Chart this week's sales."),
+    sharedImage(2, fixture.entry.name),
+    assistant(3, "Here's the chart."),
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    const image = holder.entries.find((entry) => entry.type === "shared_image");
+    assert.ok(image, "the holder sees the image");
+    const { id: _fixtureId, size: _fixtureSize, ...expected } = fixture.entry;
+    assert.deepEqual({ ...image, id: undefined, size: undefined }, { ...expected, id: undefined, size: undefined });
+    assert.equal(image.size, Buffer.from(PNG_BASE64, "base64").length);
+    assert.equal(JSON.stringify(holder).includes(PNG_BASE64), false, "bytes never ride the session");
+
+    const legacy = await service.session(BOT_ID);
+    assert.equal(legacy.entries.some((entry) => entry.type === "shared_image"), false);
+    const line = legacy.entries.find((entry) => entry.id === image.id);
+    assert.deepEqual({ ...line, id: undefined }, { ...fixture.legacyEntry, id: undefined });
+    assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
+
+    const read = await service.sharedImage(BOT_ID, image.id);
+    assert.equal(read.mimeType, "image/png");
+    assert.deepEqual(read.bytes, Buffer.from(PNG_BASE64, "base64"));
+    await assert.rejects(service.sharedImage(BOT_ID, "entry_999"), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a shared image whose bytes don't match its type is never offered to phones as readable", async () => {
+  const notAPng = Buffer.from("this is not an image").toString("base64");
+  const driven = drivenConversation([sharedImage(1, "broken.png", notAPng), sharedImage(2, "notes.gif", PNG_BASE64, "image/gif")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    // A type outside the contract is left out; a PNG whose bytes are wrong is listed but refused on read.
+    assert.deepEqual(holder.entries.map((entry) => entry.type === "shared_image" ? entry.name : entry.type), ["broken.png"]);
+    await assert.rejects(service.sharedImage(BOT_ID, holder.entries[0]!.id), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a newly shared image reaches bot:images streams as an image and other streams as its line, at the same seq", async () => {
+  const driven = drivenConversation([user(1, "Draw it.")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const holder = await openAudienceStream(service, { images: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    await driven.emit([user(1, "Draw it."), sharedImage(2, "sketch.png")]);
+    await holder.until(() => holder.frames.length >= 2, "the image entry");
+    await legacy.until(() => legacy.frames.length >= 2, "the line entry");
+    const [shown, line] = [holder.frames[1]!, legacy.frames[1]!];
+    assert.equal(shown.payload.entry.type, "shared_image");
+    assert.equal(shown.payload.entry.name, "sketch.png");
+    assert.deepEqual(line.payload.entry, {
+      type: "message",
+      id: shown.payload.entry.id,
+      role: "assistant",
+      text: "I shared an image: sketch.png. Open this chat on your Mac to see it.",
+    });
+    assert.equal(shown.seq, line.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
     await service.close();
   }
 });

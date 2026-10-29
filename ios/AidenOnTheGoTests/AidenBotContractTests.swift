@@ -2281,4 +2281,40 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertFalse(offered.supportsBotHandoffs, "but has not been granted it yet")
         XCTAssertTrue(try decoded(offered: true, grant: true).supportsBotHandoffs)
     }
+
+    /// Revision 45 (`bot:images`): a shared image decodes as the Mac sends it
+    /// to holders, every other device reads the same entry as an assistant
+    /// line, and the bytes never ride the session.
+    func testRevision41SharedImagesDecodeLikeTheHostParser() throws {
+        let raw = try XCTUnwrap(try sharedFixtureObject()["botImages"] as? [String: Any])
+        XCTAssertEqual(raw["capability"] as? String, AidenRemoteCapability.botImages.rawValue)
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botImages))
+        let entry = try XCTUnwrap(raw["entry"] as? [String: Any])
+        let decoded = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: entry))
+        guard case let .sharedImage(image) = decoded else { return XCTFail("expected a shared image") }
+        XCTAssertEqual(image.id, entry["id"] as? String)
+        XCTAssertEqual(image.name, entry["name"] as? String)
+        XCTAssertEqual(image.mimeType, entry["mimeType"] as? String)
+        XCTAssertEqual(image.size, entry["size"] as? Int)
+        XCTAssertEqual(image.attachment.kind, .image)
+        let legacy = try XCTUnwrap(raw["legacyEntry"] as? [String: Any])
+        let line = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
+        guard case let .message(message) = line else { return XCTFail("expected the line other devices read") }
+        XCTAssertEqual(message.role, .assistant)
+        XCTAssertEqual(message.id, image.id)
+        // The phone's cache writes the entry back in the shape the Mac sent.
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+        XCTAssertEqual(NSDictionary(dictionary: reencoded), NSDictionary(dictionary: entry))
+        let refused: [(String, [String: Any])] = [
+            ("inline bytes", entry.merging(["data": "iVBORw0KGgo="]) { $1 }),
+            ("a GIF", entry.merging(["mimeType": "image/gif"]) { $1 }),
+            ("an empty image", entry.merging(["size": 0]) { $1 }),
+            ("an image over the limit", entry.merging(["size": 8 * 1_048_576 + 1]) { $1 }),
+            ("a blank name", entry.merging(["name": ""]) { $1 }),
+            ("a long name", entry.merging(["name": String(repeating: "a", count: 256)]) { $1 }),
+        ]
+        for (label, sample) in refused {
+            XCTAssertFalse(decodes(AidenBotSessionEntry.self, sample), label)
+        }
+    }
 }

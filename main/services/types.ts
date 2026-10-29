@@ -342,7 +342,7 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
-  /** Producing generate_image call per generated image attachment. */
+  /** Producing call (generate_image, display_image or share_image) per image attachment. */
   imagePlacements?: ChatImagePlacementV1[];
   /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
   uiVisuals?: ChatUiVisualV1[];

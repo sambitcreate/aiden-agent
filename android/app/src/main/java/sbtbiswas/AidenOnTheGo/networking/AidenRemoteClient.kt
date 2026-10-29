@@ -2111,6 +2111,48 @@ class AidenRemoteClient(
         AidenBotAvatarContent(data = bytes, assetRevision = assetRevision)
     }
 
+    /**
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
+     * Mac's inline image limit, is accepted.
+     */
+    suspend fun botSessionImage(botId: String, entryId: String): ByteArray = withContext(Dispatchers.IO) {
+        if (!AidenBotWire.isSafeIdentifier(botId) || !AidenBotWire.isSafeIdentifier(entryId) ||
+            botId.isEmpty() || entryId.isEmpty() ||
+            entryId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH || botId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH
+        ) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+        val request = Request.Builder()
+            .url("$endpoint/bots/$botId/session/images/$entryId")
+            .addHeader("Aiden-Protocol-Version", "1")
+            .addHeader("Accept", "image/png, image/jpeg")
+            .addHeader("Authorization", "Bearer $credential")
+            .get()
+            .build()
+        httpClient.newCall(request).await().use { response ->
+            if (!response.isSuccessful) {
+                val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+            }
+            val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+            if (contentType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES ||
+                response.header("Cache-Control")?.lowercase() != "no-store" ||
+                response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
+            ) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val bytes = try {
+                response.body.readBounded(AidenBotSessionWire.MAX_SHARED_IMAGE_BYTES)
+            } catch (_: ResponseBodyLimitExceededException) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            if (bytes.isEmpty()) throw AidenRemoteClientException.InvalidResponse()
+            bytes
+        }
+    }
+
     // --- Scheduled Tasks ---
     suspend fun scheduledTasks(): List<AidenScheduledTask> = executeRequest("/scheduled-tasks") { bytes ->
         val resp = json.decodeFromString<ScheduledTaskListResponse>(String(bytes, Charsets.UTF_8))
