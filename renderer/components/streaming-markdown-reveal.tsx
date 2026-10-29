@@ -1,6 +1,6 @@
 import * as React from "react";
 import { MARKDOWN_CLASSNAME, MarkdownContent } from "./markdown";
-import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import { useReduceMotion } from "../lib/use-reduce-motion";
 import {
   advanceStreamingRevealGate,
   INITIAL_STREAMING_REVEAL_GATE,
@@ -21,22 +21,6 @@ interface StreamingMarkdownRevealProps {
   richLinks?: boolean;
 }
 
-function readReducedMotion(): boolean {
-  return (
-    typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true"
-  );
-}
-
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = React.useState(readReducedMotion);
-  React.useEffect(() => {
-    const update = () => setReduced(readReducedMotion());
-    window.addEventListener(APPEARANCE_CHANGE_EVENT, update);
-    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
-  }, []);
-  return reduced;
-}
-
 export function StreamingMarkdownReveal({
   content,
   complete = false,
@@ -44,7 +28,7 @@ export function StreamingMarkdownReveal({
   onHandoffComplete,
   richLinks = false,
 }: StreamingMarkdownRevealProps) {
-  const reducedMotion = useReducedMotion();
+  const reducedMotion = useReduceMotion();
   const gateRef = React.useRef(INITIAL_STREAMING_REVEAL_GATE);
   const [gate, setGate] = React.useState(INITIAL_STREAMING_REVEAL_GATE);
   const inputRef = React.useRef<StreamingRevealGateInput>({

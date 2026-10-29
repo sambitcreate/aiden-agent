@@ -3,7 +3,7 @@
 // the `.image-scan*` rules in styles.css; numbers come from IMAGE_SCAN_SPEC.
 
 import * as React from "react";
-import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import { useReduceMotion } from "../lib/use-reduce-motion";
 import { observeOffscreen } from "../lib/offscreen-pause";
 import type { Attachment } from "../lib/types";
 import { inlineImageSource } from "./message-attachments";
@@ -19,21 +19,6 @@ import {
   imageScanElapsedLabel,
   isLongImageScan,
 } from "../shared/image-generation/placeholder-spec";
-
-function reduceMotionActive(): boolean {
-  return typeof document !== "undefined" && document.documentElement.dataset.reduceMotion === "true";
-}
-
-function useReduceMotion(): boolean {
-  const [reduce, setReduce] = React.useState(reduceMotionActive);
-  React.useEffect(() => {
-    const update = () => setReduce(reduceMotionActive());
-    update();
-    window.addEventListener(APPEARANCE_CHANGE_EVENT, update);
-    return () => window.removeEventListener(APPEARANCE_CHANGE_EVENT, update);
-  }, []);
-  return reduce;
-}
 
 /** Pause while offscreen or while the window is hidden. */
 function usePauseWhenUnseen(ref: React.RefObject<HTMLElement | null>): void {
