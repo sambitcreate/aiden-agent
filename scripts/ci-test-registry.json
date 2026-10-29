@@ -1222,7 +1222,10 @@
         "renderer/components/settings/web-page-settings.test.tsx",
         "renderer/components/web-extract-recap.test.tsx",
         "renderer/components/chat-approval-card.test.tsx",
-        "renderer/shared/tool-approval-preview.test.ts"
+        "renderer/shared/tool-approval-preview.test.ts",
+        "main/services/transcript-image-fetch.test.ts",
+        "main/handlers/transcript-images.test.ts",
+        "renderer/components/transcript-image.test.tsx"
       ],
       "preserved": [
         "generative-ui-chromium",

@@ -24,6 +24,8 @@ import { workspaceEnvironmentApplicationService } from "../services/workspace-en
 import type { IpcMainInvokeEvent } from "electron";
 import { registerAttachmentHandlers } from "./attachments.js";
 import { registerChatImageActionHandlers } from "./chat-image-actions.js";
+import { registerTranscriptImageHandlers } from "./transcript-images.js";
+import { fetchTranscriptImage } from "../services/transcript-image-fetch.js";
 import { registerPhase2Handlers } from "./phase2.js";
 import { registerLocalVoiceHandlers } from "./local-voice.js";
 import { registerTerminalHandlers } from "./terminal.js";
@@ -102,6 +104,11 @@ export function registerHandlers(): void {
   });
   registerAttachmentHandlers();
   registerChatImageActionHandlers();
+  registerTranscriptImageHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: (event) => rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Image loading requires the active application window.")),
+    fetch: fetchTranscriptImage,
+  });
   registerPhase2Handlers();
   registerLocalVoiceHandlers();
   registerTerminalHandlers();

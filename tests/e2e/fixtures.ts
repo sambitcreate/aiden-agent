@@ -578,7 +578,7 @@ async function closeMockLmStudio(mock: MockLmStudio): Promise<void> {
   await withTimeout(closed, "deterministic LM Studio server shutdown", PROCESS_EXIT_TIMEOUT_MS);
 }
 
-function isolatedAppEnvironment(): Record<string, string> {
+export function isolatedAppEnvironment(): Record<string, string> {
   const environment: Record<string, string> = {};
   const passthrough =
     process.platform === "linux"

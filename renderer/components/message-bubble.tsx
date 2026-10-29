@@ -24,6 +24,7 @@ import { cn } from "../lib/ui-utils";
 import { USER_MESSAGE_FOLD_LINES, userMessageFolds, userMessageMayFold } from "../lib/user-message-fold";
 
 export interface MessageBubbleProps {
+  imageScope?: string;
   role: ChatMessage["role"];
   content: string;
   attachments?: Attachment[];
@@ -58,6 +59,7 @@ export function SafeMessageBubble(props: MessageBubbleProps) {
 }
 
 export function MessageBubble({
+  imageScope,
   role,
   content,
   attachments,
@@ -120,6 +122,7 @@ export function MessageBubble({
         ) : null}
         {revealed ? (
           <StreamingMarkdownReveal
+            imageScope={imageScope}
             content={content}
             // Text that settled or whose turn ended shows in full in the same
             // tree; text a tool step closed still joins at the next release.
@@ -129,7 +132,7 @@ export function MessageBubble({
             richLinks
           />
         ) : (
-          <Markdown content={content} richLinks />
+          <Markdown content={content} richLinks imageScope={imageScope} />
         )}
         {content && showCopy ? (
           <MessageActions

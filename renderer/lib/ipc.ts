@@ -133,6 +133,7 @@ import type {
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
+import type { TranscriptImage } from "../shared/transcript-images";
 import type {
   WebKeyPoolId,
   WebSearchKeyPoolRendererState,
@@ -774,6 +775,10 @@ export const webFetchApi = {
     invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractEnabled", enabled),
   setExtractAccountId: (accountId: string | null) =>
     invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
+};
+
+export const transcriptImagesApi = {
+  load: (url: string) => invoke<TranscriptImage>("chat:loadTranscriptImage", url),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────
