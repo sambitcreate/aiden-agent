@@ -244,6 +244,8 @@ export async function shutdownFollowThrough(): Promise<void> {
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
   doneWhen.clear(chatId);
+  runWindows.delete(chatId);
+  for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
   await backgroundJobs.stopChat(chatId, "chat-deleted", true);
 }
 

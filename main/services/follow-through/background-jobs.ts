@@ -26,6 +26,8 @@ export const JOB_TAIL_CHARS = 20_000;
 export const JOB_STOP_GRACE_MS = 4_000;
 /** Finished jobs each chat keeps listing (with their logs) in this session. */
 export const MAX_FINISHED_JOBS_PER_CHAT = 10;
+/** Finished jobs kept across all chats, so many open chats cannot pile up tails. */
+export const MAX_FINISHED_JOBS = 50;
 export const MAX_JOB_COMMAND_CHARS = 4_000;
 export const MAX_JOB_DESCRIPTION_CHARS = 120;
 
@@ -47,6 +49,7 @@ export interface BackgroundJobsOptions {
   maxLogBytes?: number;
   maxRunningPerChat?: number;
   maxRunning?: number;
+  maxFinished?: number;
   /** Reads a process's start time so a later launch can tell it from a reused pid. */
   processStartTime?: (pid: number) => Promise<string | undefined>;
   /** Lists the processes in a process group. */
@@ -186,6 +189,7 @@ export class BackgroundJobs {
   private readonly maxLogBytes: number;
   private readonly maxRunningPerChat: number;
   private readonly maxRunning: number;
+  private readonly maxFinished: number;
   private readonly processStartTime: (pid: number) => Promise<string | undefined>;
   private readonly processGroupMembers: (pgid: number) => Promise<number[]>;
   private readonly processHasEnvironment: (pid: number, entry: string) => Promise<boolean>;
@@ -200,6 +204,7 @@ export class BackgroundJobs {
     this.maxLogBytes = options.maxLogBytes ?? MAX_JOB_LOG_BYTES;
     this.maxRunningPerChat = options.maxRunningPerChat ?? MAX_RUNNING_JOBS_PER_CHAT;
     this.maxRunning = options.maxRunning ?? MAX_RUNNING_JOBS;
+    this.maxFinished = options.maxFinished ?? MAX_FINISHED_JOBS;
     this.processStartTime = options.processStartTime ?? defaultProcessStartTime;
     this.processGroupMembers = options.processGroupMembers ?? defaultProcessGroupMembers;
     this.processHasEnvironment = options.processHasEnvironment ?? defaultProcessHasEnvironment;
@@ -538,13 +543,17 @@ export class BackgroundJobs {
   }
 
   private forgetOldFinished(chatId: string): void {
-    const finished = [...this.jobs.values()]
-      .filter((job) => job.view.chatId === chatId && job.view.state !== "running")
-      .sort((left, right) => (right.view.endedAt ?? 0) - (left.view.endedAt ?? 0));
-    for (const job of finished.slice(MAX_FINISHED_JOBS_PER_CHAT)) {
+    const newestFirst = (left: JobRecord, right: JobRecord) => (right.view.endedAt ?? 0) - (left.view.endedAt ?? 0);
+    const finished = [...this.jobs.values()].filter((job) => job.view.state !== "running").sort(newestFirst);
+    const chatFinished = finished.filter((job) => job.view.chatId === chatId);
+    const forget = new Set([...chatFinished.slice(MAX_FINISHED_JOBS_PER_CHAT), ...finished.slice(this.maxFinished)]);
+    const otherChats = new Set<string>();
+    for (const job of forget) {
       this.jobs.delete(job.view.id);
       void fsp.rm(job.logPath, { force: true }).catch(() => undefined);
+      if (job.view.chatId !== chatId) otherChats.add(job.view.chatId);
     }
+    for (const other of otherChats) this.options.onChange?.(other);
   }
 
   private writeRecord(): void {
