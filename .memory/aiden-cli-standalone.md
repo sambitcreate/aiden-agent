@@ -47,3 +47,12 @@ CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` fi
 
 - 2026-10-19 H3 adds an explicit durable Bot host switch; see `docs/cli-durable-bots.md` for ownership, preserving migration, supported endpoints, and remaining boundaries.
 - MCP (2026-10-21, Phase 3 of `docs/plans/mcp-pi-migration-plan.md`): the CLI's MCP client and OAuth are the desktop's `main/services` modules on `@earendil-works/pi-mcp`; the CLI build rejects any bundled `@modelcontextprotocol/sdk` client. Pi's built-in MCP extension is replaced by Aiden's `/mcp` command and `aiden pi-mcp` is gone; `aiden-mcp.json` is the only MCP config. Details in `.memory/mcp-pi-migration.md`.
+- 2026-10-29 CLI/daemon audit fixes (branch `claude/audit-fix-cli-daemon`):
+  - `serve stop` SIGKILLs a wedged daemon's process group after 15 s, re-checking that the PID is still the daemon first.
+  - Serve shutdown refuses new sockets and chat turns before draining. Foreground serve drains on SIGHUP and logs unhandled rejections instead of crashing.
+  - Subagent approval gates are dismissed when the child stops. `/dictate` escalates a stuck recorder to SIGKILL, and transcription times out after 60 s.
+  - Aiden commands exit 0 on EPIPE. The handler is released before pi takes over the TUI.
+  - The scheduled response budget counts only stream deltas. The usage ledger keeps a rolling window of 4096 advisor attempt IDs, where it used to throw at 100k.
+  - Failed daemon turns close their MCP pool and memory store.
+  - `scripts/build.mjs` realpaths symlinked node_modules when deduping.
+  - Deliberately kept: rebuilding the model runtime on every scheduled tool call. That rebuild is the authority re-check.
