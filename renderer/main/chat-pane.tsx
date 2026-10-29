@@ -180,6 +180,7 @@ import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shar
 import {
   formatRecoveredAskUserQuestionAnswers,
   INTERRUPTED_REPLY_FOLLOW_UP,
+  type InterruptedWaitV1,
 } from "../shared/interrupted-reply";
 import type { CompactionEngine } from "../shared/compaction";
 import {
@@ -3206,27 +3207,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
       : undefined;
   }, [interruptedWaits, questionnaire]);
-  const [recoveredAnswerSending, setRecoveredAnswerSending] = React.useState(false);
+  // Like Resume, sending a recovered answer is busy only in its own chat.
+  const recoveredAnswerTokenRef = React.useRef(0);
+  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const recoveredAnswerSending = recoveredAnswerOwners[chatId] !== undefined;
   const answerRecoveredQuestion = React.useCallback(
     async (response: AskUserQuestionResponseV1) => {
       if (!recoveredQuestion || recoveredAnswerSending) return;
       const waitId = recoveredQuestion.promptId;
-      setRecoveredAnswerSending(true);
+      const token = ++recoveredAnswerTokenRef.current;
+      setRecoveredAnswerOwners((owners) => ({ ...owners, [chatId]: token }));
       try {
         // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
         if (!response.cancelled) {
           await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
         }
         setDismissedWaitIds((ids) => new Set(ids).add(waitId));
-        void chatsApi.dismissInterruptedWait(chatId, waitId).catch(() => undefined);
+        // Once the host forgets the wait, drop it from the cached reads too, so
+        // the card stays gone when the pane opens this chat again.
+        void chatsApi
+          .dismissInterruptedWait(chatId, waitId)
+          .then(() =>
+            qc.setQueriesData<InterruptedWaitV1[]>({ queryKey: ["chat-interrupted-waits", chatId] }, (waits) =>
+              waits?.filter((wait) => wait.waitId !== waitId),
+            ),
+          )
+          .catch(() => undefined);
       } catch (answerError) {
         if (chatIdRef.current !== chatId) return;
         toast.error(userFacingErrorMessage(answerError, "Couldn’t send your answers."));
       } finally {
-        if (chatIdRef.current === chatId) setRecoveredAnswerSending(false);
+        setRecoveredAnswerOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
       }
     },
-    [chatId, handleSend, recoveredAnswerSending, recoveredQuestion],
+    [chatId, handleSend, qc, recoveredAnswerSending, recoveredQuestion],
   );
   // Held until the saved waits are read, so Resume never shows in front of a question it would orphan.
   const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;

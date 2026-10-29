@@ -919,3 +919,83 @@ test("a pending Resume in one chat leaves another interrupted chat's Resume usab
     queryClient.clear();
   }
 });
+
+function recoveredQuestionWaits(chatId: string) {
+  return [{
+    kind: "question" as const,
+    waitId: `wait-${chatId}`,
+    askedAt: 1,
+    questions: [{
+      question: "Which database?",
+      header: "Database",
+      multiSelect: false,
+      options: [
+        { label: "SQLite", description: "Embedded." },
+        { label: "Postgres", description: "Relational." },
+      ],
+    }],
+  }];
+}
+
+test("a recovered answer still sending in one chat leaves another chat's question usable", async () => {
+  let rejectAppend!: (error: Error) => void;
+  const { router, queryClient } = await mountRoutedChatPane("chat-a", {
+    "chats:replyInterrupted": () => true,
+    "chats:interruptedWaits": (id) => recoveredQuestionWaits(String(id)),
+    "chats:dismissInterruptedWait": () => undefined,
+    "chats:appendMessage": () => new Promise((_resolve, reject) => { rejectAppend = reject; }),
+  });
+  const close = async () => (await screen.findByRole("button", { name: "Close questionnaire" })) as HTMLButtonElement;
+  const visit = async (chatId: string) => {
+    await act(async () => {
+      await router.navigate({ to: "/chat/$chatId", params: { chatId } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  };
+  try {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /SQLite/u }));
+      fireEvent.click(await screen.findByRole("button", { name: "Submit" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-b");
+    assert.equal((await close()).disabled, false, "Chat B must not inherit chat A's pending answer");
+    await act(async () => {
+      rejectAppend(new Error("The answer could not be saved."));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    await visit("chat-a");
+    assert.equal((await close()).disabled, false, "a failed answer frees chat A's question again");
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
+
+test("a dismissed recovered question stays gone when the chat opens again", async () => {
+  const dismissed = new Set<string>();
+  const handlers = {
+    "chats:replyInterrupted": () => true,
+    "chats:interruptedWaits": (id: unknown) =>
+      recoveredQuestionWaits(String(id)).filter((wait) => !dismissed.has(wait.waitId)),
+    "chats:dismissInterruptedWait": (_id: unknown, waitId: unknown) => {
+      dismissed.add(String(waitId));
+    },
+  };
+  const { queryClient } = await mountRoutedChatPane("chat-a", handlers);
+  try {
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Close questionnaire" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    assert.deepEqual([...dismissed], ["wait-chat-a"]);
+    // Leave the chat (the pane unmounts) and come back with the same cache.
+    cleanup();
+    await mountRoutedChatPane("chat-a", handlers);
+    await screen.findByRole("button", { name: "Resume" });
+    assert.equal(screen.queryByRole("heading", { name: "Which database?" }), null);
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
+});
