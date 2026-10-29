@@ -316,6 +316,20 @@ function controlVariants(value: string): {
   };
 }
 
+/**
+ * Redact only credentials that span lines (YAML block scalars, private-key blocks) so a later
+ * per-line pass cannot separate their opening line from the body. Single-line tokens are left
+ * whole for control-aware inspection.
+ */
+export function redactMultilineCredentialBlocks(value: string): string {
+  let sanitized = value;
+  if (value.includes(":") && ASSIGNMENT_SECRET_HINT.test(value)) sanitized = sanitized.replace(BLOCK_SCALAR_ASSIGNED_SECRET, "$1[REDACTED]");
+  if (STANDALONE_CREDENTIAL_HINT.test(value)) {
+    sanitized = sanitized.replace(PRIVATE_KEY_BLOCK, "[REDACTED PRIVATE KEY]").replace(PUTTY_PRIVATE_KEY, "[REDACTED PRIVATE KEY]");
+  }
+  return sanitized;
+}
+
 export function sanitizeCredentialText(value: string): string {
   let sanitized = value;
   if ((value.includes("=") || value.includes(":")) && ASSIGNMENT_SECRET_HINT.test(value)) {

@@ -1575,6 +1575,9 @@ test("a link partway along the path is refused when another user could replace i
   const state = path.join(owned, "state"); await fs.mkdir(state, { mode: 0o700 });
   await fs.symlink(owned, path.join(shared, "alias"));
   assert.throws(() => ensurePrivateDirectory(path.join(shared, "alias", "state"), "reject"), /storage must be a private/u, "another user could swap the alias");
+  // A safe link whose target runs through the replaceable one is refused too.
+  await fs.symlink(path.join(shared, "alias", "state"), path.join(r.localRoot, "config-link"));
+  assert.throws(() => ensurePrivateDirectory(path.join(r.localRoot, "config-link"), "reject"), /storage must be a private/u, "the hop inside the link's target could be swapped");
   // The same path through a link in a folder only this user can change is fine.
   await fs.symlink(owned, path.join(r.localRoot, "safe-alias"));
   assert.doesNotThrow(() => ensurePrivateDirectory(path.join(r.localRoot, "safe-alias", "state"), "reject"));
