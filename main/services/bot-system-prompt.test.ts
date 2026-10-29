@@ -40,6 +40,7 @@ test("the Bot's prompt and its routines tool name the same ways it can be woken"
   assert.ok(prompt.some((line) => /scheduled routine/u.test(line)));
   assert.ok(prompt.some((line) => /file change/u.test(line) && /link/u.test(line)), "event routines are listed");
   assert.ok(prompt.some((line) => /approval/u.test(line)), "resolved waits are listed");
+  assert.ok(prompt.some((line) => /wake_up/u.test(line) && /24 hours/u.test(line)), "self wake-ups are listed");
   const tool = createBotRoutinesTool("bot-1", {
     list: async () => [],
     pause: async () => {

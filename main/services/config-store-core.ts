@@ -1,5 +1,7 @@
 import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { randomBytes } from "node:crypto";
 import { getPresetVariant, normalizeAppearanceConfig, parseAppearanceConfig, type ThemePresetId } from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
@@ -1090,6 +1092,12 @@ export function createConfigStore(
         throw new Error("Invalid compaction engine.");
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (patch.spendingLimits !== undefined) {
+        const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
+        if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
+        patch = { ...patch, spendingLimits };
+      }
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }

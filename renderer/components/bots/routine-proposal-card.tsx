@@ -7,7 +7,7 @@
 // way the Bot's profile shows it; the Bot never sees it.
 
 import * as React from "react";
-import { CalendarClock, Check, Copy, FolderOpen, Link2 } from "lucide-react";
+import { CalendarClock, Check, Copy, Eye, FolderOpen, Link2 } from "lucide-react";
 import { Button, toast } from "../ui";
 import { BotNoticeCard } from "./bot-notice-card";
 import {
@@ -28,6 +28,7 @@ export const ROUTINE_LINK_OFF_DESCRIPTION = "Turn on Aiden On The Go in Settings
 function ProposalIcon({ proposal }: { proposal: Pick<BotRoutineProposalEntryData, "trigger"> }) {
   if (proposal.trigger?.kind === "webhook") return <Link2 />;
   if (proposal.trigger?.kind === "file_change") return <FolderOpen />;
+  if (proposal.trigger?.kind === "watch") return <Eye />;
   return <CalendarClock />;
 }
 

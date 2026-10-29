@@ -23,6 +23,7 @@ import {
   modelCallRetryDelayMs,
 } from "./model-call-retry.js";
 import { modelRetainsSystemUpdates, retainedTailSystemTokens } from "./generation-context.js";
+import { isUsageLimitFailure } from "./usage-limit-core.js";
 import type { PiSessionEntry, PiSessionPort } from "./pi-session-port.js";
 
 export type PiCompactionReason = "threshold" | "overflow" | "manual";
@@ -510,7 +511,12 @@ export class PiCompactionCoordinator {
       return this.run("overflow", true);
     }
 
-    if (options.allowProviderRetry !== false && isRetryableAssistantError(assistantMessage)) {
+    // A usage limit the wait gave up on fails once, with its reset time.
+    if (
+      options.allowProviderRetry !== false &&
+      isRetryableAssistantError(assistantMessage) &&
+      !isUsageLimitFailure(assistantMessage)
+    ) {
       let liveMessages = options.liveMessages;
       if (!liveMessages) {
         try {

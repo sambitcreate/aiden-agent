@@ -1204,6 +1204,11 @@ export class AidenRemoteChatService {
        * refuses turns; a throw (an unreadable pause record) refuses too.
        */
       botPaused?: (botId: string) => Promise<boolean>;
+      /**
+       * The refusal text when this chat (or its Bot) is over its spending
+       * limit. Nothing runs, so the same key runs once more is allowed.
+       */
+      spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -2241,6 +2246,7 @@ export class AidenRemoteChatService {
         async () => {
           const authoritative = await this.chat(chatId);
           await this.refuseIfBotPaused(authoritative);
+          await this.refuseIfOverSpendingLimit(authoritative);
           const requestedProviderId = parsed.providerId ?? authoritative.providerId;
           const requestedModelId = parsed.modelId ?? authoritative.model;
           const preservesPinnedGemini =
@@ -2487,6 +2493,13 @@ export class AidenRemoteChatService {
     throw new AidenOperationNotExecutedError(
       new AidenRemoteServiceError("operation_stale", "This Bot is paused. Resume it to continue.", 409),
     );
+  }
+
+  /** A chat over its spending limit takes no turns until more is allowed; nothing ran. */
+  private async refuseIfOverSpendingLimit(chat: Chat): Promise<void> {
+    const refusal = await this.options.spendingRefusal?.(chat);
+    if (!refusal) return;
+    throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("operation_stale", refusal, 409));
   }
 
   private mapOperationError(error: unknown): never {

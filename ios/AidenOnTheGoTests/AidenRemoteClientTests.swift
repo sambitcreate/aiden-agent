@@ -988,6 +988,61 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 2)
     }
 
+    func testSpendingReadsAndAllowMoreCarryTheRevisionAndAnEmptyBody() async throws {
+        let client = makeClient()
+        let reached = try botFixtureData(at: ["spending", "chatReached"])
+        let allowed = try botFixtureData(at: ["spending", "chatAllowMore", "response"])
+        let month = try botFixtureData(at: ["spending", "bot"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/spending")
+                return Self.response(for: request, status: 200, data: reached)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/spending/allow-more")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "sp_fixture_chat_1")
+                XCTAssertEqual(try Self.jsonBody(request).count, 0)
+                return Self.response(for: request, status: 200, data: allowed)
+            default:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/spending")
+                return Self.response(for: request, status: 200, data: month)
+            }
+        }
+
+        let read = try await client.spending(owner: .chat("chat_fixture_01"))
+        let status = try XCTUnwrap(read.spending)
+        XCTAssertEqual(status.state, .reached)
+        XCTAssertEqual(status.spentUsd, 5.37)
+        let allowedMore = try await client.allowMoreSpending(owner: .chat("chat_fixture_01"), revision: status.revision)
+        let after = try XCTUnwrap(allowedMore.spending)
+        XCTAssertEqual(after.state, .under)
+        XCTAssertEqual(after.allowedUsd, 10)
+        let botRead = try await client.spending(owner: .bot("bot_fixture_01"))
+        let bot = try XCTUnwrap(botRead.spending)
+        XCTAssertEqual(bot.period, .month)
+        XCTAssertNotNil(bot.periodEnd)
+        XCTAssertEqual(step, 3)
+    }
+
+    func testSpendingStatusDecodesNoLimitAndRefusesBadAmounts() throws {
+        let none: AidenSpendingStatus = try botFixtureValue(at: ["spending", "none"])
+        XCTAssertNil(none.spending)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenSpendingStatus.self, from: Data("{}".utf8)))
+        var raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["spending", "chat"])) as? [String: Any]
+        )
+        var spending = try XCTUnwrap(raw["spending"] as? [String: Any])
+        spending["allowedUsd"] = 1
+        raw["spending"] = spending
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(AidenSpendingStatus.self, from: JSONSerialization.data(withJSONObject: raw))
+        )
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"

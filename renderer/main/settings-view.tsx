@@ -28,6 +28,7 @@ import {
   AudioWaveform,
   Volume2,
   ShieldCheck,
+  Hourglass,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -49,6 +50,7 @@ import { AidenLiveSettings } from "../components/settings/gemini-live-settings";
 import { ConnectionsSettings } from "../components/settings/connections-settings";
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
+import { LimitsSettings } from "../components/settings/limits-settings";
 import {
   availableSettingsDestinations,
   matchesSettingsSearch,
@@ -73,6 +75,7 @@ type NavItem = {
 const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   providers: <Server className="size-5" />,
   modelData: <ChartScatter className="size-5" />,
+  limits: <Hourglass className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
   telegram: <Send className="size-5" />,
@@ -105,6 +108,7 @@ const NAV_GROUPS: NavGroup[] = ["Agent", "App"];
 const CONTENT: Record<SettingsSection, React.ComponentType> = {
   providers: ProvidersSettings,
   modelData: ModelDataSettings,
+  limits: LimitsSettings,
   skills: SkillsSettings,
   telegram: TelegramSettings,
   remoteAccess: ConnectionsSettings,
@@ -129,6 +133,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
 const DESCRIPTIONS: Record<SettingsSection, string> = {
   providers: "Connect models to Aiden and manage the providers you use.",
   modelData: "Arrange your models by capability and pace. Your map stays on this device.",
+  limits: "Choose how long replies wait out a provider’s usage limit, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
   telegram: "Connect your Telegram bots and choose how they respond.",

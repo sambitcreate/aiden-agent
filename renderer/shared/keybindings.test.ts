@@ -297,6 +297,22 @@ test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder",
   );
 });
 
+test("a shortcut saved before the subagent tray existed keeps Command+Shift+S", () => {
+  // Saved by an earlier build: Change model on Command+Shift+S.
+  const saved = { version: 1, commands: { "model.change": { binding: "Command+Shift+S" } } };
+  const repaired = migrateLegacyKeybindings(saved);
+  assert.deepEqual(
+    [effectiveBinding("model.change", repaired), effectiveBinding("subagents.toggleTray", repaired)],
+    ["Command+Shift+S", null],
+  );
+  assert.deepEqual(repairKeybindingOverrides(repaired), repaired);
+  // Without that claim the tray gets its default.
+  assert.equal(
+    effectiveBinding("subagents.toggleTray", repairKeybindingOverrides({ version: 1, commands: {} })),
+    "Command+Shift+S",
+  );
+});
+
 test("catalog defaults remain conflict-free and avoid native role accelerators", () => {
   assert.doesNotThrow(() => validateEffectiveBindings(effectiveBindings(undefined)));
   assert.equal(effectiveBinding("sidebar.toggle", undefined), "Command+B");

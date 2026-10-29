@@ -568,6 +568,8 @@ export interface ScheduledTask {
   routineSchedule?: BotRoutineSchedule;
   /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
   sourceProposalId?: string;
+  /** Main-owned: a one-time routine the Bot set for itself with `wake_up`, not one the person made. Set once. */
+  wakeUp?: BotWakeUpMarker;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -623,7 +625,14 @@ export interface ScheduledTaskInput {
   routineSchedule?: BotRoutineSchedule;
   /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
   sourceProposalId?: string;
+  /** Main-owned: the Bot set this one-time routine for itself (`wake_up`). Set once, at creation. */
+  wakeUp?: BotWakeUpMarker;
   notify?: boolean;
+}
+
+/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
+export interface BotWakeUpMarker {
+  setAt: number;
 }
 
 export interface ScheduledTaskSettings {
@@ -772,6 +781,10 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */

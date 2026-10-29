@@ -1832,14 +1832,27 @@ const BOT_ROUTINE_SCHEDULE = Type.Union(
 );
 
 // Checked in full by the proposal service (parseBotRoutineTrigger); the schema
-// only tells the model the two shapes.
+// only tells the model the shapes.
 const BOT_ROUTINE_TRIGGER = Type.Object(
   {
     kind: Type.String({
-      description: '"file_change" (a file in your folder changes) or "webhook" (the routine gets its own link on this Mac\'s network).',
+      description:
+        '"file_change" (a file in your folder changes), "webhook" (the routine gets its own link on this Mac\'s network) ' +
+        'or "watch" (Aiden checks a page or a script on an interval and wakes you only when its output changes).',
     }),
     folder: Type.Optional(Type.String({ description: "file_change: a folder relative to your folder, for example \"inbox\"." })),
     pattern: Type.Optional(Type.String({ description: "file_change: optional file pattern, for example \"*.pdf\"." })),
+    source: Type.Optional(
+      Type.Object(
+        {
+          type: Type.String({ description: '"url" or "script".' }),
+          url: Type.Optional(Type.String({ description: "url: an https address (http only for localhost), read with no sign-in and no redirects." })),
+          script: Type.Optional(Type.String({ description: "script: a file relative to your folder, for example \"scripts/ci-status.sh\"." })),
+        },
+        { additionalProperties: true, description: "watch: what to check." },
+      ),
+    ),
+    everyMinutes: Type.Optional(Type.Integer({ minimum: 5, maximum: 1440, description: "watch: minutes between checks, 5 to 1440." })),
   },
   { additionalProperties: true, description: "What starts the routine, instead of a schedule." },
 );

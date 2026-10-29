@@ -39,6 +39,15 @@ function finiteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function isWakeUpMarker(value: unknown): value is { setAt: number } {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    finiteTimestamp((value as { setAt?: unknown }).setAt) !== undefined
+  );
+}
+
 function nextTaskRevision(timestamp: number, previous?: number): number {
   return previous === undefined ? timestamp : Math.max(timestamp, previous + 1);
 }
@@ -320,6 +329,10 @@ function normalizeInput(
     ...(botId !== undefined && (existing?.sourceProposalId ?? input.sourceProposalId) !== undefined
       ? { sourceProposalId: existing?.sourceProposalId ?? input.sourceProposalId }
       : {}),
+    // Set once, when the Bot sets a wake-up; an edit never adds or removes it.
+    ...(botId !== undefined && isWakeUpMarker(existing ? existing.wakeUp : input.wakeUp)
+      ? { wakeUp: { setAt: (existing ? existing.wakeUp : input.wakeUp)!.setAt } }
+      : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
     lastError: existing?.lastError,
@@ -502,6 +515,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
       ? { sourceProposalId: task.sourceProposalId }
       : {}),
+    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: { setAt: task.wakeUp.setAt } } : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
