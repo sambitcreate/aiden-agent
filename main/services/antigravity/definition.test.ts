@@ -23,7 +23,8 @@ function initialize(overrides: Partial<InitializeResponse> = {}): InitializeResp
     protocolVersion: 1,
     agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} }, auth: { logout: {} } },
     authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
-    agentInfo: { name: "antigravity-acp", title: "Google Antigravity", version: "1.3.0" },
+    // As the pinned 1.4.3 server reports it (docs/plans/antigravity-acp-spike.md).
+    agentInfo: { name: "antigravity-acp", title: "Google Antigravity", version: "1.4.3" },
     ...overrides,
   };
 }
@@ -42,7 +43,7 @@ test("only the pinned Antigravity build with Google sign-in passes validation", 
     signedIn.validateInitialize(initialize({ agentInfo: { name: "antigravity-acp", version: "agy_acp_server_1.3.0" } }), "1.3.0"),
     undefined,
   );
-  assert.match(signedIn.validateInitialize(initialize({ authMethods: [] }), "1.3.0") ?? "", /Google sign-in/u);
+  assert.match(signedIn.validateInitialize(initialize({ authMethods: [] }), "1.4.3") ?? "", /Google sign-in/u);
 });
 
 test("launch isolates the profile, strips ambient Google credentials, and records sign-in for chats", async () => {

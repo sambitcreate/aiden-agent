@@ -3,6 +3,7 @@ import { AppControlsPanel } from "./app-controls-panel";
 
 import * as React from "react";
 import { Button, Callout, Text } from "./ui";
+import { cn } from "../lib/ui-utils";
 import { AidenActivityMark } from "./aiden-activity-mark";
 import { ActivityFeed } from "./activity-feed";
 import { EventPresence } from "./event-presence";
@@ -26,11 +27,13 @@ import {
   activityTimelineFragment,
   assistantPresentationRows,
   isExtractionStep,
+  isRecordingStep,
   isQuestionnaireStep,
   clampLiveTimelineToContent,
 } from "../lib/assistant-message-presentation";
 import { AskUserQuestionRecap } from "./ask-user-question-recap";
 import { WebExtractRecap } from "./web-extract-recap";
+import { BrowserRecordingCard } from "./browser-recording-card";
 import { reasoningActivityLabel } from "../lib/agent-steps";
 import type { Attachment, ChatMessage } from "../lib/types";
 import type { ChatArtifactV1, ChatHtmlArtifactV1, HtmlArtifactLayout } from "../shared/chat-artifacts";
@@ -49,11 +52,13 @@ import {
 import { chatsApi } from "../lib/ipc";
 import { ImageScanPlaceholder, useImageGenerationSlots } from "./image-generation-placeholder";
 import { imageGenerationRowSlots, type ImageGenerationSlot } from "../lib/image-generation-slots";
+import { withInferredImagePlacements } from "../shared/image-placements";
 import { activityPresentationDelay, type AgentActivity } from "../lib/agent-activity";
 import {
   captureSubagentChipFocus,
   resolveSubagentChipFocusHandoff,
   retainSubagentChipFocusAfterPointerDown,
+  SUBAGENT_CHIP_FOCUS_SELECTOR,
   type SubagentChipFocusCapture,
 } from "../lib/subagent-panel-state";
 import {
@@ -89,7 +94,7 @@ interface MessageListProps {
   streamingArtifacts?: readonly ChatArtifactV1[];
   /**
    * Producing toolCallId per live artifact: HTML visuals by mediaId
-   * (render_artifact) and generated images by attachment id (generate_image).
+   * (render_artifact) and images by attachment id (generate_image, display_image, share_image).
    */
   streamingArtifactPlacements?: ReadonlyMap<string, string>;
   /** mediaIds of live visuals the model asked to span the chat pane. */
@@ -114,6 +119,8 @@ interface MessageListProps {
   onOpenSubagent: (runId: string, trigger: HTMLButtonElement) => void;
   /** Current active generation phase, derived from real stream/tool state. */
   agentActivity: AgentActivity | null;
+  /** Retry now while the reply waits for a provider usage limit. */
+  onRetryUsageLimit?: () => void;
   error: string | null;
   /** Message id whose whole response may host the read-aloud action. */
   readAloudMessageId?: string;
@@ -154,7 +161,7 @@ interface AssistantResponseProps {
   fork?: MessageForkAction;
   /** Save and copy actions for images stored in this (settled) response. */
   imageActions?: MessageImageActions;
-  /** Generated image attachment id → the generate_image toolCallId that produced it. */
+  /** Image attachment id → the toolCallId of the call that produced it. */
   imagePlacements?: ReadonlyMap<string, string>;
   /** HTML visuals this response owns, placed after their producing tool row. */
   visuals?: readonly ChatHtmlArtifactV1[];
@@ -224,7 +231,7 @@ function AssistantResponse({
     streaming ? clampLiveTimelineToContent(timeline, content.length) : timeline,
     reasoning ?? "",
   );
-  // Generated images and their placeholders sit at their generate_image row.
+  // Images and generate_image placeholders sit at their producing call's row.
   const imageSlots = imageGenerationRowSlots(
     timeline ? rows : null,
     imageGeneration.slots,
@@ -291,6 +298,9 @@ function AssistantResponse({
           <ActivityFeed key="activity" timeline={activityTimeline} animate={streaming} />,
           ...(timeline?.steps.filter(isExtractionStep).map((step) => (
             <WebExtractRecap key={`extraction-${step.id}`} recap={step.extraction} />
+          )) ?? []),
+          ...(timeline?.steps.filter(isRecordingStep).map((step) => (
+            <BrowserRecordingCard key={`recording-${step.id}`} recording={step.recording} />
           )) ?? []),
           ...(timeline?.steps.filter(isQuestionnaireStep).map((step) => (
             <AskUserQuestionRecap key={`questionnaire-${step.id}`} recap={step.questionnaire} />
@@ -359,6 +369,9 @@ function AssistantResponse({
         }
         if (row.kind === "extraction") {
           return <WebExtractRecap key={row.key} recap={row.step.extraction} />;
+        }
+        if (row.kind === "recording") {
+          return <BrowserRecordingCard key={row.key} recording={row.step.recording} />;
         }
         if (row.kind === "activity") {
           return (
@@ -507,9 +520,16 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   const assistant = Boolean(live) || message?.role === "assistant";
   const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
   const storedImagePlacements = message?.imagePlacements;
+  const messageTimeline = message?.role === "assistant" ? message.timeline : undefined;
+  const messageAttachments = message?.attachments;
   const imagePlacements = React.useMemo(
-    () => new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
-    [storedImagePlacements],
+    () =>
+      withInferredImagePlacements(
+        messageTimeline,
+        messageAttachments ?? [],
+        new Map((storedImagePlacements ?? []).map((p) => [p.attachmentId, p.toolCallId])),
+      ),
+    [messageAttachments, messageTimeline, storedImagePlacements],
   );
   const row = (
     <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
@@ -573,6 +593,12 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
 export interface ProviderFailureActions {
   onAction: (action: ProviderFailureAction) => void;
   onSwitchModel?: () => void;
+  /**
+   * Which actions this chat can take. A chat on a paired Mac can try again or
+   * continue, but compaction and provider settings live on that Mac. Omitted
+   * means every action.
+   */
+  supports?: (action: ProviderFailureAction) => boolean;
   /** An action is already running; the buttons wait for it. */
   busy?: boolean;
 }
@@ -617,16 +643,18 @@ export function ProviderFailureCallout({
       <Text variant="small" color="secondary" className="mt-0.5 block">
         {presentation.description}
       </Text>
-      {actions ? (
+      {actions && (actions.supports?.(action) !== false || actions.onSwitchModel) ? (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <Button
-            size="small"
-            disabled={actions.busy}
-            data-provider-failure-action={action}
-            onClick={() => actions.onAction(action)}
-          >
-            {PROVIDER_FAILURE_ACTION_LABELS[action]}
-          </Button>
+          {actions.supports?.(action) !== false ? (
+            <Button
+              size="small"
+              disabled={actions.busy}
+              data-provider-failure-action={action}
+              onClick={() => actions.onAction(action)}
+            >
+              {PROVIDER_FAILURE_ACTION_LABELS[action]}
+            </Button>
+          ) : null}
           {actions.onSwitchModel ? (
             <Button variant="transparent" size="small" disabled={actions.busy} onClick={actions.onSwitchModel}>
               Switch model
@@ -698,6 +726,7 @@ export function MessageList({
   subagentsEnabled,
   onOpenSubagent,
   agentActivity,
+  onRetryUsageLimit,
   error,
   readAloudMessageId,
   failureActions,
@@ -873,7 +902,7 @@ export function MessageList({
     const captureFocusedChip = (target: EventTarget | null) => {
       const chip =
         target instanceof Element
-          ? target.closest<HTMLElement>("[data-subagent-chip-run-id]")
+          ? target.closest<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR)
           : null;
       if (chip && transcriptRef.current?.contains(chip)) {
         chipFocusCaptureRef.current = captureSubagentChipFocus(chip);
@@ -915,7 +944,7 @@ export function MessageList({
       chipFocusCaptureRef.current,
       document.activeElement,
       [document.body, document.documentElement],
-      root.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
+      root.querySelectorAll<HTMLElement>(SUBAGENT_CHIP_FOCUS_SELECTOR),
     );
     if (handoff.action === "clear") {
       chipFocusCaptureRef.current = null;
@@ -1071,7 +1100,7 @@ export function MessageList({
       >
         {transcriptRows}
 
-        <AgentActivityTransition activity={agentActivity} />
+        <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
         <EventPresence present={Boolean(error)}>
           {error ? (
@@ -1090,10 +1119,20 @@ export function MessageList({
   );
 }
 
-function AgentActivityTransition({ activity }: { activity: AgentActivity | null }) {
+function AgentActivityTransition({
+  activity,
+  onRetryUsageLimit,
+}: {
+  activity: AgentActivity | null;
+  onRetryUsageLimit?: () => void;
+}) {
   const [current, setCurrent] = React.useState(activity);
   React.useEffect(() => {
-    if (current?.phase === activity?.phase && current?.label === activity?.label) return;
+    if (
+      current?.phase === activity?.phase &&
+      current?.label === activity?.label &&
+      current?.canRetryNow === activity?.canRetryNow
+    ) return;
     const delay = activityPresentationDelay(
       current,
       activity,
@@ -1105,16 +1144,20 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
     }
     const timer = window.setTimeout(() => setCurrent(activity), delay);
     return () => window.clearTimeout(timer);
-  }, [activity?.phase, activity?.label, activity?.mark, current]);
+  }, [activity?.phase, activity?.label, activity?.mark, activity?.canRetryNow, current]);
 
   if (!current) return null;
+  const retry = current.phase === "limited" && current.canRetryNow && onRetryUsageLimit;
   return (
     <div
       role="status"
       aria-live="polite"
       // One fixed-height line: the label swaps on presentation timers, and a
       // wrapping label would move the bottom edge the transcript follows.
-      className="agent-activity-layer agent-event-in flex h-6 w-fit max-w-full items-center gap-2"
+      className={cn(
+        "agent-activity-layer agent-event-in flex w-fit max-w-full items-center gap-2",
+        current.phase === "limited" ? "h-7" : "h-6",
+      )}
       data-agent-activity={current.phase}
     >
       <AidenActivityMark mark={current.mark} size={20} className="shrink-0 text-primary" />
@@ -1132,6 +1175,11 @@ function AgentActivityTransition({ activity }: { activity: AgentActivity | null 
       >
         {current.label}
       </Text>
+      {retry ? (
+        <Button variant="transparent" size="small" className="-my-0.5 shrink-0" onClick={onRetryUsageLimit}>
+          Retry now
+        </Button>
+      ) : null}
     </div>
   );
 }

@@ -163,6 +163,14 @@ data class AidenServer(
     val offersBotHandoffs: Boolean
         get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFFS) == true
 
+    /** The Mac offers `bot:handoff-notes` (revision 40). Only a Mac serving hand-offs offers it. */
+    val offersBotHandoffNotes: Boolean
+        get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_NOTES) == true
+
+    /** The Mac offers `bot:handoff-on-mac` (revision 43). Only a Mac serving hand-offs offers it. */
+    val offersBotHandoffOnMac: Boolean
+        get() = offersBotHandoffs && serverCapabilities?.contains(AidenRemoteCapability.BOT_HANDOFF_ON_MAC) == true
+
     /** Offered and held: show hand-off cards, the paused state, and Pause and Resume. */
     val supportsBotHandoffs: Boolean
         get() = offersBotHandoffs && capabilities.contains(AidenRemoteCapability.BOT_HANDOFFS)
@@ -182,6 +190,28 @@ data class AidenServer(
         get() = offersScheduleCards && capabilities.contains(AidenRemoteCapability.SCHEDULE_CARDS)
 
     /**
+     * The Mac offers `bot:images` (revision 45). Like `schedule:cards`, the offer in
+     * `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
+     */
+    val offersBotImages: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_IMAGES) == true
+
+    /** Offered and held: a Bot's chat shows the images it shared instead of a line about them. */
+    val supportsBotImages: Boolean
+        get() = offersBotImages && capabilities.contains(AidenRemoteCapability.BOT_IMAGES)
+
+    /**
+     * The Mac offers `bot:issues` (revision 42). There is no `/server` feature token: the offer
+     * in `serverCapabilities` is the whole signal, and this phone asks for it in a call of its own.
+     */
+    val offersBotIssues: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.BOT_ISSUES) == true
+
+    /** Offered and held: show the Bot's "Needs you" cards and their actions. */
+    val supportsBotIssues: Boolean
+        get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
+
+    /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
      */
@@ -191,6 +221,14 @@ data class AidenServer(
     /** A tapped visual snapshot opens the Mac's interactive viewer document (revision 35). */
     val supportsChatVisualViewer: Boolean
         get() = features.contains(AidenRemoteProtocol.CHAT_VISUAL_VIEWER_FEATURE)
+
+    /** A browser recording's Play reads the video from the Mac (revision 46). */
+    val supportsBrowserRecordings: Boolean
+        get() = features.contains(AidenRemoteProtocol.CHAT_BROWSER_RECORDINGS_FEATURE)
+
+    /** The chat and Bot screens show the spending notice with Allow more (revision 47). */
+    val supportsSpendingLimits: Boolean
+        get() = features.contains(AidenRemoteProtocol.SPENDING_LIMITS_FEATURE)
 
     companion object {
         private val FEATURE_TOKEN = Regex("^[a-z0-9][a-z0-9-]{0,63}$")

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { createBotRoutinesTool } from "./schedule-tool.js";
 import {
   botRoutineGuidance,
   resolveBotForGeneration,
@@ -29,6 +30,27 @@ test("Bot wake-up guidance follows the tools offered to this turn", () => {
   assert.match(guidance, /accepts the Add routine card/u);
   assert.match(guidance, /same Bot chat/u);
   assert.match(guidance, /running on an awake computer/u);
+  assert.match(guidance, /action revise/u);
+});
+
+test("the Bot's prompt and its routines tool name the same ways it can be woken", () => {
+  const wakeList = (text: string) => text.slice(text.indexOf("You can be woken by:")).split("\n").filter((line) => line.startsWith("- "));
+  const prompt = wakeList(botRoutineGuidance(new Set(["routines"])));
+  assert.ok(prompt.length >= 5);
+  assert.ok(prompt.some((line) => /scheduled routine/u.test(line)));
+  assert.ok(prompt.some((line) => /file change/u.test(line) && /link/u.test(line)), "event routines are listed");
+  assert.ok(prompt.some((line) => /approval/u.test(line)), "resolved waits are listed");
+  assert.ok(prompt.some((line) => /wake_up/u.test(line) && /24 hours/u.test(line)), "self wake-ups are listed");
+  const tool = createBotRoutinesTool("bot-1", {
+    list: async () => [],
+    pause: async () => {
+      throw new Error("unused");
+    },
+    propose: async () => ({ ok: true, proposalId: "unused" }),
+  });
+  const described = tool.description.split("\n").filter((line) => line.startsWith("- "));
+  assert.deepEqual(described, prompt);
+  assert.doesNotMatch(botRoutineGuidance(new Set()), /You can be woken by/u, "no list when the turn can't propose");
 });
 
 test("bot persona composition preserves the base prompt and escapes structural delimiters", () => {
@@ -83,9 +105,15 @@ test("managed-home rules follow the escaped persona and cannot be replaced by it
   assert.ok(personaEnd >= 0 && workspaceStart > personaEnd);
   assert.match(prompt, /mandatory and override any conflicting bot persona instructions/u);
   assert.match(prompt, /\/Users\/private\/Aiden &amp; Bots\/&lt;reviewer&gt;/u);
-  assert.match(prompt, /Start shell and tool work there/u);
+  assert.match(prompt, /Start your work there/u);
   assert.match(prompt, /create and save ordinary artifacts in the home workspace/u);
-  assert.match(prompt, /File tools may inspect or work in other OS-accessible Mac locations/u);
+  assert.match(prompt, /File tools may inspect or work in other OS-accessible locations on this computer/u);
+  assert.match(prompt, /except Aiden's own settings and Bot data files/u);
+  // Capability honesty comes after the persona, so persona text cannot remove it.
+  const honesty = prompt.indexOf("Authoritative Bot capabilities:");
+  assert.ok(honesty > personaEnd && honesty < workspaceStart);
+  assert.match(prompt, /the provided tool list wins/u);
+  assert.match(prompt, /never try to by editing Aiden's settings or data files/u);
   assert.match(prompt, /files outside the home workspace as user-owned/u);
   assert.match(prompt, /approval and destructive-action rules/u);
   assert.match(prompt, /Do not initialize a Git repository/u);
@@ -126,7 +154,7 @@ test("managed-home rules describe scoped, home-disabled, and file-off authority 
   assert.match(scoped, /only within these host-approved roots/u);
   assert.match(scoped, /<root>\/Users\/private\/Documents &amp; Notes<\/root>/u);
   assert.match(scoped, /<root>\/Volumes\/Team\/&lt;Shared&gt;<\/root>/u);
-  assert.doesNotMatch(scoped, /other OS-accessible Mac locations/u);
+  assert.doesNotMatch(scoped, /other OS-accessible locations/u);
 
   const homeOnly = withBotRuntimeInstructions("Base", bot, managed, {
     mode: "scoped",
@@ -142,7 +170,7 @@ test("managed-home rules describe scoped, home-disabled, and file-off authority 
   });
   assert.match(off, /File tools are unavailable for this turn/u);
   assert.match(off, /Shell availability is governed separately/u);
-  assert.doesNotMatch(off, /other OS-accessible Mac locations/u);
+  assert.doesNotMatch(off, /other OS-accessible locations/u);
 
   for (const approvedRoots of [
     ["relative/root"],

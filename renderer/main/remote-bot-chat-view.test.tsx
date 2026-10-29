@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { createBotTestQueryClient, mountWithBotRouter } from "./bots/test-providers";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
@@ -147,7 +148,7 @@ test("Retry on a failed reply from another Mac resends the person's words there,
   assert.deepEqual(sent.body, { text: "Move the dentist" });
 });
 
-test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
+test("live frames from the host stream into the chat, and a deny-only approval answers by wait id from the keyboard", async () => {
   // The streaming reveal holds an unfinished line for a second, as long as findByText waits; Reduce Motion shows it at once.
   document.documentElement.dataset.reduceMotion = "true";
   const { peerCalls } = await mount();
@@ -165,7 +166,11 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   assert.ok(await screen.findByText("Looking at your calendar"));
   assert.ok(screen.getByText("Allow it on Studio."));
   assert.equal(screen.queryByRole("button", { name: "Allow" }), null);
-  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  // ⌘↩ cannot allow from a device that may only deny; ⌘⌫ still denies (Ctrl off a Mac).
+  const mac = detectedKeyboardPlatform() === "darwin";
+  const allowKey = fireEvent.keyDown(document.body, { key: "Enter", metaKey: mac, ctrlKey: !mac });
+  assert.equal(allowKey, true, "the allow key is left alone");
+  fireEvent.keyDown(document.body, { key: "Backspace", metaKey: mac, ctrlKey: !mac });
   await waitFor(() => {
     const answer = peerCalls().find((call) => call.operation === "respondApproval");
     assert.equal(answer?.resourceId, "w1");
@@ -403,6 +408,24 @@ test("a sign-in is finished on the Bot's own Mac: the card offers Finish there a
     assert.ok(typeof finish?.idempotencyKey === "string");
   });
   assert.equal(handoffAnswers().length, 0);
+});
+
+test("a password-or-code card from another Mac takes no note: no note box, and Done answers it bare", async () => {
+  const { calls, handoffAnswers } = await mountHandoff({
+    ...RUNNING_WITH_HANDOFF,
+    handoff: { ...BANK_HANDOFF, takesNote: false },
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.equal(screen.queryByPlaceholderText("Add a note and send to mark it done"), null);
+  assert.equal(screen.queryByText(/Planner reads any note you send/u), null);
+  assert.ok(
+    screen.getByText(/This card takes no note, so a password or code never reaches Planner\./u, { selector: "[role=status]" }),
+    "the composer says why it can't send",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Done" }));
+  await waitFor(() => assert.equal(handoffAnswers().length, 1));
+  assert.deepEqual(handoffAnswers()[0]!.body, { outcome: "done" });
+  assert.equal(calls.some((call) => call.channel === "remote:peerCall" && (call.args[1] as PeerOperation).operation === "botSend"), false);
 });
 
 test("a paused Bot on another Mac says so, blocks the composer, and Resume lifts the pause there", async () => {

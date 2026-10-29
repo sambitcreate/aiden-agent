@@ -62,7 +62,7 @@ test("the caption's Copy button copies the stored image without a pointer menu",
   const calls = installBotTestIpc({ "chats:copyImage": () => true });
   render(list(settled()));
   const figure = document.querySelector("[data-assistant-image='img-1']") as HTMLElement;
-  const buttons = within(figure).getAllByRole("button").map((button) => button.textContent);
+  const buttons = within(figure).getAllByRole("button").map((button) => button.getAttribute("aria-label"));
   assert.deepEqual(buttons.slice(1), ["Expand", "Copy", "Save"]);
   fireEvent.click(within(figure).getByRole("button", { name: "Copy" }));
   await flush();

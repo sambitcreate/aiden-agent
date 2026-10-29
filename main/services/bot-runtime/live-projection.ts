@@ -17,6 +17,19 @@
 // A feed also runs without subscribers while a reply is running, so the end
 // of every run is observed and reported (`onRunSettled`) for list rows.
 
+import {
+  BOT_LESSON_LEARNED_ENTRY_KIND,
+  BOT_LESSON_PROPOSAL_ENTRY_KIND,
+  BOT_LESSON_STATUS_ENTRY_KIND,
+  botLessonCardOf,
+  botLessonStatusOf,
+} from "../../../renderer/shared/bot-lessons.js";
+import {
+  BOT_SKILL_PROPOSAL_ENTRY_KIND,
+  BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND,
+  botSkillProposalOf,
+  botSkillProposalStatusOf,
+} from "../../../renderer/shared/bot-skill-proposals.js";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
@@ -60,8 +73,16 @@ import {
   type BotRoutineProposalEntryData,
   type BotRoutineProposalStatusEntryData,
 } from "../../../renderer/shared/bot-routine-proposals.js";
+import {
+  BOT_ISSUE_ENTRY_KIND,
+  BOT_ISSUE_STATUS_ENTRY_KIND,
+  botIssueOf,
+  botIssueStatusOf,
+  type BotIssueResolution,
+} from "../../../renderer/shared/bot-issues.js";
 import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
+import { BOT_WAKE_UP_ENTRY_KIND } from "../../../renderer/shared/bot-wake-ups.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
 export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
@@ -125,7 +146,7 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -159,11 +180,15 @@ function memorySaveOf(details: unknown): BotMemoryTarget[] | null {
 function proposalOf(data: unknown): BotRoutineProposalEntryData | null {
   if (typeof data !== "object" || data === null) return null;
   const record = data as Record<string, unknown>;
-  for (const key of ["proposalId", "name", "prompt", "timezone", "label"] as const) {
+  for (const key of ["proposalId", "name", "prompt", "label"] as const) {
     if (typeof record[key] !== "string") return null;
   }
-  if (typeof record.schedule !== "object" || record.schedule === null) return null;
   if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  // A schedule card (with its timezone) or a trigger card, never both.
+  const trigger = typeof record.trigger === "object" && record.trigger !== null;
+  const schedule = typeof record.schedule === "object" && record.schedule !== null && typeof record.timezone === "string";
+  if (trigger === schedule) return null;
+  if (trigger && (record.schedule !== undefined || record.timezone !== undefined)) return null;
   return data as BotRoutineProposalEntryData;
 }
 
@@ -173,10 +198,12 @@ function proposalStatusOf(data: unknown): BotRoutineProposalStatusEntryData | nu
   if (typeof record.proposalId !== "string") return null;
   if (record.status !== "accepted" && record.status !== "dismissed") return null;
   if (record.routineId !== undefined && typeof record.routineId !== "string") return null;
+  if (record.supersededBy !== undefined && typeof record.supersededBy !== "string") return null;
   return {
     proposalId: record.proposalId,
     status: record.status,
     ...(record.routineId === undefined ? {} : { routineId: record.routineId }),
+    ...(record.status === "dismissed" && record.supersededBy !== undefined ? { supersededBy: record.supersededBy } : {}),
   };
 }
 
@@ -237,6 +264,9 @@ function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): strin
  * - `aiden.routine-proposal` → a `routine_proposal` card whose status is the
  *   newest `aiden.routine-proposal-status` for its `proposalId` (pending
  *   without one); status entries themselves are not shown.
+ * - `aiden.bot-issue` → an `issue` card whose status is the newest
+ *   `aiden.bot-issue-status` for its `issueId` (`open` without one); status
+ *   entries themselves are not shown.
  * - A confirmed `write_file` / `edit_file` result in the Bot's folder → a file.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
@@ -256,6 +286,8 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   let turn: Turn | null = null;
   /** The newest decision on each proposal: cards show what is true now. */
   const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
+  /** The newest settlement on each issue: its card shows what is true now. */
+  const issueStatus = new Map<string, BotIssueResolution>();
   /**
    * The person's answer to each rule hand-off, by the call the rule stopped
    * (the last entry for a call wins), and the calls whose blocked result is
@@ -274,10 +306,23 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
     return rowId;
   };
   const issued = new Map<string, number>();
+  const skillStatus = new Map<string, "added" | "dismissed">();
+  const lessonStatus = new Map<string, "active" | "dismissed" | "retired">();
   for (const record of entries) {
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) {
+      const status = botLessonStatusOf(record.data);
+      if (status) lessonStatus.set(status.lessonId, status.status);
+      continue;
+    }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
       const status = proposalStatusOf(record.data);
       if (status) proposalStatus.set(status.proposalId, status);
+    } else if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) {
+      const status = botSkillProposalStatusOf(record.data);
+      if (status) skillStatus.set(status.proposalId, status.status);
+    } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
+      const status = botIssueStatusOf(record.data);
+      if (status) issueStatus.set(status.issueId, status.resolution);
     } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       const result = botHandoffResultOf(record.data);
       if (result?.toolCallId !== undefined && result.rule !== undefined) {
@@ -358,6 +403,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             proposal,
             status: decided?.status ?? "pending",
             ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+            ...(decided?.supersededBy === undefined ? {} : { supersededBy: decided.supersededBy }),
           },
           turn,
         });
@@ -365,6 +411,62 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_SKILL_PROPOSAL_ENTRY_KIND) {
+      const proposal = botSkillProposalOf(record.data);
+      if (proposal) {
+        mapped.push({ entry: { id, type: "skill_proposal", proposal, status: skillStatus.get(proposal.proposalId) ?? "pending" }, turn });
+      }
+      continue;
+    }
+    if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND || record.kind === BOT_LESSON_LEARNED_ENTRY_KIND) {
+      const lesson = botLessonCardOf(record.data);
+      if (lesson) {
+        const proposal = record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND;
+        mapped.push({
+          entry: {
+            id,
+            type: proposal ? "lesson_proposal" : "lesson_learned",
+            lesson,
+            status: lessonStatus.get(lesson.lessonId) ?? (proposal ? "pending" : "active"),
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_WAKE_UP_ENTRY_KIND) {
+      const data = record.data as { wakeUpId?: unknown; fireAt?: unknown } | null;
+      if (typeof data?.wakeUpId === "string" && typeof data.fireAt === "number" && Number.isFinite(data.fireAt)) {
+        mapped.push({ entry: { id, type: "wake_up", wakeUpId: data.wakeUpId, fireAt: data.fireAt }, turn });
+      }
+      continue;
+    }
+    if (record.kind === "aiden.memory-tidy") {
+      const data = record.data as { changeId?: unknown } | null;
+      const changeId = typeof data?.changeId === "string" ? data.changeId : undefined;
+      mapped.push({ entry: { id, type: "memory_tidy", ...(changeId ? { changeId } : {}) }, turn: null });
+      continue;
+    }
+    if (record.kind === BOT_ISSUE_ENTRY_KIND) {
+      const issue = botIssueOf(record.data);
+      if (issue) {
+        // Host entries sit between turns: a [SILENT] routine never hides one.
+        mapped.push({
+          entry: {
+            id,
+            type: "issue",
+            issue,
+            status: issueStatus.get(issue.id) ?? issue.resolution ?? "open",
+            at: issue.createdAt,
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) continue;
     if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
       // Read after the blocked call's result; here only when that result never landed.
       const result = botHandoffResultOf(record.data);
@@ -814,6 +916,8 @@ export interface BotLiveProjectionDeps {
   quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
   /** Whether a tool approval is waiting on the person. */
   approvalPending?(botId: string): boolean;
+  /** Whether an open "Needs you" issue is waiting on the person for this Bot. */
+  issuePending?(botId: string): Promise<boolean> | boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
   now?(): number;
   /**
@@ -1352,10 +1456,11 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = () =>
+      const needsYouNow = async () =>
         (deps.question?.(botId) ?? null) !== null ||
         (deps.handoff?.(botId) ?? null) !== null ||
-        deps.approvalPending?.(botId) === true;
+        deps.approvalPending?.(botId) === true ||
+        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1365,7 +1470,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: needsYouNow(),
+          needsYou: await needsYouNow(),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1381,7 +1486,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         preview: preview?.text ?? null,
         updatedAt: preview?.at ?? null,
         state,
-        needsYou: needsYouNow(),
+        needsYou: await needsYouNow(),
         lastReplyAt: botLastReplyAt(entries),
       };
     },

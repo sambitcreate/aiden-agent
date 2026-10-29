@@ -156,6 +156,22 @@ function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefine
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:list", async () => workspaceApplicationService.list());
 
+  // Settings → Memory: what Aiden remembers in a workspace, and deleting a fact.
+  const memoryFacts = async () => {
+    const [{ createWorkspaceMemoryFacts }, { memoryStore }, { configStore }] = await Promise.all([
+      import("../services/workspace-memory-facts.js"),
+      import("../services/memory-store-main.js"),
+      import("../services/config-store.js"),
+    ]);
+    return createWorkspaceMemoryFacts({ getWorkspace: (id) => configStore.getWorkspace(id), store: memoryStore });
+  };
+  ipcMain.handle("workspaces:memoryFacts", async (_event, workspaceId: unknown) =>
+    (await memoryFacts()).list(workspaceId),
+  );
+  ipcMain.handle("workspaces:deleteMemoryFact", async (_event, workspaceId: unknown, factId: unknown) =>
+    (await memoryFacts()).remove(workspaceId, factId),
+  );
+
   ipcMain.handle(
     "workspaces:get",
     async (_event, id: unknown) => workspaceApplicationService.get(asString(id, "id")),

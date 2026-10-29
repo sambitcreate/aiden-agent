@@ -369,6 +369,28 @@ test("Finish on your Mac from a phone brings Planner's computer forward here onc
   assert.equal(selectedTab(), "Files");
 });
 
+test("Finish on your Mac for a step on Planner's computer brings the computer forward here too", async () => {
+  const state = { computers: [computer({ state: "running" })] };
+  const step = {
+    botId: "bot-1", waitId: "wait-a", toolCallId: "tool-a", kind: "action" as const, action: "Approve the payment in the bank app",
+    target: "computer" as const, source: "tool" as const,
+  };
+  await mountBotChat(state, {
+    "bots:live:subscribe": () => ({ ...chatSnapshot(), state: { kind: "running", submissionId: "sub-1" }, handoff: step }),
+  });
+  await screen.findByRole("group", { name: "Planner needs you" });
+  assert.equal(botPanel().getAttribute("data-state"), "closed");
+
+  // A phone's Finish on your Mac: main took the computer over for the person.
+  act(() => {
+    state.computers = [computer({ state: "running", controller: "person" })];
+    emitBotTestNotification(BOT_COMPUTERS_CHANGED_CHANNEL, status(state.computers));
+  });
+  await waitFor(() => assert.equal(selectedTab(), "Computer"));
+  assert.ok(await within(botPanel()).findByRole("button", { name: "Give back" }));
+  assert.equal(botPanel().contains(document.activeElement), false, "focus stays where the person left it");
+});
+
 test("reopening a chat whose remembered view still shows a sign-in answered since never pulls the panel to Computer", async () => {
   const state = { computers: [computer({ state: "running" })] };
   const signIn = {
