@@ -19,18 +19,27 @@ interface FoldedText {
   ends: number[] | null;
 }
 
-// Lowercasing can lengthen a character (İ becomes i + a combining dot), so
-// offsets in the folded text are mapped back to the original's.
+// The query and the text are folded the same way, one character at a time, so
+// the two always agree: lowercasing a whole string is context-sensitive (Greek
+// capital sigma ends a word as ς), while a lone character is not. Final ς is
+// folded to σ so either spelling finds both. Lowercasing can also lengthen a
+// character (İ becomes i + a combining dot), so offsets in the folded text map
+// back to the original's. ASCII text folds in place, with no mapping.
+function isAscii(text: string): boolean {
+  for (let at = 0; at < text.length; at += 1) if (text.charCodeAt(at) > 0x7f) return false;
+  return true;
+}
+
 function foldCase(original: string): FoldedText {
-  const lower = original.toLocaleLowerCase();
-  if (lower.length === original.length) return { text: lower, starts: null, ends: null };
+  if (isAscii(original)) return { text: original.toLowerCase(), starts: null, ends: null };
   let text = "";
   const starts: number[] = [];
   const ends: number[] = [];
   for (let at = 0; at < original.length; ) {
     const character = String.fromCodePoint(original.codePointAt(at)!);
     const next = at + character.length;
-    const folded = character.toLocaleLowerCase();
+    const lower = character.toLocaleLowerCase();
+    const folded = lower === "ς" ? "σ" : lower;
     for (let unit = 0; unit < folded.length; unit += 1) {
       starts.push(at);
       ends.push(next);
@@ -42,7 +51,7 @@ function foldCase(original: string): FoldedText {
 }
 
 export function findChatMatches(root: Node, query: string, limit = CHAT_FIND_MATCH_LIMIT): Range[] {
-  const needle = query.toLocaleLowerCase();
+  const needle = foldCase(query).text;
   if (!needle.trim()) return [];
   const document = root.ownerDocument ?? (root as Document);
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {

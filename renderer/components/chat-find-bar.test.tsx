@@ -41,6 +41,12 @@ test("matches ignore case and skip text a reader can't see", () => {
   dotted.textContent = "İx and İ";
   assert.deepEqual(findChatMatches(dotted, "x").map(String), ["x"]);
   assert.deepEqual(findChatMatches(dotted, "İ").map(String), ["İ", "İ"]);
+  // A capital sigma lowercases by context (ς at a word's end), so the same word
+  // must still match in a node with other text, whichever sigma is typed.
+  const greek = document.createElement("div");
+  greek.textContent = "İ ΟΣ";
+  assert.deepEqual(findChatMatches(greek, "ΟΣ").map(String), ["ΟΣ"]);
+  assert.deepEqual(findChatMatches(greek, "ος").map(String), ["ΟΣ"]);
   assert.equal(findChatMatches(root, "release", 2).length, 2, "stops at the limit");
 });
 
