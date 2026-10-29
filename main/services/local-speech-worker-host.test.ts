@@ -264,6 +264,7 @@ test("a load that fails still leaves the worker holding its model, so the next m
   const { host, spawned } = harness({ failingWorkers: [1] });
   const worker = await host.prepare(target(parakeet));
   await assert.rejects(worker.load(parakeet.id, "/models/parakeet", parakeet), /model rejected/);
+  assert.equal(host.heldModelId(), parakeet.id, "a model delete must still retire this worker");
 
   await host.prepare(target(canary));
   assert.equal(spawned.length, 2);
@@ -279,4 +280,30 @@ test("a worker that dies on its own drops the model so the next request reloads 
   assert.equal(unloads(), 1);
   await host.prepare(target(parakeet));
   assert.equal(spawned.length, 2);
+});
+
+test("a worker disposed after a hang or cancel must exit, or be SIGKILLed, before the replacement forks", async () => {
+  // A decode stuck in native code ignores the ordinary kill. The retry (or the
+  // next dictation) must not fork a second model-holding worker beside it.
+  const { host, log, signals } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+  const hung = await host.prepare(target(parakeet));
+
+  host.disposeIfCurrent(hung);
+  assert.equal(host.current(), null);
+  await host.prepare(target(parakeet));
+
+  assert.deepEqual(signals, [{ pid: 50_001, signal: "SIGKILL" }]);
+  assert.ok(log.indexOf("w1 exit") >= 0, "the hung worker is gone");
+  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"), "the replacement forks only after the old worker exited");
+});
+
+test("a worker that finishes forking after the host was retired still exits before the next fork", async () => {
+  const { host, log } = harness();
+  const launching = host.acquire();
+  host.shutDown();
+  await assert.rejects(launching, /replaced/);
+
+  await host.prepare(target(parakeet));
+  assert.ok(log.includes("w1 kill"), "the orphaned worker is killed");
+  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"));
 });
