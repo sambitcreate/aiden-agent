@@ -34,3 +34,40 @@ Branch `perf/streaming-render` (optimization audit, section 3.4). Merged in PR #
   revoke the URLs.
 - MAIN-34 transport (send bytes instead of base64 through IPC and the worker).
 - MAIN-18 chat LRU and projection cache.
+
+## Renderer CPU/GPU and leak audit fixes (2026-10-29, branch `claude/audit-fix-renderer-perf`)
+Implemented from two read-only audits: renderer GPU (audit 02) and renderer leaks (audit 03).
+
+**Streaming:**
+- Detached-stream deltas notify `useSyncExternalStore` subscribers once per animation frame (F1).
+- Reconciliation retries are bounded (F2).
+- Under Reduce Motion, the streaming reveal keeps the normal release cadence instead of rendering on every token.
+
+**KaTeX:** each formula is typeset once into an LRU cache. When KaTeX first loads, only messages that contain math re-render.
+
+**Off-screen pausing:** `renderer/lib/offscreen-pause.ts` provides one shared IntersectionObserver.
+- `observeOffscreen` and `pauseWhenUnseen` set `data-offscreen` on the element.
+- `:root[data-document-hidden]` follows `visibilitychange`.
+- CSS pauses these under either attribute: the thinking shimmer, activity marks, working Bot faces, the image scan, and the onboarding `oa-anim-*` tile art.
+- Bot avatar keeps its own observer, but only for lazy photo loading (rootMargin 160px), which needs different semantics.
+
+**Reduce Motion:** `renderer/lib/use-reduce-motion.ts` (`useReduceMotion`) is the one live hook over `:root[data-reduce-motion]`. Activity marks and Bot chat activity still also check the system query on purpose.
+
+**Native browser (F3):** the native browser presents only for body mutations and scrolls that can move or cover it (`browserOcclusionMutated` and `browserOcclusionScrolled`). Streaming text does not trigger it.
+
+**Terminal drawer:** while the drawer animates, its body stays at the settled size and is clipped, so the canvas no longer refits every frame. This is covered in `tests/e2e/terminal.spec.ts`.
+
+**Leaks:**
+- `startGeneration` disposes the stream when main resolves without accepting (F4).
+- The HTML visual preview cache is an LRU of 64 (F5).
+- An empty, unobserved chat message queue is released from the module map (F6).
+- AGENTS.md notices are ignored for a generation the pane no longer owns (F7).
+- The diagnostics rate window clears its old flush timer on rollover (F8).
+
+**MessageList:** `visualFollowUpBusy` reaches visuals through a context, so settled rows stay memoized when a turn starts or ends.
+
+**Still deferred, as owner decisions:**
+- Dropping backdrop blur where the surface alpha is 0.94 or higher: a subtle visible change.
+- Unloading off-screen HTML iframes: it loses guest JS state.
+- Streaming text in a leaf subscriber.
+- Single-pane terminal canvas overflow: pre-existing; the canvas is taller than the drawer.
