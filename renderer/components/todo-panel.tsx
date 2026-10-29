@@ -52,6 +52,7 @@ function taskStatusText(task: TodoTaskViewV1, dependencyIds: readonly number[]):
  * Each chip's detail text clamps to one line and may break anywhere, so a chip's minimum width is
  * its icon and count rather than its whole detail. The row is a size container: chips drop
  * secondary details in narrow windows, and there the two chips stack instead of overflowing.
+ * It shares the composer's centered column, so it is never wider than the chat box.
  */
 export function ComposerFloatingRow({
   children,
@@ -74,7 +75,7 @@ export function ComposerFloatingRow({
     return () => observer.disconnect();
   }, []);
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 px-[var(--aiden-dock-gutter)] @container">
+    <div className="aiden-dock-inset chat-content-column pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 @container">
       <div ref={chipsRef} className="flex items-end justify-center gap-2 @max-[24rem]:flex-wrap">
         {children}
       </div>
