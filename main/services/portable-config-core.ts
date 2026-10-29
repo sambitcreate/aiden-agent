@@ -1127,8 +1127,10 @@ defaults, and nothing is written back until you next change one of these setting
 from the UI.
 
 On macOS and Linux this directory is private (0700), and configuration and
-migration/recovery files are owner-only (0600). A symlinked root or config file,
-foreign ownership, or a hard-linked config file blocks access. Use a dedicated
+migration/recovery files are owner-only (0600). The directory may be a symlink
+(for example from a dotfile manager) when the link, the folder holding it and the
+folder it points to all belong to you; that folder is then made private. A
+symlinked or hard-linked config file, or foreign ownership, blocks access. Use a dedicated
 owned directory for AIDEN_CONFIG_DIR, never your home or a shared directory.
 Windows permissions depend on its ACLs; chmod is not an equivalent guarantee.
 
