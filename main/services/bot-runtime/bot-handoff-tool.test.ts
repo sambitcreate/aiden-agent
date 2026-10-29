@@ -12,7 +12,7 @@ import type { BotTranscriptEntry } from "../../../renderer/shared/bot-live.js";
 import { createBotRegistry, type BotRegistry } from "./bot-extension.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { createBotHandoffs, type BotHandoffs } from "./bot-handoffs.js";
-import { botHandoffCandidate } from "./bot-handoff-tool.js";
+import { botHandoffCandidate, type BotHandoffDeps } from "./bot-handoff-tool.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { createBotQuestions } from "./bot-questions.js";
 import { createBotToolAssembly, type BotAdmission } from "./bot-tool-assembly.js";
@@ -55,8 +55,8 @@ async function answerRows(conversation: Conversation): Promise<Array<Extract<Bot
   return projectBotTranscript(view.entries).flatMap((entry) => (entry.type === "handoff_result" ? [entry] : []));
 }
 
-async function memoryHarness(botId: string, handoffs: BotHandoffs, fauxModels: FauxModels) {
-  const deps = recordingDeps({ tools: handoffEntries(handoffs, botId) });
+async function memoryHarness(botId: string, handoffs: BotHandoffs, fauxModels: FauxModels, handoffDeps: BotHandoffDeps = {}) {
+  const deps = recordingDeps({ tools: handoffEntries(handoffs, botId, handoffDeps) });
   const registry: BotRegistry = createBotRegistry(botId, deps);
   await registry.refresh();
   const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
@@ -235,6 +235,64 @@ test("a link that is not https, or a blank step, is an error result and never sh
     assert.match(results[2]!.content.map((part) => part.text ?? "").join(""), /needs an action/u);
     assert.equal(shown, 0, "no card was ever shown");
     assert.deepEqual(await answerRows(root), []);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a step in the Bot's own browser is marked for its screen; a place the Bot does not have is an error result", async () => {
+  const offeredWhere: unknown[] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      const tool = getCurrentTools(context.messages).find((entry) => entry.name === HANDOFF_TOOL_NAME);
+      offeredWhere.push((tool?.parameters as { properties?: Record<string, unknown> }).properties?.where);
+      return fauxAssistantMessage(
+        [
+          fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, where: "computer" }),
+          fauxToolCall(HANDOFF_TOOL_NAME, { action: ACTION, where: "phone" }),
+          fauxToolCall(HANDOFF_TOOL_NAME, { action: "Choose the delivery slot.", where: "browser", open: { url: "https://shop.example/checkout" } }),
+        ],
+        { stopReason: "toolUse" },
+      );
+    },
+    fauxAssistantMessage("Thanks, the slot is booked."),
+  ]);
+  const handoffs = createBotHandoffs();
+  const { harness, root } = await memoryHarness("bot-where", handoffs, fauxModels, { targets: { browser: true, computer: false } });
+  try {
+    const settled = (await root.submit({ type: "input", content: "book my groceries" }, ctx)).wait(ctx);
+    await waitFor(() => handoffs.pending("bot-where").length === 1, { what: "the hand-off card" });
+    const [card] = handoffs.pending("bot-where");
+    assert.deepEqual(
+      { action: card!.action, target: card!.target, open: card!.open },
+      { action: "Choose the delivery slot", target: "browser", open: { url: "https://shop.example/checkout" } },
+    );
+    assert.ok(offeredWhere[0], "`where` is offered when the Bot has a browser");
+    assert.equal(handoffs.answer("bot-where", card!.waitId, { outcome: "done" }), "answered");
+    assert.equal((await settled).status, "done");
+
+    const results = await handoffResults(root);
+    assert.deepEqual(results.map((result) => result.isError), [true, true, false]);
+    // The offered schema already refuses a place this Bot does not have.
+    for (const result of results.slice(0, 2)) assert.match(result.content.map((part) => part.text ?? "").join(""), /where/u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a Bot without its own browser or computer is not offered `where`", async () => {
+  const offeredWhere: unknown[] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      const tool = getCurrentTools(context.messages).find((entry) => entry.name === HANDOFF_TOOL_NAME);
+      offeredWhere.push((tool?.parameters as { properties?: Record<string, unknown> }).properties?.where);
+      return fauxAssistantMessage("Nothing to hand over.");
+    },
+  ]);
+  const { harness, root } = await memoryHarness("bot-nowhere", createBotHandoffs(), fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "hi" }, ctx)).wait(ctx);
+    assert.deepEqual(offeredWhere, [undefined]);
   } finally {
     await harness.close(ctx);
   }

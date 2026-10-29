@@ -1,3 +1,4 @@
+import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
 import { AidenRemoteProviderService } from "./aiden-remote-providers.js";
@@ -114,17 +115,23 @@ import {
 } from "./git.js";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
+import { spending } from "./spending-main.js";
+import { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
 import { BOT_PRESETS } from "../../renderer/shared/bot-presets.js";
 import { normalizeAppearanceConfig } from "../../renderer/shared/appearance.js";
 import { openConnectionSetup } from "./bot-connection-setup.js";
+import { requestAppPath } from "./app-navigation.js";
 import { botRoutineService } from "./scheduled-bot-routines-main.js";
-import { scheduleStore, systemTimezone } from "./schedule-store.js";
+import { systemTimezone } from "./schedule-store.js";
 import { botMemoryService } from "./bot-memory/bot-memory-main.js";
 import { botRoutineProposals } from "./bot-routine-proposals-main.js";
-import { createBotRoutineNotificationFeed } from "./bot-routine-notifications.js";
+import { createBotNotificationFeed } from "./bot-routine-notifications.js";
+import { botIssues } from "./bot-issues/service-main.js";
+import { projectBotSummaryIssuesForAudience } from "./aiden-remote-bot-issues.js";
+import { botDeliveryLog } from "./bot-delivery/funnel-main.js";
 import {
   AidenRemoteBotSessionService,
   projectBotSessionState,
@@ -411,6 +418,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     appControls: typeof remoteAppControls;
     providers: AidenRemoteProviderService;
     memorySettings: AidenRemoteMemorySettingsService;
+    spending: AidenRemoteSpendingService;
     usage: typeof usageStore;
     speech: AidenRemoteSpeechService;
     readAloud: AidenRemoteTtsService;
@@ -424,6 +432,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
   let activeHostRuns: AidenRemoteHostRunService | undefined;
   let activeHostFeed: AidenRemoteHostFeedService | undefined;
   let activeBotSessions: AidenRemoteBotSessionService | undefined;
+  // A connect card a phone shows as pending turns Connected once the app is set up here.
+  mcpLiveStatus.subscribe(() => void activeBotSessions?.refreshConnectCards());
   let detachHostFeed: (() => void) | undefined;
   const workspaceOwners = new AidenRemoteWorkspaceOwnerRegistry();
   const notifyPairingRequestsChanged = createAidenPairingRequestNotifier({
@@ -462,6 +472,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     notifyPairingRequestsChanged,
     simulators: simulatorShareRelay,
     hostPlatform: aidenRemoteHostPlatform(process.platform),
+    botRoutineWebhook: async (request) =>
+      (await import("./bot-routine-events/sources-main.js")).handleBotRoutineWebhook(request),
     workspaceApi: async (instanceId) => {
       // A failed build is retried by the next start rather than replayed.
       const api = await workspaceApis(
@@ -562,6 +574,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     (await import("./bot-runtime/bot-session-main.js")).isBotPaused(botId),
                 }
               : {}),
+            // A chat over its spending limit takes no phone turns until more is allowed.
+            spendingRefusal: (chat) =>
+              spending.refusal(chat.botId ? { kind: "bot", id: chat.botId } : { kind: "chat", id: chat.id }),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             // Revision 35: phones open visuals full screen when this build ships the viewer.
@@ -574,6 +589,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
+            // Revision 46: phones play the agent's browser recordings their chats name.
+            browserRecordings: {
+              read: async (recordingId: string) =>
+                (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
+              namedByLiveRun: (chatId: string, recordingId: string) =>
+                hostRunRegistry.chatRunNamesRecording(chatId, recordingId),
+            },
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>
               normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
@@ -631,6 +653,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             },
             resolveSkillInvocation: (workspaceId, invocationId) =>
               skillRegistry.resolveFresh(workspaceId, invocationId),
+            // Revision 41: the same projection the composer meter reads (`chats:contextPressure`).
+            contextPressure: async (chatId, selection) =>
+              (await import("./context-pressure.js")).chatContextPressure(chatId, selection),
             notifyChanged: () => ipcMain.broadcast("chats:changed", {}),
             isTitlePending: (chatId) => chatTitleService.isFirstTurnPending(chatId),
             activeChatIds: () => chatActivityRegistry.snapshot().activeChatIds,
@@ -762,6 +787,11 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               return new Map(rows);
             },
             health: (botId) => projectBotHealth(botId),
+            // Revision 42: the holder's `issueCount`; the router drops it for
+            // every device that did not negotiate `bot:issues`.
+            issues: {
+              openCount: async (botId) => (await botIssues.list(botId, { open: true })).length,
+            },
             healthBatch: async (botIds) => {
               const snapshot = await botCapabilityCatalog.snapshot({
                 audienceId: instanceId,
@@ -875,6 +905,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 approvals: botApprovals,
                 // Revision 37: phones answer hand-offs through the desktop's own bridge.
                 handoffs: botHandoffs,
+                // Revision 42: the desktop's own issue service raises, settles and acts.
+                issues: botIssues,
                 openHandoffOnMac: async (botId, waitId) => {
                   const { openBotHandoffById } = await import("./bot-runtime/bot-handoff-open-main.js");
                   return openBotHandoffById(botId, waitId, "phone");
@@ -917,7 +949,15 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
                   return connectCardStatus(botId, card);
                 },
-                connectionRequested: async ({ pluginId }) => {
+                connectionRequested: async ({ botId, pluginId }) => {
+                  // Already connected but left out of this Bot's access: the
+                  // Mac opens the Bot's chat, where the card offers "Add to this Bot".
+                  const { connectCardStatus } = await import("./bot-runtime/bot-session-main.js");
+                  const card = { type: "connect_card", pluginId, reason: "", status: "pending" } as const;
+                  if ((await connectCardStatus(botId, card)) === "needs_access") {
+                    await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
+                    return;
+                  }
                   if (!openConnectionSetup(pluginId)) {
                     throw new AidenRemoteServiceError("not_found", "Aiden can't connect that app.", 404);
                   }
@@ -927,8 +967,8 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 // Contract revision 27: the desktop's own memory and proposal services.
                 memory: botMemoryService,
                 proposals: botRoutineProposals,
-                routineNotifications: createBotRoutineNotificationFeed({
-                  store: scheduleStore,
+                routineNotifications: createBotNotificationFeed({
+                  log: botDeliveryLog,
                   botName: async (botId) => (await botStore.get(botId))?.name,
                 }),
               })
@@ -1003,9 +1043,21 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                       ...(repository ? { repository } : {}),
                     };
                   }),
-                  // Paired desktops get the revision-35 Bot rows: no `paused` state or flag.
+                  // A desktop without `bot:handoffs` gets the revision-35 rows (a paused
+                  // Bot reads as unavailable); a holder gets `paused` (revision 37).
+                  // `issueCount` (revision 42) is a phone shape: the host feed keeps
+                  // its revision-40 rows for every desktop.
                   bots: (botList?.bots ?? []).map((bot) =>
-                    projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                    projectBotSummaryIssuesForAudience(
+                      projectBotSummaryForAudience(bot, LEGACY_AUDIENCE),
+                      { issues: false },
+                    ),
+                  ) as unknown as AidenRemoteHostFeedBot[],
+                  handoffBots: (botList?.bots ?? []).map((bot) =>
+                    projectBotSummaryIssuesForAudience(
+                      projectBotSummaryForAudience(bot, { handoffs: true }),
+                      { issues: false },
+                    ),
                   ) as unknown as AidenRemoteHostFeedBot[],
                 };
               },
@@ -1059,6 +1111,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             appControls: remoteAppControls,
             providers,
             memorySettings,
+            spending: new AidenRemoteSpendingService({
+              spending,
+              requireBot: async (botId) => {
+                if (!bots) throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+                await bots.bot(botId);
+              },
+            }),
             usage: usageStore,
             speech,
             readAloud,

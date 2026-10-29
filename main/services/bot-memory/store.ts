@@ -77,7 +77,8 @@ export type BotMemoryApplyErrorCode =
   | "too_long"
   | "empty"
   | "invalid"
-  | "unreadable";
+  | "unreadable"
+  | "changed";
 
 export interface BotMemoryApplyOptions {
   /** Background review and compaction flush: only `add` is allowed. */
@@ -88,6 +89,12 @@ export interface BotMemoryApplyOptions {
    * rejection aborts the batch without writing and is rethrown as is.
    */
   assertCurrent?: () => Promise<void>;
+  /**
+   * The entries the writer last saw. Checked under the Bot's write lock, so
+   * an edit that landed since (the person's, or anyone's) is never
+   * overwritten: the batch fails with `changed` and writes nothing.
+   */
+  expectTexts?: readonly string[];
 }
 
 export type BotMemoryApplyResult =
@@ -286,6 +293,9 @@ export function createBotMemoryStore(options: BotMemoryStoreOptions): BotMemoryS
           loaded,
         });
         if (!loaded.readable) return fail("unreadable", "Memory couldn't be read. The person can erase it from the Bot's Profile.");
+        if (applyOptions.expectTexts && JSON.stringify(applyOptions.expectTexts) !== JSON.stringify(current)) {
+          return fail("changed", "Memory changed since it was read.");
+        }
         if (operations.length === 0) return fail("invalid", "Give at least one operation.");
 
         const texts = [...current];

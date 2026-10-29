@@ -123,6 +123,8 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     private var _connectionError: Error?
     private var _proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] = []
     private var _proposalResults: [Result<AidenBotRoutineProposalRespondResult, Error>] = []
+    private var _issueRequests: [(botId: String, issueId: String, request: AidenBotIssueActRequest, key: UUID)] = []
+    private var _issueResults: [Result<AidenBotIssueActReceipt, Error>] = []
     let resumeGate = TestGate()
     let sendGate = TestGate()
     let stopGate = TestGate()
@@ -183,6 +185,13 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
     }
     var proposalRequests: [(proposalId: String, decision: AidenBotRoutineProposalDecision, key: UUID)] {
         locked { _proposalRequests }
+    }
+    /// Revision 42: the next card actions' receipts, in order; `done` once they run out.
+    func queueIssueResult(_ result: Result<AidenBotIssueActReceipt, Error>) {
+        locked { _issueResults.append(result) }
+    }
+    var issueRequests: [(botId: String, issueId: String, request: AidenBotIssueActRequest, key: UUID)] {
+        locked { _issueRequests }
     }
 
     var sessionRequests: Int { locked { _sessionRequests } }
@@ -340,6 +349,40 @@ private final class FakeBotSessionTransport: AidenBotSessionTransport, @unchecke
         }
         await proposalGate.pass()
         guard let next else { throw URLError(.notConnectedToInternet) }
+        return try next.get()
+    }
+
+    private var _images: [String: Data] = [:]
+    private var _imageRequests: [String] = []
+    /// Revision 45: the bytes the Mac holds for each shared image; any other id fails as offline.
+    func holdImage(_ data: Data, entryId: String) { locked { _images[entryId] = data } }
+    var imageRequests: [String] { locked { _imageRequests } }
+
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
+        let data = locked { () -> Data? in
+            _imageRequests.append(entryId)
+            return _images[entryId]
+        }
+        guard let data else { throw URLError(.notConnectedToInternet) }
+        return data
+    }
+
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        let next = locked { () -> Result<AidenBotIssueActReceipt, Error>? in
+            _issueRequests.append((botId, issueId, request, idempotencyKey))
+            return _issueResults.isEmpty ? nil : _issueResults.removeFirst()
+        }
+        guard let next else {
+            return try AidenRemoteJSONDecoder.decode(
+                AidenBotIssueActReceipt.self,
+                from: Data(#"{"result":"done"}"#.utf8)
+            )
+        }
         return try next.get()
     }
 }
@@ -538,6 +581,77 @@ final class AidenBotSessionTests: XCTestCase {
         XCTAssertEqual(model.state, .idle)
         XCTAssertEqual(model.seq, 21)
         XCTAssertEqual(transport.sessionRequests, 1, "A snapshot frame never needs a refetch.")
+    }
+
+    /// Revision 45: an image the Bot shared is read from the Mac when it is
+    /// drawn, once while the chat is open; a failed read is tried again, and an
+    /// id the transcript doesn't hold is never asked for.
+    func testSharedImageIsReadOnceAndAFailedReadIsTriedAgain() async throws {
+        let transport = FakeBotSessionTransport()
+        let image = AidenBotSharedImage(id: "entry_7", name: "chart.png", mimeType: "image/png", size: 4)
+        let model = await loadedModel(transport, try session(
+            seq: 1,
+            entries: [message("m1", .user, "Chart it"), .sharedImage(image)]
+        ))
+
+        let offline = await model.sharedImageData(entryId: image.id)
+        XCTAssertNil(offline, "the Mac couldn't send it yet")
+        let bytes = Data([0x89, 0x50, 0x4e, 0x47])
+        transport.holdImage(bytes, entryId: image.id)
+        let first = await model.sharedImageData(entryId: image.id)
+        let second = await model.sharedImageData(entryId: image.id)
+        XCTAssertEqual(first, bytes)
+        XCTAssertEqual(second, bytes)
+        XCTAssertEqual(transport.imageRequests, [image.id, image.id], "one failed read, then one read kept for the chat")
+
+        let unknown = await model.sharedImageData(entryId: "entry_99")
+        XCTAssertNil(unknown)
+        XCTAssertEqual(transport.imageRequests.count, 2, "an id the transcript doesn't hold never reaches the Mac")
+    }
+
+    /// Revision 45: shared images stay within a byte budget. The least
+    /// recently drawn image is dropped and read again when it is drawn next;
+    /// images the transcript no longer shows are dropped; closing the chat
+    /// lets every image go.
+    func testSharedImagesStayWithinTheirBudgetAndAreReadAgainAfterBeingDropped() async throws {
+        let transport = FakeBotSessionTransport()
+        func image(_ id: String) -> AidenBotSharedImage {
+            AidenBotSharedImage(id: id, name: "\(id).png", mimeType: "image/png", size: 4)
+        }
+        for id in ["entry_1", "entry_2", "entry_3", "entry_4"] {
+            transport.holdImage(Data(repeating: UInt8(id.last!.asciiValue!), count: 4), entryId: id)
+        }
+        transport.queueSession(.success(try session(
+            seq: 1,
+            entries: [.sharedImage(image("entry_1")), .sharedImage(image("entry_2")), .sharedImage(image("entry_3"))]
+        )))
+        // Room for two 4-byte images.
+        let model = AidenBotSessionModel(botID: botID, transport: transport, sharedImageBudget: 8)
+        await model.load()
+
+        _ = await model.sharedImageData(entryId: "entry_1")
+        _ = await model.sharedImageData(entryId: "entry_2")
+        _ = await model.sharedImageData(entryId: "entry_1")
+        XCTAssertEqual(transport.imageRequests, ["entry_1", "entry_2"], "both fit, so the second draw of entry_1 is kept")
+        _ = await model.sharedImageData(entryId: "entry_3")
+        let again = await model.sharedImageData(entryId: "entry_2")
+        XCTAssertEqual(
+            transport.imageRequests, ["entry_1", "entry_2", "entry_3", "entry_2"],
+            "entry_3 pushed out the least recently drawn image, entry_2, which is read again"
+        )
+        XCTAssertEqual(again, Data(repeating: UInt8(ascii: "2"), count: 4))
+        XCTAssertLessThanOrEqual(model.sharedImageByteCount, 8)
+
+        // entry_2 leaves the transcript: once another image is read, it is no longer kept.
+        let rewritten = try session(seq: 2, entries: [.sharedImage(image("entry_3")), .sharedImage(image("entry_4"))])
+        _ = await model.apply(event(seq: 2, .snapshot(rewritten)))
+        _ = await model.sharedImageData(entryId: "entry_4")
+        XCTAssertEqual(model.sharedImageByteCount, 8, "entry_3 and entry_4 only")
+        let gone = await model.sharedImageData(entryId: "entry_2")
+        XCTAssertNil(gone, "an image the transcript no longer shows is not read")
+
+        model.release()
+        XCTAssertEqual(model.sharedImageByteCount, 0, "closing the chat dropped what it held")
     }
 
     func testEntryWithAKnownIDReplacesItInPlaceAndEmptyPartialClears() async throws {
@@ -4754,6 +4868,29 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         XCTAssertEqual(model.errorMessage, "That card was already answered or closed.")
     }
 
+    func testACardThatTakesNoNoteHoldsTheComposerAndIsAnsweredOnlyBare() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            var card = try XCTUnwrap(object["handoff"] as? [String: Any])
+            card["takesNote"] = false
+            object["handoff"] = card
+        })
+        XCTAssertEqual(model.handoff?.takesNote, false)
+        XCTAssertFalse(model.composerAnswersHandoff, "a code typed in the composer would reach the Bot")
+        XCTAssertTrue(model.composerHeldForNoNote)
+
+        let fromComposer = await model.answerHandoffFromComposer("123456", connected: true)
+        XCTAssertFalse(fromComposer)
+        let withNote = await model.answerHandoff(.done, note: "123456")
+        XCTAssertFalse(withNote)
+        XCTAssertTrue(transport.answers.isEmpty, "a note never leaves the phone for this card")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card still waits")
+
+        let done = await model.answerHandoff(.done)
+        XCTAssertTrue(done)
+        XCTAssertEqual(transport.answers.first?.request, try AidenBotHandoffAnswerRequest(outcome: .done))
+        XCTAssertFalse(model.composerHeldForNoNote)
+    }
+
     func testASignInIsFinishedOnTheMacOrSkippedNeverMarkedDone() async throws {
         let (model, transport) = await loadedModel(try session { object in
             var card = try XCTUnwrap(object["handoff"] as? [String: Any])
@@ -4781,6 +4918,30 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         let skipped = await model.answerHandoff(.skipped)
         XCTAssertTrue(skipped)
         XCTAssertEqual(transport.answers.map(\.request.outcome), [.skipped])
+    }
+
+    func testAStepOnTheBotsOwnScreenIsFinishedOnTheMacOrAnsweredDoneOrSkip() async throws {
+        let (model, transport) = await loadedModel(try session { object in
+            var card = try XCTUnwrap(object["handoff"] as? [String: Any])
+            card.removeValue(forKey: "open")
+            card["onMac"] = true
+            object["handoff"] = card
+        })
+        XCTAssertEqual(model.handoff?.onMac, true)
+        XCTAssertTrue(model.composerAnswersHandoff, "a note still marks the step done")
+
+        transport.opened = false
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(transport.opens.map(\.waitId), [waitID])
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Open Aiden on your Mac to finish this step.")
+        transport.opened = true
+        await model.finishHandoffOnMac()
+        XCTAssertEqual(model.handoffMacPrompt?.text, "Finish this step on your Mac.")
+        XCTAssertEqual(model.handoff?.waitId, waitID, "the card stays until it is answered")
+
+        let done = await model.answerHandoff(.done)
+        XCTAssertTrue(done)
+        XCTAssertEqual(transport.answers.map(\.request.outcome), [.done])
     }
 
     func testFixtureFramesShowSettleRecordAndPauseAndAlertOnceForANewWait() async throws {
@@ -4835,5 +4996,193 @@ final class AidenBotSessionHandoffTests: XCTestCase {
         XCTAssertFalse(model.isPaused)
         XCTAssertTrue(model.isInterrupted)
         XCTAssertTrue(model.canSend)
+    }
+}
+
+/// Contract revision 42 (`bot:issues`): the "Needs you" cards, their frame and
+/// the act route, driven by the shared fixture's `botIssues` section.
+@MainActor
+final class AidenBotIssueTests: XCTestCase {
+    private let botID = "bot_fixture_01"
+
+    private func section() throws -> [String: Any] {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        return try XCTUnwrap(fixture["botIssues"] as? [String: Any])
+    }
+
+    private func contract() throws -> AidenRemoteContractFixture {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        return try AidenRemoteJSONDecoder.decode(AidenRemoteContractFixture.self, from: Data(contentsOf: url))
+    }
+
+    private func session(_ edit: (inout [String: Any]) throws -> Void = { _ in }) throws -> AidenBotSession {
+        var object = try XCTUnwrap(try section()["session"] as? [String: Any])
+        try edit(&object)
+        return try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func object(_ json: String) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    }
+
+    private func decodes<T: Decodable>(_ type: T.Type, _ object: Any) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return false }
+        return (try? AidenRemoteJSONDecoder.decode(type, from: data)) != nil
+    }
+
+    /// The routine card the fixture's `resume_routine` action names.
+    private func routineCard() throws -> AidenRemoteBotIssue {
+        let session = try session()
+        return try XCTUnwrap(session.issues.first(where: { issue in
+            issue.actions.contains(where: { $0.kind == .resumeRoutine })
+        }))
+    }
+
+    func testTheSharedFixtureDecodesTheCardsTheirFrameAndTheActRoute() throws {
+        let fixture = try contract()
+        let issues = try XCTUnwrap(fixture.botIssues)
+        XCTAssertEqual(issues.capability, .botIssues)
+        XCTAssertEqual(issues.session.issues.map(\.id), [
+            "issue_fixture_preflight_01",
+            "issue_fixture_routine_01",
+            "issue_fixture_stall_01",
+            "issue_fixture_fixed_01",
+        ])
+        XCTAssertEqual(issues.session.issues.map(\.resolved), [false, false, false, true])
+        XCTAssertEqual(issues.session.issues.map(\.kind), [
+            .preflightFailed, .routinePaused, .runStalled, .routineFailed,
+        ])
+        // A card that only the Mac can answer keeps its title and body but no action.
+        let noAction = issues.session.issues[0]
+        XCTAssertEqual(noAction.actions, [])
+        XCTAssertEqual(noAction.title, "Gmail needs reconnecting")
+        let routine = issues.session.issues[1]
+        XCTAssertEqual(routine.routineId, "task_fixture_routine_01")
+        XCTAssertEqual(routine.actions.map(\.kind), [.openChat, .resumeRoutine])
+        XCTAssertEqual(routine.actions.last?.routineId, "task_fixture_routine_01")
+        let stall = issues.session.issues[2]
+        XCTAssertEqual(stall.actions.map(\.kind), [.stopRun, .keepWaiting])
+        XCTAssertEqual(issues.session.issues[3].actions, [], "a settled card offers nothing")
+
+        // The frame carries the same shapes, with one card settled.
+        let frame = try XCTUnwrap(issues.events.first)
+        guard case let .issues(shown) = frame.kind else {
+            return XCTFail("the fixture's frame must be an issues frame")
+        }
+        XCTAssertEqual(frame.wireType, "issues")
+        XCTAssertEqual(shown.map(\.resolved), [false, true, false])
+
+        XCTAssertEqual(issues.act.request.action.kind, .stopRun)
+        XCTAssertEqual(issues.act.response.result, .done)
+        XCTAssertEqual(issues.notOpen.result, .notOpen)
+
+        XCTAssertEqual(issues.summary.id, botID)
+        XCTAssertEqual(issues.summary.issueCount, 2)
+        let card = try XCTUnwrap(issues.notification.notifications.first)
+        XCTAssertEqual(issues.notification.notifications.count, 1)
+        XCTAssertEqual(card.kind, .issue)
+        XCTAssertEqual(card.routineName, "Gmail needs reconnecting")
+        XCTAssertNil(card.routineId)
+        XCTAssertNil(card.status)
+
+        // A Mac without `bot:issues` sends no key at all, and an older phone's
+        // session still reads.
+        var legacy = try XCTUnwrap(try section()["session"] as? [String: Any])
+        legacy.removeValue(forKey: "issues")
+        let older = try AidenRemoteJSONDecoder.decode(AidenBotSession.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertEqual(older.issues, [])
+
+        // A card this build cannot read fails closed rather than rendering wrongly.
+        var unknown = try XCTUnwrap(try section()["session"] as? [String: Any])
+        var rows = try XCTUnwrap(unknown["issues"] as? [[String: Any]])
+        rows[0]["kind"] = "surprise"
+        unknown["issues"] = rows
+        XCTAssertFalse(decodes(AidenBotSession.self, unknown))
+        var desktop = try XCTUnwrap(try section()["session"] as? [String: Any])
+        rows = try XCTUnwrap(desktop["issues"] as? [[String: Any]])
+        rows[0]["actions"] = [["kind": "open_settings", "section": "model"]]
+        desktop["issues"] = rows
+        XCTAssertFalse(decodes(AidenBotSession.self, desktop), "settings never reach a phone")
+    }
+
+    func testAResumeTapPostsTheCardsActionOnceAndDropsTheCard() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        XCTAssertEqual(model.openIssues.count, 3, "the settled card is not shown")
+        let card = try routineCard()
+        let resume = try XCTUnwrap(card.actions.last)
+        XCTAssertEqual(resume.kind, .resumeRoutine)
+
+        let sent = await model.actOnIssue(card, action: resume)
+        XCTAssertTrue(sent)
+        let request = try XCTUnwrap(transport.issueRequests.first)
+        XCTAssertEqual(request.botId, botID)
+        XCTAssertEqual(request.issueId, card.id)
+        XCTAssertEqual(request.request.action.kind, .resumeRoutine)
+        XCTAssertEqual(request.request.action.routineId, "task_fixture_routine_01")
+        XCTAssertEqual(transport.issueRequests.count, 1, "one tap is one request")
+        XCTAssertFalse(model.openIssues.contains(where: { $0.id == card.id }), "the card goes at once")
+
+        // Tapping the same card again cannot send a second request.
+        _ = await model.actOnIssue(card, action: resume)
+        XCTAssertEqual(transport.issueRequests.count, 1)
+
+        // The Mac settles it and sends the list without it.
+        let next = try session { object in
+            var rows = try XCTUnwrap(object["issues"] as? [[String: Any]])
+            rows.removeAll { ($0["id"] as? String) == "issue_fixture_routine_01" }
+            object["issues"] = rows
+        }
+        _ = await model.apply(AidenBotSessionEvent(botId: botID, epoch: next.epoch, seq: next.seq + 1, kind: .issues(next.issues)))
+        XCTAssertEqual(model.openIssues.map(\.id), ["issue_fixture_preflight_01", "issue_fixture_stall_01"])
+    }
+
+    func testAStaleCardComesBackWithTheMacsReasonAndNotOpenStaysGone() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        let stop = try session().issues[2]
+        let stopAction = try XCTUnwrap(stop.actions.first)
+        XCTAssertEqual(stopAction.kind, .stopRun)
+
+        transport.queueIssueResult(.failure(try XCTUnwrap(
+            AidenRemoteClientError.server(
+                statusCode: 409,
+                body: try AidenRemoteJSONDecoder.decode(
+                    AidenRemoteErrorEnvelope.Body.self,
+                    from: Data(#"{"code":"operation_stale","message":"This card changed.","requestId":"req_issue_1","retryable":true}"#.utf8)
+                )
+            )
+        )))
+        let refused = await model.actOnIssue(stop, action: stopAction)
+        XCTAssertFalse(refused)
+        XCTAssertEqual(model.errorMessage, AidenBotSessionCopy.issueStale)
+        XCTAssertTrue(model.openIssues.contains(where: { $0.id == stop.id }), "the card comes back")
+
+        // `not_open` is a success: nothing is open any more, so the card stays gone.
+        transport.queueIssueResult(.success(
+            try AidenRemoteJSONDecoder.decode(AidenBotIssueActReceipt.self, from: Data(#"{"result":"not_open"}"#.utf8))
+        ))
+        let gone = await model.actOnIssue(stop, action: stopAction)
+        XCTAssertTrue(gone)
+        XCTAssertFalse(model.openIssues.contains(where: { $0.id == stop.id }))
+    }
+
+    func testOpenChatTellsTheMacWithoutDroppingTheCard() async throws {
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session()))
+        let model = AidenBotSessionModel(botID: botID, transport: transport)
+        await model.load()
+        let card = try routineCard()
+        let openChat = try XCTUnwrap(card.actions.first)
+        XCTAssertEqual(openChat.kind, .openChat)
+        let sent = await model.actOnIssue(card, action: openChat)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.issueRequests.first?.request.action.kind, .openChat)
+        XCTAssertTrue(model.openIssues.contains(where: { $0.id == card.id }), "opening a surface fixes nothing")
     }
 }

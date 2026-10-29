@@ -475,6 +475,41 @@ test("subagent chips show on live and saved replies only while subagents are ena
   assert.deepEqual(chipRunIds(view.container), [], "a disabled capability hides every chip");
 });
 
+test("keyboard focus on a subagent group's header follows the group when it moves under its tool row", async () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const text = "Splitting the work.\n\n";
+  const live = { ...liveRun("focus-run"), generationId: "generation-focus" };
+  const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
+    version: 3,
+    generationId: "generation-focus",
+    status: "running",
+    startedAt: 1,
+    steps,
+  });
+  const frame = (steps: AgentToolStep[]): Frame => ({
+    messages: [prompt],
+    streamingText: text,
+    timeline: timeline(steps),
+    liveSubagents: [live],
+    subagentsEnabled: true,
+  });
+  const view = render(transcript(frame([])));
+  const before = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  await act(async () => {
+    before.focus();
+  });
+
+  // The subagent tool call's row arrives, and the group moves beneath it.
+  await act(async () => {
+    view.rerender(
+      transcript(frame([{ ...toolStep(text.length), toolName: "subagent", label: "Subagent" }])),
+    );
+  });
+  const after = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  assert.equal(after === before, false, "the group remounted in its new place");
+  assert.equal(document.activeElement === after, true, "focus moved with it instead of dropping to the page");
+});
+
 test("a reply steered mid-run stays the same reply through guidance, handoff and settlement", () => {
   document.documentElement.dataset.reduceMotion = "true";
   const text = "The reply with reasoning.";

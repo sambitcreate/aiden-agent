@@ -18,6 +18,7 @@ import { useAppCapabilities } from "./app-capabilities";
 export type CommandPaletteMode =
   | "root"
   | "chats"
+  | "bots"
   | "newChatIn"
   | "models"
   | "providers"

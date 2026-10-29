@@ -396,6 +396,118 @@ test("approved model scheduling persists one exact task and replay does not dupl
   assert.equal((await api.scheduleCommand(dir, ["list"])).length, 1);
 });
 
+test("schedule save consent shows effective defaults before publishing them", async (t) => {
+  const { dir, workspace, model, tool, context } = await scheduleToolFixture(t);
+  let consent;
+  context.ui.confirm = async (_title, text) => {
+    consent = JSON.parse(text);
+    assert.equal(existsSync(join(dir, "schedules.json")), false, "confirmation must precede publication");
+    return true;
+  };
+  await tool.execute("defaulted-save", { action: "save", name: "Default review", cron: "0 9 * * *", prompt: "Review the workspace", workspaceId: workspace.id }, undefined, undefined, context);
+  for (const values of [consent.request, (await api.scheduleCommand(dir, ["list"]))[0]]) {
+    assert.equal(values.enabled, true);
+    assert.equal(values.permission, "read-only");
+    assert.equal(values.notify, true);
+    assert.equal(values.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    assert.equal(values.mode, "llm");
+    assert.equal(values.providerId, model.provider);
+    assert.equal(values.model, model.id);
+    assert.equal(values.workspaceId, workspace.id);
+    assert.deepEqual(values.mcpServerIds, []);
+    assert.deepEqual(values.mcpServerBindings, []);
+    assert.equal(values.webSearchEnabled, false);
+  }
+});
+
+test("a long existing prompt can be shortened while consent shows effective edit values", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, timezone: "Asia/Tokyo", mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  let consent;
+  context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
+  await tool.execute("shorten", { action: "save", id: task.id, name: "Short review", cron: "0 9 * * *", prompt: "Read the project status", workspaceId: task.workspaceId }, undefined, undefined, context);
+  assert.equal(consent.currentTask.enabled, false);
+  assert.equal(consent.request.enabled, true);
+  assert.equal(consent.request.permission, "read-only");
+  assert.equal(consent.request.timezone, "Asia/Tokyo");
+  assert.equal(consent.request.prompt, "Read the project status");
+  const [saved] = await api.scheduleCommand(dir, ["list"]);
+  assert.equal(saved.id, task.id);
+  assert.equal(saved.enabled, true);
+  assert.equal(saved.permission, "read-only");
+  assert.equal(saved.timezone, "Asia/Tokyo");
+  assert.equal(saved.prompt, "Read the project status");
+});
+
+test("resume consent includes persisted instructions, execution mode and effective scope", async (t) => {
+  for (const mode of ["llm", "script"]) {
+    await t.test(mode, async (t) => {
+      const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+      const file = join(dir, "manual-task.json");
+      api.atomicJson(file, { ...input, mode, enabled: false, providerId: mode === "llm" ? model.provider : undefined,
+        model: mode === "llm" ? model.id : undefined, prompt: mode === "llm" ? "Summarize the project status" : undefined,
+        script: mode === "script" ? "audit.sh" : undefined, webSearchEnabled: mode === "llm" });
+      const task = await api.scheduleCommand(dir, ["save", file]);
+      let consent;
+      context.ui.confirm = async (_title, text) => { consent = JSON.parse(text); return true; };
+      await tool.execute("resume", { action: "resume", id: task.id }, undefined, undefined, context);
+      assert.equal(consent.currentTask.enabled, false);
+      const shown = consent.resumedTask;
+      assert.equal(shown.enabled, true);
+      assert.equal(shown.mode, mode);
+      assert.equal(shown.permission, "full");
+      assert.equal(shown.workspaceId, task.workspaceId);
+      assert.equal(shown.cron, "0 9 * * *");
+      assert.equal(shown.timezone, "UTC");
+      assert.equal(shown.notify, true);
+      assert.deepEqual(shown.mcpServerIds, []);
+      assert.deepEqual(shown.mcpServerBindings, []);
+      assert.equal(shown.webSearchEnabled, mode === "llm");
+      if (mode === "llm") {
+        assert.equal(shown.prompt, "Summarize the project status");
+        assert.equal(shown.providerId, model.provider);
+        assert.equal(shown.model, model.id);
+      } else {
+        assert.equal(shown.script, "audit.sh");
+      }
+      assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
+    });
+  }
+});
+
+test("an undisplayable resume leaves the disabled task unchanged without asking", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  const file = join(dir, "manual-task.json");
+  api.atomicJson(file, { ...input, prompt: "Detailed existing instruction. ".repeat(200), enabled: false, mode: "llm", providerId: model.provider, model: model.id });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  const before = readFileSync(join(dir, "schedules.json"), "utf8");
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  await assert.rejects(tool.execute("resume-long", { action: "resume", id: task.id }, undefined, undefined, context), /display budget/);
+  assert.equal(confirmations, 0);
+  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
+  assert.equal(existsSync(join(dir, "schedule-proposals")), false);
+});
+
+test("invalid schedule arguments and specialized edits are refused before confirmation", async (t) => {
+  const { dir, input, model, tool, context } = await scheduleToolFixture(t);
+  let confirmations = 0;
+  context.ui.confirm = async () => { confirmations++; return true; };
+  const invalid = [{ ...input, prompt: " " }, { ...input, cron: "invalid" }, { ...input, timezone: "Unknown/Zone" }];
+  for (const [index, proposal] of invalid.entries()) {
+    await assert.rejects(tool.execute(`invalid-${index}`, proposal, undefined, undefined, context));
+  }
+  const file = join(dir, "owned-task.json");
+  api.atomicJson(file, { ...input, mode: "llm", enabled: false, providerId: model.provider, model: model.id, executionProfile: "assistant" });
+  const task = await api.scheduleCommand(dir, ["save", file]);
+  const before = readFileSync(join(dir, "schedules.json"), "utf8");
+  await assert.rejects(tool.execute("specialized-edit", { ...input, id: task.id }, undefined, undefined, context), /specialized owner/);
+  assert.equal(confirmations, 0);
+  assert.equal(readFileSync(join(dir, "schedules.json"), "utf8"), before);
+});
+
 test("schedule consent cannot survive changed arguments, provider configuration, workspace authority or cancellation", async (t) => {
   for (const change of ["arguments", "provider", "workspace", "cancel"]) {
     await t.test(change, async (t) => {
@@ -424,6 +536,39 @@ test("an approved schedule mutation rechecks authority at publication, after asy
   api.atomicJson(join(dir, "models.json"), { providers: {} });
   await assert.rejects(api.scheduleCommand(dir, ["pause", task.id, JSON.stringify(approved)]), /changed after approval/);
   assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
+});
+
+test("a codemode script in a Full workspace still needs consent to save a scheduled task", async (t) => {
+  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const run = async (approve) => {
+    const dir = temporary(t);
+    const workspace = await api.workspaceCommand(dir, ["add", dir]);
+    await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+    const request = { action: "save", name: "Nightly", cron: "0 2 * * *", timezone: "UTC", prompt: "Summarize the repository", permission: "full", workspaceId: workspace.id };
+    const faux = fauxProvider({ provider: "faux-schedule", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
+    // Session parity also asks the model for a chat title, so answer by request shape, not order.
+    const respond = (context) => context.messages.at(-1)?.role === "toolResult" ? fauxAssistantMessage("Done")
+      : context.messages.some((message) => message.role === "system" && (message.toolsAdded ?? []).some((tool) => tool.name === "codemode"))
+        ? fauxAssistantMessage(fauxToolCall("codemode", { code: `text(JSON.stringify(await tools.schedule_task(${JSON.stringify(request)})))` }), { stopReason: "toolUse" })
+        : fauxAssistantMessage("Nightly summary");
+    faux.setResponses([respond, respond, respond, respond]);
+    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createSessionParityExtension(dir), api.createScheduleExtension(dir), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools: ["read", "codemode"] }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+    t.after(() => session.dispose());
+    const titles = [];
+    const uiContext = new Proxy({ confirm: async (title) => { titles.push(title); return approve; } }, {
+      get: (target, key) => key in target ? target[key] : () => undefined,
+    });
+    await session.bindExtensions({ uiContext });
+    await session.prompt("Schedule a nightly summary");
+    return { titles, tasks: await api.scheduleCommand(dir, ["list"]) };
+  };
+  const denied = await run(false);
+  assert.deepEqual(denied.titles, ["Allow scheduled-task change?"], "the nested call asked once, even with Full access");
+  assert.deepEqual(denied.tasks, [], "a declined nested save publishes nothing");
 });
 
 test("a cancelled or expired publication receipt cannot change an existing task", async (t) => {
@@ -1047,6 +1192,10 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   assert.equal(await runtime.isPaused(bot.id), true);
   const stopped = await running.idle();
   assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
+  // As on the Mac, the stopped reply is the person's Stop, not a deletion or a failure.
+  const stoppedTimeline = stopped.find((event) => event.channel === "chat:error")?.value.timeline;
+  assert.equal(stoppedTimeline?.status, "cancelled", JSON.stringify(stopped));
+  assert.equal(stoppedTimeline?.cancellationOrigin, "user_stop");
   held.end();
   assert.equal(statSync(join(dir, "bot-service", "bot-pauses.json")).mode & 0o777, 0o600);
   assert.deepEqual(await runtime.command(["pause", bot.id]), paused, "pausing again keeps the first time");
@@ -1436,6 +1585,68 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   for (const id of ["good", "hung"]) for (const pid of readFileSync(join(dir, `${id}.pid`), "utf8").trim().split("\n").map(Number)) {
     assert.throws(() => process.kill(pid, 0), /ESRCH/);
   }
+});
+
+test("interactive MCP keeps auto servers behind codemode, lists them for the model, and declares them when codemode is off", async (t) => {
+  const dir = temporary(t), auto = { ...fixtureServer(dir, "docs"), description: "Team documentation" }, visible = { ...fixtureServer(dir, "pinned"), exposure: "direct" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [auto, visible]);
+  const load = async (active) => {
+    const events = new Map(), tools = new Map();
+    await api.createMcpExtension(dir, { deferToCodemode: true }).factory({
+      on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.name, tool), getActiveTools: () => active });
+    t.after(() => events.get("session_shutdown")());
+    return { events, tools };
+  };
+  const scripted = await load(["read", "bash", "codemode"]);
+  scripted.events.get("session_start")();
+  assert.equal(scripted.tools.get("docs__first").exposure, "codemode", "an auto server's tools are reached from codemode scripts");
+  assert.deepEqual(scripted.tools.get("docs__first").namespace, { name: "docs", description: "Team documentation" });
+  assert.equal(scripted.tools.get("pinned__first").exposure, undefined, "an Always visible server stays declared");
+  const sections = { mcp_servers: "stale" };
+  await scripted.events.get("before_agent_start")({ systemPromptOptions: { sections } });
+  assert.match(sections.mcp_servers, /- docs: docs \(via codemode\) — "Team documentation"/);
+  assert.doesNotMatch(sections.mcp_servers, /pinned|<mcp_servers>/, "Pi wraps the section; declared servers need no listing");
+
+  const direct = await load(["read", "bash"]);
+  direct.events.get("session_start")();
+  assert.equal(direct.tools.get("docs__first").exposure, undefined, "without codemode the tools are declared directly");
+  const none = { mcp_servers: "stale" };
+  await direct.events.get("before_agent_start")({ systemPromptOptions: { sections: none } });
+  assert.equal(none.mcp_servers, undefined);
+});
+
+test("a codemode script reaches an MCP tool that was never declared to the model, and without codemode it is declared", async (t) => {
+  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...fixtureServer(dir, "docs"), description: "Team documentation" }]);
+  const run = async (defaultTools) => {
+    const faux = fauxProvider({ provider: "faux-codemode", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
+    const requests = [];
+    faux.setResponses([
+      (context) => { requests.push(context); return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.docs__first({ value: 'hi' }))" }), { stopReason: "toolUse" }); },
+      (context) => { requests.push(context); return fauxAssistantMessage("Done"); },
+    ]);
+    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createMcpExtension(dir, { deferToCodemode: true }), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+    // dispose() alone leaves extensions running; shutting down closes the MCP server process.
+    t.after(async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); });
+    await session.bindExtensions({});
+    await session.prompt("Look it up");
+    const declared = requests[0].messages.filter((message) => message.role === "system").flatMap((message) => (message.toolsAdded ?? []).map((tool) => tool.name));
+    const sections = requests[0].messages.filter((message) => message.role === "system").map((message) => message.sections?.mcp_servers ?? "").join("");
+    const result = session.messages.find((message) => message.role === "toolResult");
+    return { declared, sections, result: result.content.map((part) => part.text ?? "").join("\n") };
+  };
+  const scripted = await run(["read", "codemode"]);
+  assert.deepEqual(scripted.declared, ["read", "codemode"], "the MCP tool stays out of the model's declarations");
+  assert.match(scripted.sections, /- docs: docs \(via codemode\)/, "the model learns the service exists");
+  assert.match(scripted.result, /Echo hi/, "the script called the MCP tool");
+  const direct = await run(["read"]);
+  assert.ok(direct.declared.includes("docs__first"), "without codemode the MCP tool is declared directly");
+  assert.equal(direct.sections, "");
 });
 
 test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
@@ -2200,16 +2411,23 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
-  let calls = 0, hold = false;
+  let calls = 0, hold = false, scriptResult, scriptTools;
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body);
     const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
+    const last = parsed.messages.at(-1);
+    const script = last.role === "user" && JSON.stringify(last.content).includes("Script durable file");
+    if (script) scriptTools = parsed.tools.map((tool) => tool.function.name);
+    if (last.role === "tool" && last.tool_call_id === "durable-script") scriptResult = JSON.stringify(last.content);
+    const call = write
+      ? { id: "durable-write", name: "write_file", arguments: { path: "durable.txt", content: "Written by the durable Bot" } }
+      : script ? { id: "durable-script", name: "codemode", arguments: { code: 'text(await tools.read_file({ path: "durable.txt" }))' } } : undefined;
     calls++;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: write ? { role: "assistant", tool_calls: [{ index: 0, id: "durable-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "durable.txt", content: "Written by the durable Bot" }) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
     if (hold) return;
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: write ? "tool_calls" : "stop" }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -2278,6 +2496,11 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
   assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
+  // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
+  const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, scriptTurn.submissionId, new AbortController().signal)).kind, "completed");
+  assert.ok(scriptTools.includes("codemode") && scriptTools.includes("read_file"), "codemode sits next to the Bot's declared tools");
+  assert.match(scriptResult, /Written by the durable Bot/u, "the script read the file through the bundled sandbox");
   assert.equal((await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" })).deduped, true);
   const afterFirst = calls;
   assert.ok(afterFirst > 0);

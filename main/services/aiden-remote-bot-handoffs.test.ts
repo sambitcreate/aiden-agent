@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
 import {
   LEGACY_AUDIENCE,
   legacyHandoffNotice,
@@ -44,6 +45,45 @@ function prompt(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
 test("a holder receives the waiting card exactly as the shared fixture shows it", async () => {
   const fixture = await section();
   assert.deepEqual(toRemoteBotHandoff(prompt()), fixture.session.handoff);
+});
+
+test("a card the password-or-code rule opened tells a holder it takes no note; the Bot's own cards and other rules' do not", async () => {
+  const fixture = await section();
+  const [credentials, money] = BOT_LOCKED_RULES;
+  const ruled = (id: string) =>
+    toRemoteBotHandoff(prompt({
+      waitId: fixture.noNoteHandoff.waitId,
+      action: fixture.noNoteHandoff.action,
+      why: undefined,
+      open: undefined,
+      source: "rule",
+      rule: { id, label: "Enter passwords or codes" },
+    }));
+  assert.deepEqual(ruled(credentials!.id), fixture.noNoteHandoff);
+  assert.equal("takesNote" in ruled(money!.id), false);
+  assert.equal("takesNote" in toRemoteBotHandoff(prompt()), false);
+});
+
+test("a step on the Bot's own browser or computer reaches a phone with no page, as one to finish on the Mac", async () => {
+  const fixture = await section();
+  const onScreen = (overrides: Partial<BotPendingHandoff>) =>
+    toRemoteBotHandoff(prompt({
+      waitId: fixture.onMacHandoff.waitId,
+      action: fixture.onMacHandoff.action,
+      why: fixture.onMacHandoff.why,
+      open: { url: "https://shop.example.com/checkout" },
+      ...overrides,
+    }));
+  assert.deepEqual(onScreen({ target: "browser" }), fixture.onMacHandoff);
+  assert.deepEqual(onScreen({ target: "computer", open: undefined }), fixture.onMacHandoff);
+  // A rule that stopped a call in the Bot's browser hands over the same kind of step.
+  const ruled = onScreen({ target: "browser", source: "rule", rule: { id: "rule-buy", label: "Ask before buying" } });
+  assert.equal(ruled.onMac, true);
+  assert.equal("open" in ruled, false);
+  // A sign-in keeps its own Finish on your Mac, and a step anywhere else keeps its page.
+  assert.equal("onMac" in toRemoteBotHandoff(prompt({ kind: "sign_in", action: "Sign in to github.com", target: "computer" })), false);
+  assert.equal("onMac" in toRemoteBotHandoff(prompt()), false);
+  assert.equal(toRemoteBotHandoff(prompt()).open?.url, "https://bank.example.com/verify");
 });
 
 test("a hand-off link that is not a plain https page, and a blank reason, never reach a phone", () => {

@@ -424,6 +424,38 @@ test("a message to a paused Bot gets one fixed line, no row, and never reaches t
   assert.equal(telegramBotPausedLine(undefined), "This Bot is paused. Resume it in Aiden to continue.");
 });
 
+test("a message to a Bot over its monthly spending limit gets the limit line and never reaches the Bot", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    spendingRefusal: async () => "Ada reached its $20.00 spending limit for this month. Allow more to keep going.",
+  });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file: path.join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void delivered.push(reply),
+    botName: async () => "Ada",
+  });
+  try {
+    await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "hi" });
+    await ingress.idle();
+    assert.deepEqual(delivered, [
+      { chatId: 7, ownerUserId: 7, text: "Ada reached its $20.00 spending limit for this month. Allow more to keep going." },
+    ]);
+    assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
+    assert.equal(fauxModels.calls(), 0);
+  } finally {
+    ingress.stop();
+    await session.shutdown();
+  }
+});
+
 test("a Telegram turn paused mid-reply is delivered once after unpause and Resume, not before", async () => {
   const dir = tempDir();
   const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("finished after the pause")], { tokensPerSecond: 40 });
