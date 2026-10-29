@@ -651,6 +651,47 @@ test("the real runner streams progress, and cancel or timeout stops Git", async 
   assert.equal(timedOut.ok === false && timedOut.reason, "timeout");
 });
 
+test("a cancelled clone settles only after Git helpers that ignore SIGTERM are gone", async (t) => {
+  if (process.platform === "win32") return;
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "aiden-intake-helper-")));
+  const helperPidFile = path.join(root, "helper.pid");
+  let helperPid = 0;
+  t.after(async () => {
+    if (helperPid > 0) { try { process.kill(helperPid, "SIGKILL"); } catch { /* gone */ } }
+    await fs.rm(root, { recursive: true, force: true });
+  });
+  const slowGit = path.join(root, "slow-git");
+  // Git exits on SIGTERM; its helper (think index-pack) ignores it and would
+  // keep writing into the staging folder the caller is about to delete.
+  await fs.writeFile(
+    slowGit,
+    `#!/bin/sh\nsh -c 'trap "" TERM; echo $$ > "${helperPidFile}"; while :; do sleep 0.05; done' >/dev/null 2>&1 &\nwait\n`,
+    { mode: 0o755 },
+  );
+  const controller = new AbortController();
+  const running = createGitCloneRunner({ gitBinary: slowGit })({
+    url: FIXTURE_URL,
+    destination: path.join(root, "widget"),
+    cwd: root,
+    signal: controller.signal,
+    onProgress: () => {},
+  });
+  const deadline = Date.now() + 5_000;
+  while (!helperPid && Date.now() < deadline) {
+    helperPid = Number(await fs.readFile(helperPidFile, "utf8").catch(() => "0"));
+    if (!helperPid) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(helperPid > 0, "the helper must start");
+  controller.abort();
+  const outcome = await running;
+  assert.equal(outcome.ok === false && outcome.reason, "cancelled");
+  let helperAlive = true;
+  for (let attempt = 0; attempt < 25 && helperAlive; attempt += 1) {
+    try { process.kill(helperPid, 0); await new Promise((resolve) => setTimeout(resolve, 20)); } catch { helperAlive = false; }
+  }
+  assert.equal(helperAlive, false, "the helper is stopped with Git's process group");
+});
+
 test("clone progress lines and failures are parsed into short user-facing results", () => {
   assert.deepEqual(parseGitCloneProgress("Cloning into 'widget'..."), { phase: "Cloning" });
   assert.deepEqual(parseGitCloneProgress("remote: Counting objects: 100% (12/12), done."), {
