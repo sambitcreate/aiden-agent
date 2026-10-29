@@ -254,6 +254,11 @@ export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   await backgroundJobs.stopChat(chatId, "chat-deleted", true);
 }
 
+/** A delete that rolled back before its durable boundary leaves the chat in use: observe its runs again. */
+export function restoreChatFollowThrough(chatId: string): void {
+  deletedChats.delete(chatId);
+}
+
 /** Folder access changed: what ran in that folder stops. */
 export async function closeWorkspaceFollowThrough(workspaceId: string): Promise<void> {
   doneWhen.clearWorkspace(workspaceId);

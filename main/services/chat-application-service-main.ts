@@ -17,7 +17,7 @@ import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
 import { toolOutputStore } from "./tool-output-store.js";
 import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
-import { deleteChatFollowThrough } from "./follow-through/follow-through-main.js";
+import { deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -32,7 +32,7 @@ export const chatApplicationService = createChatApplicationService({
   piCompactionSessionStore,
   chatPullRequestStore,
   visualSnapshots: { cancelChat: cancelVisualSnapshots },
-  followThrough: { deleteChat: deleteChatFollowThrough },
+  followThrough: { deleteChat: deleteChatFollowThrough, restoreChat: restoreChatFollowThrough },
   memoryStore,
   releaseChatContext: (chatId) => {
     forgetChatContextProfile(chatId);

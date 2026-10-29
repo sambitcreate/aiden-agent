@@ -344,6 +344,41 @@ test("a partial subagent tombstone failure still publishes the roll-forward boun
   assert.equal(application.finishDeletionCalls(), 0);
 });
 
+test("a chat deletion that fails before its durable tombstone hands the chat back to follow-through", async () => {
+  const events: string[] = [];
+  const followThrough = {
+    deleteChat: async (chatId: string) => { events.push(`suppress:${chatId}`); },
+    restoreChat: (chatId: string) => { events.push(`restore:${chatId}`); },
+  };
+  const failed = fixture({
+    followThrough,
+    subagentRunStore: {
+      deleteChat: async () => { throw new Error("disk failed"); },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => [],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+  await assert.rejects(failed.service.remove("chat-1"), /subagent history/u);
+  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"]);
+  assert.equal(failed.finishDeletionCalls(), 1, "admission reopens for the retained chat");
+
+  events.length = 0;
+  const pending = fixture({
+    followThrough,
+    subagentRunStore: {
+      deleteChat: async () => { throw new Error("V2 tombstone failed"); },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+  await assert.rejects(pending.service.remove("chat-1"), /subagent history/u);
+  assert.deepEqual(events, ["suppress:chat-1"], "a pending durable delete keeps the chat's runs ignored");
+
+  events.length = 0;
+  await fixture({ followThrough }).service.remove("chat-1");
+  assert.deepEqual(events, ["suppress:chat-1"], "a completed delete keeps the chat's runs ignored");
+});
+
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
   const effects: string[] = [];
   const application = fixture({
