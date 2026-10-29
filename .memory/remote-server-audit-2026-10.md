@@ -4,6 +4,7 @@ Branch `claude/audit-fix-remote-server`. Fixes audit 07 (the Aiden Remote HTTPS/
 
 ## Streams and persistence
 - The stream journal is two files: `aiden-remote-stream-journal.ts`. The archive keeps the old file name and holds finished streams, and `*-live.json` holds in-progress ones. A streaming delta rewrites only the live file. Persists are coalesced to 1000ms. An older single-file journal loads as the archive and is split on the next write.
+- The CLI daemon (`packages/cli/src/remote-chats.ts`) uses the same `AidenRemoteStreamJournal` (load, drop revoked devices' streams, `replace`, then `persist: (write) => journal.save(write)`). It must never hand the `{archive, live}` write to a single-snapshot DataStore.
 - Opaque handles: pruning is amortized (no full scan per `issue`). Each device has its own share of the capacity, so one phone browsing large workspaces cannot cause `handle_capacity` for other devices.
 
 ## One SSE pump
@@ -15,14 +16,14 @@ Branch `claude/audit-fix-remote-server`. Fixes audit 07 (the Aiden Remote HTTPS/
 ## Chat progress
 - Rebuilt on `openCursorSse` with a `pending` map that keeps only the newest snapshot per type, so a blocked socket gets the latest state on drain.
 - Caps: 8 streams per device, where the newest replaces the oldest, and 64 in total. Past the total cap it returns 429 `rate_limited`, `retryable: true`, `retryAfterSeconds: 5`.
-- Close and revoke call `destroy()`, not `end()`. The heartbeat is a cheap grant recheck, not a full refresh.
+- Close and revoke call `destroy()`, not `end()`. The heartbeat is a cheap grant recheck, not a full refresh, and skips a tick while the previous recheck is still running.
 - The `after` cursor resume (EXT-33) is unchanged.
 
 ## Router and listener
 - `writeError` sends `Retry-After` (ceil seconds) whenever `details.retryAfterSeconds` is set.
 - Pairing source identity: on the loopback Tailscale listener only, the source is the last `X-Forwarded-For` entry, else `Tailscale-User-Login`. `tailscale serve` overwrites client-sent copies, so this is safe. A local process could spoof them on loopback, which is acceptable because the budget is for fairness and pairing secrets are high-entropy. The LAN listener ignores forwarded headers.
 - Sockets get `setKeepAlive(true, 30s)`. TCP keepalive does not probe while unacked data is queued, so the real defense against zombie progress slots is oldest-per-device eviction plus the retryable 429.
-- TLS: a daily timer (`tlsRefreshIntervalMs`) reloads the identity and calls `server.setSecureContext` when the certificate chain changed. If the SPKI changed, it logs `tls_key_changed_restart_required` and does not swap, because pinned clients need a restart and re-pair path.
+- TLS: a daily timer (`tlsRefreshIntervalMs`) reloads the identity and calls `server.setSecureContext` when the certificate chain changed. If the SPKI changed, it logs `tls_key_changed_restart_required` and does not swap, because pinned clients need a restart and re-pair path. The load (which may run openssl) runs outside `serialized()`; only the swap is serialized and rechecks that the listener and identity are unchanged. One renewal at a time, and `stopAndSettle` awaits a running one outside the queue (awaiting it inside would deadlock on the swap).
 - Device revocation now also revokes read-aloud and progress after the state fence, not only before it.
 - Host feed attaches its close listener before the opening read. Its diff memoizes item JSON in a WeakMap, so items must be replaced, never mutated in place.
 - The synchronous `stop()` delegates to `stopAndSettle()`.
