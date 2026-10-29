@@ -2,7 +2,7 @@ import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { acquireLease } from "./state.ts";
-import { DETACHED_SERVE_ENV, recoverStaleServeLease } from "./serve-lifecycle.ts";
+import { DETACHED_SERVE_ENV, recordServeMcpGroups, recoverStaleServeLease } from "./serve-lifecycle.ts";
 import { createCliScheduler, daemonSocket } from "./schedules.ts";
 import { createDaemonChats } from "./daemon-chats.ts";
 import { createCliTelegram } from "./telegram.ts";
@@ -19,7 +19,8 @@ export async function serve(agentDir: string, signal: AbortSignal, options: { re
   const detached = process.env[DETACHED_SERVE_ENV] === "1";
   delete process.env[DETACHED_SERVE_ENV];
   const release = acquireLease(join(agentDir, "serve"), detached ? { detached: true } : undefined);
-  try { await serveOwned(agentDir, signal, options); } finally { release(); }
+  const stopRecording = recordServeMcpGroups(agentDir);
+  try { await serveOwned(agentDir, signal, options); } finally { stopRecording(); release(); }
 }
 async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean }) {
   const runtime = createCliScheduler(agentDir);

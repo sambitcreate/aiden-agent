@@ -15,12 +15,14 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync,
 import { createConnection } from "node:net";
 import { join, relative, resolve } from "node:path";
 import { daemonSocket } from "./daemon-control.ts";
-import { acquireLease, cliLeaseHelperPath, leaseGuardPath, readJson } from "./state.ts";
+import { acquireLease, atomicJson, cliLeaseHelperPath, leaseGuardPath, readJson } from "./state.ts";
 import { tryAcquireProcessLifetimeLock } from "../../../main/services/process-lifetime-lock.ts";
+import { watchMcpProcessGroups } from "../../../main/services/mcp-stdio-transport.js";
 
 const SERVE_LOCK = "serve.lock";
 const SERVE_LOG = "serve.log";
 const START_LOCK = "serve-start";
+const MCP_GROUPS = "mcp-groups.json";
 
 interface ServeOwner {
   protocol?: string;
@@ -42,6 +44,44 @@ function processGroupId(pid: number): number | undefined {
     const pgid = out.status === 0 ? Number(out.stdout.trim()) : NaN;
     return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : undefined;
   } catch { return undefined; }
+}
+
+/**
+ * Publishes the serving process's live stdio MCP process groups beside its lease
+ * owner. Each server leads its own group, outside the daemon's, and a SIGKILL
+ * skips the daemon's own cleanup, so a forced `serve stop` ends them from here.
+ * Stop recording before releasing the lease.
+ */
+export function recordServeMcpGroups(agentDir: string): () => void {
+  const lock = join(agentDir, SERVE_LOCK);
+  return watchMcpProcessGroups((groups) => {
+    // Never recreate a lease directory that was already released.
+    if (!existsSync(lock)) return;
+    try { atomicJson(join(lock, MCP_GROUPS), { pid: process.pid, groups }); } catch { /* best effort */ }
+  });
+}
+
+/**
+ * The recorded MCP groups of daemon `pid` that still have a member the daemon
+ * spawned, read before the daemon dies and its children are reparented. A group
+ * id with no such member may have been reused, so it is never signalled.
+ */
+function daemonMcpGroups(agentDir: string, pid: number): number[] {
+  let recorded: { pid?: unknown; groups?: unknown } | undefined;
+  try { recorded = readJson<{ pid?: unknown; groups?: unknown } | undefined>(join(agentDir, SERVE_LOCK, MCP_GROUPS), undefined); } catch { return []; }
+  if (recorded?.pid !== pid || !Array.isArray(recorded.groups)) return [];
+  const wanted = new Set(recorded.groups.filter((group): group is number => validPid(group) && group !== pid));
+  if (!wanted.size) return [];
+  const owned = new Set<number>();
+  try {
+    const out = spawnSync("ps", ["-A", "-o", "pid=,ppid=,pgid="], { encoding: "utf8" });
+    if (out.status !== 0) return [];
+    for (const line of out.stdout.split("\n")) {
+      const [, ppid, pgid] = line.trim().split(/\s+/u).map(Number);
+      if (ppid === pid && pgid !== undefined && wanted.has(pgid)) owned.add(pgid);
+    }
+  } catch { return []; }
+  return [...owned];
 }
 
 function serveOwner(agentDir: string): ServeOwner | undefined {
@@ -301,7 +341,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
  * SIGTERM the daemon recorded in the serve lease and wait for it to release.
  * Graceful shutdown cancels every turn first, so a daemon still running after
  * the wait is stuck: it is then SIGKILLed, with its process group when
- * startDaemon spawned it detached.
+ * startDaemon spawned it detached, and with its recorded stdio MCP server groups.
  */
 export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number; forced?: true }> {
   recoverStaleServeLease(agentDir);
@@ -355,11 +395,14 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   // Re-verify the PID before the forced kill: it must still be this daemon.
   if (pidAlive(pid) && classifyPid(pid, owner) === "daemon") {
     // A background daemon leads its own process group; killing the group also
-    // takes its stdio MCP servers and Remote advertiser instead of orphaning them.
-    // A foreground serve shares its group with the shell job (`aiden serve | tee`),
-    // so only the serve process itself is killed.
+    // takes its Remote advertiser instead of orphaning it. A foreground serve
+    // shares its group with the shell job (`aiden serve | tee`), so only the
+    // serve process itself is killed. Either way its stdio MCP servers each lead
+    // a group of their own, which the daemon recorded, and are killed as well.
+    const mcpGroups = daemonMcpGroups(agentDir, pid);
     const ownGroup = owner.detached === true && processGroupId(pid) === pid;
     try { process.kill(ownGroup ? -pid : pid, "SIGKILL"); } catch { /* already gone */ }
+    for (const group of mcpGroups) { try { process.kill(-group, "SIGKILL"); } catch { /* already gone */ } }
     const killDeadline = Date.now() + 5_000;
     while (pidAlive(pid) && Date.now() < killDeadline) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }

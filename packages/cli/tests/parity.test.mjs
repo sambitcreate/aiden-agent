@@ -518,41 +518,70 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-/** A `serve` whose shutdown never finishes, holding a helper (an MCP server, a `tee`) in its process group. */
+/**
+ * A `serve` whose shutdown never finishes, holding a helper (a `tee`, the Remote
+ * advertiser) in its process group and a stdio MCP server, started through the
+ * real transport, in a group of its own. The server outlives a closed stdin.
+ */
 async function stuckServe(t, { detached }) {
-  const dir = temporary(t), fixture = join(dir, "stuck-serve.mjs"), helperPid = join(dir, "helper.pid");
+  const dir = temporary(t), fixture = join(dir, "stuck-serve.mjs"), pids = join(dir, "pids.json");
+  // The lease directory exists before the daemon records its MCP groups in it, as acquireLease leaves it.
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  const stubborn = "process.on('SIGTERM', () => {}); process.stdin.resume(); process.stdin.on('end', () => {}); setInterval(() => {}, 1e9);";
   writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+import * as api from ${JSON.stringify(join(pkg, "dist/parity-test-api.js"))};
 process.on("SIGTERM", () => {});
 const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
-writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));
+api.recordServeMcpGroups(${JSON.stringify(dir)});
+const transport = api.createMcpStdioTransport({ command: process.execPath, args: ["-e", ${JSON.stringify(stubborn)}], stderr: "pipe" });
+await transport.start();
+writeFileSync(${JSON.stringify(pids)}, JSON.stringify({ helper: helper.pid, mcp: transport.pid }));
 setInterval(() => {}, 1e9);`);
   // Its own group either way, so the test can clean up; only owner.json says whether startDaemon spawned it.
   const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
-  t.after(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } });
+  let started;
+  t.after(() => { for (const pid of [child.pid, started?.helper, started?.mcp]) { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } } });
   const ready = Date.now() + 10_000;
-  while (!existsSync(helperPid) && Date.now() < ready) await new Promise((resolve) => setTimeout(resolve, 25));
-  const helper = Number(readFileSync(helperPid, "utf8"));
-  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  while (!existsSync(pids) && Date.now() < ready) await new Promise((resolve) => setTimeout(resolve, 25));
+  started = JSON.parse(readFileSync(pids, "utf8"));
   api.atomicJson(join(dir, "serve.lock", "owner.json"), { ...(detached ? { detached: true } : {}), pid: child.pid, argv: [process.execPath, fixture, "serve"], startedAt: Date.now() });
   writeFileSync(api.daemonSocket(dir), "");
-  return { dir, pid: child.pid, helper };
+  return { dir, pid: child.pid, ...started };
 }
 
-test("serve stop force-stops a background daemon stuck in shutdown along with its process group", { skip: process.platform === "win32" }, async (t) => {
-  const { dir, pid, helper } = await stuckServe(t, { detached: true });
+/**
+ * Whether a process is still running. An orphan killed in a container whose PID 1
+ * never reaps it stays a zombie, which `kill(pid, 0)` still reports, so a
+ * zombie counts as gone.
+ */
+function running(pid) {
+  if (!api.pidAlive(pid)) return false;
+  const state = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+  return state.status === 0 && state.stdout.trim() !== "" && !state.stdout.trim().startsWith("Z");
+}
+
+async function waitUntilStopped(pid) {
+  const deadline = Date.now() + 5_000;
+  while (running(pid) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+  return !running(pid);
+}
+
+test("serve stop force-stops a background daemon stuck in shutdown along with its process group and MCP servers", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper, mcp } = await stuckServe(t, { detached: true });
+  assert.notEqual(mcp, undefined);
   assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
-  assert.equal(api.pidAlive(pid), false);
-  const helperGone = Date.now() + 5_000;
-  while (api.pidAlive(helper) && Date.now() < helperGone) await new Promise((resolve) => setTimeout(resolve, 25));
-  assert.equal(api.pidAlive(helper), false, "the daemon's helper must not be orphaned");
+  assert.equal(await waitUntilStopped(pid), true);
+  assert.equal(await waitUntilStopped(helper), true, "the daemon's helper must not be orphaned");
+  assert.equal(await waitUntilStopped(mcp), true, "the daemon's MCP server must not be orphaned");
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-test("serve stop force-stops only the serve process of a stuck foreground serve, sparing its shell job", { skip: process.platform === "win32" }, async (t) => {
-  const { dir, pid, helper } = await stuckServe(t, { detached: false });
+test("serve stop force-stops only the serve process and its MCP servers of a stuck foreground serve, sparing its shell job", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper, mcp } = await stuckServe(t, { detached: false });
   assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
-  assert.equal(api.pidAlive(pid), false);
-  assert.equal(api.pidAlive(helper), true, "a process sharing the foreground serve's group survives");
+  assert.equal(await waitUntilStopped(pid), true);
+  assert.equal(await waitUntilStopped(mcp), true, "the serve's MCP server must not be orphaned");
+  assert.equal(running(helper), true, "a process sharing the foreground serve's group survives");
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
@@ -1234,6 +1263,46 @@ test("scheduled inference budgets the streamed reply size, not every cumulative 
   assert.equal(meter.add({ type: "thinking_end", contentIndex: 0, content: "x".repeat(10), partial }), 33);
   const redacted = { content: [{ type: "thinking", thinking: "", redacted: true, thinkingSignature: "s".repeat(3 * 1024 * 1024) }] };
   assert.ok(meter.add({ type: "thinking_end", contentIndex: 0, content: "", partial: redacted }) > 2 * 1024 * 1024);
+  // A signature the terminal response fills in after its block ended counts once, at the message's end.
+  const growing = api.createReplyMeter(), reasoning = { type: "thinking", thinking: "plan", thinkingSignature: '{"id":"rs"}' };
+  const ended = growing.add({ type: "thinking_end", contentIndex: 0, content: "plan", partial: { content: [reasoning] } });
+  assert.equal(ended, 4 + '{"id":"rs"}'.length);
+  reasoning.thinkingSignature = JSON.stringify({ id: "rs", encrypted_content: "e".repeat(100) });
+  const finished = growing.finish({ content: [reasoning] });
+  assert.equal(finished, 4 + reasoning.thinkingSignature.length);
+  assert.equal(growing.finish({ content: [reasoning] }), finished);
+});
+
+test("scheduled inference counts OpenAI encrypted reasoning against the reply budget", async (t) => {
+  const dir = temporary(t);
+  let encrypted = "";
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const reasoning = { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "Planning." }], encrypted_content: encrypted };
+    const message = { type: "message", id: "msg_1", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Done.", annotations: [] }] };
+    const events = [
+      { type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } },
+      { type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_1", summary: [] } },
+      { type: "response.output_item.done", output_index: 0, item: reasoning },
+      { type: "response.output_item.added", output_index: 1, item: { ...message, status: "in_progress", content: [] } },
+      { type: "response.content_part.added", output_index: 1, item_id: "msg_1", content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+      { type: "response.output_text.delta", output_index: 1, item_id: "msg_1", content_index: 0, delta: "Done." },
+      { type: "response.output_item.done", output_index: 1, item: message },
+      { type: "response.completed", response: { id: "resp_1", status: "completed", output: [reasoning, message], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } },
+    ];
+    for (const [index, event] of events.entries()) response.write(`event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number: index })}\n\n`);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-responses", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: true, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const task = { providerId: "cli-test", model: "test", permission: "read-only", prompt: "Write the daily report", mcpServerIds: [], mcpServerBindings: [], webSearchEnabled: false };
+  encrypted = "e".repeat(1024);
+  assert.equal(await api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), "Done.");
+  // A short answer cannot carry 3 MiB of opaque reasoning past the budget.
+  encrypted = "e".repeat(3 * 1024 * 1024);
+  await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), /response budget exhausted/);
 });
 
 test("MCP paginates tools, fences schema drift, and terminates its stdio transport", async (t) => {

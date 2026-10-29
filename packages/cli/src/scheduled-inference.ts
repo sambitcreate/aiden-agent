@@ -13,27 +13,38 @@ import { messageText } from "./sessions.ts";
 /**
  * Counts a streamed reply's bytes once each: deltas as they arrive, plus whatever
  * a block's `*_end` carries beyond its deltas, so a block delivered whole (redacted
- * thinking, tool-call arguments sent at start or end) still counts. Every update
- * also carries the whole partial message, which is never counted.
+ * thinking, tool-call arguments sent at start or end) still counts. A thinking
+ * block's opaque signature (redacted thinking, OpenAI's encrypted reasoning) counts
+ * at its end, and `finish` counts whatever the terminal response added to it later.
+ * Every update also carries the whole partial message, which is never counted.
  */
 export function createReplyMeter() {
-  const streamed = new Map<number, number>();
+  const streamed = new Map<number, number>(), signatures = new Map<number, number>();
   let total = 0;
+  const countSignature = (index: number, block: AssistantMessage["content"][number] | undefined) => {
+    if (block?.type !== "thinking") return;
+    const bytes = Buffer.byteLength(block.thinkingSignature ?? ""), counted = signatures.get(index) ?? 0;
+    if (bytes > counted) { total += bytes - counted; signatures.set(index, bytes); }
+  };
   return {
     /** A new assistant message starts its content indices afresh. */
-    nextMessage() { streamed.clear(); },
+    nextMessage() { streamed.clear(); signatures.clear(); },
     add(event: AssistantMessageEvent): number {
       if (event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") {
         const bytes = Buffer.byteLength(event.delta);
         streamed.set(event.contentIndex, (streamed.get(event.contentIndex) ?? 0) + bytes);
         total += bytes;
       } else if (event.type === "text_end" || event.type === "thinking_end" || event.type === "toolcall_end") {
-        const block = event.partial.content[event.contentIndex];
-        const size = event.type === "toolcall_end" ? Buffer.byteLength(JSON.stringify(event.toolCall.arguments ?? {}))
-          : Buffer.byteLength(event.content) + (block?.type === "thinking" && block.redacted ? Buffer.byteLength(block.thinkingSignature ?? "") : 0);
+        const size = event.type === "toolcall_end" ? Buffer.byteLength(JSON.stringify(event.toolCall.arguments ?? {})) : Buffer.byteLength(event.content);
         total += Math.max(0, size - (streamed.get(event.contentIndex) ?? 0));
         streamed.delete(event.contentIndex);
+        if (event.type === "thinking_end") countSignature(event.contentIndex, event.partial.content[event.contentIndex]);
       }
+      return total;
+    },
+    /** The completed message: signatures the terminal response filled in after their block ended. */
+    finish(message: AssistantMessage): number {
+      message.content.forEach((block, index) => countSignature(index, block));
       return total;
     },
   };
@@ -81,8 +92,9 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     removeEvents = session.subscribe((event) => {
       if (event.type === "turn_start" && ++turns > 24) controller.abort(new Error("Scheduled turn budget exhausted."));
       if (event.type === "message_start") reply.nextMessage();
-      if (event.type === "message_end" && event.message.role === "assistant") produced.push(event.message);
-      if (event.type === "message_update" && reply.add(event.assistantMessageEvent) > 2 * 1024 * 1024) controller.abort(new Error("Scheduled response budget exhausted."));
+      const replied = event.type === "message_update" ? reply.add(event.assistantMessageEvent)
+        : event.type === "message_end" && event.message.role === "assistant" ? (produced.push(event.message), reply.finish(event.message)) : 0;
+      if (replied > 2 * 1024 * 1024) controller.abort(new Error("Scheduled response budget exhausted."));
     });
     await check(); await session.prompt(task.prompt!, { expandPromptTemplates: false }); combined.throwIfAborted();
     const last = produced.at(-1);
