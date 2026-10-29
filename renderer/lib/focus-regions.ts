@@ -59,7 +59,33 @@ export function focusRegion(region: FocusRegion, root: ParentNode = document): b
   const entry = element ? regionEntry(element) : null;
   if (!entry) return false;
   entry.focus({ preventScroll: entry === element });
-  return root instanceof Document ? root.activeElement === entry : true;
+  const doc = (root as Node).nodeType === Node.DOCUMENT_NODE ? (root as Document) : null;
+  return doc ? doc.activeElement === entry : true;
+}
+
+/**
+ * Focus `region` as soon as it is on screen, for a moment after something that
+ * covered the window (onboarding) goes away. If the page changes under it (a
+ * new page's message box replaces the old one), it focuses the new one. It
+ * stops once anything else takes focus, or after `timeoutMs`. Returns a cancel
+ * function.
+ */
+export function focusRegionWhenShown(region: FocusRegion, timeoutMs = 2000): () => void {
+  const started = performance.now();
+  let frame = 0;
+  let focused: Element | null = null;
+  const attempt = () => {
+    if (performance.now() - started >= timeoutMs) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || active === document.documentElement || !active.isConnected) {
+      if (focusRegion(region)) focused = document.activeElement;
+    } else if (active !== focused) {
+      return;
+    }
+    frame = requestAnimationFrame(attempt);
+  };
+  frame = requestAnimationFrame(attempt);
+  return () => cancelAnimationFrame(frame);
 }
 
 /** Focus the next (1) or previous (-1) area after the one holding `from`. */

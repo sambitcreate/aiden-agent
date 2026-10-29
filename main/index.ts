@@ -81,7 +81,7 @@ import {
   effectiveBindings,
   migrateLegacyKeybindings,
 } from "../renderer/shared/keybindings.js";
-import { applicationMenuTemplate } from "./services/application-menu-core.js";
+import { applicationMenuTemplate, parseMenuCommandIds } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -1685,10 +1685,27 @@ registerAppPathOpener(async (path) => {
   await deliverMainWindowNotification("app:navigate", { path });
 });
 
+// The last settings the menu was built from, and the commands the renderer
+// reports it can run now, so the menu can be rebuilt when either changes.
+let applicationMenuInputs: { settings: AppSettings; acceleratorsEnabled: boolean } | null = null;
+let applicationMenuAvailable: ReadonlySet<string> | null = null;
+
+ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  const next = parseMenuCommandIds(commandIds);
+  if (!next) return false;
+  const current = applicationMenuAvailable;
+  if (current && current.size === next.size && [...next].every((id) => current.has(id))) return true;
+  applicationMenuAvailable = next;
+  if (applicationMenuInputs) setupApplicationMenu(applicationMenuInputs.settings, applicationMenuInputs.acceleratorsEnabled);
+  return true;
+});
+
 function setupApplicationMenu(
   settings: AppSettings,
   acceleratorsEnabled = true,
 ): void {
+  applicationMenuInputs = { settings, acceleratorsEnabled };
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
@@ -1701,10 +1718,14 @@ function setupApplicationMenu(
       platform: process.platform,
       appName: app.getName(),
       bindings,
+      available: applicationMenuAvailable,
       actions: {
         checkForUpdates: () => void appUpdateService.checkNow(true),
-        deliverCommand: (commandId) =>
-          deliverMainWindowNotificationSafely("app:command", { commandId }),
+        deliverCommand: (commandId, viaKey) =>
+          deliverMainWindowNotificationSafely("app:command", {
+            commandId,
+            source: viaKey ? "menu-key" : "menu",
+          }),
         reload: (ignoreCache) => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             void requestWindowReload(mainWindow, { ignoreCache });

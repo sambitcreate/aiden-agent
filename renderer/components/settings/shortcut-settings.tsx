@@ -14,6 +14,8 @@ import {
   type KeybindingMutation,
   type KeybindingSnapshot,
 } from "../../shared/keybindings";
+import { BUILT_IN_KEYS, type BuiltInKey } from "../../shared/built-in-keys";
+import { KeyCombo } from "../keyboard-shortcuts-dialog";
 
 function RuntimeBadge({
   command,
@@ -148,6 +150,22 @@ function ShortcutRow({
           <span>{status.message}</span>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function BuiltInKeyRow({ entry }: { entry: BuiltInKey }) {
+  return (
+    <div className="px-4 py-3.5 after:mt-3.5 after:block after:h-px after:bg-separator last:after:hidden">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <Text variant="strong">{entry.title}</Text>
+          <Text as="p" variant="small" color="secondary" className="mt-0.5 max-w-[38rem]">
+            {entry.description}
+          </Text>
+        </div>
+        <KeyCombo keys={entry.keys} alsoKeys={entry.alsoKeys} />
+      </div>
     </div>
   );
 }
@@ -289,6 +307,18 @@ export function ShortcutSettings() {
       );
     },
   );
+  const sheetBinding = shortcuts.data.effective["shortcuts.show"];
+  const builtIn = BUILT_IN_KEYS.filter((entry) => {
+    if (!normalizedQuery) return true;
+    return [
+      entry.title,
+      entry.description,
+      ...[...entry.keys, ...(entry.alsoKeys ?? [])].map((key) => prettyAccelerator(key)),
+    ]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(normalizedQuery);
+  });
   const groups = [
     { title: "Global shortcuts", commands: visible.filter((command) => command.global) },
     { title: "In-app shortcuts", commands: visible.filter((command) => !command.global) },
@@ -369,7 +399,19 @@ export function ShortcutSettings() {
         ) : null,
       )}
 
-      {visible.length === 0 ? (
+      {builtIn.length > 0 ? (
+        <FieldSet title="Built-in keys">
+          <Text as="p" variant="small" color="secondary" className="px-4 pt-3.5">
+            These can’t be changed.
+            {sheetBinding ? ` ${prettyAccelerator(sheetBinding)} lists every key at once.` : null}
+          </Text>
+          {builtIn.map((entry) => (
+            <BuiltInKeyRow key={entry.id} entry={entry} />
+          ))}
+        </FieldSet>
+      ) : null}
+
+      {visible.length === 0 && builtIn.length === 0 ? (
         <Text role="status" color="secondary" className="py-8 text-center">
           No shortcuts match “{query.trim()}”.
         </Text>

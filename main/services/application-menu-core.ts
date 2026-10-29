@@ -1,10 +1,18 @@
 import type { MenuItemConstructorOptions } from "electron";
-import { electronAcceleratorForPlatform } from "../../renderer/shared/keybindings.js";
+import { COMMAND_IDS, electronAcceleratorForPlatform } from "../../renderer/shared/keybindings.js";
 
 export interface ApplicationMenuActions {
   checkForUpdates(): void;
-  deliverCommand(commandId: string): void;
+  /** `viaKey`: the item's key fired it, not a click (see `shownItem`). */
+  deliverCommand(commandId: string, viaKey?: boolean): void;
   reload(ignoreCache: boolean): void;
+}
+
+/** The command ids the renderer reports it can run now; anything else is dropped. */
+export function parseMenuCommandIds(value: unknown): ReadonlySet<string> | null {
+  if (!Array.isArray(value)) return null;
+  const known = new Set<string>(COMMAND_IDS);
+  return new Set(value.filter((id): id is string => typeof id === "string" && known.has(id)));
 }
 
 export function platformMenuAccelerator(
@@ -20,11 +28,14 @@ export function applicationMenuTemplate({
   appName,
   bindings,
   actions,
+  available = null,
 }: {
   platform: NodeJS.Platform;
   appName: string;
   bindings: Readonly<Record<string, string | null | undefined>>;
   actions: ApplicationMenuActions;
+  /** Commands the renderer can run now; null until it says, when all are enabled. */
+  available?: ReadonlySet<string> | null;
 }): MenuItemConstructorOptions[] {
   const commandItem = (
     label: string,
@@ -33,6 +44,20 @@ export function applicationMenuTemplate({
     label,
     accelerator: platformMenuAccelerator(bindings[commandId], platform),
     click: () => actions.deliverCommand(commandId),
+  });
+  // The renderer owns these keys: whether they act depends on focus and on
+  // what is open (a text field, the terminal, the browser). So the menu shows
+  // the key without taking it. On Linux and Windows the key is not registered;
+  // on macOS the page sees the key first, and a key the page left alone also
+  // reaches the menu, which hands it back marked `viaKey` for the renderer to
+  // drop.
+  const shownItem = (label: string, commandId: string): MenuItemConstructorOptions => ({
+    label,
+    accelerator: platformMenuAccelerator(bindings[commandId], platform),
+    registerAccelerator: false,
+    enabled: !available || available.has(commandId),
+    click: (_item, _window, event) =>
+      actions.deliverCommand(commandId, event?.triggeredByAccelerator === true),
   });
   const fileItems: MenuItemConstructorOptions[] = [
     commandItem("New Chat", "chat.new"),
@@ -84,6 +109,14 @@ export function applicationMenuTemplate({
     {
       label: "View",
       submenu: [
+        shownItem("Toggle Sidebar", "sidebar.toggle"),
+        shownItem("Toggle Terminal", "terminal.toggle"),
+        shownItem("Toggle Environment", "environment.toggle"),
+        { type: "separator" },
+        shownItem("Focus Sidebar", "focus.sidebar"),
+        shownItem("Focus Conversation", "focus.chat"),
+        shownItem("Focus Side Panel", "focus.panel"),
+        { type: "separator" },
         {
           label: "Reload",
           accelerator: "CmdOrCtrl+R",
@@ -103,12 +136,54 @@ export function applicationMenuTemplate({
         { role: "togglefullscreen" },
       ],
     },
+    {
+      label: "Go",
+      submenu: [
+        shownItem("Back", "navigate.back"),
+        shownItem("Forward", "navigate.forward"),
+        { type: "separator" },
+        shownItem("Previous Chat", "chat.previous"),
+        shownItem("Next Chat", "chat.next"),
+        shownItem("Search Chats…", "chat.search"),
+        { type: "separator" },
+        shownItem("Bots", "bots.open"),
+        shownItem("Open a Bot…", "bots.search"),
+        shownItem("Scheduled", "scheduled.open"),
+        shownItem("Profile", "profile.open"),
+      ],
+    },
+    {
+      label: "Chat",
+      submenu: [
+        shownItem("Change Model…", "model.change"),
+        shownItem("Attach Files…", "composer.attach"),
+        shownItem("Find in Chat", "chat.find"),
+        shownItem("Stop Reply", "chat.stop"),
+        { type: "separator" },
+        shownItem("Rename…", "chat.rename"),
+        shownItem("Duplicate", "chat.duplicate"),
+        shownItem("Fork…", "chat.fork"),
+        shownItem("Compact", "chat.compact"),
+        shownItem("Export", "chat.export"),
+        shownItem("Copy Last Reply", "chat.copyLatest"),
+        shownItem("Chat Details", "chat.details"),
+        shownItem("Change Folder Access", "workspace.access"),
+        { type: "separator" },
+        shownItem("Delete…", "chat.delete"),
+      ],
+    },
     { role: "windowMenu" },
   );
-  if (platform !== "darwin") {
+  if (platform === "darwin") {
+    template.push({
+      role: "help",
+      submenu: [shownItem("Keyboard Shortcuts", "shortcuts.show")],
+    });
+  } else {
     template.push({
       label: "Help",
       submenu: [
+        shownItem("Keyboard Shortcuts", "shortcuts.show"),
         commandItem("Command Palette…", "commandPalette.toggle"),
         { type: "separator" },
         { role: "about" },

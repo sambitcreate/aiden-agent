@@ -65,6 +65,7 @@ export const COMMAND_IDS = [
   "chat.find",
   "composer.attach",
   "workspace.access",
+  "shortcuts.show",
 ] as const;
 
 export type CommandId = (typeof COMMAND_IDS)[number];
@@ -599,6 +600,19 @@ export const COMMANDS = [
     showInSettings: true,
   }),
   command({
+    id: "shortcuts.show",
+    title: "Keyboard shortcuts",
+    description: "See every key Aiden understands, including the built-in ones.",
+    category: "Aiden",
+    keywords: ["keys", "cheat sheet", "hotkeys", "help", "list"],
+    defaultBinding: "Command+/",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
     id: "composer.attach",
     title: "Attach files…",
     description: "Choose files or images to send with your next message.",
@@ -786,6 +800,7 @@ export function prettyAcceleratorForPlatform(
     Shift: "⇧",
     Space: "Space",
     Return: "↩",
+    Backspace: "⌫",
     Escape: "Esc",
     Up: "↑",
     Down: "↓",
@@ -1170,6 +1185,7 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "chat.find",
   "composer.attach",
   "subagents.toggleTray",
+  "shortcuts.show",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {
