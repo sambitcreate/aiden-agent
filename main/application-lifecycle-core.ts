@@ -7,8 +7,9 @@ export function shouldQuitAfterAllWindowsClose(
 
 /**
  * Electron reports `window-all-closed` only once every window is gone,
- * hidden ones included. When only hidden helper windows (the visual snapshot
- * renderer) remain and closing should quit, they must be released so it can.
+ * helper ones included. When only helper windows (the visual snapshot
+ * renderer, the dictation pill) remain and closing should quit, they must be
+ * released so it can.
  */
 export function shouldReleaseAuxiliaryWindows(
   platform: NodeJS.Platform,

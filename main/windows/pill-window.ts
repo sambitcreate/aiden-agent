@@ -8,6 +8,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import { getPillPreloadPath, getWindowUrl } from "./window-paths.js";
 import { isTrustedPillSender } from "./pill-window-security.js";
 import { shouldPositionDictationPill } from "./pill-window-platform.js";
+import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 
 const PILL_WIDTH = 280;
 const PILL_HEIGHT = 56;
@@ -54,6 +55,10 @@ async function createPillWindow(): Promise<BrowserWindow> {
       backgroundThrottling: false,
     },
   });
+
+  // The pill is never an app window: it must not keep Linux or Windows
+  // running after the last real window closes, and app UI never targets it.
+  markAuxiliaryWindow(window);
 
   // Float above other apps (including fullscreen spaces) without stealing focus.
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
