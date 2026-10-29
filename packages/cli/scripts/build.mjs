@@ -15,7 +15,7 @@
  *    AIDEN_CODING_AGENT_DIR, project resources under .aiden/.
  */
 
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -275,7 +275,7 @@ const dedupeRepoPackagesPlugin = {
 			}
 			const owner = owningPackage(resolved.path);
 			if (!owner) return undefined;
-			canonicalPackages ??= indexCanonicalPackages(resolve(pkgDir, "node_modules"));
+			canonicalPackages ??= indexCanonicalPackages(realpathSync(resolve(pkgDir, "node_modules")));
 			const canonicalDir = canonicalPackages.get(`${owner.name}@${owner.version}`);
 			if (!canonicalDir || canonicalDir === owner.dir) return undefined;
 			return { path: join(canonicalDir, relative(owner.dir, resolved.path)), sideEffects: resolved.sideEffects };
