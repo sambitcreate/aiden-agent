@@ -6622,6 +6622,74 @@
           }
         }
       }
+    },
+    "/bots/{botId}/session/images/{entryId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "description": "The id of a shared_image entry in the Bot's current session."
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSessionImage",
+        "description": "Contract revision 45: the bytes of an image the Bot shared, while it is in the Bot's current conversation. 404 not_found once it is gone.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:images"
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated shared image content",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 8388608
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 8388608
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -7379,6 +7447,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:images",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7421,6 +7490,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:images",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7566,6 +7636,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:images",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -7617,6 +7688,7 @@
                 "bot:handoffs",
                 "bot:handoff-notes",
                 "bot:handoff-on-mac",
+                "bot:images",
                 "bot:issues",
                 "schedule:cards"
               ]
@@ -15934,6 +16006,44 @@
               "createdAt": {
                 "type": "string",
                 "format": "date-time"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Contract revision 45, only for devices holding bot:images: an image the Bot shared. The bytes are read from GET /bots/{botId}/session/images/{id}; devices without bot:images get an assistant message with the same id that names the image and points to the Mac.",
+            "required": [
+              "type",
+              "id",
+              "name",
+              "mimeType",
+              "size"
+            ],
+            "properties": {
+              "type": {
+                "const": "shared_image"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "mimeType": {
+                "enum": [
+                  "image/png",
+                  "image/jpeg"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8388608
               }
             },
             "additionalProperties": false

@@ -123,6 +123,10 @@ object AidenBotSessionWire {
     const val MAX_SUBMISSION_ID_LENGTH = 64
     const val MAX_PLUGIN_ID_LENGTH = 80
     const val MAX_ROUTINE_ID_LENGTH = 160
+    /** Revision 45: a shared image's name, and its largest size (the Mac's inline image limit). */
+    const val MAX_SHARED_IMAGE_NAME_LENGTH = 255
+    const val MAX_SHARED_IMAGE_BYTES = 8 * 1_048_576
+    val SHARED_IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg")
     private val PLUGIN_ID = Regex("^[a-z0-9][a-z0-9._-]*$")
     private val EPOCH = Regex("^[A-Za-z0-9_-]+$")
     private val PROPOSAL_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -305,10 +309,36 @@ sealed class AidenBotSessionEntry {
         }
     }
 
+    /**
+     * Revision 45 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
+     * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
+     */
+    @Serializable
+    @SerialName("shared_image")
+    data class SharedImage(
+        override val id: String,
+        val name: String,
+        /** `image/png` or `image/jpeg`. */
+        val mimeType: String,
+        val size: Int
+    ) : AidenBotSessionEntry() {
+        init {
+            AidenBotWire.validateIdentifier(id, "entry.id")
+            AidenBotWire.validateString(name, "entry.name", AidenBotSessionWire.MAX_SHARED_IMAGE_NAME_LENGTH)
+            if (mimeType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES) throw AidenBotContractException.InvalidField("entry.mimeType")
+            if (size !in 1..AidenBotSessionWire.MAX_SHARED_IMAGE_BYTES) throw AidenBotContractException.InvalidField("entry.size")
+        }
+
+        /** The image as the shared attachment viewer reads it. */
+        val attachment: AidenMessageAttachment
+            get() = AidenMessageAttachment(id = id, name = name, mimeType = mimeType, kind = AidenAttachmentKind.IMAGE, size = size)
+    }
+
     companion object {
         /** The entry types this build reads. Any other `type` is skipped (revision 27). */
         val KNOWN_TYPES: Set<String> = setOf(
-            "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal"
+            "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
+            "shared_image"
         )
 
         /**

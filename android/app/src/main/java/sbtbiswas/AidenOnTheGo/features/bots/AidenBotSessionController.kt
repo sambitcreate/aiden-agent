@@ -66,6 +66,9 @@ interface AidenBotSessionTransport {
     suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView =
         throw AidenRemoteClientException.InvalidResponse()
 
+    /** Revision 45 (`bot:images`): the bytes of an image the Bot shared. A Mac without it has none to read. */
+    suspend fun sharedImage(botId: String, entryId: String): ByteArray =
+        throw AidenRemoteClientException.InvalidResponse()
     /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
     suspend fun actOnIssue(
         botId: String,
@@ -113,6 +116,7 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
     override suspend fun openHandoffOnMac(botId: String, waitId: String, key: UUID) =
         client.openBotHandoffOnMac(botId, waitId, key)
     override suspend fun unpause(botId: String, key: UUID) = client.unpauseBot(botId, key)
+    override suspend fun sharedImage(botId: String, entryId: String) = client.botSessionImage(botId, entryId)
     override suspend fun actOnIssue(
         botId: String,
         issueId: String,
@@ -307,7 +311,7 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
 }
 
 /**
- * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes` and `bot:handoff-on-mac` [installation] holds. The Mac shapes a
+ * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`, `bot:handoff-on-mac` and `bot:images` [installation] holds. The Mac shapes a
  * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
  * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
  * saved features while it connects, before this connection has negotiated a grant, so the chat
@@ -320,7 +324,8 @@ fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemote
         AidenRemoteCapability.BOT_ACTIVITY,
         AidenRemoteCapability.BOT_HANDOFFS,
         AidenRemoteCapability.BOT_HANDOFF_NOTES,
-        AidenRemoteCapability.BOT_HANDOFF_ON_MAC
+        AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
+        AidenRemoteCapability.BOT_IMAGES
     )
         .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
 
@@ -553,6 +558,8 @@ class AidenBotSessionController(
     private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
     /** How long a taken message that nothing on the Mac shows stays before it goes (FR-m5). */
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
+    /** Revision 45: how many bytes of shared images this chat keeps in memory. */
+    sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
@@ -587,6 +594,8 @@ class AidenBotSessionController(
     private var claimsEpoch: String? = null
     /** The run a Stop was pressed in, by its `startedAt`. */
     private var stopStartedAt: Long? = null
+    /** Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
+    private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
 
     init {
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
@@ -644,6 +653,7 @@ class AidenBotSessionController(
         restoreJob?.cancel()
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
+        sharedImages.clear()
     }
 
     /**
@@ -663,6 +673,45 @@ class AidenBotSessionController(
     fun dismissNotice() {
         _state.update { it.copy(notice = null) }
     }
+
+    /**
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
+     * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,
+     * within a byte budget and only while the transcript still shows them; one that was dropped, or
+     * whose read failed, is read again the next time it is drawn. An id the transcript doesn't show
+     * is never asked for.
+     */
+    suspend fun sharedImageData(entryId: String): ByteArray? {
+        sharedImages[entryId]?.let { return it }
+        if (entryId !in shownSharedImageIds()) return null
+        val data = try {
+            bounded { transport.sharedImage(botId, entryId) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return null
+        }
+        sharedImages.retainOnly(shownSharedImageIds())
+        sharedImages.put(entryId, data)
+        return data
+    }
+
+    /**
+     * The attachment the shared image viewer draws. Entry ids (`entry_7`) repeat across Bots and
+     * Macs, and the viewer caches pictures for the whole app by attachment id, so the id it sees
+     * names this Mac and Bot too. Reads still go to [sharedImageData] with the entry's own id.
+     */
+    fun sharedImageAttachment(image: AidenBotSessionEntry.SharedImage): AidenMessageAttachment =
+        image.attachment.copy(id = "bot-image:$imageScope:${image.id}")
+
+    private val imageScope: String by lazy {
+        val owner = sessionKey?.let { "${it.instanceId}\u0000${it.deviceId}\u0000" }.orEmpty() + botId
+        java.security.MessageDigest.getInstance("SHA-256").digest(owner.toByteArray())
+            .take(12).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun shownSharedImageIds(): Set<String> =
+        _state.value.entries.filterIsInstance<AidenBotSessionEntry.SharedImage>().mapTo(HashSet()) { it.id }
 
     /** [block], or [AidenBotSessionTimeout] once it has run past [requestLimitMillis]. */
     private suspend fun <T : Any> bounded(block: suspend () -> T): T =
