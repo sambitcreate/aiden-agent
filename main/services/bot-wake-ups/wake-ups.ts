@@ -257,7 +257,14 @@ export function createBotWakeUps(dependencies: BotWakeUpDependencies) {
           const ran = isSpentBotWakeUp(task) && task.lastResult !== "skipped";
           // In the background, as in `cancel`: the cleanup can wait on a Pause
           // that waits on a tool call queued behind this one.
-          await dependencies.routines.delete({ botId, id: task.id }, { cleanup: "background" });
+          try {
+            await dependencies.routines.delete({ botId, id: task.id }, { cleanup: "background" });
+          } catch (error) {
+            // Removed a moment ago (the person cancelled it from the chat or the
+            // profile): nothing is left to cancel, so go on with the rest.
+            if (!(await dependencies.store.list()).some((each) => each.id === task.id)) continue;
+            throw error;
+          }
           if (!ran) cancelled += 1;
         }
         return cancelled;

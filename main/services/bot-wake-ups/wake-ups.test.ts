@@ -197,6 +197,28 @@ test("with the Bot's switch off nothing is set, and turning it off cancels its w
   assert.deepEqual(await h.wakeUps.pending("bot-chef"), []);
 });
 
+test("turning the switch off still cancels the rest when the person removed one a moment before", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const first = await h.wakeUps.set("bot-chef", { when: { inMinutes: 15 }, note: "Check the oven." });
+  const second = await h.wakeUps.set("bot-chef", { when: { inMinutes: 45 }, note: "Ask about dessert." });
+  assert.ok(first.ok && second.ok);
+  // The switch read the list just before the person's Cancel from the chat landed.
+  const before = await h.store.list();
+  await h.routines.delete({ botId: "bot-chef", id: first.wakeUp.id });
+  let reads = 0;
+  const wakeUps = createBotWakeUps({
+    store: { list: async () => (reads++ === 0 ? before : h.store.list()) },
+    routines: h.routines,
+    timezone: () => "UTC",
+    enabled: async () => false,
+  });
+
+  assert.equal(await wakeUps.cancelAll("bot-chef"), 1);
+  assert.deepEqual(await h.wakeUps.pending("bot-chef"), []);
+  assert.equal(await h.store.get(second.wakeUp.id), undefined);
+});
+
 test("turning the switch off also removes a wake-up that fired while the Bot was paused, so Resume can't run it", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
