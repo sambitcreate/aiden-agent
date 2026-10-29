@@ -6,10 +6,13 @@
 // source shows as typed), then re-renders once KaTeX lands.
 
 import remarkMath from "remark-math";
+import type { Element, ElementContent, Root, RootContent } from "hast";
 import type { Options } from "react-markdown";
+import type { VFile } from "vfile";
 
 type RemarkPlugin = NonNullable<Options["remarkPlugins"]>[number];
 type RehypePlugin = NonNullable<Options["rehypePlugins"]>[number];
+type RehypeTransform = (tree: Root, file: VFile) => void;
 
 export interface MarkdownMathPlugins {
   remark: RemarkPlugin;
@@ -38,7 +41,10 @@ export function loadMarkdownMath(
   if (plugins) return Promise.resolve(true);
   pending ??= Promise.all([import("rehype-katex"), loadStylesheet()]).then(
     ([rehypeKatex]) => {
-      plugins = { remark: remarkMath, rehype: rehypeKatex.default };
+      plugins = {
+        remark: remarkMath,
+        rehype: cachedRehypeMath(rehypeKatex.default as () => RehypeTransform),
+      };
       version += 1;
       for (const listener of listeners) listener();
       return true;
@@ -63,4 +69,86 @@ export function subscribeMarkdownMath(listener: () => void): () => void {
 
 export function markdownMathVersion(): number {
   return version;
+}
+
+/** Typeset formulas kept across parses; enough for several long math replies. */
+export const TYPESET_FORMULA_CACHE_LIMIT = 500;
+const typesetFormulas = new Map<string, ElementContent[]>();
+
+function classesOf(node: Element): unknown[] {
+  return Array.isArray(node.properties.className) ? node.properties.className : [];
+}
+
+function isMathElement(node: Element): boolean {
+  const classes = classesOf(node);
+  return (
+    classes.includes("language-math") ||
+    classes.includes("math-display") ||
+    classes.includes("math-inline")
+  );
+}
+
+/**
+ * The node rehype-katex replaces for a formula: the element carrying a math
+ * class, or the `<pre>` around a math `<code>` (fenced and `$$` math).
+ */
+function mathScope(node: Element): boolean {
+  if (isMathElement(node)) return true;
+  return (
+    node.tagName === "pre" &&
+    node.children.some(
+      (child) =>
+        child.type === "element" &&
+        child.tagName === "code" &&
+        classesOf(child).includes("language-math"),
+    )
+  );
+}
+
+/** The scope without source positions, so the same formula anywhere matches. */
+function formulaKey(scope: Element): string {
+  return JSON.stringify(scope, (key, value: unknown) => (key === "position" ? undefined : value));
+}
+
+/**
+ * Streaming re-parses the whole reply at every release, and rehype-katex
+ * typesets every formula in the tree each time. This runs rehype-katex once per
+ * distinct formula and reuses the typeset nodes for later parses, so settled
+ * formulas cost a lookup instead of a KaTeX render.
+ */
+function cachedRehypeMath(rehypeKatex: () => RehypeTransform): RehypePlugin {
+  return function rehypeCachedKatex() {
+    const typeset = rehypeKatex();
+    const render = (scope: Element, file: VFile): ElementContent[] => {
+      const key = formulaKey(scope);
+      let nodes = typesetFormulas.get(key);
+      if (nodes) {
+        typesetFormulas.delete(key);
+      } else {
+        const fragment: Root = { type: "root", children: [scope] };
+        typeset(fragment, file);
+        nodes = fragment.children as ElementContent[];
+        if (typesetFormulas.size >= TYPESET_FORMULA_CACHE_LIMIT) {
+          typesetFormulas.delete(typesetFormulas.keys().next().value!);
+        }
+      }
+      typesetFormulas.set(key, nodes);
+      // Later stages may rewrite properties, so each tree gets its own copy.
+      return structuredClone(nodes);
+    };
+    const walk = (parent: Root | Element, file: VFile) => {
+      for (let index = 0; index < parent.children.length; index += 1) {
+        const child = parent.children[index] as RootContent;
+        if (child.type !== "element") continue;
+        if (!mathScope(child)) {
+          walk(child, file);
+          continue;
+        }
+        const typesetNodes = render(child, file);
+        parent.children.splice(index, 1, ...typesetNodes);
+        index += typesetNodes.length - 1;
+      }
+    };
+    return (tree: Root, file: VFile) => walk(tree, file);
+  } as RehypePlugin;
 }
