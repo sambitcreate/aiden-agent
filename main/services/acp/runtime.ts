@@ -163,6 +163,8 @@ const TOOL_BATCH_MS = 100;
 export class AcpHarnessRuntime {
   private readonly bindings = new Map<string, Promise<Binding>>();
   private readonly live = new Set<Binding>();
+  /** Sessions between `makeRoom` and joining `live`; they count against the limit. */
+  private startingSessions = 0;
   private readonly options: Required<AcpRuntimeOptions>;
   private disposed = false;
   /** Closed while signing out: no chat or catalog process may start. */
@@ -617,24 +619,40 @@ export class AcpHarnessRuntime {
       if (binding) await this.drop(binding);
       if (this.bindings.get(host.chatId) === existing) this.bindings.delete(host.chatId);
     }
-    await this.makeRoom();
-    const created = this.create(host, signal, options.fresh === true).catch((error: unknown) => {
-      if (this.bindings.get(host.chatId) === created) this.bindings.delete(host.chatId);
-      throw error;
-    });
+    const releaseSlot = await this.makeRoom();
+    const created = this.create(host, signal, options.fresh === true)
+      .finally(releaseSlot)
+      .catch((error: unknown) => {
+        if (this.bindings.get(host.chatId) === created) this.bindings.delete(host.chatId);
+        throw error;
+      });
     this.bindings.set(host.chatId, created);
     return created;
   }
 
-  private async makeRoom(): Promise<void> {
-    while (this.live.size >= this.options.maxLiveSessions) {
+  /**
+   * Evict idle sessions until a new one fits, then reserve its slot in the
+   * same synchronous step, so concurrent starts cannot all see room for
+   * themselves. The returned function releases the reservation once the
+   * session is live (or failed to start).
+   */
+  private async makeRoom(): Promise<() => void> {
+    while (this.live.size + this.startingSessions >= this.options.maxLiveSessions) {
       // Re-evaluate each time: a session may have started a turn meanwhile.
       const oldest = [...this.live]
         .filter((binding) => !binding.turn && binding.pendingTools.size === 0)
         .sort((left, right) => left.lastUsed - right.lastUsed)[0];
-      if (!oldest) return;
+      // Busy sessions are never evicted; go over the limit rather than wait.
+      if (!oldest) break;
       await this.drop(oldest);
     }
+    this.startingSessions += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.startingSessions -= 1;
+    };
   }
 
   private async create(host: AcpTurnHost, signal: AbortSignal | undefined, fresh: boolean): Promise<Binding> {

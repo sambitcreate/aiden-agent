@@ -720,6 +720,19 @@ test("after a clean Stop the same agent session continues", async () => {
   await h.runtime.close();
 });
 
+test("sessions started at the same time evict an idle one instead of exceeding the limit", async (t) => {
+  const h = harness(undefined, undefined, { maxLiveSessions: 2 });
+  t.after(() => h.runtime.close());
+  for (const chat of ["chat-a", "chat-b", "chat-c"]) h.hosts.register(new RecordingHost(chat, h.dir));
+  await turn(h, [userMessage("echo:a")], { chatId: "chat-a" });
+  await Promise.all([
+    turn(h, [userMessage("echo:b")], { chatId: "chat-b" }),
+    turn(h, [userMessage("echo:c")], { chatId: "chat-c" }),
+  ]);
+  assert.equal(h.runtime.liveCount, 2);
+  assert.equal(h.launcher.processes.filter((process) => process.alive).length, 2);
+});
+
 test("eviction never closes a session that is mid-turn", async () => {
   const h = harness(undefined, undefined, { maxLiveSessions: 1 });
   h.hosts.register(new RecordingHost("chat-a", h.dir));
