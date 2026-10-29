@@ -1,8 +1,8 @@
 /** POSIX protection for dedicated Aiden state directories. Never chmod ancestors. */
 import type { Stats } from "node:fs";
-import { constants, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, realpathSync, statSync } from "node:fs";
+import { constants, closeSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 function unsafe(target: string): Error {
   return new Error(`Aiden storage must be a private directory or single-link file owned by this user: ${target}`);
@@ -33,20 +33,34 @@ function verifyDirectoryChain(directory: string): void {
 }
 
 /**
- * Every symlink along the requested path must belong to this user (or the system) and sit in a
- * folder no other user can change, or another user could swap it after the checks below pass.
+ * Every symlink met while resolving the requested path, including links inside other links'
+ * targets, must belong to this user (or the system) and sit in a folder no other user can
+ * change, or another user could swap it after the checks below pass.
  */
 function verifyLexicalAliases(requested: string): void {
   if (process.platform === "win32") return;
-  for (let current = requested; ; current = dirname(current)) {
-    let info: Stats | undefined;
-    try { info = lstatSync(current); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    if (info?.isSymbolicLink()) {
-      if (process.getuid && info.uid !== 0 && info.uid !== process.getuid()) throw unsafe(current);
-      verifyDirectoryChain(realpathSync(dirname(current)));
+  const parts = (value: string) => value.split(sep).filter((part) => part !== "" && part !== ".");
+  const queue = parts(requested);
+  let resolved: string = sep;
+  let links = 0;
+  while (queue.length > 0) {
+    const part = queue.shift()!;
+    if (part === "..") { resolved = dirname(resolved); continue; }
+    const candidate = join(resolved, part);
+    let info: Stats;
+    try { info = lstatSync(candidate); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return;
     }
-    if (dirname(current) === current) break;
+    if (!info.isSymbolicLink()) { resolved = candidate; continue; }
+    if (++links > 40) throw unsafe(requested);
+    if (process.getuid && info.uid !== 0 && info.uid !== process.getuid()) throw unsafe(candidate);
+    // `resolved` is already free of links, so this checks the folder that really holds this one.
+    verifyDirectoryChain(resolved);
+    const target = readlinkSync(candidate);
+    if (isAbsolute(target)) resolved = sep;
+    queue.unshift(...parts(target));
   }
 }
 
