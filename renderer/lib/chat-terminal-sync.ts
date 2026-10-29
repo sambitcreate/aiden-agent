@@ -1,3 +1,4 @@
+import { replaceEqualDeep } from "@tanstack/react-query";
 import type { Chat, ChatMessage, ChatReadResponse } from "./types";
 import { persistedChatWorkspaceId } from "../shared/chat-workspace";
 import {
@@ -872,7 +873,11 @@ export function subscribeDetachedTerminalChats(
     if (!parsed) return;
     const timeline = parseGenerationTimeline(parsed.payload.timeline);
     if (!timeline || timeline.generationId !== parsed.streamId) return;
-    updateDetachedProjection(parsed.streamId, (current) => ({ ...current, timeline }));
+    // Keeping unchanged steps lets their memoized rows skip rendering.
+    updateDetachedProjection(parsed.streamId, (current) => ({
+      ...current,
+      timeline: replaceEqualDeep(current.timeline, timeline),
+    }));
   });
   const unsubscribeArtifact = subscribe("chat:artifact", (payload) => {
     const parsed = streamPayload(payload);
