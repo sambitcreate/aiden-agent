@@ -8,6 +8,7 @@
 import remarkMath from "remark-math";
 import type { Element, ElementContent, Root, RootContent } from "hast";
 import type { Options } from "react-markdown";
+import type { Plugin } from "unified";
 import type { VFile } from "vfile";
 
 type RemarkPlugin = NonNullable<Options["remarkPlugins"]>[number];
@@ -17,6 +18,8 @@ type RehypeTransform = (tree: Root, file: VFile) => void;
 export interface MarkdownMathPlugins {
   remark: RemarkPlugin;
   rehype: RehypePlugin;
+  /** For a reply that is still streaming: its trailing formula is not cached. */
+  rehypeStreaming: RehypePlugin;
 }
 
 let plugins: MarkdownMathPlugins | null = null;
@@ -41,9 +44,11 @@ export function loadMarkdownMath(
   if (plugins) return Promise.resolve(true);
   pending ??= Promise.all([import("rehype-katex"), loadStylesheet()]).then(
     ([rehypeKatex]) => {
+      const rehype = cachedRehypeMath(rehypeKatex.default as () => RehypeTransform);
       plugins = {
         remark: remarkMath,
-        rehype: cachedRehypeMath(rehypeKatex.default as () => RehypeTransform),
+        rehype,
+        rehypeStreaming: [rehype, { streaming: true } satisfies CachedMathOptions],
       };
       version += 1;
       for (const listener of listeners) listener();
@@ -122,7 +127,7 @@ function lastMathScope(parent: Root | Element): Element | undefined {
   return undefined;
 }
 
-export interface CachedMathOptions {
+interface CachedMathOptions {
   /** The reply is still arriving, so its trailing formula may be a partial prefix. */
   streaming?: boolean;
 }
@@ -135,7 +140,7 @@ export interface CachedMathOptions {
  * trailing formula (an open `$$` block grows with every release) is typeset
  * without being stored, so its prefixes cannot evict settled formulas.
  */
-function cachedRehypeMath(rehypeKatex: () => RehypeTransform): RehypePlugin {
+function cachedRehypeMath(rehypeKatex: () => RehypeTransform): Plugin<[CachedMathOptions?], Root> {
   return function rehypeCachedKatex(options?: CachedMathOptions) {
     const typeset = rehypeKatex();
     const render = (scope: Element, file: VFile, store: boolean): ElementContent[] => {
@@ -174,5 +179,5 @@ function cachedRehypeMath(rehypeKatex: () => RehypeTransform): RehypePlugin {
     };
     return (tree: Root, file: VFile) =>
       walk(tree, file, options?.streaming ? lastMathScope(tree) : undefined);
-  } as RehypePlugin;
+  };
 }

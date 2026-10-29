@@ -157,7 +157,7 @@ function useMarkdownPlugins(content: string, richLinks: boolean, streaming = fal
       ...(richLinks ? [remarkRichLinkLimit] : []),
       ...(streaming ? [remarkOpenFence] : []),
     ],
-    rehypePlugins: math ? [streaming ? [math.rehype, { streaming: true }] : math.rehype] : [],
+    rehypePlugins: math ? [streaming ? math.rehypeStreaming : math.rehype] : [],
     urlTransform,
   };
 }
