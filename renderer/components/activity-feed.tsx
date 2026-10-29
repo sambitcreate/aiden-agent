@@ -66,8 +66,11 @@ function StepLine({ step }: { step: AgentStep }) {
   );
 }
 
+// Rows are memoized by step: the live timeline keeps an unchanged step's
+// object between updates, so only the step that changed renders again.
+
 /** A single fixed-height ticker row. Height must stay in step with the CSS shift. */
-function TickerRow({ step }: { step: AgentStep }) {
+const TickerRow = React.memo(function TickerRow({ step }: { step: AgentStep }) {
   // A pending tool step is the model still writing the call's arguments, so
   // it shimmers like any other work in progress. Approval waits do not.
   const active = !isToolStep(step)
@@ -87,9 +90,9 @@ function TickerRow({ step }: { step: AgentStep }) {
       </span>
     </div>
   );
-}
+});
 
-function TrailRow({ step }: { step: AgentStep }) {
+const TrailRow = React.memo(function TrailRow({ step }: { step: AgentStep }) {
   return (
     <div
       className="flex min-h-5 min-w-0 items-start py-px"
@@ -101,7 +104,7 @@ function TrailRow({ step }: { step: AgentStep }) {
       </span>
     </div>
   );
-}
+});
 
 export function ActivityFeed({
   timeline,

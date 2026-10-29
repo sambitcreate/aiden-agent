@@ -79,7 +79,7 @@ import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
 import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -1599,8 +1599,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 },
               }
             : {}),
-          onTimeline: (timeline) => {
+          onTimeline: (next) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
+              // Each update carries every step; keeping the unchanged ones
+              // lets their memoized rows skip rendering.
+              const timeline = replaceEqualDeep(generationTimelineRef.current, next);
               generationTimelineRef.current = timeline;
               setGenerationTimeline(timeline);
               // A tool starting means the retried request answered.
