@@ -9,6 +9,43 @@ const GENERATION_TIMEOUT_MS = 15_000;
 const STABLE_STATUS_TTL_MS = 30_000;
 const PREPARING_STATUS_TTL_MS = 5_000;
 
+export interface RecordedHelperStopDependencies {
+  /** The running executable for `pid`, or null when it has exited or cannot be read. */
+  readExecutable: (pid: number) => Promise<string | null>;
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+}
+
+/**
+ * SIGTERM the helper whose PID it wrote to its process file, but only while
+ * that PID still runs an executable inside the helper app bundle. The helper
+ * is launched through `open`, so it is not our child and its PID can be
+ * recycled by an unrelated process once it exits.
+ */
+export async function stopRecordedHelperProcess(
+  recordedPid: string,
+  helperAppPath: string,
+  dependencies: RecordedHelperStopDependencies,
+): Promise<boolean> {
+  const text = recordedPid.trim();
+  if (!/^[0-9]+$/.test(text)) return false;
+  const pid = Number.parseInt(text, 10);
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+  let executable: string | null;
+  try {
+    executable = await dependencies.readExecutable(pid);
+  } catch {
+    return false;
+  }
+  const bundle = helperAppPath.replace(/\/+$/, "");
+  if (!executable || !executable.startsWith(`${bundle}/`)) return false;
+  try {
+    dependencies.kill(pid, "SIGTERM");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export type NativeFoundationModelsMethod = "availability" | "generateTitle";
 
 export interface NativeFoundationModelsRequest {
