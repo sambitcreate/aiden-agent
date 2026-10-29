@@ -34,14 +34,28 @@ interface QueueSnapshot {
 export type CompactionHoldOutcome = { compacted: true } | { compacted: false; reason: string };
 
 /** Unsent, document-local drafts. Never write attachment contents to browser storage. */
+interface QueueRetention {
+  observed(queue: ChatMessageQueue): void;
+  unobserved(queue: ChatMessageQueue): void;
+}
+
 export class ChatMessageQueue {
   private snapshot: QueueSnapshot = { messages: [], paused: false };
   private listeners = new Set<() => void>();
+  private readonly retention: QueueRetention | undefined;
+  constructor(retention?: QueueRetention) {
+    this.retention = retention;
+  }
   getSnapshot = (): QueueSnapshot => this.snapshot;
+  get observed(): boolean {
+    return this.listeners.size > 0;
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
+    this.retention?.observed(this);
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.retention?.unobserved(this);
     };
   };
   private publish(next: QueueSnapshot) {
@@ -193,11 +207,34 @@ export class ChatMessageQueue {
   }
 }
 
+/** Nothing queued, held, paused or in flight: a fresh queue would be identical. */
+function holdsNothing(snapshot: QueueSnapshot): boolean {
+  return snapshot.messages.length === 0
+    && !snapshot.paused
+    && !snapshot.sendingId
+    && !snapshot.editingId
+    && !snapshot.holdReason
+    && !snapshot.forkSummaryHeld;
+}
+
 const queues = new Map<string, ChatMessageQueue>();
 export function chatMessageQueue(chatId: string): ChatMessageQueue {
   let queue = queues.get(chatId);
   if (!queue) {
-    queue = new ChatMessageQueue();
+    queue = new ChatMessageQueue({
+      observed: (subscribed) => {
+        if (!queues.has(chatId)) queues.set(chatId, subscribed);
+      },
+      // Every visited chat would otherwise leave a record behind. Wait a task
+      // so an immediate resubscribe (a remount) keeps the same queue.
+      unobserved: (released) => {
+        setTimeout(() => {
+          if (queues.get(chatId) === released && !released.observed && holdsNothing(released.getSnapshot())) {
+            queues.delete(chatId);
+          }
+        }, 0);
+      },
+    });
     queues.set(chatId, queue);
   }
   return queue;
