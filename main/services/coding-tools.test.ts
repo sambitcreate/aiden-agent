@@ -1534,6 +1534,79 @@ test("pinned edit_file keeps ordinary files above the subagent content cap edita
   }
 });
 
+test("write_file streams a large existing file and refuses one past the replace limit", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-huge-"));
+  try {
+    const write = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    // Sparse files take no disk. The streamed hash must match what the native writer checks.
+    const large = path.join(root, "large.log");
+    await fs.writeFile(large, "first\nsecond\n");
+    await fs.truncate(large, 100 * 1024 * 1024);
+    const result = await write.execute("large", { path: "large.log", content: "a\nb\n" });
+    assert.equal(await fs.readFile(large, "utf8"), "a\nb\n");
+    // Two newline-terminated lines, then the zero-filled tail as one final line.
+    assert.deepEqual([result.details?.additions, result.details?.deletions], [2, 3]);
+
+    // 600 MiB is past both the replace limit and V8's maximum string length.
+    const huge = path.join(root, "huge.log");
+    await fs.writeFile(huge, "keep\n");
+    await fs.truncate(huge, 600 * 1024 * 1024);
+    await assert.rejects(
+      write.execute("huge", { path: "huge.log", content: "x" }),
+      /huge\.log is larger than write_file's \d+ MB limit for replacing a file/u,
+    );
+    assert.equal((await fs.stat(huge)).size, 600 * 1024 * 1024);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("write_file counts lines of a large pre-image exactly as it does for a small one", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-large-"));
+  try {
+    const write = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    const line = `${"x".repeat(1023)}\n`;
+    const large = `${line.repeat(17 * 1024)}tail without newline`;
+    await fs.writeFile(path.join(root, "large.txt"), large);
+    const replaced = await write.execute("large", { path: "large.txt", content: "one\n" });
+    assert.equal(replaced.details?.deletions, 17 * 1024 + 1);
+    assert.equal(replaced.details?.additions, 1);
+    await fs.writeFile(path.join(root, "small.txt"), "keep\ndrop\n");
+    const edited = await write.execute("small", { path: "small.txt", content: "keep\nadd\n" });
+    assert.deepEqual([edited.details?.additions, edited.details?.deletions], [1, 1]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("edit_file refuses a file too large to edit in memory and leaves it untouched", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-huge-"));
+  try {
+    const target = path.join(root, "huge.log");
+    await fs.writeFile(target, "before\n");
+    await fs.truncate(target, 600 * 1024 * 1024);
+    const edit = buildPinnedCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+    await assert.rejects(
+      edit.execute("huge", { path: "huge.log", old_string: "before", new_string: "after" }),
+      /huge\.log is larger than edit_file's \d+ MB limit; use write_file or run_command/u,
+    );
+    const head = Buffer.alloc(7);
+    const handle = await fs.open(target, "r");
+    try {
+      await handle.read(head, 0, 7, 0);
+    } finally {
+      await handle.close();
+    }
+    assert.equal(head.toString("utf8"), "before\n");
+    assert.equal((await fs.stat(target)).size, 600 * 1024 * 1024);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("run_command reports real exit failures through Pi and codemode without re-executing effects", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-outcome-"));
   try {
