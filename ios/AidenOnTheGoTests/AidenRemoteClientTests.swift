@@ -1043,6 +1043,57 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    func testBackgroundJobRoutesReadTheChatsJobsAndStopOneWithAnEmptyBody() async throws {
+        let client = makeClient()
+        let list = try botFixtureData(at: ["backgroundJobs", "list"])
+        let stopped = try botFixtureData(at: ["backgroundJobs", "stop", "response"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            if step == 1 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs")
+                return Self.response(for: request, status: 200, data: list)
+            }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs/job_1a2b3c4d/stop")
+            XCTAssertEqual(try Self.jsonBody(request).count, 0)
+            return Self.response(for: request, status: 200, data: stopped)
+        }
+
+        let read = try await client.backgroundJobs(chatId: "chat_fixture_01")
+        XCTAssertEqual(read.jobs.map(\.state), [.running, .running, .failed])
+        XCTAssertEqual(read.jobs[0].ports, [5173])
+        XCTAssertTrue(read.jobs[1].fromCommand)
+        XCTAssertEqual(read.jobs[2].exitCode, 1)
+        let after = try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "job_1a2b3c4d")
+        let job = try XCTUnwrap(after.jobs.first { $0.id == "job_1a2b3c4d" })
+        XCTAssertEqual(job.state, .stopped)
+        XCTAssertEqual(job.endReason, "person")
+        XCTAssertEqual(step, 2)
+        await assertInvalidResponse { try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "../server") }
+    }
+
+    func testBackgroundJobsRefuseWhatAPhoneCannotShow() throws {
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["backgroundJobs", "list"])) as? [String: Any]
+        )
+        let jobs = try XCTUnwrap(raw["jobs"] as? [[String: Any]])
+        func refuses(_ change: (inout [String: Any]) -> Void, _ why: String) {
+            var job = jobs[0]
+            change(&job)
+            let data = try? JSONSerialization.data(withJSONObject: ["jobs": [job]])
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data ?? Data()), why)
+        }
+        refuses({ $0["endedAt"] = "2026-10-29T09:05:00.000Z" }, "a running job has no end time")
+        refuses({ $0["ports"] = [70_000] }, "ports are TCP ports")
+        refuses({ $0["exitCode"] = 0 }, "a running job has no exit code")
+        refuses({ $0["command"] = "npm run dev" }, "no unknown fields")
+        refuses({ $0["id"] = "job_1" }, "ids are job ids")
+        let twice = try JSONSerialization.data(withJSONObject: ["jobs": [jobs[0], jobs[0]]])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: twice))
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"

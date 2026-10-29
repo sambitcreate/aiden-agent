@@ -38,6 +38,8 @@ import {
   AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION,
   AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
   parseAidenRemoteSpendingStatus,
+  AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION,
+  parseAidenRemoteBackgroundJobs,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
@@ -447,6 +449,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
   delete revision19.spending;
+  delete revision19.backgroundJobs;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -584,6 +587,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/attachments/{attachmentId}/content",
     "/chats/{chatId}/spending",
     "/chats/{chatId}/spending/allow-more",
+    "/chats/{chatId}/jobs",
+    "/chats/{chatId}/jobs/{jobId}/stop",
     "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
@@ -1330,6 +1335,8 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/pause", "delete", "200", "BotSessionState"],
     ["/chats/{chatId}/spending", "get", "200", "SpendingStatus"],
     ["/chats/{chatId}/spending/allow-more", "post", "200", "SpendingStatus"],
+    ["/chats/{chatId}/jobs", "get", "200", "BackgroundJobs"],
+    ["/chats/{chatId}/jobs/{jobId}/stop", "post", "200", "BackgroundJobs"],
     ["/bots/{botId}/spending", "get", "200", "SpendingStatus"],
     ["/bots/{botId}/spending/allow-more", "post", "200", "SpendingStatus"],
     ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
@@ -2863,6 +2870,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   );
   delete older.botHandoffs;
   delete older.spending;
+  delete older.backgroundJobs;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2893,6 +2901,7 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
     new RegExp(`require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.spending;
+  delete older.backgroundJobs;
   assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
 
   const status = raw.spending.bot;
@@ -2913,6 +2922,54 @@ test("spending fixtures need their own revision, parse strictly, and refuse with
   const wrongCode = structuredClone(raw);
   wrongCode.spending.refusal.error.code = "spending_limit";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode));
+});
+
+test("background job fixtures need their own revision, and the parser and schema refuse what a phone cannot show", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).backgroundJobs!;
+  assert.equal(fixture.list.jobs.filter((job) => job.state === "running").length, 2);
+  assert.equal(fixture.stop.response.jobs.find((job) => job.id === fixture.stop.jobId)?.state, "stopped");
+  assert.equal(fixture.notFound.error.code, "not_found");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.backgroundJobs;
+  assert.equal(parseAidenRemoteContractFixture(older).backgroundJobs, undefined);
+
+  const ajv = new Ajv2020({ strict: false });
+  const schema = ajv.compile({ $ref: "#/components/schemas/BackgroundJobs", components: spec.components });
+  for (const body of [raw.backgroundJobs.list, raw.backgroundJobs.stop.response]) {
+    assert.ok(schema(body), JSON.stringify(schema.errors));
+    assert.deepEqual(parseAidenRemoteBackgroundJobs(body), body);
+  }
+  const running = raw.backgroundJobs.list.jobs[0];
+  const failed = raw.backgroundJobs.list.jobs[2];
+  for (const [why, job, schemaRefuses] of [
+    ["a running job has no end time", { ...running, endedAt: failed.endedAt }, false],
+    ["an ended job has an end time", { ...failed, endedAt: undefined }, false],
+    ["an ended job serves no ports", { ...failed, ports: [5173] }, false],
+    ["a running job has no exit code", { ...running, exitCode: 0 }, false],
+    ["a stopped job says why", { ...failed, state: "stopped", exitCode: undefined }, false],
+    ["only a stopped job says why", { ...failed, endReason: "person" }, false],
+    ["a command's leftover cannot fail", { ...failed, fromCommand: true }, false],
+    ["ports are TCP ports", { ...running, ports: [70_000] }, true],
+    ["a few ports at most", { ...running, ports: [1, 2, 3, 4, 5, 6] }, true],
+    ["ids are job ids", { ...running, id: "job_1" }, true],
+    ["no unknown fields", { ...running, command: "npm run dev" }, true],
+  ] as const) {
+    const body = JSON.parse(JSON.stringify({ jobs: [job] }));
+    assert.throws(() => parseAidenRemoteBackgroundJobs(body), Error, why);
+    if (schemaRefuses) assert.equal(schema(body), false, why);
+  }
+  const twice = { jobs: [running, running] };
+  assert.throws(() => parseAidenRemoteBackgroundJobs(twice), /repeated/u);
 });
 
 test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
@@ -2974,6 +3031,7 @@ test("Bot shared images need their own revision, and the schema and parser accep
   );
   delete older.botImages;
   delete older.spending;
+  delete older.backgroundJobs;
   assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
 
   const ajv = new Ajv2020({ strict: false });
@@ -3009,6 +3067,7 @@ test("browser recordings need their own revision, and a recording step carries o
   );
   delete older.browserRecordings;
   delete older.spending;
+  delete older.backgroundJobs;
   assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
 
   const ajv = new Ajv2020({ strict: false });
