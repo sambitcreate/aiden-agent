@@ -126,7 +126,10 @@ export class AcpProcess {
     // A dead agent turns stdin writes into EPIPE; the exit promise reports it.
     child.stdin.on("error", () => undefined);
 
-    let pending: Buffer = Buffer.alloc(0);
+    // The unfinished line, as received. Joined once when its newline arrives,
+    // so a large line costs one copy instead of one per chunk.
+    let pending: Buffer[] = [];
+    let pendingBytes = 0;
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     /** Errored or cancelled: enqueueing again would throw out of the stdout handlers. */
     let streamClosed = false;
@@ -136,7 +139,8 @@ export class AcpProcess {
       },
       cancel() {
         streamClosed = true;
-        pending = Buffer.alloc(0);
+        pending = [];
+        pendingBytes = 0;
       },
     });
     const emitLine = (line: Buffer) => {
@@ -155,23 +159,35 @@ export class AcpProcess {
     };
     child.stdout.on("data", (chunk: Buffer) => {
       if (streamClosed) return;
-      pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk]);
+      let start = 0;
       let index: number;
-      while (!streamClosed && (index = pending.indexOf(0x0a)) >= 0) {
-        emitLine(pending.subarray(0, index));
-        pending = pending.subarray(index + 1);
+      // Only the new chunk is searched; earlier chunks held no newline.
+      while (!streamClosed && (index = chunk.indexOf(0x0a, start)) >= 0) {
+        const end = chunk.subarray(start, index);
+        const line = pending.length === 0 ? end : Buffer.concat([...pending, end]);
+        pending = [];
+        pendingBytes = 0;
+        emitLine(line);
+        start = index + 1;
       }
-      if (!streamClosed && pending.length > MAX_LINE_BYTES) {
+      if (streamClosed) return;
+      if (start < chunk.length) {
+        pending.push(chunk.subarray(start));
+        pendingBytes += chunk.length - start;
+      }
+      if (pendingBytes > MAX_LINE_BYTES) {
         // The rest of the line is dropped with the buffer; the agent is stopped.
         streamClosed = true;
-        pending = Buffer.alloc(0);
+        pending = [];
+        pendingBytes = 0;
         controller.error(new AcpHarnessError("protocol", "The agent sent an oversized protocol line."));
         void this.close();
       }
     });
     child.stdout.once("end", () => {
-      if (!streamClosed && pending.length > 0) emitLine(pending);
-      pending = Buffer.alloc(0);
+      if (!streamClosed && pendingBytes > 0) emitLine(Buffer.concat(pending));
+      pending = [];
+      pendingBytes = 0;
       if (streamClosed) return;
       streamClosed = true;
       try {

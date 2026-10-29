@@ -5,18 +5,21 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { Type } from "@earendil-works/pi-ai";
 import { Value } from "typebox/value";
 
 import { createDeviceAgentTools } from "../devices/device-tools.js";
 import { createTodoExtensionRuntime } from "../rpiv-todo/extension.js";
 import { buildChildEnvironment } from "./environment.js";
+import { AcpConnection } from "./connection.js";
 import { redactSecrets } from "./errors.js";
 import { AcpMcpBridge, sanitizeSchema } from "./mcp-bridge.js";
 import { AcpPidLedger } from "./pid-ledger.js";
 import { AcpProcess } from "./process.js";
 import { AcpSessionStore } from "./session-store.js";
-import { tempDir } from "./test-support.js";
+import { FakeLauncher, fakeAgentEnv, tempDir } from "./test-support.js";
 
 test("child environment keeps PATH but strips credentials, Electron switches and Aiden state", () => {
   const env = buildChildEnvironment(
@@ -74,6 +77,50 @@ test("the process wrapper keeps protocol lines, drops stdout noise, and reports 
   assert.deepEqual(lines, ["first", "second"]);
   assert.equal(exit.code, 0);
   assert.equal(child.ignoredStdoutLines, 1);
+});
+
+test("protocol lines split across many stdout chunks arrive whole and in order", async () => {
+  const fake = Object.assign(new EventEmitter(), {
+    pid: undefined,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    stdin: new PassThrough(),
+    kill() {
+      return true;
+    },
+  });
+  const noise: string[] = [];
+  const child = new AcpProcess({
+    command: "agent",
+    args: [],
+    cwd: tempDir(),
+    env: {},
+    platform: "linux",
+    spawnImpl: (() => fake) as never,
+    onStdoutNoise: (line) => noise.push(line),
+  });
+  const large = `{"jsonrpc":"2.0","id":1,"result":"${"x".repeat(3 * 1024 * 1024)}"}`;
+  const stream = Buffer.from(`${large}\r\nbanner\n{"id":2}\n{"id":3}\n{"id":4}`, "utf8");
+  // 64 KB pipe-sized chunks, then a few odd-sized ones around the short lines.
+  const sizes = [...Array.from({ length: 48 }, () => 64 * 1024), 7, 1, 13];
+  let offset = 0;
+  for (const size of sizes) {
+    fake.stdout.write(stream.subarray(offset, offset + size));
+    offset += size;
+  }
+  fake.stdout.end(stream.subarray(offset));
+
+  const reader = child.input.getReader();
+  let text = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += Buffer.from(value).toString("utf8");
+  }
+  assert.deepEqual(text.split("\n"), [large, '{"id":2}', '{"id":3}', '{"id":4}', ""]);
+  assert.deepEqual(noise, ["banner"]);
 });
 
 test("an oversized protocol line fails the input stream and closes the agent without an uncaught error", async () => {
@@ -230,6 +277,29 @@ function fakeLedgerSystem(processes: Record<number, { group: number; command: st
 
 const MARKER_A = "a".repeat(32);
 const MARKER_B = "b".repeat(32);
+
+test("finished requests to a running agent are not kept alive until it exits", async (t) => {
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  const dir = tempDir();
+  const { process: agent } = await new FakeLauncher(fakeAgentEnv(dir)).launch("test", dir);
+  t.after(() => agent.close());
+  const connection = new AcpConnection(agent);
+
+  const signals: Array<WeakRef<AbortSignal>> = [];
+  for (let index = 0; index < 20; index += 1) {
+    const controller = new AbortController();
+    signals.push(new WeakRef(controller.signal));
+    await connection.logout(controller.signal);
+  }
+  for (let round = 0; round < 5; round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    gc();
+  }
+  const retained = signals.filter((signal) => signal.deref() !== undefined).length;
+  assert.equal(agent.alive, true, "the agent is still running");
+  assert.ok(retained <= 1, `${retained} finished requests are still retained by the running agent`);
+});
 
 test("the pid ledger only stops survivors still running the recorded binary", async () => {
   const file = path.join(tempDir(), "processes.json");
