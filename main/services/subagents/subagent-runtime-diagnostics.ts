@@ -3,7 +3,7 @@ import { closeSync, constants as fsConstants, fchmodSync, fstatSync, lstatSync, 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { PROVIDER_FAILURE_CATEGORIES, type ProviderFailureCategoryV1 } from "../../../renderer/shared/provider-failure.js";
-import { sanitizeCredentialText, sanitizeSubagentText } from "../../../renderer/shared/subagent-safe-text.js";
+import { redactMultilineCredentialBlocks, sanitizeSubagentText } from "../../../renderer/shared/subagent-safe-text.js";
 import { redactDevLogSecrets } from "../dev-log.js";
 
 export const MAX_SUBAGENT_RUNTIME_LOG_BYTES = 2 * 1024 * 1024;
@@ -88,7 +88,7 @@ export function sanitizeSubagentDiagnosticText(value: string): string {
     // across controls. Replacing them first would preserve the secret's bytes.
     // Multiline values (YAML block scalars, private-key blocks) are redacted
     // whole before any per-line pass can split their opening line from the body.
-    const controlSafe = sanitizeCredentialText(value.replace(ANSI_ESCAPE_PATTERN, ""));
+    const controlSafe = redactMultilineCredentialBlocks(value.replace(ANSI_ESCAPE_PATTERN, ""));
     // Inspect control-bearing lines first so a sensitive line cannot erase
     // unrelated loader evidence. Then retain the full multiline assignment pass.
     const inspected = controlSafe.split("\n").map((line) =>
