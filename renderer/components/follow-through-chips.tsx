@@ -149,11 +149,12 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
   const ports = job.state === "running" ? (job.ports ?? []) : [];
   return (
     <li className="flex flex-col">
-      <div className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5">
+      <div className={cn("flex min-w-0 gap-2 rounded-lg px-2 py-1.5", ports.length ? "items-start" : "items-center")}>
         <span
           aria-hidden="true"
           className={cn(
             "size-1.5 shrink-0 rounded-full",
+            ports.length && "mt-[7px]",
             job.state === "running" ? "bg-accent" : job.state === "exited" ? "bg-status-green" : job.state === "failed" ? "bg-status-red" : "bg-quaternary",
           )}
         />

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseLsofListening, parseProcNetTcp } from "./listening-ports.js";
+import { defaultListeningPorts, parseLsofListening, parseProcNetTcp, portsOfProcesses } from "./listening-ports.js";
 
 test("only listening sockets count from the kernel's TCP table, by socket inode", () => {
   const table = [
@@ -15,7 +15,40 @@ test("only listening sockets count from the kernel's TCP table, by socket inode"
   assert.deepEqual([...parseProcNetTcp(table)], [["41231", 5173]]);
 });
 
-test("lsof's name lines give the port after the last colon, IPv4 and IPv6 alike", () => {
-  assert.deepEqual(parseLsofListening("p4242\nf23\nn*:5173\nf24\nn[::1]:24678\nf25\nn127.0.0.1:3000\n"), [5173, 24678, 3000]);
-  assert.deepEqual(parseLsofListening(""), []);
+test("lsof's name lines give each process's ports after the last colon, IPv4 and IPv6 alike", () => {
+  assert.deepEqual(
+    [...parseLsofListening("p4242\nf23\nn*:5173\nf24\nn[::1]:24678\np4243\nf25\nn127.0.0.1:3000\n")],
+    [[4242, [5173, 24678]], [4243, [3000]]],
+  );
+  assert.deepEqual([...parseLsofListening("")], []);
+});
+
+test("a socket a job inherited from Aiden is Aiden's address, not the job's", () => {
+  const byProcess = new Map([[100, [38229]], [200, [5173, 38229]], [300, [38229]]]);
+  assert.deepEqual(portsOfProcesses(byProcess, [200, 300], 100), [5173]);
+  assert.deepEqual(portsOfProcesses(byProcess, [200, 100], 100), [5173], "Aiden itself is never one of the job's processes");
+});
+
+test("on Linux, a child that inherits one of Aiden's listening sockets does not report it as its own", { skip: process.platform !== "linux" }, async () => {
+  const { createServer } = await import("node:net");
+  const { spawn } = await import("node:child_process");
+  const ownServer = createServer();
+  await new Promise<void>((resolve) => ownServer.listen(0, "127.0.0.1", resolve));
+  const ownPort = (ownServer.address() as { port: number }).port;
+  const handle = (ownServer as unknown as { _handle: { fd: number } })._handle;
+  // The child gets Aiden's listening socket as an extra descriptor, then listens on its own port.
+  const child = spawn(
+    process.execPath,
+    ["-e", "const s=require('net').createServer().listen(0,'127.0.0.1',()=>console.log(s.address().port))"],
+    { stdio: ["ignore", "pipe", "ignore", handle.fd] },
+  );
+  try {
+    const childPort = await new Promise<number>((resolve) => child.stdout!.once("data", (chunk) => resolve(Number(String(chunk).trim()))));
+    const ports = await defaultListeningPorts([child.pid!]);
+    assert.ok(ports.includes(childPort), `${childPort} in ${ports.join(",")}`);
+    assert.equal(ports.includes(ownPort), false);
+  } finally {
+    child.kill();
+    ownServer.close();
+  }
 });
