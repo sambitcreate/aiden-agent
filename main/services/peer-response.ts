@@ -26,6 +26,7 @@ const operationIds: Record<PeerOperation["operation"], string> = {
   messagesWindow: "chatMessagesWindow",
   attachmentContent: "getChatAttachmentContent",
   skills: "getChatSkills",
+  contextPressure: "getChatContextPressure",
   tasks: "getChatTasks",
   agents: "getChatAgents",
   streamQuestion: "getStreamQuestion",

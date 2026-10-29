@@ -289,7 +289,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Aiden in Telegram",
     description:
-      "Pair your account with a one-time command from Settings. Use models, skills, files, and voice, queue follow-ups, steer a response, or stop pending work.",
+      "Use models, skills, files, and voice from your paired account. Queue follow-ups, steer a running response, interrupt a turn, or stop pending work.",
     icon: Send,
     size: "standard",
   },

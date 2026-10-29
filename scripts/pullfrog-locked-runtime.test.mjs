@@ -4,6 +4,7 @@ import process from "node:process";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { parse } from "yaml";
+import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,11 +63,18 @@ test("rewritten executable routes never call the original runtime installers", {
 });
 
 
-test("immutable bootstrap blob is integrity checked and survives a hostile review checkout", { skip: process.platform === "win32" }, (t) => {
+test("immutable bootstrap blob is integrity checked and survives a hostile review checkout", { skip: process.platform === "win32" }, async (t) => {
   const f = fixture(t);
   const workflow = parse(readFileSync(new URL("../.github/workflows/pullfrog.yml", import.meta.url), "utf8"));
   const step = workflow.jobs.pullfrog.steps.find(step => step.id === "bootstrap");
   const preload = readFileSync(new URL("./pullfrog-runtime-preload.mjs", import.meta.url));
+  const compiled = await build({
+    absWorkingDir: new URL("../", import.meta.url).pathname,
+    entryPoints: ["scripts/pullfrog-locked-runtime.mjs"], outfile: "scripts/pullfrog-runtime-preload.mjs",
+    bundle: true, platform: "node", format: "esm", target: "node22", write: false,
+  });
+  assert.equal(createHash("sha256").update(compiled.outputFiles[0].contents).digest("hex"), createHash("sha256").update(preload).digest("hex"),
+    "the enforcing blob must compile from the reviewed source");
   assert.equal(step.env.BOOTSTRAP_SHA256, createHash("sha256").update(preload).digest("hex"));
   assert.equal(step.env.BOOTSTRAP_BLOB, createHash("sha1").update(`blob ${preload.length}\0`).update(preload).digest("hex"));
   const bin = join(f.root, "bin"); mkdirSync(bin);

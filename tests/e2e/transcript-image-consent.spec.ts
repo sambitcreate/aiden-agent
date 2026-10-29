@@ -6,7 +6,7 @@ import playwright from "@playwright/test";
 import type * as PlaywrightModule from "@playwright/test";
 import type { AddressInfo } from "node:net";
 import { build } from "esbuild";
-import { test, expect } from "./fixtures";
+import { test, expect, isolatedAppEnvironment } from "./fixtures";
 import { fetchTranscriptImage } from "../../main/services/transcript-image-fetch";
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -20,7 +20,8 @@ test("transcript images make zero network requests before consent through stream
     app.setPath("userData", ${JSON.stringify(path.join(rootDir, "user-data"))});
     app.whenReady().then(() => { const window = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true, nodeIntegration: false } }); window.loadURL("about:blank"); });`);
   const electron = (playwright as unknown as typeof PlaywrightModule)._electron;
-  const app = await electron.launch({ args: [entry], env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+  // The shared allowlist adds the Linux display variables (DISPLAY, WAYLAND_DISPLAY) CI needs.
+  const app = await electron.launch({ args: [entry], env: isolatedAppEnvironment() });
   const page = await app.firstWindow();
   const paths: string[] = [];
   const headers: http.IncomingHttpHeaders[] = [];

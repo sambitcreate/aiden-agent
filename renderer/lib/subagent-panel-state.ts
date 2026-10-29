@@ -436,9 +436,13 @@ export function focusSubagentRosterRun(
   return false;
 }
 
+/** Transcript subagent rows, and the header that collapses their group. */
+export const SUBAGENT_CHIP_FOCUS_SELECTOR = "[data-subagent-chip-run-id], [data-subagent-chip-group-toggle]";
+
 export interface SubagentChipFocusTarget {
   dataset: {
     subagentChipRunId?: string;
+    subagentChipGroupToggle?: string;
   };
   isConnected: boolean;
   contains: (target: Node | null) => boolean;
@@ -446,15 +450,23 @@ export interface SubagentChipFocusTarget {
 }
 
 export interface SubagentChipFocusCapture {
-  runId: string;
+  /** The run a row opens, or the group a header collapses. */
+  key: string;
   element: SubagentChipFocusTarget;
+}
+
+function subagentChipFocusKey(element: SubagentChipFocusTarget): string | null {
+  const { subagentChipRunId: runId, subagentChipGroupToggle: group } = element.dataset;
+  if (runId) return `run:${runId}`;
+  if (group) return `group:${group}`;
+  return null;
 }
 
 export function captureSubagentChipFocus(
   element: SubagentChipFocusTarget | null,
 ): SubagentChipFocusCapture | null {
-  const runId = element?.dataset.subagentChipRunId;
-  return element && runId ? { runId, element } : null;
+  const key = element ? subagentChipFocusKey(element) : null;
+  return element && key ? { key, element } : null;
 }
 
 export function retainSubagentChipFocusAfterPointerDown(
@@ -494,7 +506,7 @@ export function resolveSubagentChipFocusHandoff(
     if (
       candidate !== capture.element &&
       candidate.isConnected &&
-      candidate.dataset.subagentChipRunId === capture.runId
+      subagentChipFocusKey(candidate) === capture.key
     ) {
       return { action: "focus", target: candidate };
     }

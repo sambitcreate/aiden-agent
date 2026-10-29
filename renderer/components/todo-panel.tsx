@@ -47,12 +47,59 @@ function taskStatusText(task: TodoTaskViewV1, dependencyIds: readonly number[]):
   return "Pending.";
 }
 
-function floatingAnchor(children: React.ReactNode) {
+/**
+ * The centered row that floats above the composer, shared by the task chip and the subagent pill.
+ * Each chip's detail text clamps to one line and may break anywhere, so a chip's minimum width is
+ * its icon and count rather than its whole detail. The row is a size container: chips drop
+ * secondary details in narrow windows, and there the two chips stack instead of overflowing.
+ * It shares the composer's centered column, so it is never wider than the chat box.
+ */
+export function ComposerFloatingRow({
+  children,
+  onHeightChange,
+}: {
+  children: React.ReactNode;
+  /** Reports the chips' laid-out height, which doubles when they stack. */
+  onHeightChange?: (height: number) => void;
+}) {
+  const chipsRef = useRef<HTMLDivElement>(null);
+  const report = useRef(onHeightChange);
+  report.current = onHeightChange;
+  useLayoutEffect(() => {
+    const chips = chipsRef.current;
+    if (!chips || typeof ResizeObserver === "undefined") return;
+    const update = () => report.current?.(chips.getBoundingClientRect().height);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(chips);
+    return () => observer.disconnect();
+  }, []);
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 flex justify-center px-[var(--aiden-dock-gutter)]">
-      {children}
+    <div className="aiden-dock-inset chat-content-column pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 @container">
+      <div ref={chipsRef} className="flex items-end justify-center gap-2 @max-[24rem]:flex-wrap">
+        {children}
+      </div>
     </div>
   );
+}
+
+/** One line of chips; the clearance starts from this until the row has been measured. */
+const FLOATING_ROW_LINE_HEIGHT = 36;
+
+/**
+ * Transcript clearance while the floating row is on screen: the jump button lifts and the last
+ * row clears it. `height` is the row's measured height, taller when its chips stack.
+ */
+export function composerFloatingRowOffsets(
+  visible: boolean,
+  height?: number,
+): {
+  scrollToBottomButtonOffset: number;
+  scrollContentBottomOffset: number;
+} {
+  if (!visible) return { scrollToBottomButtonOffset: 0, scrollContentBottomOffset: 0 };
+  const rowHeight = Math.max(FLOATING_ROW_LINE_HEIGHT, Math.ceil(height ?? 0));
+  return { scrollToBottomButtonOffset: rowHeight + 8, scrollContentBottomOffset: rowHeight + 20 };
 }
 
 export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): boolean {
@@ -65,7 +112,16 @@ export function todoPanelHasVisibleChrome(snapshot: TodoSnapshotViewV1 | null): 
   );
 }
 
-export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null }) {
+export function TodoPanel({
+  snapshot,
+  floating = true,
+}: {
+  snapshot: TodoSnapshotViewV1 | null;
+  /** False when a parent already supplies the {@link ComposerFloatingRow}. */
+  floating?: boolean;
+}) {
+  const floatingAnchor = (children: React.ReactNode) =>
+    floating ? <ComposerFloatingRow>{children}</ComposerFloatingRow> : children;
   if (!snapshot) return null;
   if (snapshot.availability === "unavailable") {
     // Rollout-ineligible and other intentionally journalless chats need no
@@ -152,7 +208,7 @@ export function TodoPanel({ snapshot }: { snapshot: TodoSnapshotViewV1 | null })
             <span aria-hidden="true" className="text-tertiary">
               ·
             </span>
-            <span className="min-w-0 truncate text-secondary">{chipDetail}</span>
+            <span className="line-clamp-1 min-w-0 text-left text-secondary [overflow-wrap:anywhere]">{chipDetail}</span>
           </button>
         </HoverCardTrigger>
         <HoverCardContent

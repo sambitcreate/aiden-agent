@@ -157,6 +157,21 @@ test("a connection request that replaces the one on screen starts back on Deny",
   await expect.poll(async () => (await remoteStatus(page)).running).toBe(true);
   const { lanPort } = await remoteStatus(page);
 
+  // Enabling Remote alone never invites unknown computers. The host must
+  // explicitly accept requests and open its own Add device window first.
+  const refused = await hostRequest(lanPort, "POST", "/pairing/requests", {
+    body: { deviceName: "Uninvited Mac", deviceType: "mac", publicKey: generateKeyPairSync("x25519").publicKey.export({ format: "jwk" }).x },
+  });
+  expect(refused.status).toBe(403);
+  expect(refused.body).toMatchObject({ error: { code: "pairing_closed" } });
+  await page.evaluate(async () => {
+    const bridge = (window as unknown as {
+      aidenAPI: { ipc: { invoke(channel: string, ...args: unknown[]): Promise<unknown> } };
+    }).aidenAPI;
+    await bridge.ipc.invoke("remote:setAcceptPairingRequests", true);
+    await bridge.ipc.invoke("remote:beginPairing", "lan");
+  });
+
   const first = await openConnectionRequest(lanPort, "First Mac");
   const second = await openConnectionRequest(lanPort, "Second Mac");
   const firstSheet = page.getByRole("dialog", { name: /^First Mac wants to control this / });

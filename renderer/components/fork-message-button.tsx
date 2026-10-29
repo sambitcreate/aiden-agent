@@ -1,11 +1,12 @@
 // Transcript hover action that forks the chat at one message. Settled replies
 // offer "Fork from here"; sent prompts offer "Edit in fork". Right-clicking a
-// settled message offers the same fork, "Fork with summary…", and Copy for a
-// text selection inside it.
+// settled message, or Shift+F10 on one of its actions, offers the same fork,
+// "Fork with summary…", and Copy for a text selection inside it.
 
 import * as React from "react";
 import { Copy, GitFork, ListCollapse, SquarePen } from "lucide-react";
 import { cn } from "../lib/ui-utils";
+import { openContextMenuFromKeyboard } from "../lib/keyboard-context-menu";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -42,7 +43,7 @@ export function ForkMessageButton({ action, kind, className }: ForkMessageButton
       onClick={disabledReason ? undefined : action.onFork}
       aria-label={label}
       aria-disabled={disabledReason ? true : undefined}
-      title={disabledReason ?? label}
+      title={disabledReason ?? (action.onForkWithSummary ? `${label} (⇧F10 for more)` : label)}
       data-fork-action={kind}
       className={cn(
         "inline-flex items-center gap-1 rounded-pill px-1.5 py-1 text-tertiary outline-none",
@@ -90,6 +91,7 @@ export function MessageForkContextMenu({ action, kind, children }: MessageForkCo
       <ContextMenuTrigger
         asChild
         onContextMenu={(event) => setSelectedText(selectedTextWithin(event.currentTarget))}
+        onKeyDown={openContextMenuFromKeyboard}
       >
         {children}
       </ContextMenuTrigger>

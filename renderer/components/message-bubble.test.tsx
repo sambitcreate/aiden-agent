@@ -46,6 +46,30 @@ test("legacy messages render unchanged without provenance", () => {
   assert.doesNotMatch(markup, /skill/u);
 });
 
+test("a long prompt folds behind a chevron but keeps its whole text and one full copy", () => {
+  const content = `Please review this.\n${"The tail of a long pasted log line. ".repeat(20)}END-OF-PROMPT`;
+  const markup = renderToStaticMarkup(<MessageBubble role="user" content={content} />);
+  const toggle = markup.match(/<button[^>]*data-user-message-fold-toggle[^>]*>/u)?.[0];
+  assert.ok(toggle, "a long prompt offers a disclosure");
+  assert.match(toggle, /aria-expanded="false"/u);
+  assert.match(toggle, /aria-label="Show full message"/u);
+  const controls = toggle.match(/aria-controls="([^"]+)"/u)?.[1];
+  assert.ok(controls && markup.includes(`id="${controls}"`), "the chevron names the body it shows");
+  assert.match(markup, /data-folded="true"/u);
+  // Folding is visual only: selection, Find and screen readers still get every word.
+  assert.match(markup, /END-OF-PROMPT/u);
+  assert.equal(markup.match(/aria-label="Copy message"/gu)?.length, 1);
+});
+
+test("a short prompt shows no chevron, and a surface with its own copy action can drop the bubble's", () => {
+  const short = renderToStaticMarkup(<MessageBubble role="user" content="Say hello to my Umbrel." />);
+  assert.doesNotMatch(short, /data-user-message-fold-toggle|data-folded/u);
+  assert.equal(short.match(/aria-label="Copy message"/gu)?.length, 1);
+  // Bot rows copy from their own message menu, so the bubble adds no second Copy.
+  const bot = renderToStaticMarkup(<MessageBubble role="user" content="Say hello." showCopy={false} />);
+  assert.doesNotMatch(bot, /Copy message/u);
+});
+
 test("assistant links show provider context while keeping their original anchors", () => {
   const href = "https://github.com/openai/codex/pull/247?utm_source=test#files";
   const markup = renderToStaticMarkup(

@@ -63,6 +63,8 @@ import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -734,6 +736,12 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
+  if (settings.spendingLimits !== undefined) {
+    const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
+    if (spendingLimits === undefined) delete runtime.spendingLimits;
+    else runtime.spendingLimits = spendingLimits;
+  }
   if (settings.compactionModelOverrides !== undefined) {
     try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
     catch { delete runtime.compactionModelOverrides; }
@@ -1119,8 +1127,10 @@ defaults, and nothing is written back until you next change one of these setting
 from the UI.
 
 On macOS and Linux this directory is private (0700), and configuration and
-migration/recovery files are owner-only (0600). A symlinked root or config file,
-foreign ownership, or a hard-linked config file blocks access. Use a dedicated
+migration/recovery files are owner-only (0600). The directory may be a symlink
+(for example from a dotfile manager) when the link, the folder holding it and the
+folder it points to all belong to you; that folder is then made private. A
+symlinked or hard-linked config file, or foreign ownership, blocks access. Use a dedicated
 owned directory for AIDEN_CONFIG_DIR, never your home or a shared directory.
 Windows permissions depend on its ACLs; chmod is not an equivalent guarantee.
 

@@ -498,8 +498,12 @@ function liveConnectConfig(
     ...(model.endsWith("-extended-thinking")
       ? {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          // The screen-action contract only applies when Computer Use tools
+          // were granted; without them, Live must not promise screen control.
           systemInstruction:
-            "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Execute the user's requested screen actions directly during this Live session without per-action approval prompts. Stop when the user cancels. Never claim that an action completed until its tool result confirms it.",
+            tools && tools.length > 0
+              ? "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning or tools are still running. Execute the user's requested screen actions directly during this Live session without per-action approval prompts. Stop when the user cancels. Never claim that an action completed until its tool result confirms it."
+              : "Keep the conversation fully voice-first. Briefly tell the user what you are doing while background reasoning is still running. You cannot click, type or act on the user's screen in this session; if asked, say so plainly.",
         }
       : {}),
     ...(handle

@@ -16,16 +16,10 @@ paths, idempotence, and rejection of unexpected source/version changes.
 
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
 runtime limits and request admission. `npm run dist` refreshes and validates it before every
-package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
-tracked file and runs `npm run test:model-catalog`. A changed snapshot does not go straight to
-`main`: the workflow pushes it to a fresh `automation/models-dev-catalog-*` branch with its deploy
-key, opens a pull request with auto-merge, and closes any older catalog pull request it
-supersedes. CI runs the catalog contracts and the desktop unit lanes on that branch (the runtime
-takes model limits from the snapshot), and GitHub merges once `main`'s required checks pass. A
-merge made through the job token starts no workflows, so `Model catalog main baseline` starts full
-CI on `main` unless a recent `main` CI run already tested a commit that contains the latest catalog
-merge (checked by commit ancestry). It checks right after catalog branch CI passes (waiting briefly
-for the merge) and every 30 minutes, so a late merge is still covered. A failed fetch leaves the known-good snapshot
+package; `release.yml` runs the same refresh for the published build. There is no post-merge
+catalog workflow: the bot that refreshed the tracked snapshot after every push to `main` was removed
+on 2026-10-27, so the checked-in file changes only when someone runs `npm run models:refresh` and
+commits the result through a normal pull request. A failed fetch leaves the known-good snapshot
 untouched.
 
 The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
@@ -62,7 +56,9 @@ authority. Ordinary model reads and application startup remain offline.
   in one public GitHub release in this repository. The workflow also uploads a byte-identical
   `Aiden-Agent-Beta-arm64.dmg` alias so the website can use GitHub's stable
   `releases/latest/download` URL without a per-release source edit. Each release includes
-  GitHub-generated notes for changes since the previous release. The DMGs are website and
+  GitHub-generated notes for changes since the previous release. When the version-bump pull
+  request adds `docs/release-notes/v<version>.md`, the publisher places that reviewed text
+  between the Beta line and the generated notes (see [release notes](release-notes/README.md)). The DMGs are website and
   Homebrew downloads; the ZIP and YAML are the updater payload.
 - Release-related pull requests run the separate release-consumer contract workflow. It verifies
   the versioned DMG name against `sambitcreate/homebrew-tap`, verifies the deployed website points
@@ -240,3 +236,5 @@ that exact version. Do not lower the version or reuse a published tag.
 Pullfrog's checkout, action and runtime are pinned to reviewed source. The action uses its supported `PULLFROG_FORCE_LOCAL_CLI=1` path, which installs the action's exact pnpm package-manager pin and frozen integrity-checked lockfile with lifecycle scripts disabled, then runs that commit's `cli.ts`. Node 22.23.4 supplies Corepack. The review context initially checks out trusted main without retained Git credentials. A generated enforcing bootstrap is fetched by immutable Git blob ID, checked against a separate SHA-256 pin and loaded as a self-contained data URL; no secret-bearing process preloads JavaScript from the mutable review checkout. A source-hash-guarded Node module hook replaces the pinned upstream executable installer: OpenCode and Claude use only native packages already installed from that frozen lock, and GitHub/curl/tarball runtime downloads are refused. The helper is specific to the reviewed source SHA and fails on source/version/identity changes. A missing bootstrap, native package or lock failure fails the review; it does not fall back to a newer npm package. OIDC remains necessary for the action's GitHub token exchange. Provider bindings remain available for configured review models; bindings are not evidence that a repository secret is populated or used. Repository-name inventory on 2026-10-27 found only Docker Hub secrets; organization/integration credentials were not read.
 
 The macOS build, Linux build and publishing jobs all explicitly require `refs/heads/main`, including manual dispatches. Keep the release environment's main-only rule as a separate control. Branch validation never signs or publishes a release. An authorized real Pullfrog run is required when changing its pinned source or bootstrap.
+
+To refresh the enforcing bootstrap, run `npx esbuild scripts/pullfrog-locked-runtime.mjs --bundle --platform=node --format=esm --target=node22 --outfile=scripts/pullfrog-runtime-preload.mjs`, update both the Git blob ID and SHA-256 pin in Pullfrog's bootstrap step, then run `npm run test:ci-policy`. The behavioral tests compile the reviewed source, verify the blob pins, reject modified bytes and execute the data-URL loader against a hostile checkout fixture. Source/action-version changes also require reviewing the pinned upstream installer fixture and native package versions.

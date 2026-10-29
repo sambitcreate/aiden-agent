@@ -30,6 +30,16 @@ export function isExtractionStep(step: AgentStep): step is ExtractionStep {
   return isToolStep(step) && step.extraction !== undefined;
 }
 
+/** A completed `browser_recording_stop` step that carries the video it saved. */
+export type RecordingStep = AgentToolStep & {
+  recording: NonNullable<AgentToolStep["recording"]>;
+};
+
+/** A recording shows as a playable card under its activity line, which stays in the tally. */
+export function isRecordingStep(step: AgentStep): step is RecordingStep {
+  return isToolStep(step) && step.recording !== undefined;
+}
+
 export type AssistantPresentationRow =
   | {
       key: string;
@@ -59,6 +69,11 @@ export type AssistantPresentationRow =
       key: string;
       kind: "extraction";
       step: ExtractionStep;
+    }
+  | {
+      key: string;
+      kind: "recording";
+      step: RecordingStep;
     };
 
 function textRow(
@@ -185,6 +200,7 @@ export function assistantPresentationRows(
     });
     for (const grouped of steps) {
       if (isExtractionStep(grouped)) rows.push({ key: `extraction-${grouped.id}`, kind: "extraction", step: grouped });
+      if (isRecordingStep(grouped)) rows.push({ key: `recording-${grouped.id}`, kind: "recording", step: grouped });
     }
     cursor = offset;
   }

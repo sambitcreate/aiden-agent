@@ -929,6 +929,66 @@ test("sent user prompts can be selected with the pointer", async ({ aiden }) => 
   expect(expected).toContain(selected.trim());
 });
 
+test("chats can be moved between, opened from their menu and deleted from the keyboard alone", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  const first = page.getByText("Opened palette-chat-first", { exact: true });
+  const second = page.getByText("Opened palette-chat-second", { exact: true });
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(first).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+2`);
+  await expect(second).toBeVisible();
+  // ⌘[ and ⌘] walk the history, even from the message box.
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketLeft`);
+  await expect(first).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketRight`);
+  await expect(second).toBeVisible();
+
+  // Shift+F10 opens the open chat's row menu where the row is.
+  const row = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  await row.focus();
+  await page.keyboard.press("Shift+F10");
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  // The row's ••• button is a keyboard stop with the same items.
+  await row.focus();
+  await page.keyboard.press("Tab");
+  const more = row.locator("xpath=following-sibling::button");
+  await expect(more).toHaveAccessibleName("More for Repeated palette title");
+  await expect(more).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(menu.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // ⌘K reaches chat actions and places.
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  const palette = page.locator("[data-command-palette-content]");
+  await palette.getByRole("combobox").fill("Delete chat");
+  await palette.getByRole("combobox").press("Enter");
+  await expect(palette).toBeHidden();
+  const confirm = page.getByRole("alertdialog", { name: "Delete this chat?" });
+  await expect(confirm).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(confirm).toBeHidden();
+  await expect(second).toBeVisible();
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  await palette.getByRole("combobox").fill("Go to Scheduled");
+  await palette.getByRole("combobox").press("Enter");
+  await expect(page.getByText("Scheduled tasks", { exact: true }).first()).toBeVisible();
+  await expect(second).toBeHidden();
+  await page.locator("body").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+BracketLeft`);
+  await expect(second).toBeVisible();
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {
@@ -1370,3 +1430,88 @@ for (const mode of [
     await expect(palette).toBeHidden();
   });
 }
+
+test("a long prompt wraps inside its column, folds behind a chevron, and copies in full from the bubble's corner", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  // Narrow enough that one unbroken key is wider than the bubble's column.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1000, 760));
+  const token = `umbrelmcp_${"63d71902b67b06ef".repeat(8)}`;
+  const prompt = [
+    `Add my Umbrel to the global MCP config. The auth header is Authorization: Bearer ${token}.`,
+    // Taller than the window once expanded, so Find has to scroll to its match.
+    ...Array.from({ length: 60 }, (_, index) => `Step ${index + 1}: check the server and report what you find.`),
+    "END-OF-PROMPT",
+  ].join("\n");
+  await page.locator("textarea").fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const toggle = page.getByRole("button", { name: "Show full message" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const bubble = page.locator("[data-user-message-bubble]").filter({ has: toggle });
+  const body = page.locator(`[id="${await toggle.getAttribute("aria-controls")}"]`);
+
+  const geometry = () =>
+    bubble.evaluate((element) => {
+      const column = element.closest(".chat-content-column")!.getBoundingClientRect();
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, columnLeft: column.left, columnRight: column.right };
+    });
+  const box = await geometry();
+  expect(box.left, "the bubble never spills left of the transcript column").toBeGreaterThanOrEqual(box.columnLeft - 0.5);
+  expect(box.right).toBeLessThanOrEqual(box.columnRight + 0.5);
+
+  const bodyHeight = () => body.evaluate((element) => element.getBoundingClientRect().height);
+  const lineHeight = await body.evaluate((element) => Number.parseFloat(getComputedStyle(element).lineHeight));
+  const folded = await bodyHeight();
+  expect(folded, "folded to six lines").toBeLessThanOrEqual(lineHeight * 6 + 1);
+
+  await toggle.click();
+  const showLess = page.getByRole("button", { name: "Show less" });
+  await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(bodyHeight).toBeGreaterThan(folded + lineHeight * 4);
+  await showLess.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect.poll(bodyHeight).toBeLessThanOrEqual(lineHeight * 6 + 1);
+
+  // Find selects a match in the hidden tail without focusing it; the fold opens so it shows.
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as { find(text: string, caseSensitive: boolean, backwards: boolean, wrapAround: boolean): boolean })
+        .find("END-OF-PROMPT", false, false, true),
+    ),
+  ).toBe(true);
+  await expect(showLess).toHaveAttribute("aria-expanded", "true");
+  // The match itself ends up inside the transcript's viewport, not just unclipped.
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const selection = window.getSelection();
+        const scroller = document.querySelector("[data-follow]");
+        if (!selection || selection.rangeCount === 0 || !scroller) return false;
+        const match = selection.getRangeAt(0).getBoundingClientRect();
+        const view = scroller.getBoundingClientRect();
+        return selection.toString() === "END-OF-PROMPT" && match.top >= view.top && match.bottom <= view.bottom;
+      }),
+    )
+    .toBe(true);
+  await page.evaluate(() => window.getSelection()?.removeAllRanges());
+  await showLess.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  // Copy waits for the pointer (or focus inside the bubble, which the chevron
+  // just had), then sits in the bubble's top-right corner.
+  const copy = bubble.getByRole("button", { name: "Copy message" });
+  await page.locator("textarea").focus();
+  await page.mouse.move(0, 0);
+  await expect.poll(() => copy.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+  await bubble.hover();
+  await expect.poll(() => copy.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  const bubbleBox = (await bubble.boundingBox())!;
+  const copyBox = (await copy.boundingBox())!;
+  expect(bubbleBox.x + bubbleBox.width - (copyBox.x + copyBox.width)).toBeLessThanOrEqual(12);
+  expect(copyBox.y - bubbleBox.y).toBeLessThanOrEqual(12);
+  await copy.click();
+  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toBe(prompt);
+});

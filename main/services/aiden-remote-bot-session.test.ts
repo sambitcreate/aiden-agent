@@ -30,6 +30,8 @@ import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
 import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
 import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
 import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import type { BotIssue, BotIssueAction } from "../../renderer/shared/bot-issues.js";
+import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
 import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
@@ -698,21 +700,90 @@ test("deleting a Bot while its stream is open ends the stream and the next read 
 test("a connect card finished on the Mac reads as connected on the next fetch, with nothing committed", async () => {
   const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
   const connected = new Set<string>();
+  let granted = false;
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
     runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
-    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+    connectCardStatus: async (_botId, entry) =>
+      connected.has(entry.pluginId) ? (granted ? "connected" : "needs_access") : entry.status,
   });
   const cardOf = (session: { entries: Array<{ type: string }> }) =>
     session.entries.find((entry) => entry.type === "connect_card") as unknown as { status: string; name: string };
   try {
     assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
     connected.add("gmail");
+    // Connected on the Mac but not part of this Bot's access: phones keep the
+    // card pending, so "Finish on your Mac" leads to "Add to this Bot" there.
+    assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
+    granted = true;
     const shown = cardOf(await service.session(BOT_ID));
     assert.equal(shown.status, "connected");
     assert.equal(shown.name, "Gmail");
   } finally {
+    await service.close();
+  }
+});
+
+test("a phone watching the chat sees a connect card turn connected once the app is set up on the Mac", async () => {
+  const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    connected.add("gmail");
+    // What main does when an app's connection status changes on the Mac.
+    await service.refreshConnectCards();
+    await stream.until(
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "snapshot" &&
+            frame.payload.session.entries.some((entry: any) => entry.type === "connect_card" && entry.status === "connected"),
+        ) && stream.frames.length >= 2,
+      "the connected card",
+    );
+    const last = stream.frames[stream.frames.length - 1]!;
+    assert.equal(last.seq, stream.frames[0]!.seq + 1, "the refresh is the next frame in sequence");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a connect card refreshed outside the phone's window does not reappear at the bottom of the chat", async () => {
+  const history = [card(1, "gmail"), ...Array.from({ length: 201 }, (_, index) => user(index + 2, `Message ${index + 2}`))];
+  const driven = drivenConversation(history);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const first = stream.frames[0]!.payload.session;
+    assert.equal(first.hasOlder, true);
+    assert.equal(first.entries.some((entry: any) => entry.type === "connect_card"), false, "the card starts outside the window");
+    connected.add("gmail");
+    await service.refreshConnectCards();
+    await stream.until(() => stream.frames.length >= 2, "the refresh");
+    assert.equal(stream.frames.some((frame) => frame.type === "entry"), false, "no entry event appends the old card");
+    const refreshed = stream.frames[stream.frames.length - 1]!;
+    assert.equal(refreshed.type, "snapshot");
+    const texts = refreshed.payload.session.entries.map((entry: any) => entry.text);
+    assert.equal(texts.at(-1), "Message 202", "the newest message stays last");
+    assert.deepEqual(texts, first.entries.map((entry: any) => entry.text));
+  } finally {
+    await stream.close();
     await service.close();
   }
 });
@@ -1158,6 +1229,35 @@ test("only a device holding bot:cards sees memory and routine proposal cards, as
   }
 });
 
+test("phones see only the newest card of a revised suggestion, and a trigger card's label names what starts it", async () => {
+  const driven = drivenConversation([
+    user(1, "Tell me when the report lands."),
+    proposal(2, "11111111-1111-4111-8111-111111111111", "Morning check-in", "Check in.", "Every day at 8:00 AM"),
+    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "11111111-1111-4111-8111-111111111111", status: "dismissed", supersededBy: "22222222-2222-4222-8222-222222222222" } },
+    proposal(4, "22222222-2222-4222-8222-222222222222", "Morning check-in", "Check in.", "Every day at 9:00 AM"),
+    {
+      id: 5,
+      kind: "aiden.routine-proposal",
+      data: { proposalId: "33333333-3333-4333-8333-333333333333", name: "Report landed", prompt: "Summarize the report.", trigger: { kind: "webhook" }, label: "When this routine's link is called" },
+    },
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const session = await service.session(BOT_ID, { cards: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session);
+    const cards = session.entries.flatMap((entry) =>
+      entry.type === "routine_proposal" ? [{ proposalId: entry.proposalId, label: entry.label, status: entry.status }] : [],
+    );
+    assert.deepEqual(cards, [
+      { proposalId: "22222222-2222-4222-8222-222222222222", label: "Every day at 9:00 AM · UTC", status: "pending" },
+      { proposalId: "33333333-3333-4333-8333-333333333333", label: "When this routine's link is called", status: "pending" },
+    ]);
+  } finally {
+    await service.close();
+  }
+});
+
 /** Serve one Bot's SSE stream for a device with or without `bot:cards`. */
 async function openCardStream(service: AidenRemoteBotSessionService, cards: boolean) {
   const server = createServer((_request, response) => {
@@ -1412,7 +1512,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -2817,6 +2917,77 @@ test("a waiting hand-off reads as the shared fixture shows it, to holders and to
   }
 });
 
+test("only a device that also asked for hand-off notes is told a password card takes no note; a rev-37 holder gets the card it can decode", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const NOTES = { handoffs: true, handoffNotes: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const notes = await openAudienceStream(service, NOTES);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await notes.until(() => notes.frames.length >= 1, "the notes snapshot");
+    handOff({
+      waitId: fixture.noNoteHandoff.waitId,
+      action: fixture.noNoteHandoff.action,
+      why: undefined,
+      open: undefined,
+      source: "rule",
+      rule: { id: BOT_LOCKED_RULES[0]!.id, label: "Enter passwords or codes" },
+    });
+    const { takesNote: _takesNote, ...rev37Card } = fixture.noNoteHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, NOTES)).handoff, fixture.noNoteHandoff);
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev37Card);
+    // Asking for notes without hand-offs is still a legacy device.
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffNotes: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await notes.until(() => card(notes) !== undefined, "the notes hand-off frame");
+    assert.deepEqual(card(notes), fixture.noNoteHandoff);
+    assert.deepEqual(card(holder), rev37Card);
+  } finally {
+    await holder.close();
+    await notes.close();
+    await service.close();
+  }
+});
+
+test("only a device that asked for on-Mac steps is told one is on the Bot's own screen; others get the card without its page", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const ON_MAC = { handoffs: true, handoffOnMac: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const onMac = await openAudienceStream(service, ON_MAC);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await onMac.until(() => onMac.frames.length >= 1, "the on-Mac snapshot");
+    handOff({
+      waitId: fixture.onMacHandoff.waitId,
+      action: fixture.onMacHandoff.action,
+      why: fixture.onMacHandoff.why,
+      open: { url: "https://shop.example.com/checkout" },
+      target: "browser",
+    });
+    const { onMac: _onMac, ...rev40Card } = fixture.onMacHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, ON_MAC)).handoff, fixture.onMacHandoff);
+    // An older holder can't offer Finish on your Mac, but never gets the Bot's page either.
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev40Card);
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffOnMac: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await onMac.until(() => card(onMac) !== undefined, "the on-Mac hand-off frame");
+    assert.deepEqual(card(onMac), fixture.onMacHandoff);
+    assert.deepEqual(card(holder), rev40Card);
+  } finally {
+    await holder.close();
+    await onMac.close();
+    await service.close();
+  }
+});
+
 test("a hand-off, its answer and a pause reach holders and other devices frame for frame as the fixture shows, at the same seqs", async () => {
   const fixture = (await contractFixture()).botHandoffs;
   const driven = drivenConversation(scoutConversation());
@@ -3321,6 +3492,317 @@ test("a legacy phone's hand-off line leaves its next snapshot once the card sett
     await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0015", { outcome: "done" }, HOLDER);
     await asked;
     assert.deepEqual(await notices(), []);
+  } finally {
+    await service.close();
+  }
+});
+
+// --- Contract revision 45: images a Bot shares reach phones -------------------------
+
+/** A 1×1 PNG, as `share_image` stores it. */
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const sharedImage = (id: number, name: string, data = PNG_BASE64, mimeType = "image/png"): RawEntry => ({
+  id,
+  kind: "aiden.bot-shared-image",
+  data: { id: `img-${id}`, name, mimeType, size: Buffer.from(data, "base64").length, data },
+});
+
+test("an image the Bot shares reaches bot:images phones as the shared fixture shows it, other devices as a line pointing to the Mac, and its bytes read back exactly", async () => {
+  const fixture = (await contractFixture()).botImages;
+  const driven = drivenConversation([
+    user(1, "Chart this week's sales."),
+    sharedImage(2, fixture.entry.name),
+    assistant(3, "Here's the chart."),
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    const image = holder.entries.find((entry) => entry.type === "shared_image");
+    assert.ok(image, "the holder sees the image");
+    const { id: _fixtureId, size: _fixtureSize, ...expected } = fixture.entry;
+    assert.deepEqual({ ...image, id: undefined, size: undefined }, { ...expected, id: undefined, size: undefined });
+    assert.equal(image.size, Buffer.from(PNG_BASE64, "base64").length);
+    assert.equal(JSON.stringify(holder).includes(PNG_BASE64), false, "bytes never ride the session");
+
+    const legacy = await service.session(BOT_ID);
+    assert.equal(legacy.entries.some((entry) => entry.type === "shared_image"), false);
+    const line = legacy.entries.find((entry) => entry.id === image.id);
+    assert.deepEqual({ ...line, id: undefined }, { ...fixture.legacyEntry, id: undefined });
+    assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
+
+    const read = await service.sharedImage(BOT_ID, image.id);
+    assert.equal(read.mimeType, "image/png");
+    assert.deepEqual(read.bytes, Buffer.from(PNG_BASE64, "base64"));
+    await assert.rejects(service.sharedImage(BOT_ID, "entry_999"), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a shared image whose bytes don't match its type is never offered to phones as readable", async () => {
+  const notAPng = Buffer.from("this is not an image").toString("base64");
+  const driven = drivenConversation([sharedImage(1, "broken.png", notAPng), sharedImage(2, "notes.gif", PNG_BASE64, "image/gif")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    // A type outside the contract is left out; a PNG whose bytes are wrong is listed but refused on read.
+    assert.deepEqual(holder.entries.map((entry) => entry.type === "shared_image" ? entry.name : entry.type), ["broken.png"]);
+    await assert.rejects(service.sharedImage(BOT_ID, holder.entries[0]!.id), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a newly shared image reaches bot:images streams as an image and other streams as its line, at the same seq", async () => {
+  const driven = drivenConversation([user(1, "Draw it.")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const holder = await openAudienceStream(service, { images: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    await driven.emit([user(1, "Draw it."), sharedImage(2, "sketch.png")]);
+    await holder.until(() => holder.frames.length >= 2, "the image entry");
+    await legacy.until(() => legacy.frames.length >= 2, "the line entry");
+    const [shown, line] = [holder.frames[1]!, legacy.frames[1]!];
+    assert.equal(shown.payload.entry.type, "shared_image");
+    assert.equal(shown.payload.entry.name, "sketch.png");
+    assert.deepEqual(line.payload.entry, {
+      type: "message",
+      id: shown.payload.entry.id,
+      role: "assistant",
+      text: "I shared an image: sketch.png. Open this chat on your Mac to see it.",
+    });
+    assert.equal(shown.seq, line.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 42: Bot issues on phones (`bot:issues`)
+// ---------------------------------------------------------------------------
+
+const ISSUES_HOLDER = { issues: true };
+/** The issue the shared `botIssues` fixture carries, as the host stores it. */
+const ISSUE_CARD: BotIssue = {
+  id: "issue_card_1",
+  botId: BOT_ID,
+  kind: "run_stalled",
+  dedupeKey: "run:stalled:1",
+  title: "A reply has been quiet for 10 minutes",
+  body: "The Bot is still working on the invoices.",
+  actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
+  createdAt: Date.parse("2026-10-27T09:06:00.000Z"),
+};
+
+/** A host's issue service: the cards it holds, the actions it ran, and its change listeners. */
+function issueHost(
+  options: {
+    cards?: BotIssue[];
+    /** What `act` answers, in order; the last one repeats. */
+    results?: Array<"done" | "not_open" | "invalid">;
+  } = {},
+) {
+  let cards = [...(options.cards ?? [ISSUE_CARD])];
+  const results = [...(options.results ?? ["done"])];
+  const listeners = new Set<(botId: string) => void>();
+  const calls: Array<{ botId: string; issueId: string; action: BotIssueAction }> = [];
+  const service = {
+    list: async (botId: string) => cards.filter((card) => card.botId === botId),
+    act: async (botId: string, issueId: string, action: BotIssueAction) => {
+      calls.push({ botId, issueId, action });
+      return results.length > 1 ? results.shift()! : results[0]!;
+    },
+    onChange: (listener: (botId: string) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return {
+    service,
+    calls,
+    settle(issueId: string) {
+      cards = cards.map((card) =>
+        card.id === issueId
+          ? { ...card, actions: [], resolvedAt: Date.parse("2026-10-27T09:20:00.000Z"), resolution: "fixed" as const }
+          : card,
+      );
+      for (const listener of listeners) listener(BOT_ID);
+    },
+  };
+}
+
+function issueSession(
+  issues: ReturnType<typeof issueHost>["service"],
+  options: { wired?: boolean } = {},
+) {
+  return new AidenRemoteBotSessionService({
+    bots: botService({ name: "Scout" }),
+    runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
+    ...(options.wired === false ? {} : { issues }),
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+}
+
+test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  const holder = await openAudienceStream(service, ISSUES_HOLDER);
+  const legacy = await openAudienceStream(service, { cards: true, handoffs: true, handoffNotes: true });
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+
+    const fetched = await service.session(BOT_ID, ISSUES_HOLDER);
+    assert.deepEqual(fetched.issues?.map((issue) => [issue.id, issue.kind, issue.resolved]), [
+      ["issue_card_1", "run_stalled", false],
+    ]);
+    assert.deepEqual(fetched.issues?.[0]?.actions, [{ kind: "stop_run" }, { kind: "keep_waiting" }]);
+    // Another device with every other opt-in is still a legacy device here.
+    const other = await service.session(BOT_ID, { cards: true, activity: true, handoffs: true, handoffNotes: true });
+    assert.equal("issues" in other, false);
+    assert.deepEqual(holder.frames[0]?.payload.session.issues, fetched.issues);
+    assert.equal("issues" in legacy.frames[0]!.payload.session, false);
+
+    host.settle("issue_card_1");
+    await holder.until(() => holder.frames.some((frame) => frame.type === "issues"), "the issues frame");
+    await legacy.until(() => legacy.frames.length >= 2, "the legacy state frame");
+    const frame = holder.frames.find((candidate) => candidate.type === "issues")!;
+    assert.deepEqual(
+      frame.payload.issues?.map((issue: { id: string; resolved: boolean }) => [issue.id, issue.resolved]),
+      [["issue_card_1", true]],
+    );
+    const legacyFrame = legacy.frames[1]!;
+    assert.equal(legacyFrame.type, "state", "a device without bot:issues still advances its seq");
+    assert.equal(legacyFrame.seq, frame.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("an unwired host sends no issues even when the device asks for them", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service, { wired: false });
+  try {
+    assert.equal(service.supportsIssues, false);
+    assert.equal("issues" in (await service.session(BOT_ID, ISSUES_HOLDER)), false);
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0009", { action: { kind: "stop_run" } }),
+      isError("not_found", 404),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("act stop_run reaches the issue service once, and an action the card never offered records nothing", async () => {
+  const host = issueHost({ results: ["done", "invalid", "done", "not_open"] });
+  const service = issueSession(host.service);
+  try {
+    const request = { action: { kind: "stop_run" } };
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    // The same request UUID replays its receipt instead of acting twice.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    assert.deepEqual(host.calls, [{ botId: BOT_ID, issueId: ISSUE_CARD.id, action: { kind: "stop_run" } }]);
+
+    // An action the card no longer offers is `409 operation_stale`, and
+    // nothing is recorded: the same key runs once the card offers it again.
+    const keepWaiting = { action: { kind: "keep_waiting" } };
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      isError("operation_stale", 409),
+    );
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      { result: "done" },
+    );
+    assert.equal(host.calls.length, 3);
+
+    // not_open is a success: the card is gone, so the phone drops it.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0003", {
+        action: { kind: "open_chat" },
+      }),
+      { result: "not_open" },
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("unknown and desktop-only issue actions are 400 and run nothing", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  try {
+    for (const action of [
+      { kind: "open_settings", section: "model" },
+      { kind: "stop_run", routineId: "routine_1" },
+      { kind: "resume_routine" },
+      { kind: "surprise" },
+    ]) {
+      await assert.rejects(
+        service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0010", { action }),
+        isError("invalid_request", 400),
+        JSON.stringify(action),
+      );
+    }
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0011", { action: { kind: "stop_run" }, extra: true }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, "not an issue id", "issue-act-request-0012", { action: { kind: "stop_run" } }),
+      isError("invalid_request", 400),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a card's desktop-only settings action never crosses the wire, and a settled card offers nothing", async () => {
+  const host = issueHost({
+    cards: [
+      {
+        ...ISSUE_CARD,
+        id: "issue_settings_1",
+        dedupeKey: "preflight:gmail",
+        kind: "preflight_failed",
+        actions: [{ kind: "open_settings", section: "connections" }],
+      },
+      // The store keeps a settled row's old actions; the wire still offers none.
+      { ...ISSUE_CARD, id: "issue_settled_1", resolvedAt: 1_234, resolution: "fixed" },
+    ],
+  });
+  const service = issueSession(host.service);
+  try {
+    const issues = (await service.session(BOT_ID, ISSUES_HOLDER)).issues ?? [];
+    // The store holds them newest first; the wire carries them oldest first.
+    assert.deepEqual(issues.map((issue) => issue.id), ["issue_settled_1", "issue_settings_1"]);
+    const settings = issues.find((issue) => issue.id === "issue_settings_1");
+    const settled = issues.find((issue) => issue.id === "issue_settled_1");
+    assert.deepEqual(settings?.actions, [], "settings stay on the Mac");
+    assert.equal(settings?.resolved, false);
+    assert.equal(settled?.resolved, true);
+    assert.deepEqual(settled?.actions, [], "a settled card offers nothing");
   } finally {
     await service.close();
   }

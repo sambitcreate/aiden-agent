@@ -21,7 +21,7 @@ const laptop: NewChatMachine = { id: "host-c", label: "Laptop", availability: "o
 const CHAT: HostChatCapability[] = ["send", "attach", "createChat"];
 
 const catalog: HostModelCatalog = {
-  providers: [{ id: "prov", label: "Provider", models: [{ id: "fast", label: "Fast model", supportsImages: false }] }],
+  providers: [{ id: "prov", label: "Provider", models: [{ id: "fast", label: "Fast model", supportsImages: false, thinkingLevels: [], thinkingCanDisable: true, hidden: false }] }],
   defaults: { providerId: "prov", modelId: "fast" },
 };
 
@@ -94,6 +94,18 @@ test("a new chat on a paired Mac names that Mac and its project, model and machi
   );
   assert.equal(view.attr("data-remote-new-chat-unresolved"), null);
   assert.doesNotMatch(view.text, /first\.|Connecting to/u, "nothing holds the first message back");
+});
+
+test("the new chat's composer sits on the column once, and the header chip names the Mac", () => {
+  const view = renderPane();
+  const chip = view.all.find((node) => node.hasAttribute("data-remote-host-chip"));
+  assert.equal(chip?.textContent, "Runs on Studio");
+  const composer = view.all.find((node) => node.hasAttribute("data-browser-composer-inset"));
+  assert.ok(composer);
+  const columns = (node: Element) => (node.getAttribute("class") ?? "").split(/\s+/u).includes("chat-content-column");
+  for (let parent = composer.parentNode as Element | null; parent?.getAttribute; parent = parent.parentNode as Element | null) {
+    assert.equal(columns(parent), false, "a second column around it would narrow it by another dock gutter");
+  }
 });
 
 test("sending waits for a project, a reachable host and a connected control", () => {
@@ -269,6 +281,32 @@ test("Bots on paired Macs are grouped by Mac, and a Mac that cannot open them sa
   assert.equal(opening.button(/^Scribe, on Studio$/u)?.hasAttribute("disabled"), true, "one Bot chat opens at a time");
 
   assert.equal(renderToStaticMarkup(<RemoteBotsSection groups={[]} opening={null} onOpen={noop} />), "");
+});
+
+test("a paired Mac's paused or interrupted Bot says so in place of its purpose", () => {
+  const view = dom(
+    renderToStaticMarkup(
+      <RemoteBotsSection
+        groups={[
+          {
+            host: studio,
+            bots: [
+              { id: "bot-1", name: "Reviewer", purpose: "Reviews pull requests", status: "paused" },
+              { id: "bot-2", name: "Scribe", purpose: "Takes notes", status: "interrupted" },
+              { id: "bot-3", name: "Planner", purpose: "Plans the week", working: true },
+            ],
+          },
+        ]}
+        opening={null}
+        onOpen={noop}
+      />,
+    ),
+  );
+  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.textContent?.includes("Paused"), true);
+  assert.equal(view.button(/^Scribe, on Studio, interrupted$/u)?.textContent?.includes("Interrupted — tap to resume"), true);
+  assert.equal(view.button(/^Planner, on Studio, working$/u)?.textContent?.includes("Working…"), true);
+  assert.doesNotMatch(view.text, /Reviews pull requests|Takes notes|Plans the week/u);
+  assert.equal(view.button(/^Reviewer, on Studio, paused$/u)?.hasAttribute("disabled"), false, "a paused Bot's chat still opens");
 });
 
 test("search in the Bots sidebar narrows paired Macs' Bots too, and hides a Mac with no match", () => {

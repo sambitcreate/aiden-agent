@@ -1,7 +1,7 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys } from "../../lib/queries";
-import { resolveBotChatActivity, type BotAvatar, type BotChatActivity, type BotDefinition } from "../../shared/bots";
+import { resolveBotChatActivity, type BotAvatar, type BotChatActivity, type BotDefinition, type BotInterruptions } from "../../shared/bots";
 
 export type BotIdentityPatch = Partial<{
   name: string;
@@ -10,13 +10,18 @@ export type BotIdentityPatch = Partial<{
   avatar: BotAvatar;
   /** Only the fields named here change; the rest keep the latest stored value. */
   chatActivity: Partial<BotChatActivity>;
+  /** Replaces the whole setting. */
+  interruptions: BotInterruptions;
+  /** "Let <Bot> set its own wake-ups"; off also cancels the pending ones. */
+  selfWakeUps: boolean;
 }>;
 
 /** The Bot as the renderer will show it once `patch` is applied to `base`. */
 function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition {
   // A cleared subtitle must not fall through to the old one: main drops the
   // description when the update omits it, and the cache has to agree.
-  const { description: baseDescription, ...rest } = base;
+  const { description: baseDescription, selfWakeUps: baseSelfWakeUps, ...rest } = base;
+  const selfWakeUpsOff = patch.selfWakeUps === undefined ? baseSelfWakeUps === false : patch.selfWakeUps === false;
   const description = (patch.description ?? baseDescription ?? "").trim();
   return {
     ...rest,
@@ -27,6 +32,8 @@ function patchedBot(base: BotDefinition, patch: BotIdentityPatch): BotDefinition
     ...(patch.chatActivity
       ? { chatActivity: { ...resolveBotChatActivity(base.chatActivity), ...patch.chatActivity } }
       : {}),
+    ...(patch.interruptions ? { interruptions: structuredClone(patch.interruptions) } : {}),
+    ...(selfWakeUpsOff ? { selfWakeUps: false as const } : {}),
   };
 }
 
@@ -132,6 +139,8 @@ export async function updateBotIdentity(
       instructions: next.instructions,
       avatar: next.avatar,
       ...(patch.chatActivity ? { chatActivity: resolveBotChatActivity(next.chatActivity) } : {}),
+      ...(patch.interruptions ? { interruptions: patch.interruptions } : {}),
+      ...(patch.selfWakeUps !== undefined ? { selfWakeUps: patch.selfWakeUps } : {}),
     });
     settle(saved);
     void qc.invalidateQueries({ queryKey: queryKeys.bots });
