@@ -672,6 +672,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// any other negotiation.
     /// Contract revision 40 adds `bot:handoff-notes`, asked for with `bot:handoffs`.
     /// Contract revision 43 adds `bot:handoff-on-mac`, asked for the same way.
+    /// Contract revision 45 adds `bot:images`, asked for alone.
     static let phoneNegotiable: [Self] = v1Known + [
         Self(rawValue: "runs:observe"), Self(rawValue: "runs:control"),
         Self(rawValue: "simulators:mobile"), Self(rawValue: "bot:cards"),
@@ -679,6 +680,7 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
         Self(rawValue: "schedule:cards"), Self(rawValue: "bot:handoff-notes"),
         Self(rawValue: "bot:issues"),
         Self(rawValue: "bot:handoff-on-mac"),
+        Self(rawValue: "bot:images"),
     ]
 
     /// Revision 27: the device renders `memory_update` and `routine_proposal`
@@ -705,6 +707,11 @@ struct AidenRemoteCapability: RawRepresentable, Codable, Hashable, Sendable {
     /// (`onMac`), and the device offers Finish on your Mac for it. It grants no
     /// authority, and is asked for like `bot:handoff-notes`.
     static let botHandoffOnMac = Self(rawValue: "bot:handoff-on-mac")
+
+    /// Revision 45: the device receives `shared_image` Bot session entries
+    /// and may read their bytes. It grants no other authority. A Mac on an
+    /// earlier revision refuses the name, so the device asks for it alone.
+    static let botImages = Self(rawValue: "bot:images")
 
     /// Revision 39: the device receives the display-only
     /// `schedule` card on scheduled-task approvals, which the host adds only

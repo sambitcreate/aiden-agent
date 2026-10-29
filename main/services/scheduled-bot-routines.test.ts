@@ -1480,3 +1480,75 @@ test("a visible reply or a failure reaches the Bot's other surfaces once; silenc
     ],
   );
 });
+
+test("a wake-up fires once into its Bot's chat as the Bot's own note, then leaves the routines list", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const setAt = Date.UTC(nextYear, 2, 14, 15, 10);
+  const wakeUp = await h.routines.create({
+    botId: "bot-chef",
+    name: "Wake-up",
+    schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "See whether the dough has risen.",
+    wakeUp: { setAt },
+  });
+  assert.deepEqual((await h.routines.list("bot-chef")).map((routine) => routine.id), [wakeUp.id]);
+  await h.scheduler.start();
+  h.session.replies.push({ kind: "completed", text: "Your dough should be ready to shape." });
+
+  await fireWhenDue(t, jobFor(wakeUp.id));
+
+  assert.deepEqual(
+    h.session.sends.map(({ botId, text, label }) => ({ botId, text, label })),
+    [
+      {
+        botId: "bot-chef",
+        text: "You set this wake-up at 3:10 PM: See whether the dough has risen.\n\nIf there is nothing new to report, reply exactly [SILENT].",
+        label: "Wake-up",
+      },
+    ],
+  );
+  assert.deepEqual(h.notifications, [{ taskId: wakeUp.id, body: "Your dough should be ready to shape." }]);
+  assert.equal((await h.store.get(wakeUp.id))?.enabled, false);
+  assert.deepEqual(await h.routines.list("bot-chef"), [], "a spent wake-up is hidden");
+});
+
+test("a wake-up skipped while its Bot was paused catches up once after Resume", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const wakeUp = await h.routines.create({
+    botId: "bot-chef",
+    name: "Wake-up",
+    schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "Ask how the bake went.",
+    wakeUp: { setAt: Date.UTC(nextYear, 2, 14, 9, 0) },
+  });
+  h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "paused" });
+  await h.scheduler.start();
+  await fireWhenDue(t, jobFor(wakeUp.id));
+  const [missed] = await h.store.runs(wakeUp.id);
+  assert.equal(missed?.reason, "bot_paused");
+  assert.equal(h.session.sends.length, 0);
+
+  h.session.states.set("bot-chef", { kind: "idle" });
+  const catchUp = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler, now: () => missed!.startedAt + 1 });
+  await settle(await catchUp.catchUp("bot-chef"));
+  assert.equal(h.session.sends.length, 1);
+  assert.match(h.session.sends[0]!.text, /^You set this wake-up at 9:00 AM: Ask how the bake went\./u);
+  assert.deepEqual(await catchUp.catchUp("bot-chef"), [], "it catches up once");
+});
+
+test("a wake-up marker cannot be added through the routine IPC parser", () => {
+  const nextYear = new Date().getUTCFullYear() + 1;
+  assert.throws(() =>
+    parseBotRoutineCreate({
+      botId: "bot-chef",
+      name: "Wake-up",
+      schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+      prompt: "Forged.",
+      wakeUp: { setAt: 1 },
+    }),
+  );
+});

@@ -115,6 +115,8 @@ import {
 } from "./git.js";
 import { AidenRemoteScheduleService } from "./aiden-remote-schedules.js";
 import { usageStore } from "./usage-store.js";
+import { spending } from "./spending-main.js";
+import { AidenRemoteSpendingService } from "./aiden-remote-spending.js";
 import { AidenRemoteSpeechService } from "./aiden-remote-speech.js";
 import { scheduledTaskApplicationService } from "./scheduled-task-application-service-main.js";
 import { botStore } from "./bot-store.js";
@@ -416,6 +418,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     appControls: typeof remoteAppControls;
     providers: AidenRemoteProviderService;
     memorySettings: AidenRemoteMemorySettingsService;
+    spending: AidenRemoteSpendingService;
     usage: typeof usageStore;
     speech: AidenRemoteSpeechService;
     readAloud: AidenRemoteTtsService;
@@ -571,6 +574,9 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                     (await import("./bot-runtime/bot-session-main.js")).isBotPaused(botId),
                 }
               : {}),
+            // A chat over its spending limit takes no phone turns until more is allowed.
+            spendingRefusal: (chat) =>
+              spending.refusal(chat.botId ? { kind: "bot", id: chat.botId } : { kind: "chat", id: chat.id }),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             // Revision 35: phones open visuals full screen when this build ships the viewer.
@@ -583,6 +589,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                   },
                 }
               : {}),
+            // Revision 46: phones play the agent's browser recordings their chats name.
+            browserRecordings: {
+              read: async (recordingId: string) =>
+                (await import("./browser/recordings.js")).readBrowserRecording(app.getPath("userData"), recordingId),
+              namedByLiveRun: (chatId: string, recordingId: string) =>
+                hostRunRegistry.chatRunNamesRecording(chatId, recordingId),
+            },
             // Paired devices see visuals as snapshots, so turns follow Appearance.
             inlineVisuals: async () =>
               normalizeAppearanceConfig((await configStore.getSettings()).appearance).inlineVisuals,
@@ -1098,6 +1111,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             appControls: remoteAppControls,
             providers,
             memorySettings,
+            spending: new AidenRemoteSpendingService({
+              spending,
+              requireBot: async (botId) => {
+                if (!bots) throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+                await bots.bot(botId);
+              },
+            }),
             usage: usageStore,
             speech,
             readAloud,

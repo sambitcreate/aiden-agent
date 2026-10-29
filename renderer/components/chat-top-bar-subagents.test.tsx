@@ -2,9 +2,12 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { WorkspaceToolButtons } from "./chat-top-bar";
 import { EnvironmentPanelContext, type EnvironmentPanelContextValue } from "./environment-panel";
+import { CommandSystemProvider } from "../lib/command-system";
 import type { EnvironmentPanelTab } from "../lib/environment-panel-state";
+import { createBotTestQueryClient } from "../main/bots/test-providers";
 import type { SubagentRunView, SubagentRunViewState } from "../lib/subagent-view-state";
 
 afterEach(cleanup);
@@ -44,6 +47,7 @@ function stubPanel(state: PanelState, calls: Calls): EnvironmentPanelContextValu
     subagentsEnabled: state.subagentsEnabled ?? true,
     subagents: { chatId: state.viewsChatId ?? "chat-1" } as EnvironmentPanelContextValue["subagents"],
     subagentViews: state.runs,
+    artifacts: { views: [] } as unknown as EnvironmentPanelContextValue["artifacts"],
     toolsPresented: state.tab !== undefined,
     tab: state.tab ?? "browser",
     gitOperationBusy: state.gitOperationBusy ?? false,
@@ -59,17 +63,22 @@ function stubPanel(state: PanelState, calls: Calls): EnvironmentPanelContextValu
 
 function renderToolbar(initial: PanelState, hasWorkspace = true) {
   const calls: Calls = { shown: [], closed: 0 };
+  const client = createBotTestQueryClient();
   const ui = (state: PanelState) => (
-    <EnvironmentPanelContext.Provider value={stubPanel(state, calls)}>
-      <WorkspaceToolButtons
-        chatId="chat-1"
-        hasWorkspace={hasWorkspace}
-        hasFolder={false}
-        hasFolderAccess={false}
-        isRepo={false}
-        terminalButton={null}
-      />
-    </EnvironmentPanelContext.Provider>
+    <QueryClientProvider client={client}>
+      <CommandSystemProvider>
+        <EnvironmentPanelContext.Provider value={stubPanel(state, calls)}>
+          <WorkspaceToolButtons
+            chatId="chat-1"
+            hasWorkspace={hasWorkspace}
+            hasFolder={false}
+            hasFolderAccess={false}
+            isRepo={false}
+            terminalButton={null}
+          />
+        </EnvironmentPanelContext.Provider>
+      </CommandSystemProvider>
+    </QueryClientProvider>
   );
   const view = render(ui(initial));
   return { calls, update: (state: PanelState) => view.rerender(ui(state)) };

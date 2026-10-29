@@ -128,9 +128,17 @@ test("share_image admits verified PNG bytes from absolute paths without exposing
       ),
     );
     const shared: import("./types.js").Attachment[] = [];
-    const tool = createShareImageTool({ workspaceRoot: root, share: (attachment) => shared.push(attachment) });
+    const calls: string[] = [];
+    const tool = createShareImageTool({
+      workspaceRoot: root,
+      share: (attachment, toolCallId) => {
+        shared.push(attachment);
+        calls.push(toolCallId);
+      },
+    });
     const result = await tool.execute("share-1", { path: imagePath });
     assert.equal(shared.length, 1);
+    assert.deepEqual(calls, ["share-1"], "the image is placed at the call that shared it");
     assert.equal(shared[0]?.name, "Preview.png");
     assert.equal(shared[0]?.mimeType, "image/png");
     assert.match(shared[0]?.id ?? "", /^shared_/u);

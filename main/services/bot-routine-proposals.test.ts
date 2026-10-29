@@ -14,7 +14,8 @@ import {
   createBotRoutineProposalService,
   parseBotRoutineProposalRespond,
 } from "./bot-routine-proposals.js";
-import { routinesCandidate } from "./bot-runtime/bot-tool-candidates.js";
+import { eventRoutinesToolSource, routinesCandidate } from "./bot-runtime/bot-tool-candidates.js";
+import { BOT_EVENT_ROUTINES_MAX, createBotEventRoutineStore } from "./bot-routine-events/store.js";
 import type { BotToolCall } from "./bot-runtime/tool-adapter.js";
 import { createScheduleServiceCore } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
@@ -68,20 +69,29 @@ function harness() {
   });
   // `appended` is the Bot's conversation: the cards the person is shown.
   const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
-  const failures = { statusAppend: false };
+  // `sessionClosing`: the Bot's session is closing for a pause, so reading it
+  // through the session waits until the closing tool call returns.
+  const failures = { statusAppend: false, sessionClosing: false };
   let sequence = 0;
   const clock = { at: Date.UTC(2026, 9, 9, 12) };
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => clock.at });
+  const revisions: Array<[string, string, string]> = [];
   // A fresh service over the same profile and schedule store is an app restart.
   const start = () =>
     createBotRoutineProposalService({
       profileDir: () => root,
       routines,
+      eventRoutines: events,
+      onRevised: (botId, replacedId, replacement) => void revisions.push([botId, replacedId, replacement.proposalId]),
       defaultTimezone: () => "UTC",
       appendEntry: async (botId, kind, data) => {
         if (failures.statusAppend && kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) throw new Error("disk full");
         appended.push({ botId, kind, data });
       },
-      conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+      conversationEntries: async (botId) => {
+        if (failures.sessionClosing) return new Promise<never>(() => undefined);
+        return appended.filter((entry) => entry.botId === botId);
+      },
       now: () => clock.at,
       newId: () => `00000000-0000-4000-8000-${String((sequence += 1)).padStart(12, "0")}`,
     });
@@ -91,7 +101,7 @@ function harness() {
     projectBotTranscript(appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never)
       .flatMap((entry) => (entry.type === "routine_proposal" ? [{ status: entry.status, routineId: entry.routineId }] : []));
   const proposalsFile = path.join(botSessionDirectory(root, "bot-a"), BOT_ROUTINE_PROPOSALS_FILE);
-  return { routines, proposals, appended, failures, start, cards, proposalsFile, clock };
+  return { routines, events, revisions, proposals, appended, failures, start, cards, proposalsFile, clock };
 }
 
 const dailyPlan = { name: "Weekly meal plan", schedule: { kind: "weekly", days: [0], time: "09:00" }, prompt: "Plan this week's meals." };
@@ -444,4 +454,384 @@ test("follow-ups the host dismissed when they expired never count as declines", 
   }
   assert.equal((await h.proposals.propose("bot-a", { ...dailyPlan, name: "One" })).ok, true);
   assert.deepEqual(await h.proposals.recentDecisions("bot-a"), []);
+});
+
+const reportLink = { name: "Report landed", trigger: { kind: "webhook" }, prompt: "Summarize the new report." };
+
+test("a trigger card adds an event routine on Add routine, and its link token reaches only that first answer", async () => {
+  const { proposals, events, routines, appended, start } = harness();
+  for (const bad of [
+    { ...reportLink, trigger: { kind: "webhook", url: "https://example.com" } },
+    { ...reportLink, trigger: { kind: "file_change", folder: "../outside" } },
+    { ...reportLink, schedule: { kind: "daily", time: "09:00" } },
+  ]) {
+    const refused = await proposals.propose("bot-a", bad);
+    assert.equal(refused.ok === false && refused.code, "invalid");
+  }
+  assert.equal(appended.length, 0);
+
+  const proposed = await proposals.propose("bot-a", reportLink);
+  assert.ok(proposed.ok);
+  assert.deepEqual(appended[0]?.data, {
+    proposalId: proposed.proposal.proposalId,
+    name: "Report landed",
+    prompt: "Summarize the new report.",
+    trigger: { kind: "webhook" },
+    label: "When this routine's link is called",
+  });
+  assert.deepEqual(await events.list("bot-a"), [], "a proposal alone makes no link");
+
+  const input = { botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "accept" as const };
+  const [first, second] = await Promise.all([proposals.respond(input), proposals.respond(input)]);
+  const [made] = await events.list("bot-a");
+  assert.equal((await events.list("bot-a")).length, 1, "two answers make one routine");
+  assert.deepEqual(await routines.list("bot-a"), [], "no scheduled routine is made");
+  assert.equal(first.routineId, made!.id);
+  assert.equal(typeof first.token, "string");
+  assert.equal((await events.findByToken(first.token!))?.id, made!.id, "the token opens this routine");
+  assert.deepEqual(second, { status: "accepted", routineId: made!.id }, "a repeat answer carries no token");
+  assert.deepEqual(
+    await start().respond(input),
+    { status: "accepted", routineId: made!.id },
+    "after a restart the same answer, still without a token",
+  );
+  assert.ok(!JSON.stringify(appended).includes(first.token!), "the conversation never holds the token");
+});
+
+test("a trigger proposal is refused once the Bot keeps as many event routines as it can", async () => {
+  const { proposals, events } = harness();
+  for (let index = 0; index < BOT_EVENT_ROUTINES_MAX; index += 1) {
+    await events.create("bot-a", { name: `Link ${index}`, prompt: "Go.", trigger: { kind: "webhook" } });
+  }
+  const refused = await proposals.propose("bot-a", reportLink);
+  assert.equal(refused.ok === false && refused.code, "invalid");
+  assert.ok((await proposals.propose("bot-a", dailyPlan)).ok, "a schedule card is still fine");
+});
+
+test("revising a waiting card replaces it without taking another slot, and only a waiting card can be revised", async () => {
+  const { proposals, appended, revisions } = harness();
+  const first = await proposals.propose("bot-a", dailyPlan);
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // Both slots are taken, yet a revision (even into a trigger card) still lands.
+  const revised = await proposals.revise("bot-a", first.proposal.proposalId, { ...reportLink, name: "Weekly meal plan" });
+  assert.ok(revised.ok);
+  assert.equal(revised.replaced, first.proposal.proposalId);
+  assert.notEqual(revised.proposal.proposalId, first.proposal.proposalId);
+  assert.equal(await proposals.pendingCount("bot-a"), 2);
+  assert.deepEqual(revisions, [["bot-a", first.proposal.proposalId, revised.proposal.proposalId]]);
+
+  const shown = projectBotTranscript(appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never)
+    .flatMap((entry) => (entry.type === "routine_proposal" ? [{ id: entry.proposal.proposalId, status: entry.status, supersededBy: entry.supersededBy }] : []));
+  assert.deepEqual(shown, [
+    { id: first.proposal.proposalId, status: "dismissed", supersededBy: revised.proposal.proposalId },
+    { id: second.proposal.proposalId, status: "pending", supersededBy: undefined },
+    { id: revised.proposal.proposalId, status: "pending", supersededBy: undefined },
+  ]);
+  await assert.rejects(
+    proposals.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+    "the replaced card can't be answered",
+  );
+  assert.deepEqual(await proposals.recentDecisions("bot-a"), [], "a replaced card is not a decline");
+
+  await proposals.respond({ botId: "bot-a", proposalId: second.proposal.proposalId, decision: "dismiss" });
+  const answered = await proposals.revise("bot-a", second.proposal.proposalId, dailyPlan);
+  assert.equal(answered.ok === false && answered.code, "not_pending");
+  const replacedAgain = await proposals.revise("bot-a", first.proposal.proposalId, dailyPlan);
+  assert.equal(replacedAgain.ok === false && replacedAgain.code, "not_pending");
+  const unknown = await proposals.revise("bot-a", "00000000-0000-4000-8000-999999999999", dailyPlan);
+  assert.equal(unknown.ok === false && unknown.code, "not_found");
+  // Renaming a waiting card into one the person just turned down is a new idea.
+  const renamed = await proposals.revise("bot-a", revised.proposal.proposalId, { ...dailyPlan, name: "gym  Reminder" });
+  assert.equal(renamed.ok === false && renamed.code, "declined_before");
+});
+
+test("a revision cut short after its new card is shown still replaces the old card, even with both slots taken", async () => {
+  const { proposals, failures, start, revisions, cards } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // The new card lands, then the old card's status write fails; Aiden quits.
+  failures.statusAppend = true;
+  await assert.rejects(proposals.revise("bot-a", first.proposal.proposalId, { ...dailyPlan, schedule: { kind: "daily", time: "10:00" } }));
+  failures.statusAppend = false;
+  const restarted = start();
+
+  const waitingIds = (await restarted.pending("bot-a")).map((entry) => entry.proposalId);
+  assert.equal(waitingIds.length, 2, "the replacement takes only the old card's slot");
+  assert.ok(!waitingIds.includes(first.proposal.proposalId), "the old card no longer waits");
+  assert.equal(await restarted.pendingCount("bot-a"), 2);
+  const refused = await restarted.propose("bot-a", { ...dailyPlan, name: "Third idea" });
+  assert.equal(refused.ok === false && refused.code, "too_many_pending");
+
+  await assert.rejects(
+    restarted.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+    "the old 09:00 card can't add its routine",
+  );
+  const replacementId = waitingIds.find((id) => id !== second.proposal.proposalId)!;
+  assert.deepEqual(revisions, [["bot-a", first.proposal.proposalId, replacementId]], "the revision is reported once it finishes");
+  assert.deepEqual(cards().map((card) => card.status), ["dismissed", "pending", "pending"]);
+  const accepted = await restarted.respond({ botId: "bot-a", proposalId: replacementId, decision: "accept" });
+  assert.equal(accepted.status, "accepted");
+});
+
+test("a revision saved but never shown leaves the original card the one to answer", async () => {
+  const { proposals, start, proposalsFile, cards } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // Aiden quit after saving the replacement and before appending its card.
+  const file = JSON.parse(await readFile(proposalsFile, "utf8")) as { proposals: Array<Record<string, unknown>> };
+  const original = file.proposals.find((record) => record.proposalId === first.proposal.proposalId)!;
+  const unshownId = "00000000-0000-4000-8000-000000000999";
+  file.proposals.push({ ...original, proposalId: unshownId, schedule: { kind: "daily", time: "10:00" }, revises: original.proposalId });
+  await writeFile(proposalsFile, JSON.stringify(file));
+  const restarted = start();
+
+  assert.deepEqual(
+    (await restarted.pending("bot-a")).map((entry) => entry.proposalId),
+    [first.proposal.proposalId, second.proposal.proposalId],
+  );
+  await assert.rejects(
+    restarted.respond({ botId: "bot-a", proposalId: unshownId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+  );
+  const accepted = await restarted.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" });
+  assert.equal(accepted.status, "accepted");
+  assert.deepEqual(cards().map((card) => card.status), ["accepted", "pending"]);
+  assert.equal(await restarted.pendingCount("bot-a"), 1);
+});
+
+test("a revision whose card was shown just before Aiden quit still replaces the old card", async () => {
+  const { proposals, start, proposalsFile, appended, revisions, cards } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  const second = await proposals.propose("bot-a", { ...dailyPlan, name: "Gym reminder" });
+  assert.ok(first.ok && second.ok);
+
+  // Aiden quit after appending the replacement's card and before saving that it was shown.
+  const file = JSON.parse(await readFile(proposalsFile, "utf8")) as { proposals: Array<Record<string, unknown>> };
+  const original = file.proposals.find((record) => record.proposalId === first.proposal.proposalId)!;
+  const replacementId = "00000000-0000-4000-8000-000000000999";
+  const schedule = { kind: "daily", time: "10:00" };
+  file.proposals.push({ ...original, proposalId: replacementId, schedule, label: "Every day at 10:00", revises: original.proposalId });
+  await writeFile(proposalsFile, JSON.stringify(file));
+  const originalCard = appended.find((entry) => entry.data.proposalId === first.proposal.proposalId)!;
+  appended.push({ ...originalCard, data: { ...originalCard.data, proposalId: replacementId, schedule, label: "Every day at 10:00" } });
+  const restarted = start();
+
+  await restarted.list("bot-a");
+  assert.deepEqual(
+    (await restarted.pending("bot-a")).map((entry) => entry.proposalId),
+    [second.proposal.proposalId, replacementId],
+    "the shown replacement waits in the old card's slot",
+  );
+  assert.deepEqual(cards().map((card) => card.status), ["dismissed", "pending", "pending"], "no visible card is left without a record");
+  assert.deepEqual(revisions, [["bot-a", first.proposal.proposalId, replacementId]]);
+  await assert.rejects(
+    restarted.respond({ botId: "bot-a", proposalId: first.proposal.proposalId, decision: "accept" }),
+    BotRoutineProposalNotFoundError,
+    "the old 09:00 card can't add its routine",
+  );
+  const accepted = await restarted.respond({ botId: "bot-a", proposalId: replacementId, decision: "accept" });
+  assert.equal(accepted.status, "accepted");
+  assert.deepEqual(cards().map((card) => card.status), ["dismissed", "pending", "accepted"]);
+});
+
+test("a routines call during a pause finishes a cut-short revision from its own conversation", async () => {
+  const { proposals, start, proposalsFile, appended, failures } = harness();
+  const first = await proposals.propose("bot-a", { ...dailyPlan, schedule: { kind: "daily", time: "09:00" } });
+  assert.ok(first.ok);
+  // Aiden quit after showing the replacement card and before saving that it was shown.
+  const file = JSON.parse(await readFile(proposalsFile, "utf8")) as { proposals: Array<Record<string, unknown>> };
+  const original = file.proposals.find((record) => record.proposalId === first.proposal.proposalId)!;
+  const replacementId = "00000000-0000-4000-8000-000000000999";
+  file.proposals.push({ ...original, proposalId: replacementId, schedule: { kind: "daily", time: "10:00" }, revises: original.proposalId });
+  await writeFile(proposalsFile, JSON.stringify(file));
+  const originalCard = appended.find((entry) => entry.data.proposalId === first.proposal.proposalId)!;
+  appended.push({ ...originalCard, data: { ...originalCard.data, proposalId: replacementId } });
+  const restarted = start();
+
+  // The person pauses the Bot while its routines call runs: the session waits for the call.
+  failures.sessionClosing = true;
+  const conversation: BotToolCall = {
+    ...call([]),
+    entries: async () => appended.map((entry, index) => ({ id: index + 1, kind: entry.kind, data: entry.data })) as never,
+    appendEntry: async (kind, data) => void appended.push({ botId: "bot-a", kind, data: data as Record<string, unknown> }),
+  };
+  const tool = routinesCandidate("bot-a", {
+    list: async () => [],
+    pause: async () => {
+      throw new Error("unused");
+    },
+    propose: async (botId, input, append, entries) => {
+      const outcome = await restarted.propose(botId, input, append, entries);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+  }).bind!(conversation);
+  let timer: NodeJS.Timeout | undefined;
+  const result = await Promise.race([
+    tool.execute("c1", { action: "propose", ...dailyPlan, name: "Gym reminder" }),
+    new Promise<"stuck">((resolve) => (timer = setTimeout(() => resolve("stuck"), 2_000))),
+  ]).finally(() => clearTimeout(timer));
+  assert.notEqual(result, "stuck", "the call never waits on the session the pause is closing");
+  assert.equal(json(result as AgentToolResult<unknown>).ok, true);
+
+  failures.sessionClosing = false;
+  assert.deepEqual(
+    (await restarted.pending("bot-a")).map((entry) => entry.proposalId).sort(),
+    [replacementId, json(result as AgentToolResult<unknown>).proposalId].sort(),
+    "the shown replacement took the old card's place",
+  );
+});
+
+test("the routines tool lists and pauses event routines, shows waiting cards, and never shows a link", async () => {
+  const { proposals, events, routines, appended } = harness();
+  const changed: string[] = [];
+  // The tool writes its cards into this Bot's conversation, where Add routine reads them.
+  const conversation: BotToolCall = {
+    ...call([]),
+    appendEntry: async (kind, data) => void appended.push({ botId: "bot-a", kind, data: data as Record<string, unknown> }),
+  };
+  const tool = routinesCandidate("bot-a", {
+    list: (botId) => routines.list(botId),
+    pause: (botId, id) => routines.pause(botId, id),
+    propose: async (botId, input, append) => {
+      const outcome = await proposals.propose(botId, input, append);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+    revise: async (botId, proposalId, input, append) => {
+      const outcome = await proposals.revise(botId, proposalId, input, append);
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+    },
+    pending: (botId) => proposals.pending(botId),
+    eventRoutines: eventRoutinesToolSource(async () => ({ store: events, changed: (botId) => void changed.push(botId) })),
+    recentDecisions: (botId) => proposals.recentDecisions(botId),
+  }).bind!(conversation);
+
+  const proposed = json(await tool.execute("c1", { action: "propose", ...reportLink }));
+  assert.equal(proposed.ok, true);
+  const accepted = await proposals.respond({ botId: "bot-a", proposalId: String(proposed.proposalId), decision: "accept" });
+  const waiting = json(await tool.execute("c2", { action: "propose", ...dailyPlan }));
+
+  const listed = json(await tool.execute("c3", { action: "list" }));
+  assert.deepEqual(listed, {
+    routines: [],
+    eventRoutines: [{ id: accepted.routineId, name: "Report landed", label: "When this routine's link is called", enabled: true, kind: "event" }],
+    pendingSuggestions: [{ proposalId: waiting.proposalId, name: "Weekly meal plan", label: "Every Sunday at 9:00 AM · UTC" }],
+    recentDecisions: [{ name: "Report landed", label: "When this routine's link is called", status: "accepted", decidedAt: Date.UTC(2026, 9, 9, 12) }],
+  });
+
+  const revised = json(await tool.execute("c4", { action: "revise", proposalId: waiting.proposalId, ...dailyPlan, schedule: { kind: "daily", time: "07:30" } }));
+  assert.equal(revised.ok, true);
+  assert.notEqual(revised.proposalId, waiting.proposalId);
+  assert.deepEqual(
+    appended.map((entry) => entry.kind),
+    [
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_ENTRY_KIND,
+      BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND,
+    ],
+    "the revised card and the replaced card's status land in this conversation",
+  );
+
+  const paused = json(await tool.execute("c5", { action: "pause", id: accepted.routineId }));
+  assert.deepEqual(paused, { routine: { id: accepted.routineId, name: "Report landed", label: "When this routine's link is called", enabled: false, kind: "event" } });
+  assert.equal((await events.list("bot-a"))[0]!.enabled, false);
+  assert.deepEqual(changed, ["bot-a"], "a pause re-arms the Bot's event sources");
+  assert.ok(!JSON.stringify({ proposed, listed, revised, paused, appended }).includes(accepted.token!), "the Bot never sees the token");
+});
+
+test("an event routine an interrupted Add routine already made settles its card as accepted, with no second link", async () => {
+  const { proposals, events } = harness();
+  const proposed = await proposals.propose("bot-a", reportLink);
+  assert.ok(proposed.ok);
+  // The routine was saved, then the app quit before the card settled.
+  const { routine } = await events.create("bot-a", { ...reportLink, sourceProposalId: proposed.proposal.proposalId });
+  const again = await events.create("bot-a", { ...reportLink, sourceProposalId: proposed.proposal.proposalId });
+  assert.equal(again.routine.id, routine.id);
+  assert.equal(again.token, undefined, "making it again returns no new token");
+
+  const answer = await proposals.respond({ botId: "bot-a", proposalId: proposed.proposal.proposalId, decision: "dismiss" });
+  assert.deepEqual(answer, { status: "accepted", routineId: routine.id });
+  assert.equal((await events.list("bot-a")).length, 1);
+});
+
+test("a Bot proposes a watch through the routines tool, and Add routine saves it waiting for its first check", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-watch-proposals-"));
+  roots.push(root);
+  const at = Date.UTC(2026, 9, 28, 15);
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
+  let sequence = 0;
+  const { routines } = harness();
+  const proposals = createBotRoutineProposalService({
+    profileDir: () => root,
+    routines,
+    eventRoutines: events,
+    defaultTimezone: () => "UTC",
+    appendEntry: async (botId, kind, data) => void appended.push({ botId, kind, data }),
+    conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+    now: () => at,
+    newId: () => `00000000-0000-4000-8000-${String((sequence += 1)).padStart(12, "0")}`,
+  });
+  const cards: Array<{ kind: string; data: unknown }> = [];
+  const tool = routinesCandidate("bot-a", {
+    list: (botId) => routines.list(botId),
+    pause: (botId, id) => routines.pause(botId, id),
+    eventRoutines: {
+      list: async (botId) => (await events.list(botId)).map(({ id, name, enabled }) => ({ id, name, label: "", enabled })),
+      pause: async () => undefined,
+    },
+    propose: async (botId, input, append) => {
+      const outcome = await proposals.propose(botId, input, async (kind, data) => {
+        appended.push({ botId, kind, data: data as Record<string, unknown> });
+        await append(kind, data);
+      });
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+  }).bind!(call(cards));
+  const watch = (source: unknown, everyMinutes = 15) => ({
+    action: "propose",
+    name: "Release notes",
+    prompt: "Summarize what changed in the release notes.",
+    trigger: { kind: "watch", source, everyMinutes },
+  });
+
+  // The proposal is checked like the routine it would add.
+  for (const bad of [
+    watch({ type: "url", url: "http://example.com/notes" }),
+    watch({ type: "url", url: "https://example.com/notes" }, 1),
+    watch({ type: "script", script: "../outside.sh" }),
+  ]) {
+    const refused = json(await tool.execute("bad", bad));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, "invalid");
+  }
+  assert.equal(cards.length, 0, "a refused watch shows no card");
+
+  const proposed = json(await tool.execute("c1", watch({ type: "url", url: "https://example.com/notes" })));
+  assert.equal(proposed.ok, true);
+  assert.equal(cards.length, 1, "the card lands in the calling conversation");
+  const card = cards[0]!.data as { trigger: unknown; label: string };
+  assert.deepEqual(card.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/notes" }, everyMinutes: 15 });
+  assert.match(card.label, /15 min/u);
+  assert.match(card.label, /example\.com\/notes/u);
+  assert.deepEqual(await events.list("bot-a"), [], "proposing creates nothing and checks nothing");
+
+  const accepted = await proposals.respond({ botId: "bot-a", proposalId: String(proposed.proposalId), decision: "accept" });
+  const [saved] = await events.list("bot-a");
+  assert.equal(accepted.routineId, saved?.id);
+  assert.equal(accepted.token, undefined, "a watch has no link to show");
+  assert.equal(saved?.enabled, true);
+  assert.deepEqual(saved?.trigger, card.trigger);
+  assert.equal(saved?.watch?.hash, undefined, "the first check is still to come");
+  assert.equal(saved?.watch?.nextCheckAt, at);
+  assert.equal(saved?.watch?.failures, 0);
 });

@@ -923,6 +923,16 @@
     <string name="chat_web_extract_error_timeout">the extraction model did not answer in time</string>
     <string name="chat_web_extract_error_unavailable">the extraction model could not be reached</string>
     <string name="chat_web_extract_error_invalid_response">the extraction model sent an answer Aiden could not read</string>
+    <!-- Chat: a browser recording the agent saved (contract revision 46) -->
+    <string name="chat_browser_recording_title">Browser recording</string>
+    <string name="chat_browser_recording_cd">Browser recording, %1$s</string>
+    <string name="chat_browser_recording_meta">%1$s · %2$s</string>
+    <string name="chat_browser_recording_play">Play</string>
+    <string name="chat_browser_recording_loading">Loading…</string>
+    <string name="chat_browser_recording_on_mac">Watch this recording on your Mac.</string>
+    <string name="chat_browser_recording_missing">This recording is no longer on the Mac.</string>
+    <string name="chat_browser_recording_failed">Couldn’t load this recording. Try again.</string>
+    <string name="chat_browser_recording_unplayable">This recording can’t play on this phone.</string>
 
     <!-- Chat: inline visuals (contract revision 28) -->
     <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>

@@ -1,6 +1,8 @@
 // Stuck-run watchdog (spec §5 S4). A running Bot turn that makes no progress
 // for 10 minutes is stuck, unless it is waiting on the person (a hand-off, an
-// approval, a question card, a computer give-back).
+// approval, a question card, a computer give-back). A request waiting out a
+// provider's usage limit counts as progress, so the 10 minutes start again
+// when the limit clears.
 //
 // - A routine run is stopped and recorded as `stalled`, so routine recovery
 //   retries it in the same conversation, which keeps the partial work.
@@ -15,6 +17,8 @@ export interface BotRunWatchdogDependencies {
   lastProgressAt(botId: string): number | undefined;
   runKind(botId: string): "routine" | "attended" | null;
   isWaitingOnPerson(botId: string): boolean;
+  /** A request of this Bot's is held back until a provider's usage limit clears (not one already sent). */
+  isWaitingOnUsageLimit?(botId: string): boolean;
   stopForStall(botId: string): Promise<void>;
   raiseStall(botId: string): Promise<void>;
   now(): number;
@@ -40,6 +44,10 @@ export function createBotRunWatchdog(dependencies: BotRunWatchdogDependencies): 
     for (const botId of handledUntil.keys()) if (!running.has(botId)) handledUntil.delete(botId);
     for (const botId of running) {
       if (acting.has(botId) || dependencies.isWaitingOnPerson(botId)) continue;
+      if (dependencies.isWaitingOnUsageLimit?.(botId)) {
+        handledUntil.set(botId, now);
+        continue;
+      }
       const progress = Math.max(dependencies.lastProgressAt(botId) ?? now, handledUntil.get(botId) ?? 0);
       if (now - progress < BOT_RUN_STALL_MS) continue;
       const kind = dependencies.runKind(botId);

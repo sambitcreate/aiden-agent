@@ -54,6 +54,7 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  eventRoutinesToolSource,
   routinesCandidate,
   proposeSkillCandidate,
   routineTaskIdOfCall,
@@ -67,6 +68,7 @@ import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffCandidate } from "./bot-handoff-tool.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { signInCandidate } from "./bot-sign-in-tool.js";
+import { wakeUpCandidate } from "../bot-wake-ups/wake-up-candidate.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
 import { isBrowserToolName } from "../browser-tools.js";
@@ -145,14 +147,24 @@ export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefine
 // load while the Bot runtime module graph is still initializing.
 const routineServices = () => import("../scheduled-bot-routines-main.js");
 const proposalServices = () => import("../bot-routine-proposals-main.js");
+const eventRoutineServices = () => import("../bot-routine-events/sources-main.js");
 
 const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
   list: async (botId) => (await routineServices()).botRoutineService.list(botId),
   pause: async (botId, routineId) => (await routineServices()).botRoutineService.pause(botId, routineId),
-  propose: async (botId, input, append) => {
-    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
+  propose: async (botId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append, entries);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
+  revise: async (botId, proposalId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.revise(botId, proposalId, input, append, entries);
+    return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+  },
+  pending: async (botId) => (await proposalServices()).botRoutineProposals.pending(botId),
+  eventRoutines: eventRoutinesToolSource(async () => {
+    const services = await eventRoutineServices();
+    return { store: services.botEventRoutines, changed: services.botEventRoutinesChanged };
+  }),
   recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
@@ -161,6 +173,15 @@ const lazyRoutineNotes = {
     (await routineServices()).botRoutineNotes.set(botId, taskId, key, value),
   delete: async (botId: string, taskId: string, key: unknown) =>
     (await routineServices()).botRoutineNotes.delete(botId, taskId, key),
+};
+
+// Wake-ups reach the scheduler too, so they load lazily as well.
+const wakeUpServices = () => import("../bot-wake-ups/wake-ups-main.js");
+const lazyWakeUps = {
+  set: async (...args: Parameters<import("../bot-wake-ups/wake-ups.js").BotWakeUps["set"]>) =>
+    (await wakeUpServices()).botWakeUps.set(...args),
+  pending: async (botId: string) => (await wakeUpServices()).botWakeUps.pending(botId),
+  cancel: async (botId: string, id: string) => (await wakeUpServices()).botWakeUps.cancel(botId, id),
 };
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
@@ -451,6 +472,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
+      // Only in turns a person started (ingress also withholds it on routine,
+      // catch-up, wake-up and intro runs), and only while the person's per-Bot
+      // switch is on.
+      if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+        tools.push(wakeUpCandidate(botId, lazyWakeUps));
+      }
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));

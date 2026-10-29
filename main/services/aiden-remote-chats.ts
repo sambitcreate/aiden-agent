@@ -1,5 +1,5 @@
 import { agentNoticeDisplayText, parseAgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
-import { parseAppControlPanels } from "../../renderer/shared/app-controls.js";
+import { parseAppControlPanels, REMOTE_APP_CONTROL_TOPICS } from "../../renderer/shared/app-controls.js";
 import {
   createHash,
   createHmac,
@@ -12,13 +12,16 @@ import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
+  isToolStep,
   parseGenerationTimeline,
   type GenerationTimeline,
 } from "../../renderer/shared/generation-timeline.js";
+import { isBrowserRecordingId } from "../../renderer/shared/browser-recording.js";
 import { parseProviderFailureV1 } from "../../renderer/shared/provider-failure.js";
 import { parseChatUiVisuals } from "../../renderer/shared/aiden-ui/visual.js";
 import type { InlineVisualsMode } from "../../renderer/shared/appearance.js";
-import { parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { parseChatImagePlacements, parseHtmlArtifactPlacements } from "../../renderer/shared/chat-artifacts.js";
+import { withInferredImagePlacements } from "../../renderer/shared/image-placements.js";
 import { parseVisualSnapshots } from "../../renderer/shared/visual-snapshots.js";
 import { visualSnapshotImages } from "./visual-snapshot-core.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
@@ -177,6 +180,11 @@ export interface AidenRemoteMessageAttachmentProjection {
   mimeType: string;
   kind: "image" | "text";
   size: number;
+  /**
+   * Additive (contract revision 44): on an assistant image, the timeline tool
+   * step that produced it, so a phone draws the image at that step.
+   */
+  toolCallId?: string;
 }
 
 export interface AidenRemoteMessageOutcomeProjection {
@@ -378,16 +386,42 @@ function projectedAttachmentId(value: string): string {
     : `legacy_${createHash("sha256").update(value).digest("base64url")}`;
 }
 
-function projectMessageAttachments(value: unknown): AidenRemoteMessageAttachmentProjection[] {
-  return (safeStoredAttachments(value) ?? []).map((attachment) => ({
-    id: projectedAttachmentId(attachment.id),
-    name: safeAttachmentDisplayName(attachment.name),
-    mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
-      ? attachment.mimeType
-      : attachment.kind === "image" ? "image/unknown" : "text/plain",
-    kind: attachment.kind,
-    size: attachment.size,
-  }));
+function projectMessageAttachments(message: ChatMessage): AidenRemoteMessageAttachmentProjection[] {
+  const attachments = safeStoredAttachments(message.attachments) ?? [];
+  const placements = assistantImagePlacements(message, attachments);
+  return attachments.map((attachment) => {
+    const toolCallId = attachment.kind === "image" ? placements?.get(attachment.id) : undefined;
+    return {
+      id: projectedAttachmentId(attachment.id),
+      name: safeAttachmentDisplayName(attachment.name),
+      mimeType: /^[\x21-\x7e]{1,120}$/u.test(attachment.mimeType)
+        ? attachment.mimeType
+        : attachment.kind === "image" ? "image/unknown" : "text/plain",
+      kind: attachment.kind,
+      size: attachment.size,
+      ...(toolCallId && VISUAL_TOOL_CALL_ID.test(toolCallId) ? { toolCallId } : {}),
+    };
+  });
+}
+
+/**
+ * Contract revision 44: the call that produced each assistant image, as the
+ * desktop places it (stored placements, plus the in-order pairing for replies
+ * saved before every image recorded its call).
+ */
+function assistantImagePlacements(
+  message: ChatMessage,
+  attachments: readonly Attachment[],
+): ReadonlyMap<string, string> | undefined {
+  if (message.role !== "assistant") return undefined;
+  const stored = new Map(
+    (parseChatImagePlacements(message.imagePlacements) ?? []).map((placement) => [placement.attachmentId, placement.toolCallId]),
+  );
+  return withInferredImagePlacements(
+    parseGenerationTimeline(message.timeline, message.content.length),
+    attachments,
+    stored,
+  );
 }
 
 const MAX_PROJECTED_VISUALS = 40;
@@ -532,22 +566,25 @@ function chatRevision(chat: Chat): string {
     updatedAt: chat.updatedAt,
     messages: chat.messages
       .filter((message) => message.role === "user" || message.role === "assistant")
-      .map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: remoteMessageText(message),
-        reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
-          ? message.reasoning : null,
-        createdAt: message.createdAt,
-        attachments: projectMessageAttachments(message.attachments),
-        htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
-          id: artifact.mediaId,
-          title: artifact.title,
-        })),
-        visuals: projectMessageVisuals(message, projectMessageAttachments(message.attachments)),
-        outcome: projectMessageOutcome(message) ?? null,
-        timeline: projectMessageTimeline(message) ?? null,
-      })),
+      .map((message) => {
+        const attachments = projectMessageAttachments(message);
+        return {
+          id: message.id,
+          role: message.role,
+          content: remoteMessageText(message),
+          reasoning: !chat.botId && message.role === "assistant" && message.reasoning && message.reasoning.length <= 100_000
+            ? message.reasoning : null,
+          createdAt: message.createdAt,
+          attachments,
+          htmlArtifacts: (message.htmlArtifacts ?? []).map((artifact) => ({
+            id: artifact.mediaId,
+            title: artifact.title,
+          })),
+          visuals: projectMessageVisuals(message, attachments),
+          outcome: projectMessageOutcome(message) ?? null,
+          timeline: projectMessageTimeline(message) ?? null,
+        };
+      }),
   };
   return `rev_${createHash("sha256").update(JSON.stringify(visible)).digest("base64url")}`;
 }
@@ -610,11 +647,18 @@ function projectMessage(
   chat: Chat,
   message: ChatMessage & { role: "user" | "assistant" },
 ): AidenRemoteMessageProjection {
-  const attachments = projectMessageAttachments(message.attachments);
+  const attachments = projectMessageAttachments(message);
   const visuals = projectMessageVisuals(message, attachments);
-  const appPanels = parseAppControlPanels(message.appPanels);
+  const allPanels = parseAppControlPanels(message.appPanels);
+  // Phones understand only the v1 card topics; newer cards reach them as text.
+  const phonePanels = allPanels?.filter((panel) => REMOTE_APP_CONTROL_TOPICS.has(panel.topic));
+  const appPanels = phonePanels?.length ? phonePanels : undefined;
+  const textOnlyPanels = allPanels?.filter((panel) => !REMOTE_APP_CONTROL_TOPICS.has(panel.topic)) ?? [];
   const outcome = projectMessageOutcome(message);
-  const text = boundedUnicodeScalarPrefix(remoteMessageText(message), 200_000);
+  const text = boundedUnicodeScalarPrefix(
+    [remoteMessageText(message), ...textOnlyPanels.map((panel) => panel.fallback)].filter(Boolean).join("\n\n"),
+    200_000,
+  );
   const reasoning = !chat.botId && message.role === "assistant" && message.reasoning &&
     message.reasoning.length <= 100_000 ? message.reasoning : undefined;
   const storedTimeline = projectMessageTimeline(message);
@@ -1160,6 +1204,11 @@ export class AidenRemoteChatService {
        * refuses turns; a throw (an unreadable pause record) refuses too.
        */
       botPaused?: (botId: string) => Promise<boolean>;
+      /**
+       * The refusal text when this chat (or its Bot) is over its spending
+       * limit. Nothing runs, so the same key runs once more is allowed.
+       */
+      spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -1178,6 +1227,18 @@ export class AidenRemoteChatService {
       visualViewer?: {
         htmlFor(chatId: string, mediaId: string): Promise<string | undefined>;
         render(source: VisualViewerSource, appearance: VisualViewerAppearance): Promise<string>;
+      };
+      /**
+       * Revision 46: reads a browser recording the agent saved, by its id. Absent
+       * on hosts without the in-app browser (the CLI).
+       */
+      browserRecordings?: {
+        read(recordingId: string): Promise<{ mimeType: string; data: Buffer } | undefined>;
+        /**
+         * Whether a run of this chat that is still going has shown the
+         * recording: its reply is saved only when the whole turn ends.
+         */
+        namedByLiveRun?(chatId: string, recordingId: string): boolean;
       };
       /**
        * Device-declared `skills:invoke` grant lookup. A turn carrying `skill`
@@ -1831,7 +1892,7 @@ export class AidenRemoteChatService {
     const chat = await this.chat(chatId);
     const unavailable = () => new AidenRemoteServiceError("not_found", "This visual is unavailable.", 404);
     for (const message of chat.messages) {
-      const projected = projectMessageVisuals(message, projectMessageAttachments(message.attachments))
+      const projected = projectMessageVisuals(message, projectMessageAttachments(message))
         .find((visual) => visual.id === visualId);
       if (!projected) continue;
       let source: VisualViewerSource;
@@ -1854,6 +1915,36 @@ export class AidenRemoteChatService {
       }
     }
     throw unavailable();
+  }
+
+  /** Whether this host serves the agent's browser recordings (revision 46). */
+  get supportsBrowserRecordings(): boolean {
+    return this.options.browserRecordings !== undefined;
+  }
+
+  /**
+   * The video a completed `browser_recording_stop` step in this chat saved.
+   * Only a recording one of the chat's own timelines names can be read, saved
+   * or still running, so a device that may read one chat can't read another
+   * chat's recordings.
+   */
+  async browserRecording(chatId: string, recordingId: string): Promise<{ bytes: Buffer; mimeType: string }> {
+    const recordings = this.options.browserRecordings;
+    if (!recordings) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    if (!isBrowserRecordingId(recordingId)) {
+      throw new AidenRemoteServiceError("invalid_request", "The recording identifier is invalid.", 400);
+    }
+    const chat = await this.chat(chatId);
+    const unavailable = () => new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+    const named = chat.messages.some((message) =>
+      parseGenerationTimeline(message.timeline, message.content.length)?.steps.some(
+        (step) => isToolStep(step) && step.recording?.id === recordingId,
+      ),
+    );
+    if (!named && recordings.namedByLiveRun?.(chatId, recordingId) !== true) throw unavailable();
+    const stored = await recordings.read(recordingId).catch(() => undefined);
+    if (!stored) throw unavailable();
+    return { bytes: stored.data, mimeType: stored.mimeType };
   }
 
   /** Whether this host projects context pressure (`chat-context-pressure-v1`). */
@@ -2155,6 +2246,7 @@ export class AidenRemoteChatService {
         async () => {
           const authoritative = await this.chat(chatId);
           await this.refuseIfBotPaused(authoritative);
+          await this.refuseIfOverSpendingLimit(authoritative);
           const requestedProviderId = parsed.providerId ?? authoritative.providerId;
           const requestedModelId = parsed.modelId ?? authoritative.model;
           const preservesPinnedGemini =
@@ -2401,6 +2493,13 @@ export class AidenRemoteChatService {
     throw new AidenOperationNotExecutedError(
       new AidenRemoteServiceError("operation_stale", "This Bot is paused. Resume it to continue.", 409),
     );
+  }
+
+  /** A chat over its spending limit takes no turns until more is allowed; nothing ran. */
+  private async refuseIfOverSpendingLimit(chat: Chat): Promise<void> {
+    const refusal = await this.options.spendingRefusal?.(chat);
+    if (!refusal) return;
+    throw new AidenOperationNotExecutedError(new AidenRemoteServiceError("operation_stale", refusal, 409));
   }
 
   private mapOperationError(error: unknown): never {

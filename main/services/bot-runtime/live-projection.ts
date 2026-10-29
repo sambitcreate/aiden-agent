@@ -82,6 +82,7 @@ import {
 } from "../../../renderer/shared/bot-issues.js";
 import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
+import { BOT_WAKE_UP_ENTRY_KIND } from "../../../renderer/shared/bot-wake-ups.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
 export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
@@ -145,7 +146,7 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -179,11 +180,15 @@ function memorySaveOf(details: unknown): BotMemoryTarget[] | null {
 function proposalOf(data: unknown): BotRoutineProposalEntryData | null {
   if (typeof data !== "object" || data === null) return null;
   const record = data as Record<string, unknown>;
-  for (const key of ["proposalId", "name", "prompt", "timezone", "label"] as const) {
+  for (const key of ["proposalId", "name", "prompt", "label"] as const) {
     if (typeof record[key] !== "string") return null;
   }
-  if (typeof record.schedule !== "object" || record.schedule === null) return null;
   if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  // A schedule card (with its timezone) or a trigger card, never both.
+  const trigger = typeof record.trigger === "object" && record.trigger !== null;
+  const schedule = typeof record.schedule === "object" && record.schedule !== null && typeof record.timezone === "string";
+  if (trigger === schedule) return null;
+  if (trigger && (record.schedule !== undefined || record.timezone !== undefined)) return null;
   return data as BotRoutineProposalEntryData;
 }
 
@@ -193,10 +198,12 @@ function proposalStatusOf(data: unknown): BotRoutineProposalStatusEntryData | nu
   if (typeof record.proposalId !== "string") return null;
   if (record.status !== "accepted" && record.status !== "dismissed") return null;
   if (record.routineId !== undefined && typeof record.routineId !== "string") return null;
+  if (record.supersededBy !== undefined && typeof record.supersededBy !== "string") return null;
   return {
     proposalId: record.proposalId,
     status: record.status,
     ...(record.routineId === undefined ? {} : { routineId: record.routineId }),
+    ...(record.status === "dismissed" && record.supersededBy !== undefined ? { supersededBy: record.supersededBy } : {}),
   };
 }
 
@@ -396,6 +403,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             proposal,
             status: decided?.status ?? "pending",
             ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+            ...(decided?.supersededBy === undefined ? {} : { supersededBy: decided.supersededBy }),
           },
           turn,
         });
@@ -428,6 +436,13 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_WAKE_UP_ENTRY_KIND) {
+      const data = record.data as { wakeUpId?: unknown; fireAt?: unknown } | null;
+      if (typeof data?.wakeUpId === "string" && typeof data.fireAt === "number" && Number.isFinite(data.fireAt)) {
+        mapped.push({ entry: { id, type: "wake_up", wakeUpId: data.wakeUpId, fireAt: data.fireAt }, turn });
+      }
+      continue;
+    }
     if (record.kind === "aiden.memory-tidy") {
       const data = record.data as { changeId?: unknown } | null;
       const changeId = typeof data?.changeId === "string" ? data.changeId : undefined;

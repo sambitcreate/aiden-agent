@@ -39,6 +39,10 @@ A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only whe
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
 
+## Limits & spending
+
+Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
+
 ## Web pages
 
 Settings → Web Search ends with a "Web pages" `FieldSet` (`renderer/components/settings/web-page-settings.tsx`). **Read web pages** is a trailing switch whose description says the Web Search switch above must be on. While it is on, the group adds **Extract only the values asked for** with a soft status `Badge` (On, Off or Needs setup) beside the label; the switch stays disabled until the Cloudflare account ID and a key are saved. If the setup is removed while the switch is on, the switch keeps showing the saved choice and the row reads "Paused" with Needs setup, so it can still be turned off. The account ID is a vertical field with an inline Save, the key list reuses the Web Search key pool editor, and a last row, "What leaves this device", says what extract mode sends to Cloudflare. Extract mode never turns itself on.

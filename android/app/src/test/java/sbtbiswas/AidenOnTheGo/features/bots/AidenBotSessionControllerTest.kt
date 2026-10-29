@@ -520,6 +520,100 @@ class AidenBotSessionControllerTest {
         assertTrue(transport.sends.isEmpty())
     }
 
+    /**
+     * Revision 45: an image the Bot shared is read from the Mac when it is drawn, once while the
+     * chat is open; a failed read is tried again, and an id the transcript doesn't hold is never asked for.
+     */
+    @Test
+    fun aSharedImageIsReadOnceAndAFailedReadIsTriedAgain() = runTest {
+        val image = AidenBotSessionEntry.SharedImage(id = "entry_7", name = "chart.png", mimeType = "image/png", size = 4)
+        val withImage = needsModelSession.copy(state = AidenBotSessionState.IDLE, entries = listOf(image))
+        val bytes = byteArrayOf(0x89.toByte(), 0x50, 0x4e, 0x47)
+        val transport = object : AidenBotSessionTransport by FakeTransport(withImage) {
+            val reads = mutableListOf<String>()
+            var held: ByteArray? = null
+            override suspend fun session(botId: String) = withImage
+            override suspend fun sharedImage(botId: String, entryId: String): ByteArray {
+                reads += entryId
+                return held ?: throw IOException("offline")
+            }
+        }
+        val controller = AidenBotSessionController(withImage.botId, transport, backgroundScope)
+        controller.refetch()
+
+        assertNull("the Mac couldn't send it yet", controller.sharedImageData(image.id))
+        transport.held = bytes
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertTrue(bytes.contentEquals(controller.sharedImageData(image.id)))
+        assertEquals("one failed read, then one read kept for the chat", listOf(image.id, image.id), transport.reads)
+
+        assertNull(controller.sharedImageData("entry_99"))
+        assertEquals("an id the transcript doesn't hold never reaches the Mac", 2, transport.reads.size)
+    }
+
+    /**
+     * Revision 45: shared images stay within a byte budget. The oldest drawn image is dropped and
+     * read again when it is drawn next; an image the transcript no longer shows is dropped; closing
+     * the chat lets every image go.
+     */
+    @Test
+    fun sharedImagesStayWithinTheirBudgetAndAreReadAgainAfterBeingDropped() = runTest {
+        fun image(id: String) = AidenBotSessionEntry.SharedImage(id = id, name = "$id.png", mimeType = "image/png", size = 4)
+        var shown = needsModelSession.copy(state = AidenBotSessionState.IDLE, entries = listOf(image("entry_1"), image("entry_2"), image("entry_3")))
+        val transport = object : AidenBotSessionTransport by FakeTransport(shown) {
+            val reads = mutableListOf<String>()
+            override suspend fun session(botId: String) = shown
+            override suspend fun sharedImage(botId: String, entryId: String): ByteArray {
+                reads += entryId
+                return ByteArray(4) { entryId.last().code.toByte() }
+            }
+        }
+        // Room for two 4-byte images.
+        val controller = AidenBotSessionController(shown.botId, transport, backgroundScope, sharedImageBudgetBytes = 8)
+        controller.refetch()
+
+        controller.sharedImageData("entry_1")
+        controller.sharedImageData("entry_2")
+        controller.sharedImageData("entry_1")
+        assertEquals("both fit, so the second draw of entry_1 is kept", listOf("entry_1", "entry_2"), transport.reads)
+        controller.sharedImageData("entry_3")
+        controller.sharedImageData("entry_2")
+        assertEquals(
+            "entry_3 pushed out the least recently drawn image, entry_2, which is read again",
+            listOf("entry_1", "entry_2", "entry_3", "entry_2"),
+            transport.reads
+        )
+        assertTrue(ByteArray(4) { '2'.code.toByte() }.contentEquals(controller.sharedImageData("entry_2")))
+
+        // entry_2 leaves the transcript: once another image is read, it is no longer kept.
+        shown = shown.copy(entries = listOf(image("entry_3"), image("entry_4")))
+        controller.refetch()
+        controller.sharedImageData("entry_4")
+        assertNull("an image the transcript no longer shows is not read", controller.sharedImageData("entry_2"))
+
+        controller.stopFollowing()
+        controller.sharedImageData("entry_3")
+        assertEquals("closing the chat dropped what it held", "entry_3", transport.reads.last())
+    }
+
+    /** The viewer caches pictures app-wide by attachment id, so the same entry id in two Bots draws two pictures. */
+    @Test
+    fun sharedImagesOfTwoBotsNeverShareAViewerId() = runTest {
+        val image = AidenBotSessionEntry.SharedImage(id = "entry_7", name = "chart.png", mimeType = "image/png", size = 4)
+        val one = AidenBotSessionController("bot-one", FakeTransport(needsModelSession), backgroundScope)
+        val two = AidenBotSessionController("bot-two", FakeTransport(needsModelSession), backgroundScope)
+        val first = one.sharedImageAttachment(image)
+        val second = two.sharedImageAttachment(image)
+        assertNotEquals(first.id, second.id)
+        assertEquals(first.id, one.sharedImageAttachment(image).id)
+        assertTrue("the viewer still accepts the id", first.isWireSafe && second.isWireSafe)
+        val otherMac = AidenBotSessionController(
+            "bot-one", FakeTransport(needsModelSession), backgroundScope,
+            sessionKey = AidenBotSessionKey("instance-b", "device-b", "bot-one")
+        )
+        assertNotEquals(first.id, otherMac.sharedImageAttachment(image).id)
+    }
+
     @Test
     fun aLostSendKeepsItsKeyAndGoesOutAgainWhileConnected() = runTest {
         val idle = needsModelSession.copy(state = AidenBotSessionState.IDLE)

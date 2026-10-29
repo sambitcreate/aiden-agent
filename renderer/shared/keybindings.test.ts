@@ -245,6 +245,27 @@ test("a shortcut saved before New chat in… existed keeps Command+Shift+N", () 
   assert.equal(effectiveBinding("chat.newIn", untouched), "Command+Shift+N");
 });
 
+test("back, forward, stop and attach get their keys unless a saved shortcut already uses them", () => {
+  const defaults = effectiveBindings(undefined);
+  assert.deepEqual(
+    [defaults["navigate.back"], defaults["navigate.forward"], defaults["chat.stop"], defaults["composer.attach"]],
+    ["Command+[", "Command+]", "Command+.", "Command+U"],
+  );
+  assert.equal(defaults["model.change"], "Command+Shift+M");
+
+  // Saved by an earlier build: the person put Search chats on Command+U.
+  const saved = { version: 1, commands: { "chat.search": { binding: "Command+U" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+U");
+  assert.equal(effectiveBinding("composer.attach", repaired), null);
+  // The other new keys were free, so they still apply.
+  assert.equal(effectiveBinding("navigate.back", repaired), "Command+[");
+  assert.equal(effectiveBinding("chat.stop", repaired), "Command+.");
+  // Attach can then take a free shortcut instead.
+  const rebound = applyKeybindingMutation(repaired, { commandId: "composer.attach", binding: "Command+Shift+U" });
+  assert.equal(effectiveBinding("composer.attach", rebound), "Command+Shift+U");
+});
+
 test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {
   // Saved by an earlier build: New chat on Command+Shift+O, before Open folder… owned that default.
   const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+O" } } };

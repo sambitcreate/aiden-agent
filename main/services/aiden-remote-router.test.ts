@@ -19,6 +19,7 @@ import type { AidenRemoteRetainedBotChatAuthorizationRequest } from "./aiden-rem
 import {
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
+  parseAidenRemoteSpendingStatus,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
@@ -104,6 +105,7 @@ async function fixture(options: {
   speechAvailable?: boolean;
   /** The host ships the phone visual viewer (contract revision 35). */
   visualViewer?: boolean;
+  browserRecordings?: boolean;
   /** The person paused the Bot: the host's rows carry the `bot:handoffs` view (contract revision 37). */
   pausedBot?: boolean;
   /** Contract revision 42: the Bot service's holder view carries `issueCount`. */
@@ -111,6 +113,8 @@ async function fixture(options: {
   botRoutineWebhook?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["botRoutineWebhook"];
   /** The host projects context pressure (contract revision 41): this is what the chat service answers. */
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
+  /** The host's spending ledger (contract revision 47). */
+  spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -266,6 +270,7 @@ async function fixture(options: {
               capability !== "bot:cards" &&
               capability !== "bot:handoffs" &&
               capability !== "bot:handoff-notes" &&
+              capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "schedule:cards",
           )
@@ -451,6 +456,16 @@ async function fixture(options: {
             },
           }
         : {}),
+      ...(options.browserRecordings
+        ? {
+            supportsBrowserRecordings: true,
+            browserRecording: async (id: string, recordingId: string) => {
+              calls.push(`browser-recording:${id}:${recordingId}`);
+              if (!recordingId.startsWith("recording-")) throw new AidenRemoteServiceError("not_found", "This recording is no longer on the Mac.", 404);
+              return { bytes: Buffer.from("fake mp4"), mimeType: "video/mp4" };
+            },
+          }
+        : {}),
       ...(options.forks
         ? {
             supportsForks: true,
@@ -552,6 +567,7 @@ async function fixture(options: {
           },
         },
     ...(options.providers ? { providers: options.providers } : {}),
+    ...(options.spending ? { spending: options.spending } : {}),
     models: {
       list: async () => ({
         providers: [{
@@ -1209,6 +1225,139 @@ test("visual documents are served to chat readers as revalidatable, compressible
     assert.equal(unavailable.status, 404);
   } finally {
     await older.close();
+  }
+});
+
+test("browser recordings are served to chat readers as no-store video", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const recording = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const app = await fixture({ capabilities: ["server:read", "chat:read"], browserRecordings: true });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-browser-recordings-v1"), true);
+    const response = await fetch(`${app.base}/chats/chat-1/recordings/${recording}`, { headers });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "video/mp4");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(Buffer.from(await response.arrayBuffer()).toString(), "fake mp4");
+    assert.ok(app.calls.includes(`browser-recording:chat-1:${recording}`));
+    const missing = await fetch(`${app.base}/chats/chat-1/recordings/elsewhere`, { headers });
+    assert.equal(missing.status, 404);
+  } finally {
+    await app.close();
+  }
+
+  const unreadable = await fixture({ capabilities: ["server:read"], browserRecordings: true });
+  try {
+    assert.equal((await fetch(`${unreadable.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 403);
+    assert.equal(unreadable.calls.some((call) => call.startsWith("browser-recording:")), false);
+  } finally {
+    await unreadable.close();
+  }
+
+  const cli = await fixture({ capabilities: ["server:read", "chat:read"] });
+  try {
+    const server = await (await fetch(`${cli.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("chat-browser-recordings-v1"), false);
+    assert.equal((await fetch(`${cli.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 404);
+  } finally {
+    await cli.close();
+  }
+});
+
+test("phones read a chat's and a Bot's spending and allow more once per tap", async () => {
+  const { AidenRemoteSpendingService } = await import("./aiden-remote-spending.js");
+  const { SpendingService } = await import("./spending-service.js");
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const ledger = new SpendingService({
+    persistence: { load: async () => undefined, save: async () => {} },
+    settings: async () => ({ chatUsd: 5, botMonthUsd: 20 }),
+    broadcast: () => {},
+  });
+  await ledger.record({ kind: "chat", id: "chat-1" }, 5.37);
+  const spending = new AidenRemoteSpendingService({
+    spending: ledger,
+    requireBot: async (botId) => {
+      if (botId !== "bot-1") throw new AidenRemoteServiceError("not_found", "This Bot no longer exists.", 404);
+    },
+  });
+  const app = await fixture({
+    capabilities: ["server:read", "chat:read", "chat:write", "bot:read", "bot:write"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    spending,
+  });
+  const allowMore = (path: string, revision: string, body: unknown = {}) =>
+    fetch(`${app.base}${path}`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "if-match": revision },
+      body: JSON.stringify(body),
+    });
+  try {
+    const server = await (await fetch(`${app.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("spending-limits-v1"), true);
+
+    const reached = parseAidenRemoteSpendingStatus(await (await fetch(`${app.base}/chats/chat-1/spending`, { headers })).json());
+    assert.equal(reached.spending?.state, "reached");
+    assert.equal(reached.spending?.spentUsd, 5.37);
+    assert.equal(reached.spending?.allowMoreUsd, 5);
+
+    const allowed = await allowMore("/chats/chat-1/spending/allow-more", reached.spending!.revision);
+    assert.equal(allowed.status, 200);
+    const after = parseAidenRemoteSpendingStatus(await allowed.json());
+    assert.deepEqual([after.spending?.state, after.spending?.allowedUsd], ["under", 10]);
+    assert.equal((await ledger.block({ kind: "chat", id: "chat-1" })), undefined, "the chat may send again");
+
+    // The same tap again (a retry, or a second phone) adds nothing.
+    const repeated = await allowMore("/chats/chat-1/spending/allow-more", reached.spending!.revision);
+    assert.equal(repeated.status, 409);
+    const conflict = await repeated.json();
+    assert.equal(conflict.error.code, "revision_conflict");
+    assert.equal(conflict.error.details.currentRevision, after.spending?.revision);
+    assert.equal((await ledger.status("chat", "chat-1"))?.extraUsd, 5);
+
+    const badBody = await allowMore("/chats/chat-1/spending/allow-more", after.spending!.revision, { amountUsd: 100 });
+    assert.equal(badBody.status, 400);
+    const noRevision = await fetch(`${app.base}/chats/chat-1/spending/allow-more`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(noRevision.status, 400);
+
+    const bot = parseAidenRemoteSpendingStatus(await (await fetch(`${app.base}/bots/bot-1/spending`, { headers })).json());
+    assert.deepEqual([bot.spending?.period, bot.spending?.state, bot.spending?.limitUsd], ["month", "under", 20]);
+    assert.ok(bot.spending?.periodStart && bot.spending.periodEnd);
+    // Allow more acts only at or near the limit.
+    const early = parseAidenRemoteSpendingStatus(await (await allowMore("/bots/bot-1/spending/allow-more", bot.spending!.revision)).json());
+    assert.equal(early.spending?.allowedUsd, 20);
+    const missing = await fetch(`${app.base}/bots/bot-gone/spending`, { headers });
+    assert.equal(missing.status, 404);
+  } finally {
+    await app.close();
+  }
+
+  const readOnly = await fixture({ capabilities: ["server:read", "chat:read"], deviceType: "iphone", spending });
+  try {
+    assert.equal((await fetch(`${readOnly.base}/chats/chat-1/spending`, { headers })).status, 200);
+    const denied = await fetch(`${readOnly.base}/chats/chat-1/spending/allow-more`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json", "if-match": "sp_any" },
+      body: "{}",
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    await readOnly.close();
+  }
+
+  const unwired = await fixture({ capabilities: ["server:read", "chat:read"], deviceType: "iphone" });
+  try {
+    const server = await (await fetch(`${unwired.base}/server`, { headers })).json();
+    assert.equal(server.features.includes("spending-limits-v1"), false);
+    assert.equal((await fetch(`${unwired.base}/chats/chat-1/spending`, { headers })).status, 404);
+  } finally {
+    await unwired.close();
   }
 });
 
@@ -6235,6 +6384,77 @@ test("a paired desktop's host feed carries paused Bot rows only when it holds bo
     } finally {
       await mac.close();
     }
+  }
+});
+
+test("bot:images is offered and negotiable while shared images are served, and only a holder reads an image's bytes", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:images"] }) };
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  const sessions = (wired: boolean, seen: string[]) => ({
+    ...recordingHandoffSessions([], false),
+    supportsSharedImages: wired,
+    session: async (botId: string, options: { images?: boolean } = {}) => {
+      seen.push(`session:${options.images === true ? "images" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries: [], hasOlder: false, question: null, approval: null };
+    },
+    sharedImage: async (_botId: string, entryId: string) => {
+      if (entryId !== "entry_2") throw new AidenRemoteServiceError("not_found", "This image is no longer in the Bot's chat.", 404);
+      return { bytes: png, mimeType: "image/png" as const };
+    },
+  });
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read"],
+      acceptsBotCapabilities: true,
+      deviceType: "android",
+      botSessions: sessions(wired, []) as never,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:images"), wired);
+      assert.equal(server.capabilities.includes("bot:images"), false, "offered, not yet granted");
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      const image = await fetch(`${app.base}/bots/bot_1/session/images/entry_2`, { headers });
+      // Unwired hosts have no route; a wired host refuses a device that does not hold the opt-in.
+      assert.equal(image.status, wired ? 403 : 404);
+    } finally {
+      await app.close();
+    }
+  }
+
+  const seen: string[] = [];
+  const holder = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read", "bot:images"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions(true, seen) as never,
+  });
+  const plain = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions(true, seen) as never,
+  });
+  try {
+    const image = await fetch(`${holder.base}/bots/bot_1/session/images/entry_2`, { headers });
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get("content-type"), "image/png");
+    assert.equal(image.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+    const gone = await fetch(`${holder.base}/bots/bot_1/session/images/entry_9`, { headers });
+    assert.equal(gone.status, 404);
+    assert.equal((await gone.json()).error.code, "not_found");
+    const refused = await fetch(`${plain.base}/bots/bot_1/session/images/entry_2`, { headers });
+    assert.equal(refused.status, 403);
+    assert.equal((await refused.json()).error.code, "capability_denied");
+    await fetch(`${holder.base}/bots/bot_1/session`, { headers });
+    await fetch(`${plain.base}/bots/bot_1/session`, { headers });
+    assert.deepEqual(seen, ["session:images", "session:plain"]);
+  } finally {
+    await holder.close();
+    await plain.close();
   }
 });
 

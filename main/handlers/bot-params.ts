@@ -32,7 +32,7 @@ const CREATE_KEYS = new Set([
   "name",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -114,7 +114,13 @@ export function parseBotUpdate(value: unknown): BotUpdateInput {
     ...createFields(record),
     ...(chatActivity ? { chatActivity } : {}),
     ...(record.interruptions !== undefined ? { interruptions: parseBotInterruptions(record.interruptions) } : {}),
+    ...(record.selfWakeUps !== undefined ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) } : {}),
   };
+}
+
+function parseSelfWakeUps(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("Invalid bot wake-up setting.");
+  return value;
 }
 
 export function parseBotRevision(value: unknown): string {

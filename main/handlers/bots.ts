@@ -244,16 +244,9 @@ export function registerBotHandlers(): void {
       },
       rotateToken: async (botId, id) => (await import("../services/bot-routine-events/sources-main.js")).botEventRoutines.rotateToken(botId, id),
     },
-    linkFor: async (token) => {
-      const { getAidenRemoteService } = await import("../services/aiden-remote-service-main.js");
-      const status = await (await getAidenRemoteService()).status().catch(() => undefined);
-      // Tailscale first: it reaches this Mac from anywhere the person's devices are.
-      const base = status?.running ? status.tailscaleEndpoint ?? status.lanEndpoint : undefined;
-      return base ? `${base.replace(/\/+$/u, "")}/hooks/bot-routines/${token}` : null;
-    },
+    linkFor: async (token) => (await import("../services/bot-routine-events/sources-main.js")).botRoutineWebhookLink(token),
     changed: (botId) => {
-      void import("../services/bot-routine-events/sources-main.js").then(({ rearmBotEventRoutines }) => rearmBotEventRoutines());
-      ipcMain.broadcast("bots:changed", { botId });
+      void import("../services/bot-routine-events/sources-main.js").then(({ botEventRoutinesChanged }) => botEventRoutinesChanged(botId));
     },
   });
   // Skill cards: Add writes and approves the exact content; Not now leaves it unused.
@@ -311,8 +304,15 @@ export function registerBotHandlers(): void {
   ipcMain.handle("bots:delete", async (_event, id: unknown) => {
     await (await botSessionRuntime()).deleteBot(parseBotId(id));
   });
-  ipcMain.handle("bots:update", async (_event, input: unknown) => {
-    return botApplicationService.updateBot(parseBotUpdate(input));
+  ipcMain.handle("bots:update", async (_event, raw: unknown) => {
+    const input = parseBotUpdate(raw);
+    const updated = await botApplicationService.updateBot(input);
+    // Turning "Let <Bot> set its own wake-ups" off also cancels the ones still pending.
+    if (input.selfWakeUps === false) {
+      const { botWakeUps } = await import("../services/bot-wake-ups/wake-ups-main.js");
+      await botWakeUps.cancelAll(updated.id);
+    }
+    return updated;
   });
   registerBotTelegramHandlers<Electron.IpcMainInvokeEvent>({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

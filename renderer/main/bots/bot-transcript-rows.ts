@@ -51,6 +51,7 @@ export type BotTranscriptRow =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      supersededBy?: string;
     }
   | {
       kind: "skill_proposal";
@@ -65,6 +66,8 @@ export type BotTranscriptRow =
       status: "pending" | "active" | "dismissed" | "retired";
     }
   | { kind: "memory_tidy"; id: string; changeId?: string }
+  /** "Wake-up at 3:10 PM · Cancel": a wake-up the Bot set for itself. */
+  | { kind: "wake_up"; id: string; wakeUpId: string; fireAt: number }
   /** A "Needs you" issue the host raised; settles to one quiet line. */
   | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
   /** Routines that fired while the person had paused the Bot, each with Run now. */
@@ -159,6 +162,7 @@ export function botTranscriptRows(
             proposal: entry.proposal,
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
+            ...(entry.supersededBy ? { supersededBy: entry.supersededBy } : {}),
           });
           break;
         case "lesson_proposal":
@@ -167,6 +171,9 @@ export function botTranscriptRows(
           break;
         case "memory_tidy":
           rows.push({ kind: "memory_tidy", id: entry.id, ...(entry.changeId ? { changeId: entry.changeId } : {}) });
+          break;
+        case "wake_up":
+          rows.push({ kind: "wake_up", id: entry.id, wakeUpId: entry.wakeUpId, fireAt: entry.fireAt });
           break;
         case "skill_proposal":
           rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });

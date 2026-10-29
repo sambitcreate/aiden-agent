@@ -54,6 +54,8 @@ import {
   sameBotModelChoice,
 } from "./bot-model-choice";
 import { botChatActivitySummary } from "./bot-chat-activity-page";
+import { updateBotIdentity } from "./bot-identity";
+import { botRoutinesKey } from "./bot-routines";
 import { botInterruptionsSummary } from "./bot-interruptions-page";
 import { BotModelPicker, botModelCapabilityLabel } from "./bot-model-picker";
 import { BotPageShell, BotPageSkeleton, useDiscardChangesGuard } from "./bot-page-shell";
@@ -441,6 +443,40 @@ function TelegramSection({ bot }: { bot: Pick<BotDefinition, "id"> }) {
 }
 
 /**
+ * "Let <Bot> set its own wake-ups". Saves at once, like a phone toggle; off
+ * also cancels the wake-ups still pending (main does that with the save).
+ */
+function SelfWakeUpsField({ bot }: { bot: BotDefinition }) {
+  const qc = useQueryClient();
+  const [saving, setSaving] = React.useState(false);
+  const enabled = bot.selfWakeUps !== false;
+  const change = async (next: boolean) => {
+    setSaving(true);
+    try {
+      await updateBotIdentity(qc, bot.id, { selfWakeUps: next });
+      if (!next) void qc.invalidateQueries({ queryKey: botRoutinesKey(bot.id) });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t save this setting."));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Field
+      label={`Let ${bot.name} set its own wake-ups`}
+      description="One-time check-ins in this chat, up to a day ahead. Turning this off cancels any still waiting."
+    >
+      <Switch
+        checked={enabled}
+        disabled={saving}
+        onCheckedChange={(next) => void change(next)}
+        aria-label={`Let ${bot.name} set its own wake-ups`}
+      />
+    </Field>
+  );
+}
+
+/**
  * Power settings for one Bot: model and what it can use are edited as one
  * draft and saved together by the toolbar's Save;
  * Back with unsaved edits asks before discarding them. Telegram is a
@@ -623,6 +659,7 @@ export function BotAdvanced({
           <span className="shrink-0 text-small text-secondary">{botInterruptionsSummary(bot.interruptions)}</span>
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
+        <SelfWakeUpsField bot={bot} />
       </FieldSet>
       <TelegramSection bot={bot} />
       {guard.dialog}

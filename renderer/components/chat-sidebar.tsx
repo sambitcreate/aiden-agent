@@ -76,7 +76,9 @@ import { MAX_SIDEBAR_PULL_REQUEST_CHATS } from "../shared/chat-pull-requests";
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
-import { useCommandSystem } from "../lib/command-system";
+import { useCommandHandler, useCommandSystem } from "../lib/command-system";
+import { openContextMenuFromKeyboard } from "../lib/keyboard-context-menu";
+import { cn } from "../lib/ui-utils";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
@@ -1008,6 +1010,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }
   };
 
+  // ⌘K → Delete chat… asks about the open chat, through the same confirmation.
+  const activeListedChat = (chats.data ?? []).find((chat) => chat.id === activeChatId);
+  useCommandHandler(
+    "chat.delete",
+    () => {
+      if (activeListedChat) setDeleting(activeListedChat);
+    },
+    activeListedChat !== undefined && renamingWithAppleId !== activeListedChat.id,
+  );
+
   const commitDelete = async () => {
     if (!deleting) return;
     if (deleting.id === activeChatId && environmentPanel.agentBusy) {
@@ -1154,102 +1166,131 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ) : (
         chat.title
       );
-    return (
-      <ContextMenu key={chat.id}>
-        <ContextMenuTrigger asChild>
-          <SidebarListItem
-            className={indented ? "pl-8" : undefined}
-            icon={
-              renamingWithAppleId === chat.id ? (
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              ) : undefined
-            }
-            aria-busy={renamingWithAppleId === chat.id || rowState === "working"}
-            aria-description={forkedFrom}
-            data-forked={forkedFrom ? "true" : undefined}
-            title={
-              forkedFrom ? (
-                <span className="flex min-w-0 items-center gap-1.5" title={forkedFrom}>
-                  <GitFork aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
-                  <span className="min-w-0 truncate">{titleContent}</span>
-                </span>
-              ) : (
-                titleContent
-              )
-            }
-            trailing={
-              <>
-                {chatShortcutsVisible && shortcutBinding ? (
-                  <kbd
-                    aria-hidden="true"
-                    data-chat-shortcut-hint="true"
-                    className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                  >
-                    {prettyAccelerator(shortcutBinding)}
-                  </kbd>
-                ) : null}
-                {/* Only rows in a group the user expanded (not one search opened)
-                    read live branch PRs, as the old group indicator did, and only
-                    once their dismissals are known. */}
-                <ChatRowContextGlyphs
-                  workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
-                  pullRequests={sidebarPullRequests[chat.id]}
-                  live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
-                />
-                <ChatRowStatus state={rowState} unread={unread} failed={chat.lastAssistantFailed === true} />
-              </>
-            }
-            aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-            selected={chat.id === activeChatId}
-            onPointerEnter={() => prefetchChat(chat.id)}
-            onFocus={() => prefetchChat(chat.id)}
-            onClick={() => void openChat(chat)}
-          />
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem
-            icon="pencil"
-            disabled={renamingWithAppleId === chat.id}
-            onSelect={() => {
-              setRenameValue(chat.title);
-              setRenaming(chat);
-            }}
-          >
-            Rename
-          </ContextMenuItem>
-          {capabilities.appleFoundationModels && foundationModels.data !== null ? (
-            <ContextMenuItem
-              disabled={!appleRenameReady || renamingWithAppleId !== null}
-              aria-label={
-                renamingWithAppleId === chat.id
-                  ? "Renaming with Apple"
-                  : appleRenameReady
-                    ? "Rename with Apple"
-                    : `Rename with Apple. ${appleRenameDetail}`
-              }
-              onSelect={() => void renameWithApple(chat)}
-            >
-              <span className="min-w-0 flex-1">
-                {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
-              </span>
-              {!appleRenameReady ? (
-                <span className="text-small text-tertiary">
-                  {foundationModels.isLoading ? "Checking…" : "Unavailable"}
-                </span>
-              ) : null}
-            </ContextMenuItem>
+    const menuItems = (
+      Item: typeof DropdownMenuItem | typeof ContextMenuItem,
+      Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator,
+    ) => (
+      <>
+      <Item
+        icon="pencil"
+        disabled={renamingWithAppleId === chat.id}
+        onSelect={() => {
+          setRenameValue(chat.title);
+          setRenaming(chat);
+        }}
+      >
+        Rename
+      </Item>
+      {capabilities.appleFoundationModels && foundationModels.data !== null ? (
+        <Item
+          disabled={!appleRenameReady || renamingWithAppleId !== null}
+          aria-label={
+            renamingWithAppleId === chat.id
+              ? "Renaming with Apple"
+              : appleRenameReady
+                ? "Rename with Apple"
+                : `Rename with Apple. ${appleRenameDetail}`
+          }
+          onSelect={() => void renameWithApple(chat)}
+        >
+          <span className="min-w-0 flex-1">
+            {renamingWithAppleId === chat.id ? "Renaming with Apple…" : "Rename with Apple"}
+          </span>
+          {!appleRenameReady ? (
+            <span className="text-small text-tertiary">
+              {foundationModels.isLoading ? "Checking…" : "Unavailable"}
+            </span>
           ) : null}
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            icon="trash"
-            color="red"
-            disabled={renamingWithAppleId === chat.id}
-            onSelect={() => setDeleting(chat)}
+        </Item>
+      ) : null}
+      <Separator />
+      <Item
+        icon="trash"
+        color="red"
+        disabled={renamingWithAppleId === chat.id}
+        onSelect={() => setDeleting(chat)}
+      >
+        Delete
+      </Item>
+      </>
+    );
+    return (
+      <div key={chat.id} className="group/chat-row relative">
+        <ContextMenu>
+          <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
+            <SidebarListItem
+              className={cn(
+                indented && "pl-8",
+                // Room for the ••• button while it shows, including while its menu is open.
+                !chatShortcutsVisible &&
+                  "group-hover/chat-row:pr-10 group-focus-within/chat-row:pr-10 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:pr-10",
+              )}
+              icon={
+                renamingWithAppleId === chat.id ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                ) : undefined
+              }
+              aria-busy={renamingWithAppleId === chat.id || rowState === "working"}
+              aria-description={forkedFrom}
+              data-forked={forkedFrom ? "true" : undefined}
+              title={
+                forkedFrom ? (
+                  <span className="flex min-w-0 items-center gap-1.5" title={forkedFrom}>
+                    <GitFork aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
+                    <span className="min-w-0 truncate">{titleContent}</span>
+                  </span>
+                ) : (
+                  titleContent
+                )
+              }
+              trailing={
+                <span
+                  className={cn(
+                    "flex items-center gap-1 transition-opacity duration-(--motion-duration) ease-standard motion-reduce:transition-none",
+                    // The ••• button takes this spot while the row is hovered or focused.
+                    !chatShortcutsVisible &&
+                    "group-hover/chat-row:opacity-0 group-focus-within/chat-row:opacity-0 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:opacity-0",
+                  )}
+                >
+                  {chatShortcutsVisible && shortcutBinding ? (
+                    <kbd
+                      aria-hidden="true"
+                      data-chat-shortcut-hint="true"
+                      className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
+                    >
+                      {prettyAccelerator(shortcutBinding)}
+                    </kbd>
+                  ) : null}
+                  {/* Only rows in a group the user expanded (not one search opened)
+                      read live branch PRs, as the old group indicator did, and only
+                      once their dismissals are known. */}
+                  <ChatRowContextGlyphs
+                    workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
+                    pullRequests={sidebarPullRequests[chat.id]}
+                    live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
+                  />
+                  <ChatRowStatus state={rowState} unread={unread} failed={chat.lastAssistantFailed === true} />
+                </span>
+              }
+              aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
+              selected={chat.id === activeChatId}
+              onPointerEnter={() => prefetchChat(chat.id)}
+              onFocus={() => prefetchChat(chat.id)}
+              onClick={() => void openChat(chat)}
+            />
+          </ContextMenuTrigger>
+          <ContextMenuContent>{menuItems(ContextMenuItem, ContextMenuSeparator)}</ContextMenuContent>
+        </ContextMenu>
+        {chatShortcutsVisible ? null : (
+          <SidebarOverflowMenu
+            ariaLabel={`More for ${chat.title}`}
+            triggerClassName="pointer-events-none absolute right-1.5 top-1/2 size-7 -translate-y-1/2 text-tertiary opacity-0 transition-opacity duration-(--motion-duration) ease-standard group-hover/chat-row:pointer-events-auto group-hover/chat-row:opacity-100 group-focus-within/chat-row:pointer-events-auto group-focus-within/chat-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 motion-reduce:transition-none"
+            contentClassName="w-56"
           >
-            Delete
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+            {menuItems(DropdownMenuItem, DropdownMenuSeparator)}
+          </SidebarOverflowMenu>
+        )}
+      </div>
     );
   };
 

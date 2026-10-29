@@ -69,6 +69,10 @@ import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../lib/use-usage-limit-wait";
+import { useSpendingStatus } from "../lib/use-spending-status";
+import { SpendingLimitNotice } from "../components/spending/spending-limit-notice";
+import { spendingNotice } from "../shared/spending";
 import { useMarkChatRead } from "../lib/use-mark-chat-read";
 import { localHostAdapter } from "../lib/hosts/local-host-adapter";
 import { useObservedLocalRun } from "../lib/hosts/use-observed-local-run";
@@ -472,8 +476,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
         accessOff: effectiveWorkspace?.permission === "none",
       })
     : undefined;
-  const ready = modelReady && !chatReadinessMessage && !draftGitPending;
-  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? modelReadinessMessage;
+  // A chat over its spending limit sends nothing until the person allows more.
+  const spending = useSpendingStatus("chat", draft ? undefined : chatId);
+  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status)?.title : undefined;
+  const ready = modelReady && !chatReadinessMessage && !draftGitPending && !spendingReached;
+  const readinessMessage = chatReadinessMessage ?? draftGitPending ?? spendingReached ?? modelReadinessMessage;
 
   const providerModels = React.useMemo(
     () => providers.data?.find((p) => p.id === providerId)?.models ?? [],
@@ -1499,7 +1506,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             if (artifact.kind === "html" && event.src) primeInlineVisualPreview(chatId, artifact, event.src);
             if (event.toolCallId) {
               const toolCallId = event.toolCallId;
-              // Visuals key by mediaId, generated images by attachment id. Both
+              // Visuals key by mediaId, images by attachment id. Both
               // are unique per generation, so this map only grows; entries for
               // artifacts no longer shown are never looked up.
               const key = artifact.kind === "html" ? artifact.mediaId : artifact.attachment.id;
@@ -2972,6 +2979,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     !isStartingGeneration &&
     !detachedGenerationDraining &&
     !visibleDetachedProjection;
+  const usageLimitWait = useUsageLimitWait("chat", draft ? undefined : chatId);
+  const usageLimitNow = useUsageLimitNow(usageLimitWait);
   const activeStep = latestActiveAgentStep(displayedGenerationTimeline);
   const toolActivity: ToolActivity | null = activeStep
     ? {
@@ -2984,6 +2993,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     isStarting: isStartingGeneration,
     isStopping: isStoppingGeneration,
     isModelLoading,
+    usageLimitWait: usageLimitWait ?? null,
     streamingText:
       canStopGeneration || isStoppingGeneration || detachedGenerationDraining
         ? displayedStreamingText
@@ -2992,7 +3002,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
     pendingApproval: Boolean(pending),
     toolActivity,
     modelCallRetry,
-    now: modelCallRetryNow,
+    // Each ticks only while its own row shows.
+    now: usageLimitWait ? usageLimitNow : modelCallRetryNow,
   });
   const visualizingLive =
     (hasActiveToolStep(displayedGenerationTimeline, RENDER_ARTIFACT_TOOL_NAME) ||
@@ -3389,6 +3400,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   cardRef={approvalCardRef}
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
+                  keyboardShortcuts
                 />
               ) : null}
             </EventPresence>
@@ -3428,6 +3440,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </ComposerFloatingRow>
+            {spending.status ? (
+              <SpendingLimitNotice
+                status={spending.status}
+                allowing={spending.allowing}
+                onAllowMore={() => void spending.allowMore()}
+                className="aiden-dock-inset chat-content-column pb-2"
+              />
+            ) : null}
             {btwView ? (
               <BtwCard
                 view={btwView}
@@ -3801,6 +3821,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             subagentsEnabled={environmentPanel.subagentsEnabled}
             onOpenSubagent={environmentPanel.openSubagent}
             agentActivity={visibleAgentActivity}
+            onRetryUsageLimit={() => void retryUsageLimitNow("chat", chatId)}
             readAloudMessageId={readAloudCandidateId}
             failureActions={failureActions}
             interruptedReply={interruptedReply}

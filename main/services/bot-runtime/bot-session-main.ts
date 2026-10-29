@@ -28,6 +28,13 @@ import * as path from "node:path";
 import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import { usageLimits } from "../usage-limit-main.js";
+import { spending } from "../spending-main.js";
+import { responseCostUsd, spendCounts } from "../spending-service.js";
+import type { SpendingOwner } from "../spending-core.js";
+import { botRoutineTaskIdOf } from "../scheduled-bot-routines.js";
+import { isLocalModelProvider } from "../usage-accounting.js";
 import { aidenConfigDir } from "../aiden-config-dir.js";
 import { IMAGE_GENERATION_SETTINGS_FILE } from "../image-generation/settings-store.js";
 import {
@@ -83,6 +90,7 @@ import { wireBotLiveTurnIntents } from "./bot-turn-intents.js";
 import { botRunStarts, botTurnIntents } from "./bot-turn-intents-main.js";
 import type { BotExtensionDeps } from "./bot-extension.js";
 import { createBotRuntimeModels, type BotModelRuntime } from "./bot-models.js";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   BOT_NOTICE_ENTRY_KIND,
   createBotSessionService,
@@ -123,7 +131,13 @@ setBotFileToolProtectedRoots(() => [
   path.join(profileDir(), PROVIDER_MODEL_CACHE_FILENAME),
   path.join(profileDir(), IMAGE_GENERATION_SETTINGS_FILE),
 ]);
-const runtimeModels = createBotRuntimeModels();
+// A Bot's replies and routines wait out provider usage limits like a chat's.
+const runtimeModels = createBotRuntimeModels({
+  usageLimits: (botId, runtime) =>
+    runtime.provider && isAcpHarnessProvider(runtime.provider.id)
+      ? undefined
+      : usageLimits.streamOptions({ kind: "bot", id: botId }, runtime.provider?.label ?? runtime.model.provider),
+});
 const dismissals = createBotConnectionDismissalStore({ root: profileDir });
 // The pause store is shared with the legacy chat path (`bot-pause-main.ts`).
 export { isBotPaused };
@@ -157,6 +171,31 @@ export async function probeBotAdmission(botId: string): Promise<{ providerId: st
     providerId: admission.authority.provider.sourceProviderId,
     modelId: admission.authority.provider.sourceModelId,
   }));
+}
+
+/**
+ * Shell access for one host process started outside a turn (a watch script):
+ * admitted and revalidated right before it starts. `signal` aborts when the
+ * Bot's access changes; the caller releases the grant when the process ends.
+ */
+export async function admitBotShellWork(botId: string): Promise<{ signal: AbortSignal; release(): void } | { error: string }> {
+  let admission: BotRuntimeAuthorityAdmission;
+  try {
+    admission = await admit(botId);
+  } catch {
+    return { error: "Aiden couldn't confirm this Bot's access." };
+  }
+  try {
+    if (!admission.authority.shell.enabled) {
+      admission.release();
+      return { error: "Shell access is off for this Bot, so its scripts can't run." };
+    }
+    await admission.revalidateBeforeEffect();
+  } catch {
+    admission.release();
+    return { error: "Aiden couldn't confirm this Bot's access." };
+  }
+  return { signal: admission.signal, release: () => admission.release() };
 }
 
 /** Admit the Bot's current authority for one step and release it right away. */
@@ -231,7 +270,8 @@ export async function admitMemoryWork(botId: string): Promise<BotMemoryAdmission
     const { sourceProviderId, sourceModelId } = admission.authority.provider;
     const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
     runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
-    const models = runtimeModels.modelsFor(botId);
+    // Memory tidy-up is a background chore: at a usage limit it fails and runs another time.
+    const models = runtimeModels.backgroundModelsFor(botId);
     const model = models.getModel(runtime.model.provider, runtime.model.id);
     if (model === undefined) {
       admission.release();
@@ -273,6 +313,46 @@ const compactionSteering = createBotCompactionSteering({
   admit: admitMemoryWork,
   onError: (botId, error) => logger.warn("bots", `Bot ${botId} compaction memory step failed.`, error),
 });
+
+// Spending. Each Bot's responses count toward its month, and a routine run's
+// toward that run too. A request after a limit is crossed stops the run; the
+// stop's reason is kept for the routine that ran it.
+const spendRuntimes = new Map<string, { local: boolean; provider: { id: string }; models: Pick<Models, "checkAuth"> }>();
+const spendingStops = new Map<string, string>();
+const SPENDING_STOPS_KEPT = 200;
+
+function botSpendingOwner(botId: string, requestIds: readonly (string | undefined)[]): SpendingOwner {
+  const run = requestIds.find((id) => botRoutineTaskIdOf(id) !== undefined);
+  return { kind: "bot", id: botId, ...(run === undefined ? {} : { run }) };
+}
+
+const botSpending: NonNullable<BotExtensionDeps["spending"]> = {
+  async refusal(botId, requestIds) {
+    const refusal = await spending.refusal(botSpendingOwner(botId, requestIds), (await botStore.get(botId))?.name);
+    if (refusal !== undefined) {
+      for (const id of requestIds) {
+        if (id === undefined) continue;
+        spendingStops.delete(id);
+        spendingStops.set(id, refusal);
+      }
+      while (spendingStops.size > SPENDING_STOPS_KEPT) spendingStops.delete(spendingStops.keys().next().value!);
+    }
+    return refusal;
+  },
+  async record(botId, requestIds, message) {
+    const cost = responseCostUsd(message);
+    const runtime = spendRuntimes.get(botId);
+    if (cost <= 0 || runtime === undefined) return;
+    await spendCounts(runtime)
+      .then((counts) => (counts ? spending.record(botSpendingOwner(botId, requestIds), cost) : undefined))
+      .catch((error: unknown) => logger.warn("bots", `Bot ${botId} spending could not be counted.`, error));
+  },
+};
+
+/** Why a spending limit stopped the run serving `requestId`, for its routine. */
+export function botSpendingStop(requestId: string): string | undefined {
+  return spendingStops.get(requestId);
+}
 
 const extension: BotExtensionDeps = {
   loadBot,
@@ -352,6 +432,7 @@ const extension: BotExtensionDeps = {
     }
   },
   imageInput,
+  spending: botSpending,
 };
 
 /**
@@ -371,6 +452,7 @@ async function resolveModel(botId: string): Promise<ModelRef | null> {
       const { sourceProviderId, sourceModelId } = admission.authority.provider;
       const runtime = await resolveBotModelRuntime(sourceProviderId, sourceModelId, undefined, botId);
       runtimeModels.register(botId, runtime as unknown as BotModelRuntime);
+      spendRuntimes.set(botId, { local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models });
       return runtime;
     });
     const ref = { provider: resolved.model.provider, modelId: resolved.model.id };
@@ -609,6 +691,8 @@ const runWatchdog = createBotRunWatchdog({
     botHandoffs.pending(botId).length > 0 ||
     botApprovals.pending(botId).length > 0 ||
     botQuestions.pending(botId).length > 0,
+  // Held back only: a test request already sent can still hang, and the watchdog catches it.
+  isWaitingOnUsageLimit: (botId) => usageLimits.gate.isHeld({ kind: "bot", id: botId }),
   stopForStall: async (botId) => {
     botRunStalls.mark(botId);
     try {
@@ -708,6 +792,7 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
     onSessionOpen: (botId) => memory.beginSession(botId),
     compactionInstructions: BOT_COMPACTION_FOCUS,
     pauses: botPauses,
+    spendingRefusal: async (botId) => spending.refusal({ kind: "bot", id: botId }, (await botStore.get(botId))?.name),
     // No memory review runs or writes its marker while the Bot is paused.
     onPaused: (botId) => memoryReview.cancel(botId),
     afterPaused: afterBotPaused,
@@ -725,6 +810,8 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
       async (botId) => {
         runtimeModels.forget(botId);
         resolvedModels.delete(botId);
+        spendRuntimes.delete(botId);
+        await spending.forgetBot(botId);
       },
       deleteRoutines,
       forgetDeliveries,

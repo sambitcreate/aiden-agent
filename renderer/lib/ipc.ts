@@ -2,6 +2,19 @@ import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from 
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import {
+  parseUsageLimitWaits,
+  USAGE_LIMITS_CHANGED_CHANNEL,
+  type UsageLimitWaitView,
+  type UsageLimitsChangedEvent,
+} from "../shared/usage-limits";
+import {
+  parseSpendingLimitUsd,
+  parseSpendingStatusView,
+  SPENDING_CHANGED_CHANNEL,
+  type SpendingChangedEvent,
+  type SpendingStatusView,
+} from "../shared/spending";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -547,6 +560,42 @@ export const modelPaceApi = {
   clear: () => invoke<void>("modelPace:clear"),
 };
 
+/** Replies waiting for a provider usage limit to clear, on this Mac. */
+export const usageLimitsApi = {
+  list: async () => parseUsageLimitWaits(await invoke<unknown>("usageLimits:list")),
+  /** Send the waiting reply's test request now; false when it was tried in the last 30 seconds. */
+  retryNow: (ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string) =>
+    invoke<boolean>("usageLimits:retryNow", ownerKind, ownerId),
+  onChanged: (handler: (waits: UsageLimitWaitView[]) => void) =>
+    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) => handler(parseUsageLimitWaits(event?.waits))),
+};
+
+export type BotSpendingLimitChoice = { kind: "default" } | { kind: "none" } | { kind: "amount"; usd: number };
+
+function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
+  const choice = value as { kind?: unknown; usd?: unknown } | null;
+  if (choice?.kind === "none") return { kind: "none" };
+  const usd = choice?.kind === "amount" ? parseSpendingLimitUsd(choice.usd) : undefined;
+  return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
+}
+
+export const spendingApi = {
+  status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
+  /** Raise the chat's limit, or the Bot's month, by the limit once more. */
+  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
+  /** "default" follows Settings, null is no limit, a number is the Bot's own. */
+  setBotLimit: async (botId: string, choice: "default" | null | number) =>
+    parseBotSpendingLimitChoice(await invoke<unknown>("spending:setBotLimit", botId, choice)),
+  /** `ownerId` "*" means every chat or every Bot (the limits in Settings changed). */
+  onChanged: (handler: (event: SpendingChangedEvent) => void) =>
+    onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
+      if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
+};
+
 export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
@@ -1027,6 +1076,10 @@ export const browserApi = {
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
   openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+  /** A video the agent recorded, by the id its chat step names; null once it is gone. */
+  recording: (recordingId: string) =>
+    invoke<{ mimeType: string; data: Uint8Array } | null>("browser:recording", recordingId),
+  revealRecording: (recordingId: string) => invoke<void>("browser:reveal-recording", recordingId),
 };
 
 async function botComputersStatus(channel: string): Promise<BotComputersStatus> {
@@ -1753,11 +1806,16 @@ export const botsApi = {
     list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
     create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
-    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string }) =>
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
     remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+    /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
   },
   /** What a Bot learned: the page's overview, Undo, and lesson answers. */
   learning: {

@@ -32,6 +32,25 @@ function page(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Fixture</title><style>html,body{margin:0;background:#fff}</style></head><body>${body}</body></html>`;
 }
 
+/**
+ * The secrets found in what a snapshot shows: its strings, without Chromium's
+ * node ids and the element refs. Those are counters, so a short code such as a
+ * card's "737" can turn up in one by chance (node 4737).
+ */
+const NODE_ID_KEYS = new Set(["nodeId", "parentId", "childIds", "ref"]);
+function leakedIn(secrets: readonly string[], ...parts: unknown[]): string[] {
+  const strings = (value: unknown): string[] =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.flatMap(strings)
+        : value && typeof value === "object"
+          ? Object.entries(value).flatMap(([key, item]) => (NODE_ID_KEYS.has(key) ? [] : strings(item)))
+          : [];
+  const shown = strings(parts);
+  return secrets.filter((secret) => shown.some((text) => text.includes(secret)));
+}
+
 function serve(request: IncomingMessage, response: ServerResponse): void {
   const url = new URL(request.url ?? "/", "http://fixture");
   const html = (body: string, headers: Record<string, string> = {}) => {
@@ -178,14 +197,13 @@ void app.whenReady().then(async () => {
       // BGRA
       return [bitmap[offset + 2], bitmap[offset + 1], bitmap[offset]];
     };
-    const serialized = JSON.stringify(login);
     return {
       note: login.imageNote,
       password: pixel(140, 42),
       otp: pixel(140, 122),
       card: pixel(140, 202),
       control: pixel(140, 322),
-      leaked: ["hunter2-secret", "481516", "4242424242424242"].filter((secret) => serialized.includes(secret)),
+      leaked: leakedIn(["hunter2-secret", "481516", "4242424242424242"], login),
     };
   };
   step("2 masking");
@@ -242,8 +260,7 @@ void app.whenReady().then(async () => {
   };
   const table = await snapshot(botTab);
   const tableSeen = {
-    leaked: ["hunter2xyz", "550071", "4000123412341234", "5555444433332222", "737"].filter((secret) =>
-      JSON.stringify([table.text, table.elements, table.accessibilityTree]).includes(secret)),
+    leaked: leakedIn(["hunter2xyz", "550071", "4000123412341234", "5555444433332222", "737"], table.text, table.elements, table.accessibilityTree),
     // Each element's locator still finds it for the Bot.
     found: await Promise.all(table.elements.map((element) => outcome(agent({ action: "wait", tabId: botTab, locator: element.selector, timeoutMs: 300 })))),
     // The name the Bot's rules see for a click on the checkbox, and on Pay.

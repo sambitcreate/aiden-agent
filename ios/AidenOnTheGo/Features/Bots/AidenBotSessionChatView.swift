@@ -41,6 +41,7 @@ struct AidenBotSessionChatView: View {
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var spending = AidenSpendingNoticeModel()
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -55,6 +56,21 @@ struct AidenBotSessionChatView: View {
 
     private var canWrite: Bool {
         coordinator.connectionState == .connected && canCompose
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    private var spendingRefreshKey: String {
+        [
+            coordinator.activeInstanceId ?? "",
+            String(coordinator.server?.supportsSpendingLimits == true),
+            String(model?.isRunning == true),
+            String(model?.entries.count ?? 0),
+            model?.errorMessage ?? "",
+        ].joined(separator: "|")
     }
 
     /// Messages are taken while the Mac is still connecting: they wait in the
@@ -185,6 +201,10 @@ struct AidenBotSessionChatView: View {
         }
         .task(id: filesLookupKey) {
             await loadFilesTools()
+        }
+        // Revision 47: re-read the Bot's month after each reply, send and refusal.
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: .bot(botID), transport: spendingTransport)
         }
         // Chat activity is changed in Advanced; reread the Bot when it closes.
         .onChange(of: isShowingAdvanced) { _, showing in
@@ -536,6 +556,15 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .sharedImage(image):
+            // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+            AidenMessageImageAttachmentsView(
+                attachments: [image.attachment],
+                edge: .leading,
+                loadData: { attachment in await model.sharedImageData(entryId: attachment.id) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 48)
         }
     }
 
@@ -710,6 +739,16 @@ struct AidenBotSessionChatView: View {
                     onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
                 )
                 .id(handoff.waitId)
+            }
+            if let current = spending.spending, !model.needsModel, !model.isPaused {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: bot?.name,
+                    isAllowing: spending.isAllowing,
+                    canAllow: canWrite,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
             }
             if model.needsModel {
                 AidenBotNeedsModelCard(

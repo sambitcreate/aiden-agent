@@ -7,6 +7,7 @@ import { TooltipProvider } from "./ui";
 import type { ApprovalPrompt } from "../lib/ipc";
 import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
 import { toolApprovalPreview } from "../shared/tool-approval-preview";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import { subagentOutboundApprovalSummaryV2 } from "../../main/services/subagents/outbound-approval-v2.js";
 
 afterEach(cleanup);
@@ -351,4 +352,121 @@ test("an automation change keeps its own question and the same review", () => {
   const { taskId: _taskId, enabled: _enabled, ...proposal } = automation;
   mountSchedule({ ...proposal, action: "create" });
   assert.ok(screen.getByRole("region", { name: "Save this scheduled task?" }));
+});
+
+function mountWithComposer(
+  pending: Partial<ApprovalPrompt> & Pick<ApprovalPrompt, "toolName" | "summary">,
+  { keyboardShortcuts = true, deciding = false }: { keyboardShortcuts?: boolean; deciding?: boolean } = {},
+) {
+  const decisions: Array<[string, ChatApprovalDecisionOptions | undefined]> = [];
+  render(
+    <TooltipProvider>
+      <ChatApprovalCard
+        pending={{ approvalId: "approval-1", toolCallId: "call-1", ...pending }}
+        deciding={deciding}
+        onDecide={(decision, options) => decisions.push([decision, options])}
+        keyboardShortcuts={keyboardShortcuts}
+      />
+      <textarea aria-label="Message" data-message-draft="" />
+    </TooltipProvider>,
+  );
+  const composer = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  composer.focus();
+  return { composer, decisions };
+}
+
+// The primary modifier the card listens for on this test's platform: ⌘ on a Mac, Ctrl elsewhere.
+function primaryKey(key: "Enter" | "Backspace") {
+  const mac = detectedKeyboardPlatform() === "darwin";
+  return { key, metaKey: mac, ctrlKey: !mac };
+}
+
+test("⌘↩ allows once and ⌘⌫ denies while the message box is empty", () => {
+  const { composer, decisions } = mountWithComposer({ toolName: "bash", summary: "npm test" });
+  fireEvent.keyDown(composer, primaryKey("Enter"));
+  fireEvent.keyDown(composer, primaryKey("Backspace"));
+  assert.deepEqual(decisions, [
+    ["allow", undefined],
+    ["deny", undefined],
+  ]);
+  const allow = screen.getByRole("button", { name: /Allow once/ });
+  assert.match(allow.getAttribute("aria-keyshortcuts") ?? "", /\+Enter$/);
+});
+
+test("approval keys leave the message box alone once something is typed", () => {
+  const { composer, decisions } = mountWithComposer({ toolName: "bash", summary: "npm test" });
+  fireEvent.change(composer, { target: { value: "wait, use pnpm" } });
+  const enter = fireEvent.keyDown(composer, primaryKey("Enter"));
+  const backspace = fireEvent.keyDown(composer, primaryKey("Backspace"));
+  assert.deepEqual(decisions, []);
+  assert.equal(enter && backspace, true, "the keys reach the message box untouched");
+
+  // The draft still counts once focus moves to the card's buttons.
+  const deny = screen.getByRole("button", { name: "Deny" });
+  deny.focus();
+  fireEvent.keyDown(deny, primaryKey("Enter"));
+  fireEvent.keyDown(deny, primaryKey("Backspace"));
+  assert.deepEqual(decisions, []);
+
+  // Spaces alone are still typing: ⌘⌫ there deletes to the line start.
+  fireEvent.change(composer, { target: { value: "  " } });
+  composer.focus();
+  fireEvent.keyDown(composer, primaryKey("Backspace"));
+  assert.deepEqual(decisions, []);
+
+  // So is an empty box with an attachment or skill staged, which the box marks.
+  fireEvent.change(composer, { target: { value: "" } });
+  composer.setAttribute("data-message-draft", "attached");
+  fireEvent.keyDown(composer, primaryKey("Enter"));
+  assert.deepEqual(decisions, []);
+});
+
+test("approval keys leave other text fields, the terminal and the file editor alone, even when empty", () => {
+  const { decisions } = mountWithComposer({ toolName: "bash", summary: "npm test" });
+  const surfaces = [
+    Object.assign(document.createElement("input"), { type: "search" }),
+    Object.assign(document.createElement("div"), { tabIndex: 0 }),
+    Object.assign(document.createElement("div"), { tabIndex: 0 }),
+  ];
+  surfaces[1]!.setAttribute("data-command-scope", "terminal");
+  surfaces[2]!.setAttribute("data-command-scope", "fileEditor");
+  for (const surface of surfaces) {
+    document.body.append(surface);
+    surface.focus();
+    fireEvent.keyDown(surface, primaryKey("Enter"));
+    fireEvent.keyDown(surface, primaryKey("Backspace"));
+    surface.remove();
+  }
+  assert.deepEqual(decisions, []);
+});
+
+test("approval keys stay off while a menu is open, without the modifier, or while deciding", () => {
+  const typing = mountWithComposer({ toolName: "bash", summary: "npm test" });
+  fireEvent.keyDown(typing.composer, { key: "Enter" });
+  fireEvent.keyDown(typing.composer, { ...primaryKey("Enter"), shiftKey: true });
+  const menu = document.createElement("div");
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("data-state", "open");
+  document.body.append(menu);
+  fireEvent.keyDown(typing.composer, primaryKey("Enter"));
+  menu.remove();
+  assert.deepEqual(typing.decisions, []);
+  cleanup();
+
+  const sending = mountWithComposer({ toolName: "bash", summary: "npm test" }, { deciding: true });
+  fireEvent.keyDown(sending.composer, primaryKey("Enter"));
+  assert.deepEqual(sending.decisions, []);
+});
+
+test("only a card that takes approval keys answers them, and one that can't allow only denies", () => {
+  const passive = mountWithComposer({ toolName: "bash", summary: "npm test" }, { keyboardShortcuts: false });
+  fireEvent.keyDown(passive.composer, primaryKey("Enter"));
+  fireEvent.keyDown(passive.composer, primaryKey("Backspace"));
+  assert.deepEqual(passive.decisions, []);
+  cleanup();
+
+  const denyOnly = mountWithComposer({ toolName: "bash", summary: "npm test", canAllow: false });
+  fireEvent.keyDown(denyOnly.composer, primaryKey("Enter"));
+  fireEvent.keyDown(denyOnly.composer, primaryKey("Backspace"));
+  assert.deepEqual(denyOnly.decisions, [["deny", undefined]]);
 });

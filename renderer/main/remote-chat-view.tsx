@@ -764,6 +764,7 @@ export function RemoteChatPane({
                     refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
                   }
                   pendingCount={approvals.length}
+                  keyboardShortcuts
                   computerUseHost="remote"
                 />
               ) : null}
