@@ -1,6 +1,6 @@
 # Bot wake sources
 
-Status: In progress (2026-10-28). Steps 1 and 2 built; step 3 in progress. Stacked PRs on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
+Status: Merged (2026-10-29), unreleased. Step 1 in [PR #635](https://github.com/sambitcreate/aiden-agent/pull/635), step 2 in [PR #636](https://github.com/sambitcreate/aiden-agent/pull/636), step 3 in [PR #634](https://github.com/sambitcreate/aiden-agent/pull/634), all on top of [PR #633](https://github.com/sambitcreate/aiden-agent/pull/633) (desktop Bot sends never say "Sending…").
 
 ## Why
 
@@ -37,7 +37,7 @@ Read from `NousResearch/hermes-agent` on 2026-10-28 (product reference, no copie
    - Fires go through the existing one-time routine claim, recovery and delivery funnel, so quiet hours, the daily limit, pause and `[SILENT]` apply.
    - The person sees each pending wake-up (with Cancel) in the chat and the Bot's routines, and can switch the tool off per Bot.
    - Implemented on `feature/bot-self-wake` (2026-10-28). The tool lives in `main/services/bot-wake-ups/`. A wake-up is a one-time Bot routine with a `wakeUp` marker, hidden once spent. The per-Bot switch (Advanced → Chat, default on) cancels pending wake-ups when turned off. No Remote revision: phones see a one-time routine named Wake-up.
-3. **Watch routines** (`feature/bot-watch-routines`).
+3. **Watch routines** ([PR #634](https://github.com/sambitcreate/aiden-agent/pull/634)).
    - A `watch` event trigger: a bounded HTTPS GET or a script in the Bot's folder, checked every N minutes (at least 5).
    - The output is hashed, and the Bot is woken only when it changes, with a bounded diff as the event payload. The first check records a baseline.
    - The hash is saved before the run. A failed check counts as a failure, never a change, and repeated failures raise a Bot issue and pause the watch.
