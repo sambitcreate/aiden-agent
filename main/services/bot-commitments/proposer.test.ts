@@ -137,3 +137,55 @@ test("a follow-up card nobody answered by its day is settled, freeing its slot",
   assert.deepEqual(dismissed, ["p-late"]);
   assert.equal((await h.store.list("bot-a"))[0]?.status, "expired");
 });
+
+function expiringHarness() {
+  const h = harness();
+  const dismissed: string[] = [];
+  const proposer = createBotCommitmentProposer({
+    commitments: h.store,
+    proposals: {
+      propose: async () => ({ ok: true, proposal: { proposalId: "p-first" } }),
+      pendingCount: async () => 0,
+      dismiss: async (_botId, proposalId) => void dismissed.push(proposalId),
+    },
+    pendingLimit: 2,
+    timeZone: () => "UTC",
+    now: () => h.clock.at,
+  });
+  return { ...h, proposer, dismissed };
+}
+
+test("a follow-up card revised to a later day expires on that day, not the original one", async () => {
+  const h = expiringHarness();
+  assert.ok((await h.store.add("bot-a", { text: "Invoice", dueDate: "2026-10-29" })).ok);
+  await h.proposer.pump("bot-a");
+  await h.proposer.onProposalRevised("bot-a", "p-first", {
+    proposalId: "p-later",
+    schedule: { kind: "once", date: "2026-11-10", time: "14:00" },
+  });
+  h.clock.at = Date.UTC(2026, 9, 30, 12);
+  await h.proposer.pump("bot-a");
+  assert.deepEqual(h.dismissed, [], "the revised card is still ahead");
+  assert.equal((await h.store.list("bot-a"))[0]?.status, "proposed");
+  h.clock.at = Date.UTC(2026, 10, 11, 12);
+  await h.proposer.pump("bot-a");
+  assert.deepEqual(h.dismissed, ["p-later"]);
+  assert.equal((await h.store.list("bot-a"))[0]?.status, "expired");
+});
+
+test("a follow-up card revised into a repeating schedule or a trigger never expires by date", async () => {
+  const h = expiringHarness();
+  assert.ok((await h.store.add("bot-a", { text: "Invoice", dueDate: "2026-10-29" })).ok);
+  assert.ok((await h.store.add("bot-a", { text: "Report", dueDate: "2026-10-29" })).ok);
+  await h.proposer.pump("bot-a");
+  const [invoice, report] = await h.store.list("bot-a");
+  await h.store.update("bot-a", report!.id, { proposalId: "p-second" });
+  await h.proposer.onProposalRevised("bot-a", "p-first", { proposalId: "p-daily", schedule: { kind: "daily", time: "09:00" } });
+  await h.proposer.onProposalRevised("bot-a", "p-second", { proposalId: "p-link" });
+  h.clock.at = Date.UTC(2026, 11, 1, 12);
+  await h.proposer.pump("bot-a");
+  assert.deepEqual(h.dismissed, []);
+  assert.deepEqual((await h.store.list("bot-a")).map((record) => record.status), ["proposed", "proposed"]);
+  await h.proposer.onProposalSettled("bot-a", "p-daily", "accepted");
+  assert.equal((await h.store.list("bot-a")).find((record) => record.id === invoice!.id)?.status, "accepted");
+});

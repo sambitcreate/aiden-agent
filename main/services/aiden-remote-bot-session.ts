@@ -61,6 +61,7 @@ import type { Attachment } from "./types.js";
 import type { BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import {
   BOT_DAILY_CHECKIN_SUGGESTION,
+  botRoutineProposalWhen,
   type BotRoutineProposalRespondInput,
   type BotRoutineProposalRespondResult,
 } from "../../renderer/shared/bot-routine-proposals.js";
@@ -502,6 +503,8 @@ export function projectBotSessionEntries(
         break;
       }
       case "routine_proposal": {
+        // A card the Bot revised is replaced by the next one; phones show only that.
+        if (entry.supersededBy !== undefined) break;
         const createdAt = isoOf(entry.at);
         const { proposal } = entry;
         output.push({
@@ -510,7 +513,8 @@ export function projectBotSessionEntries(
           proposalId: proposal.proposalId,
           name: wireText(proposal.name, 120).trim() || "Routine",
           prompt: bounded(proposal.prompt).trim() || proposal.name,
-          label: wireText(proposal.label, 120).trim() || "On a schedule",
+          // The card's own "when": a schedule with its timezone, or what starts it.
+          label: wireText(botRoutineProposalWhen(proposal), 120).trim() || (proposal.trigger ? "When something happens" : "On a schedule"),
           status: entry.status,
           ...(entry.status === "accepted" && entry.routineId ? { routineId: wireText(entry.routineId, 160) } : {}),
           ...(createdAt ? { createdAt } : {}),

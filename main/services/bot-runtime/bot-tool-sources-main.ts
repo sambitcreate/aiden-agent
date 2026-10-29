@@ -54,6 +54,7 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  eventRoutinesToolSource,
   routinesCandidate,
   proposeSkillCandidate,
   routineTaskIdOfCall,
@@ -145,14 +146,24 @@ export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefine
 // load while the Bot runtime module graph is still initializing.
 const routineServices = () => import("../scheduled-bot-routines-main.js");
 const proposalServices = () => import("../bot-routine-proposals-main.js");
+const eventRoutineServices = () => import("../bot-routine-events/sources-main.js");
 
 const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
   list: async (botId) => (await routineServices()).botRoutineService.list(botId),
   pause: async (botId, routineId) => (await routineServices()).botRoutineService.pause(botId, routineId),
-  propose: async (botId, input, append) => {
-    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
+  propose: async (botId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append, entries);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
+  revise: async (botId, proposalId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.revise(botId, proposalId, input, append, entries);
+    return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+  },
+  pending: async (botId) => (await proposalServices()).botRoutineProposals.pending(botId),
+  eventRoutines: eventRoutinesToolSource(async () => {
+    const services = await eventRoutineServices();
+    return { store: services.botEventRoutines, changed: services.botEventRoutinesChanged };
+  }),
   recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
