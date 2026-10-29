@@ -38,6 +38,7 @@ import {
   disposeFoundationModelsConnection,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -331,6 +332,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();

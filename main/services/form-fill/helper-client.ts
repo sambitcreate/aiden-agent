@@ -143,6 +143,14 @@ export class FormFillHelperClient {
     });
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => this.onStdout(chunk));
+    // A write racing the helper's death fails with EPIPE on stdin; without a
+    // listener that error is thrown out of the main process. The listener
+    // stays after teardown so a late error from this child is still absorbed,
+    // and only poisons the client while this child is the current one.
+    child.stdin?.on("error", () => {
+      if (this.process === child)
+        this.failTransport("The form-fill helper closed its input.");
+    });
     child.on("error", () =>
       this.failTransport("The form-fill helper could not start."),
     );
@@ -195,6 +203,13 @@ export class FormFillHelperClient {
       result?: unknown;
       error?: { code?: unknown; message?: unknown };
     };
+    if (response.id === "") {
+      // The helper could not read a request well enough to answer it by id
+      // (malformed or oversized line). Its caller would otherwise wait out
+      // the full timeout, so fail everything in flight now.
+      this.failTransport("The form-fill helper rejected a request it could not read.");
+      return;
+    }
     const pending = this.pending.get(response.id);
     if (!pending) return; // stale/unknown id — ignore, do not poison
     this.pending.delete(response.id);
