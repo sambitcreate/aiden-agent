@@ -519,10 +519,29 @@ test("foreground serve drains and removes its socket when its terminal hangs up"
     while (!/listening at (.+)\n/u.test(stderr) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
     const socket = /listening at (.+)\n/u.exec(stderr)?.[1];
     assert.ok(socket && existsSync(socket), stderr);
+    // A foreground serve shares its shell job's process group, so it never claims one to force-kill.
+    assert.equal(JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8")).detached, undefined);
     child.kill("SIGHUP");
     assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
     assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
   } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a background daemon records that it leads its own process group and stops on request", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
+  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" } };
+  try {
+    const started = runCli(["serve", "--daemon"], options);
+    assert.equal(started.status, 0, started.stderr);
+    const owner = JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8"));
+    assert.equal(owner.detached, true);
+    const stopped = runCli(["serve", "stop"], options);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(existsSync(path.join(agentDir, "serve.lock")), false);
+  } finally {
+    runCli(["serve", "stop"], options);
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("a malformed or unreadable native mcp.json never blocks the CLI", () => {

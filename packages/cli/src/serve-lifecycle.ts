@@ -29,6 +29,19 @@ interface ServeOwner {
   argv?: unknown;
   startedAt?: number;
   token?: string;
+  /** Set only by a daemon that startDaemon spawned in its own process group. */
+  detached?: unknown;
+}
+
+/** Tells a `serve` child that startDaemon spawned it detached. */
+export const DETACHED_SERVE_ENV = "AIDEN_SERVE_DETACHED";
+
+function processGroupId(pid: number): number | undefined {
+  try {
+    const out = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" });
+    const pgid = out.status === 0 ? Number(out.stdout.trim()) : NaN;
+    return Number.isSafeInteger(pgid) && pgid > 0 ? pgid : undefined;
+  } catch { return undefined; }
 }
 
 function serveOwner(agentDir: string): ServeOwner | undefined {
@@ -250,7 +263,7 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
         resolve(entry),
         "serve",
         ...(options.remote ? ["--remote"] : []),
-      ], { detached: true, stdio: ["ignore", logFd, logFd] });
+      ], { detached: true, stdio: ["ignore", logFd, logFd], env: { ...process.env, [DETACHED_SERVE_ENV]: "1" } });
     } catch (error) {
       closeSync(logFd);
       throw error;
@@ -287,7 +300,8 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
 /**
  * SIGTERM the daemon recorded in the serve lease and wait for it to release.
  * Graceful shutdown cancels every turn first, so a daemon still running after
- * the wait is stuck: it and its process group are then SIGKILLed.
+ * the wait is stuck: it is then SIGKILLed, with its process group when
+ * startDaemon spawned it detached.
  */
 export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number; forced?: true }> {
   recoverStaleServeLease(agentDir);
@@ -342,7 +356,10 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
   if (pidAlive(pid) && classifyPid(pid, owner) === "daemon") {
     // A background daemon leads its own process group; killing the group also
     // takes its stdio MCP servers and Remote advertiser instead of orphaning them.
-    try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+    // A foreground serve shares its group with the shell job (`aiden serve | tee`),
+    // so only the serve process itself is killed.
+    const ownGroup = owner.detached === true && processGroupId(pid) === pid;
+    try { process.kill(ownGroup ? -pid : pid, "SIGKILL"); } catch { /* already gone */ }
     const killDeadline = Date.now() + 5_000;
     while (pidAlive(pid) && Date.now() < killDeadline) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
