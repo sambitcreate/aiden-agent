@@ -138,6 +138,15 @@ export async function forgetBotEventRoutines(botId: string): Promise<void> {
   for (const routine of await botEventRoutines.list(botId)) await forgetBotEventRoutine(botId, routine.id);
 }
 
+/**
+ * Event runs in flight. Stopping event routines (quit, or Bots closing)
+ * cancels them; a cancelled event run is recorded as uncertain, so the event
+ * is replayed on the next start instead of being lost.
+ */
+const inFlight = new Set<AbortController>();
+/** Event routines whose own run is in progress; their folder changes are the Bot's own writes. */
+const runningRoutines = new Set<string>();
+
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
   run: async (routine, event) => {
@@ -145,11 +154,20 @@ const dispatcher = createBotRoutineEventDispatcher({
     // The event's own request id as the run id: a replay after a restart
     // reads the recorded run or the admitted turn instead of sending again.
     const requestId = botRoutineRequestId(routine.id, trigger);
-    const run = await executor.run(eventRoutineTask(routine), {
-      trigger,
-      runId: requestId,
-      signal: new AbortController().signal,
-    });
+    const controller = new AbortController();
+    inFlight.add(controller);
+    runningRoutines.add(routine.id);
+    let run: ScheduledRun;
+    try {
+      run = await executor.run(eventRoutineTask(routine), {
+        trigger,
+        runId: requestId,
+        signal: controller.signal,
+      });
+    } finally {
+      inFlight.delete(controller);
+      runningRoutines.delete(routine.id);
+    }
     // Only a run recorded under the event's own id, and handed to the
     // delivery log, is settled; anything else is replayed on next start
     // (the replay reads the saved run and only retries its delivery).
@@ -184,6 +202,7 @@ const folders = createBotFolderWatches({
     return { close: () => handle.close() };
   },
   dispatcher,
+  ownRun: (routine) => runningRoutines.has(routine.id),
   refused: (routine) => {
     if (refusedOnce.has(routine.id)) return;
     refusedOnce.add(routine.id);
@@ -192,7 +211,7 @@ const folders = createBotFolderWatches({
       kind: "routine_failed",
       dedupeKey: `event_folder:${routine.id}`,
       title: `${routine.name} can't watch its folder`,
-      body: "Its folder is missing or outside the Bot's folder. Edit the routine to pick another one.",
+      body: "Its folder is missing, outside the Bot's folder, or can't be watched. Edit the routine to pick another one.",
       routineId: routine.id,
       actions: [],
     })).catch((error: unknown) => logger.warn("bots", "Could not report a Bot folder problem.", error));
@@ -285,6 +304,8 @@ export function stopBotEventRoutines(): void {
   folders.dispose();
   watches.dispose();
   dispatcher.dispose();
+  for (const controller of inFlight) controller.abort();
+  inFlight.clear();
 }
 
 /** `POST /hooks/bot-routines/{token}`; only while Bots are open. */

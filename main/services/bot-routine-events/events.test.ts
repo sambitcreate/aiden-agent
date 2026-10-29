@@ -185,7 +185,17 @@ test("the 25th event of the day is refused, and a disabled routine refuses event
   assert.equal(await h.dispatcher.emit("bot-a", routine.id, { eventId: "e26", payload: "x" }), "disabled");
 });
 
-function folderHarness(routines: BotEventRoutine[], options: { home: string; resolve?: Record<string, string>; missing?: Set<string> }) {
+function folderHarness(routines: BotEventRoutine[], options: {
+  home: string;
+  resolve?: Record<string, string>;
+  missing?: Set<string>;
+  /** Folders whose watch throws when opened (deleted in between, or EMFILE). */
+  unwatchable?: Set<string>;
+  /** Routines whose own run is in progress. */
+  running?: Set<string>;
+  /** Holds `routines()` open until released, to land a dispose mid-rearm. */
+  gate?: Promise<void>;
+}) {
   const listeners = new Map<string, (file: string | null) => void>();
   const errors = new Map<string, () => void>();
   const emitted: Array<{ routineId: string; eventId: string; payload: string }> = [];
@@ -193,14 +203,19 @@ function folderHarness(routines: BotEventRoutine[], options: { home: string; res
   const accepted: string[] = [];
   const timers: Array<() => void> = [];
   const watches = createBotFolderWatches({
-    routines: async () => routines,
+    routines: async () => {
+      await options.gate;
+      return routines;
+    },
     homePath: async () => options.home,
     watch: (folder, listener, onError) => {
+      if (options.unwatchable?.has(folder)) throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
       listeners.set(folder, listener);
       errors.set(folder, onError);
       return { close: () => listeners.delete(folder) };
     },
     dispatcher: { emit: async (_botId, routineId, event) => { emitted.push({ routineId, ...event }); return "queued"; } },
+    ownRun: (routine) => options.running?.has(routine.id) === true,
     refused: (routine) => refused.push(routine.id),
     accepted: (routine) => accepted.push(routine.id),
     now: () => 1,
@@ -256,6 +271,45 @@ test("a folder that was missing is reported, then cleared once it exists and is 
   assert.deepEqual(h.accepted, ["r1"]);
   await h.watches.rearm();
   assert.deepEqual(h.accepted, ["r1"], "an existing watch doesn't report again");
+});
+
+test("a folder whose watch can't be opened is reported, and the routines after it still get watches", async () => {
+  const h = folderHarness([routineOf("gone", "Gone"), routineOf("inbox", "Inbox")], {
+    home: "/home/bot",
+    unwatchable: new Set([path.join("/home/bot", "Gone")]),
+  });
+  await h.watches.rearm();
+  assert.deepEqual(h.refused, ["gone"]);
+  assert.deepEqual(h.accepted, ["inbox"]);
+  h.listeners.get(path.join("/home/bot", "Inbox"))!("new.txt");
+  h.fireTimers();
+  assert.equal(h.emitted.length, 1);
+});
+
+test("a routine's own run writing into its watched folder does not fire it again", async () => {
+  const running = new Set(["r1"]);
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", running });
+  await h.watches.rearm();
+  const listener = h.listeners.get(path.join("/home/bot", "Inbox"))!;
+  listener("summary.md");
+  h.fireTimers();
+  assert.equal(h.emitted.length, 0, "the Bot's own report is not a new event");
+
+  running.clear();
+  listener("dropped-in.pdf");
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["dropped-in.pdf"]);
+});
+
+test("a rearm still loading when event routines stop leaves no watch open", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", gate });
+  const rearm = h.watches.rearm();
+  h.watches.dispose();
+  release();
+  await rearm;
+  assert.equal(h.listeners.size, 0);
 });
 
 test("webhooks: a valid token queues, repeats in a minute dedupe and always answer 202; bad requests are refused", async () => {

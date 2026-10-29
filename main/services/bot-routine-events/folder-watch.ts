@@ -1,6 +1,8 @@
 // File-change triggers: one recursive watch per enabled routine, on a folder
 // inside its Bot's home. Changes are coalesced for 30 seconds into one event
-// listing up to 50 paths. The Bot's own `.aiden/` state never triggers it.
+// listing up to 50 paths. The Bot's own `.aiden/` state never triggers it, and
+// neither do changes made while the routine's own run is in progress (a Bot
+// writing a summary into the folder it watches would otherwise fire itself).
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -17,7 +19,9 @@ export interface BotFolderWatchDependencies {
   /** `onError`: the watch died (folder deleted or replaced); it is re-armed on the next rearm. */
   watch(folder: string, listener: (file: string | null) => void, onError: () => void): { close(): void };
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
-  /** A routine whose folder is outside the Bot's home: tell the person once. */
+  /** True while this routine's own run is in progress: its writes must not fire it again. */
+  ownRun?(routine: BotEventRoutine): boolean;
+  /** A routine whose folder is outside the Bot's home, or can't be watched: tell the person once. */
   refused(routine: BotEventRoutine): void;
   /** Its folder is watched now: a "can't watch" card for it is fixed. */
   accepted?(routine: BotEventRoutine): void;
@@ -54,6 +58,7 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
     const relative = file.replace(/\\/gu, "/");
     if (relative.split("/").includes(".aiden")) return;
     if (routine.trigger.kind !== "file_change") return;
+    if (dependencies.ownRun?.(routine)) return;
     if (!matchesTriggerPattern(path.posix.basename(relative), routine.trigger.pattern)) return;
     let window = windows.get(routine.id);
     if (!window) {
@@ -79,8 +84,10 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
   }
 
   let rearming: Promise<void> = Promise.resolve();
+  /** Bumped by dispose(): a rearm still awaiting must not reopen watches. */
+  let generation = 0;
 
-  async function rearmOnce(): Promise<void> {
+  async function rearmOnce(armedFor: number): Promise<void> {
       const wanted = new Map<string, BotEventRoutine>();
       for (const routine of await dependencies.routines()) {
         if (routine.enabled && routine.trigger.kind === "file_change") wanted.set(routine.id, routine);
@@ -95,16 +102,25 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
       for (const [id, routine] of wanted) {
         if (watches.has(id)) continue;
         const folder = await folderOf(routine).catch(() => undefined);
+        if (armedFor !== generation) return;
         if (!folder) {
           dependencies.refused(routine);
           continue;
         }
         const key = JSON.stringify(routine.trigger);
-        const handle = dependencies.watch(folder, (file) => noticed(routine, file), () => {
-          // A dead watch leaves the map, so the next rearm makes a fresh one.
-          if (watches.get(id)?.key === key) watches.delete(id);
-          handle.close();
-        });
+        let handle: { close(): void };
+        try {
+          handle = dependencies.watch(folder, (file) => noticed(routine, file), () => {
+            // A dead watch leaves the map, so the next rearm makes a fresh one.
+            if (watches.get(id)?.key === key) watches.delete(id);
+            handle.close();
+          });
+        } catch {
+          // Removed between the check and the watch, or out of watch handles:
+          // this routine is reported, and the others still get their watches.
+          dependencies.refused(routine);
+          continue;
+        }
         watches.set(id, { key, close: () => handle.close() });
         dependencies.accepted?.(routine);
       }
@@ -113,11 +129,13 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
   return {
     /** Serialized: overlapping rearms never open two watches for one routine. */
     rearm(): Promise<void> {
-      const next = rearming.catch(() => undefined).then(rearmOnce);
+      const armedFor = generation;
+      const next = rearming.catch(() => undefined).then(() => rearmOnce(armedFor));
       rearming = next;
       return next;
     },
     dispose(): void {
+      generation += 1;
       for (const watch of watches.values()) watch.close();
       watches.clear();
       for (const window of windows.values()) window.timer.cancel();
