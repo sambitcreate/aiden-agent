@@ -1161,7 +1161,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         chats: activeChats,
         workspaceOwners,
       }, deviceId);
-      // A relay admitted between the first close and the revocation fence is closed here.
+      // A stream or relay admitted between the first close and the revocation
+      // fence is closed here.
+      activeReadAloud?.revokeDevice(deviceId);
+      activeProgress?.revokeDevice(deviceId);
       simulatorShareRelay.revokeDevice(deviceId);
       activeHostFeed?.revokeDevice(deviceId);
       activeHostRuns?.revokeDevice(deviceId);
