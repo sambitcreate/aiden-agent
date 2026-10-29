@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,7 +14,11 @@ import {
   normalizeInterruptedWaits,
   type InterruptedWaitDatabase,
 } from "./interrupted-reply.js";
-import { formatRecoveredAskUserQuestionAnswers, INTERRUPTED_WAIT_MAX_AGE_MS } from "../../renderer/shared/interrupted-reply.js";
+import {
+  formatRecoveredAskUserQuestionAnswers,
+  INTERRUPTED_WAIT_MAX_AGE_MS,
+  interruptedWaitSettled,
+} from "../../renderer/shared/interrupted-reply.js";
 
 function run(
   operationId: string,
@@ -147,29 +151,39 @@ test("a question asked during the interrupted run is offered after a relaunch, a
     await before.remember("other-chat", { kind: "approval", waitId: "a-1", askedAt: 5_000, summary: "Run npm test" });
 
     const after = open(() => 6_000);
-    assert.deepEqual(await after.forRun("chat", 4_000), { kind: "question", waitId: "q-1", askedAt: 5_000, questions });
-    assert.deepEqual(await after.forRun("other-chat", 4_000), {
-      kind: "approval",
-      waitId: "a-1",
-      askedAt: 5_000,
-      summary: "Run npm test",
-    });
+    assert.deepEqual(await after.forRun("chat", 4_000), [{ kind: "question", waitId: "q-1", askedAt: 5_000, questions }]);
+    assert.deepEqual(await after.forRun("other-chat", 4_000), [
+      { kind: "approval", waitId: "a-1", askedAt: 5_000, summary: "Run npm test" },
+    ]);
     // Asked during an earlier run, not the one that was cut short.
-    assert.equal(await after.forRun("chat", 5_001), undefined);
+    assert.deepEqual(await after.forRun("chat", 5_001), []);
 
+    // Dismissing needs the chat the card belongs to.
+    await after.forget("q-1", "other-chat");
+    assert.equal((await open(() => 6_000).forRun("chat", 4_000)).length, 1);
     // Answering it (or its card settling before the quit) removes it.
-    await after.forget("q-1");
-    assert.equal(await open(() => 6_000).forRun("chat", 4_000), undefined);
+    await after.forget("q-1", "chat");
+    assert.deepEqual(await open(() => 6_000).forRun("chat", 4_000), []);
+    // Deleting a chat removes what it was waiting on.
+    await after.forgetChat("other-chat");
+    assert.deepEqual(await open(() => 6_000).forRun("other-chat", 4_000), []);
   });
 });
 
-test("a newer card replaces the chat's earlier one, and a week-old one is no longer offered", async () => {
-  await withWaitFile(async (open) => {
+test("a reply waiting on an approval and a question keeps both, question first, and week-old ones leave the disk", async () => {
+  await withWaitFile(async (open, file) => {
     const store = open(() => 5_000);
+    await store.remember("chat", { kind: "approval", waitId: "a-1", askedAt: 4_900, summary: "Edit README.md" });
     await store.remember("chat", { kind: "question", waitId: "q-1", askedAt: 5_000, questions });
-    await store.remember("chat", { kind: "approval", waitId: "a-2", askedAt: 5_100, summary: "Edit README.md" });
-    assert.equal((await open(() => 5_200).forRun("chat", 0))?.waitId, "a-2");
-    assert.equal(await open(() => 5_100 + INTERRUPTED_WAIT_MAX_AGE_MS + 1).forRun("chat", 0), undefined);
+    assert.deepEqual((await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId), ["q-1", "a-1"]);
+    // Settling one leaves the other.
+    await store.forget("q-1", "chat");
+    assert.deepEqual((await open(() => 5_200).forRun("chat", 0)).map((wait) => wait.waitId), ["a-1"]);
+
+    const weekLater = open(() => 4_900 + INTERRUPTED_WAIT_MAX_AGE_MS + 1);
+    assert.deepEqual(await weekLater.forRun("chat", 0), []);
+    await weekLater.prune();
+    assert.doesNotMatch(await readFile(file, "utf8"), /README/u);
   });
 });
 
@@ -195,8 +209,17 @@ test("answers to a question from before a restart start a new turn that names ea
     formatRecoveredAskUserQuestionAnswers(questions, [
       { questionIndex: 1, kind: "multi", selected: ["Lint", "Tests"] },
     ]),
-    "Answering the question you asked before Aiden restarted:\n\nWhich checks should run?\nAnswer: Lint, Tests",
+    "Answering the question you asked before Aiden restarted:\n\n1. Which database should I use?\nAnswer: Skipped\n\n2. Which checks should run?\nAnswer: Lint, Tests",
   );
-  // Skipping everything sends nothing.
-  assert.equal(formatRecoveredAskUserQuestionAnswers(questions, []), undefined);
+});
+
+test("only a card withdrawn while Aiden quits is kept for the next launch", () => {
+  // The person answered, allowed, denied or closed it.
+  assert.equal(interruptedWaitSettled({ byPerson: true, quitting: true }), true);
+  // It expired: the agent already went on without an answer.
+  assert.equal(interruptedWaitSettled({ byPerson: false, timedOut: true, quitting: true }), true);
+  // Stop, a closed window or a reloaded renderer: the reply goes on (or ends) without it.
+  assert.equal(interruptedWaitSettled({ byPerson: false, quitting: false }), true);
+  // Quit: the reply is cut short while still waiting.
+  assert.equal(interruptedWaitSettled({ byPerson: false, quitting: true }), false);
 });

@@ -3181,45 +3181,44 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const replyInterrupted = transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
   // What the interrupted reply was waiting on. A question is offered again in
   // place of Resume; an approval is only named on the Resume card.
-  const interruptedWaitQuery = useQuery({
-    queryKey: ["chat-interrupted-wait", chatId, messages.length],
-    queryFn: () => chatsApi.interruptedWait(chatId),
+  const interruptedWaitsQuery = useQuery({
+    queryKey: ["chat-interrupted-waits", chatId, messages.length],
+    queryFn: () => chatsApi.interruptedWaits(chatId),
     enabled: replyInterruptedQuery.data === true,
     staleTime: Infinity,
     retry: false,
   });
   const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(() => new Set());
-  const interruptedWait =
-    replyInterrupted && interruptedWaitQuery.data && !dismissedWaitIds.has(interruptedWaitQuery.data.waitId)
-      ? interruptedWaitQuery.data
-      : undefined;
-  const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(
+  const interruptedWaits = React.useMemo(
     () =>
-      interruptedWait?.kind === "question" && !questionnaire
-        ? {
-            version: ASK_USER_QUESTION_VERSION,
-            promptId: interruptedWait.waitId,
-            streamId: "s-recovered",
-            toolCallId: "recovered",
-            questions: interruptedWait.questions,
-          }
-        : undefined,
-    [interruptedWait, questionnaire],
+      replyInterrupted ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId)) : [],
+    [dismissedWaitIds, interruptedWaitsQuery.data, replyInterrupted],
   );
+  const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(() => {
+    const wait = interruptedWaits.find((item) => item.kind === "question");
+    return wait?.kind === "question" && !questionnaire
+      ? {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: wait.waitId,
+          streamId: "s-recovered",
+          toolCallId: "recovered",
+          questions: wait.questions,
+        }
+      : undefined;
+  }, [interruptedWaits, questionnaire]);
   const [recoveredAnswerSending, setRecoveredAnswerSending] = React.useState(false);
   const answerRecoveredQuestion = React.useCallback(
     async (response: AskUserQuestionResponseV1) => {
       if (!recoveredQuestion || recoveredAnswerSending) return;
       const waitId = recoveredQuestion.promptId;
-      // Closing the card, or skipping every question, leaves the plain Resume card.
-      const text = response.cancelled
-        ? undefined
-        : formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers);
       setRecoveredAnswerSending(true);
       try {
-        if (text) await handleSend(text, []);
+        // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
+        if (!response.cancelled) {
+          await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
+        }
         setDismissedWaitIds((ids) => new Set(ids).add(waitId));
-        void chatsApi.dismissInterruptedWait(waitId).catch(() => undefined);
+        void chatsApi.dismissInterruptedWait(chatId, waitId).catch(() => undefined);
       } catch (answerError) {
         if (chatIdRef.current !== chatId) return;
         toast.error(userFacingErrorMessage(answerError, "Couldn’t send your answers."));
@@ -3229,17 +3228,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [chatId, handleSend, recoveredAnswerSending, recoveredQuestion],
   );
-  const interruptedReply = React.useMemo(
-    () =>
-      replyInterrupted && !recoveredQuestion
-        ? {
-            busy: resumeBusy,
-            onResume: () => void resumeInterruptedReply(),
-            ...(interruptedWait?.kind === "approval" ? { approvalSummary: interruptedWait.summary } : {}),
-          }
-        : undefined,
-    [interruptedWait, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply],
-  );
+  // Held until the saved waits are read, so Resume never shows in front of a question it would orphan.
+  const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;
+  const interruptedReply = React.useMemo(() => {
+    if (!replyInterrupted || !interruptedWaitsRead || recoveredQuestion) return undefined;
+    const approvalSummaries = interruptedWaits.flatMap((wait) => (wait.kind === "approval" ? [wait.summary] : []));
+    return {
+      busy: resumeBusy,
+      onResume: () => void resumeInterruptedReply(),
+      ...(approvalSummaries.length ? { approvalSummaries } : {}),
+    };
+  }, [interruptedWaits, interruptedWaitsRead, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply]);
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);

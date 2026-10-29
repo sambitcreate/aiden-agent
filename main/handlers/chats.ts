@@ -203,21 +203,24 @@ export function registerChatHistoryHandlers(): void {
     }
   });
 
-  // The question or approval the interrupted reply was waiting on, if any.
-  ipcMain.handle("chats:interruptedWait", async (_event, id: unknown) => {
+  // Saved waits too old to offer leave the disk at launch.
+  void interruptedWaits.prune().catch(() => undefined);
+
+  // The questions or approvals the interrupted reply was waiting on, questions first.
+  ipcMain.handle("chats:interruptedWaits", async (_event, id: unknown) => {
     const chatId = asString(id, "id");
     try {
       await piRuntimeEffectStore.initialize();
       const run = await latestInterruptedRun(piRuntimeEffectStore, chatId);
-      return (run && (await interruptedWaits.forRun(chatId, run.startedAt))) ?? null;
+      return run ? await interruptedWaits.forRun(chatId, run.startedAt) : [];
     } catch {
       // Unreadable history only leaves the plain Resume card.
-      return null;
+      return [];
     }
   });
 
-  ipcMain.handle("chats:dismissInterruptedWait", async (_event, waitId: unknown) => {
-    await interruptedWaits.forget(asString(waitId, "waitId"));
+  ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
+    await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"));
   });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {

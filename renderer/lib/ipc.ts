@@ -1578,9 +1578,9 @@ export const chatsApi = {
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
-  /** The question or approval the interrupted reply was waiting on, or null. */
-  interruptedWait: (id: string) => invoke<InterruptedWaitV1 | null>("chats:interruptedWait", id),
-  dismissInterruptedWait: (waitId: string) => invoke<void>("chats:dismissInterruptedWait", waitId),
+  /** The questions and approvals the interrupted reply was waiting on, questions first. */
+  interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
+  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

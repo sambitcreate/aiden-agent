@@ -315,6 +315,7 @@ import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
 import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
+import { interruptedWaitSettled } from "../../renderer/shared/interrupted-reply.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   parseSubagentModelSettings,
@@ -879,8 +880,11 @@ function endLoadMonitor(
 }
 
 // What a foreground reply is waiting on is saved so a restart can offer it
-// again. It is offered only when the chat's latest run was cut short by a quit
-// or crash, so a record left behind by Stop is never shown.
+// again. A crash never settles the card; a quit withdraws it while
+// `quitInProgress` is set, before any window closes, so it stays saved. Any
+// other settlement removes it. It is offered only when the chat's latest run
+// was cut short by that quit or crash.
+let quitInProgress = false;
 function rememberInterruptedWait(
   streamId: string,
   wait: Parameters<typeof interruptedWaits.remember>[1],
@@ -912,9 +916,11 @@ const approvals = new ToolApprovalCoordinator(
     });
   },
   (approvalId, outcome) => {
-    // Allowed or denied by the person. A card the host withdrew (Stop, a
-    // closed window, quit) keeps it; only an interrupted run offers it.
-    if (outcome === "allowed" || outcome === "denied") forgetInterruptedWait(approvalId);
+    if (
+      interruptedWaitSettled({ byPerson: outcome === "allowed" || outcome === "denied", quitting: quitInProgress })
+    ) {
+      forgetInterruptedWait(approvalId);
+    }
     chatActivityRegistry.resolveAttention(approvalId);
     recordRunAttentionResolved(hostRunRegistry, approvalId, {
       kind: "approval",
@@ -937,9 +943,11 @@ const questionnaires = new AskUserQuestionCoordinator(
     });
   },
   (promptId, response, settledBy) => {
-    // Answered or closed by the person, or expired. A card the host withdrew
-    // (Stop, a closed window, quit) keeps it; only an interrupted run offers it.
-    if (settledBy === "owner" || response.timedOut) forgetInterruptedWait(promptId);
+    if (
+      interruptedWaitSettled({ byPerson: settledBy === "owner", timedOut: response.timedOut, quitting: quitInProgress })
+    ) {
+      forgetInterruptedWait(promptId);
+    }
     chatActivityRegistry.resolveAttention(promptId);
     recordRunAttentionResolved(hostRunRegistry, promptId, {
       kind: "question",
@@ -2290,6 +2298,14 @@ async function acpScratchDir(chatId: string): Promise<string> {
 }
 
 export const llmClient = {
+  /**
+   * Aiden is about to quit (or the quit was called off): cards withdrawn from
+   * now on stay saved, so the next launch can offer them again.
+   */
+  setQuitInProgress(value: boolean): void {
+    quitInProgress = value;
+  },
+
   async start(
     streamId: string,
     params: ChatStartParams,

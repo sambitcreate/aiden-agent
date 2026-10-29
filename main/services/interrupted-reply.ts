@@ -33,7 +33,7 @@ export async function chatReplyInterrupted(store: OperationReader, chatId: strin
 }
 
 // What a reply was waiting on is saved when the card is shown and removed when
-// it settles, except while Aiden shuts down. A crash never settles it. On the
+// it settles, except when the host withdraws it while Aiden quits. A crash never settles it. On the
 // next launch it counts only if it was asked during the chat's interrupted run.
 
 export type InterruptedWaitRecord = InterruptedWaitV1 & { chatId: string };
@@ -43,8 +43,9 @@ export interface InterruptedWaitDatabase {
   waits: InterruptedWaitRecord[];
 }
 
-/** Waits kept across every chat; the oldest go first. */
+/** Waits kept across every chat, and per chat; the oldest go first. */
 const MAX_INTERRUPTED_WAITS = 100;
+const MAX_INTERRUPTED_WAITS_PER_CHAT = 10;
 
 export function emptyInterruptedWaits(): InterruptedWaitDatabase {
   return { version: 1, waits: [] };
@@ -103,28 +104,41 @@ export function createInterruptedWaitStore(
 ) {
   const fresh = (wait: InterruptedWaitRecord) => now() - wait.askedAt <= INTERRUPTED_WAIT_MAX_AGE_MS;
   return {
-    /** Save the card a chat's reply is waiting on, replacing that chat's earlier one. */
+    /** Save a card a chat's reply is waiting on; a reply can wait on a question and an approval at once. */
     remember(chatId: string, wait: InterruptedWaitV1): Promise<void> {
       const record = parseInterruptedWait({ ...wait, chatId });
       if (!record) return Promise.resolve();
       return persistence.update((draft) => {
-        draft.waits = [...draft.waits.filter((item) => item.chatId !== chatId && fresh(item)), record].slice(
-          -MAX_INTERRUPTED_WAITS,
-        );
+        const kept = draft.waits.filter((item) => item.waitId !== record.waitId && fresh(item));
+        const sameChat = kept.filter((item) => item.chatId === chatId);
+        const dropped = new Set(sameChat.slice(0, Math.max(0, sameChat.length - MAX_INTERRUPTED_WAITS_PER_CHAT + 1)));
+        draft.waits = [...kept.filter((item) => !dropped.has(item)), record].slice(-MAX_INTERRUPTED_WAITS);
       });
     },
     /** The card was answered, dismissed or withdrawn: nothing to offer again. */
-    forget(waitId: string): Promise<void> {
+    forget(waitId: string, chatId?: string): Promise<void> {
       return persistence.update((draft) => {
-        draft.waits = draft.waits.filter((item) => item.waitId !== waitId);
+        draft.waits = draft.waits.filter((item) => item.waitId !== waitId || (chatId !== undefined && item.chatId !== chatId));
       });
     },
-    /** The chat's saved wait, if it was asked during the run that was cut short. */
-    async forRun(chatId: string, runStartedAt: number): Promise<InterruptedWaitV1 | undefined> {
-      const wait = (await persistence.load()).waits.find((item) => item.chatId === chatId);
-      if (!wait || wait.askedAt < runStartedAt || !fresh(wait)) return undefined;
-      const { chatId: _chatId, ...view } = wait;
-      return view;
+    /** The chat was deleted. */
+    forgetChat(chatId: string): Promise<void> {
+      return persistence.update((draft) => {
+        draft.waits = draft.waits.filter((item) => item.chatId !== chatId);
+      });
+    },
+    /** Drop waits too old to offer, so their text does not stay on disk. */
+    prune(): Promise<void> {
+      return persistence.update((draft) => {
+        draft.waits = draft.waits.filter(fresh);
+      });
+    },
+    /** The chat's saved waits asked during the run that was cut short, questions first. */
+    async forRun(chatId: string, runStartedAt: number): Promise<InterruptedWaitV1[]> {
+      return (await persistence.load()).waits
+        .filter((item) => item.chatId === chatId && item.askedAt >= runStartedAt && fresh(item))
+        .sort((left, right) => (left.kind === right.kind ? left.askedAt - right.askedAt : left.kind === "question" ? -1 : 1))
+        .map(({ chatId: _chatId, ...view }) => view);
     },
   };
 }
