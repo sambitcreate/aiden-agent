@@ -204,3 +204,20 @@ test("studio commands never reserve a shortcut", () => {
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
 });
+
+test("a key that matches no binding never reads the page-dependent context", () => {
+  const bindings = effectiveBindings(undefined);
+  const reads: string[] = [];
+  const context = Object.defineProperties({ ...base }, Object.fromEntries(
+    (["editable", "fileEditor", "terminal", "modal"] as const).map((name) => [
+      name,
+      { get: () => (reads.push(name), false) },
+    ]),
+  )) as CommandDispatchContext;
+  const typed = { key: "a", code: "KeyA", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false };
+  assert.equal(resolveCommandForKeyEvent(typed, bindings, context), null);
+  assert.equal(reads.length, 0, reads.join(", "));
+  // A real shortcut still consults the context before it runs.
+  assert.notEqual(resolveCommandForKeyEvent(event("k", "KeyK"), bindings, context), null);
+  assert.ok(reads.includes("modal"));
+});
