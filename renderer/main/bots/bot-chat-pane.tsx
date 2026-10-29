@@ -71,6 +71,7 @@ import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
 import { useConnectionSetup } from "./use-connection-setup";
+import { useChatFind } from "../../components/chat-find-bar";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -953,6 +954,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [addingConnection, setAddingConnection] = React.useState(false);
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
+  const findBar = useChatFind(botId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   const back = () => void navigate({ to: "/bots" });
@@ -963,6 +965,8 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
+      focusRegion="chat"
+      overlay={findBar}
       scrollRestorationId={`bot-chat:${botId}`}
       className="h-full min-h-0"
       alignFooterToScrollContent

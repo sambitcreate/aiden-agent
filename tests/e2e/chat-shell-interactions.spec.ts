@@ -989,6 +989,54 @@ test("chats can be moved between, opened from their menu and deleted from the ke
   await expect(second).toBeVisible();
 });
 
+test("F6 moves between areas, arrows move through the chat list, and Command+F finds text in the chat", async ({ aiden }) => {
+  const { page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await seedPaletteChats(aiden);
+  const first = page.getByText("Opened palette-chat-first", { exact: true });
+  const second = page.getByText("Opened palette-chat-second", { exact: true });
+  // Chat keys work from the message box, where focus usually is.
+  await page.locator("textarea").focus();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+1`);
+  await expect(first).toBeVisible();
+
+  // ⇧F6 from the message box goes back to the conversation, then the sidebar's open chat.
+  const message = page.locator("textarea");
+  await message.focus();
+  await page.keyboard.press("Shift+F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await page.keyboard.press("Shift+F6");
+  const openRow = page.locator('aside button[aria-current="page"]', { hasText: "Repeated palette title" });
+  await expect(openRow).toBeFocused();
+
+  // The chat list is one Tab stop; ↓ moves to the next chat and ↩ opens it.
+  await page.keyboard.press("ArrowDown");
+  const nextRow = page.locator("aside button[data-roving-item]:focus", { hasText: "Repeated palette title" });
+  await expect(nextRow).toHaveCount(1);
+  await expect(nextRow).not.toHaveAttribute("aria-current", "page");
+  await page.keyboard.press("Enter");
+  await expect(second).toBeVisible();
+
+  // F6 from the sidebar reaches the conversation, and then the message box.
+  await openRow.focus();
+  await page.keyboard.press("F6");
+  await expect(page.getByRole("region", { name: "Conversation" })).toBeFocused();
+  await page.keyboard.press("F6");
+  await expect(message).toBeFocused();
+
+  // Command+F opens Find in chat; Esc closes it and the message box has focus again.
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+f`);
+  const find = page.getByRole("searchbox", { name: "Find in chat" });
+  await expect(find).toBeFocused();
+  await find.fill("palette-chat");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("1 of 1");
+  await find.fill("nothing like this");
+  await expect(page.getByRole("search", { name: "Find in chat" }).getByRole("status")).toHaveText("No matches");
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await expect(message).toBeFocused();
+});
+
 // Human-readable palette labels may legitimately collide. Keyboard selection
 // must target the underlying chat/model identity, not the label string.
 test("command palette selects each chat with identical labels independently", async ({ aiden }) => {

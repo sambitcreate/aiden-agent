@@ -250,6 +250,7 @@ import {
   isAcpHarnessProvider,
   type AcpHarnessBlockedSurface,
 } from "../shared/acp-harness";
+import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -701,6 +702,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const findBar = useChatFind(chatId);
   // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
   // the draft's composer for focus; it may mount a few frames after navigation.
   React.useEffect(() => {
@@ -3249,6 +3251,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
