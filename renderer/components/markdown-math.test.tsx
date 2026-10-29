@@ -5,8 +5,12 @@ import * as React from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import katex from "katex";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Markdown } from "./markdown.js";
-import { loadMarkdownMath, subscribeMarkdownMath } from "../lib/markdown-math.js";
+import { Markdown, MarkdownContent } from "./markdown.js";
+import {
+  loadMarkdownMath,
+  subscribeMarkdownMath,
+  TYPESET_FORMULA_CACHE_LIMIT,
+} from "../lib/markdown-math.js";
 
 const MATH = "Euler: $e^{i\\pi} + 1 = 0$ and\n\n$$\n\\int_0^1 x\\,dx\n$$";
 
@@ -79,6 +83,25 @@ test("a re-parsed reply typesets only the formulas it has not typeset before", a
     "reused formulas render exactly like freshly typeset ones",
   );
   assert.equal(typeset.mock.callCount(), 3);
+});
+
+test("a streaming formula that is still being written does not evict settled formulas", async (t) => {
+  assert.equal(await loadMarkdownMath(async () => {}), true);
+  const settled = "Settled: $\\alpha_{kept}$";
+  renderToStaticMarkup(<Markdown content={settled} />);
+  const typeset = t.mock.method(katex, "renderToString");
+
+  // Each release of an open `$$` block is a new partial formula; every one still shows.
+  for (let release = 0; release <= TYPESET_FORMULA_CACHE_LIMIT; release += 1) {
+    const partial = `Working\n\n$$\nx^{${release}}`;
+    const markup = renderToStaticMarkup(<MarkdownContent content={partial} streaming />);
+    if (release === 0) assert.match(markup, /class="katex-display"/u);
+  }
+  const partialRenders = typeset.mock.callCount();
+  assert.equal(partialRenders, TYPESET_FORMULA_CACHE_LIMIT + 1);
+
+  renderToStaticMarkup(<Markdown content={settled} />);
+  assert.equal(typeset.mock.callCount(), partialRenders, "the settled formula is still a cache hit");
 });
 
 test("messages without math delimiters never use the math plugins", async () => {

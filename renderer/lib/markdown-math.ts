@@ -110,45 +110,69 @@ function formulaKey(scope: Element): string {
   return JSON.stringify(scope, (key, value: unknown) => (key === "position" ? undefined : value));
 }
 
+/** The last formula in document order: the one a streaming reply may still be writing. */
+function lastMathScope(parent: Root | Element): Element | undefined {
+  for (let index = parent.children.length - 1; index >= 0; index -= 1) {
+    const child = parent.children[index] as RootContent;
+    if (child.type !== "element") continue;
+    if (mathScope(child)) return child;
+    const nested = lastMathScope(child);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+export interface CachedMathOptions {
+  /** The reply is still arriving, so its trailing formula may be a partial prefix. */
+  streaming?: boolean;
+}
+
 /**
  * Streaming re-parses the whole reply at every release, and rehype-katex
  * typesets every formula in the tree each time. This runs rehype-katex once per
  * distinct formula and reuses the typeset nodes for later parses, so settled
- * formulas cost a lookup instead of a KaTeX render.
+ * formulas cost a lookup instead of a KaTeX render. While a reply streams, its
+ * trailing formula (an open `$$` block grows with every release) is typeset
+ * without being stored, so its prefixes cannot evict settled formulas.
  */
 function cachedRehypeMath(rehypeKatex: () => RehypeTransform): RehypePlugin {
-  return function rehypeCachedKatex() {
+  return function rehypeCachedKatex(options?: CachedMathOptions) {
     const typeset = rehypeKatex();
-    const render = (scope: Element, file: VFile): ElementContent[] => {
+    const render = (scope: Element, file: VFile, store: boolean): ElementContent[] => {
       const key = formulaKey(scope);
       let nodes = typesetFormulas.get(key);
       if (nodes) {
+        // Refresh its place in the LRU order.
         typesetFormulas.delete(key);
+        typesetFormulas.set(key, nodes);
       } else {
         const fragment: Root = { type: "root", children: [scope] };
         typeset(fragment, file);
         nodes = fragment.children as ElementContent[];
-        if (typesetFormulas.size >= TYPESET_FORMULA_CACHE_LIMIT) {
-          typesetFormulas.delete(typesetFormulas.keys().next().value!);
+        if (store) {
+          if (typesetFormulas.size >= TYPESET_FORMULA_CACHE_LIMIT) {
+            typesetFormulas.delete(typesetFormulas.keys().next().value!);
+          }
+          typesetFormulas.set(key, nodes);
         }
       }
-      typesetFormulas.set(key, nodes);
       // Later stages may rewrite properties, so each tree gets its own copy.
       return structuredClone(nodes);
     };
-    const walk = (parent: Root | Element, file: VFile) => {
+    const walk = (parent: Root | Element, file: VFile, unsettled: Element | undefined) => {
       for (let index = 0; index < parent.children.length; index += 1) {
         const child = parent.children[index] as RootContent;
         if (child.type !== "element") continue;
         if (!mathScope(child)) {
-          walk(child, file);
+          walk(child, file, unsettled);
           continue;
         }
-        const typesetNodes = render(child, file);
+        const typesetNodes = render(child, file, child !== unsettled);
         parent.children.splice(index, 1, ...typesetNodes);
         index += typesetNodes.length - 1;
       }
     };
-    return (tree: Root, file: VFile) => walk(tree, file);
+    return (tree: Root, file: VFile) =>
+      walk(tree, file, options?.streaming ? lastMathScope(tree) : undefined);
   } as RehypePlugin;
 }

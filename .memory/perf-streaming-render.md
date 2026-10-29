@@ -43,7 +43,7 @@ Implemented from two read-only audits: renderer GPU (audit 02) and renderer leak
 - Reconciliation retries are bounded (F2).
 - Under Reduce Motion, the streaming reveal keeps the normal release cadence instead of rendering on every token.
 
-**KaTeX:** each formula is typeset once into an LRU cache. When KaTeX first loads, only messages that contain math re-render.
+**KaTeX:** each formula is typeset once into a 500-entry LRU cache (`renderer/lib/markdown-math.ts`). While a reply streams, its trailing formula (an open `$$` block grows each release) is typeset without being stored, so partial prefixes cannot evict settled formulas; `MarkdownContent` passes `{ streaming: true }` to the rehype plugin. When KaTeX first loads, only messages that contain math re-render.
 
 **Off-screen pausing:** `renderer/lib/offscreen-pause.ts` provides one shared IntersectionObserver.
 - `observeOffscreen` and `pauseWhenUnseen` set `data-offscreen` on the element.
