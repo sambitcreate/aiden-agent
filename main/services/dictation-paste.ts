@@ -26,10 +26,21 @@ export interface PasteDeps {
   /**
    * Saves the clipboard before the paste and returns a restore. It is used only
    * when the paste transaction dies after sending ⌘V (an osascript timeout),
-   * before its own restore step ran. The restore must leave a clipboard that no
+   * before its own restore step ran, and only after `confirmDelivered` showed
+   * the transcript in the field. The restore must leave a clipboard that no
    * longer holds the transcript untouched.
    */
   saveClipboard?: (text: string) => () => void;
+  /**
+   * After a transaction died past ⌘V: whether the focused field now holds the
+   * transcript. A ⌘V that was posted but not yet read by a busy app would
+   * paste whatever is on the clipboard when it is, so the clipboard is put
+   * back only once the text is seen in the field. Resolves false when that
+   * cannot be confirmed; never rejects.
+   */
+  confirmDelivered?: (text: string) => Promise<boolean>;
+  /** Waits before `confirmDelivered`, giving the target app time to read the pasteboard. */
+  wait?: (ms: number) => Promise<void>;
   log?: (message: string, error?: unknown) => void;
 }
 
@@ -47,6 +58,33 @@ export class PasteAfterKeystrokeError extends Error {
     super(`The paste transaction failed after sending the keystroke: ${String(original)}`);
   }
 }
+
+/** How long a paste that outlived its transaction gets to land before the field is checked. */
+export const PASTE_CONFIRM_DELAY_MS = 1_000;
+
+/** The confirmation read is short and bounded; a busy target that cannot answer counts as unconfirmed. */
+export const PASTE_CONFIRM_TIMEOUT_MS = 1_500;
+
+/**
+ * Reads the focused element's value and says whether it contains the
+ * transcript (case-sensitive). The transcript arrives as argv, never interpolated.
+ */
+export const PASTE_CONFIRM_SCRIPT = `on run argv
+	set transcriptText to item 1 of argv
+	tell application "System Events"
+		try
+			set focusedProcess to first process whose frontmost is true
+			set focusedElement to value of attribute "AXFocusedUIElement" of focusedProcess
+			set fieldValue to value of attribute "AXValue" of focusedElement as text
+		on error
+			return "unconfirmed"
+		end try
+	end tell
+	considering case
+		if fieldValue contains transcriptText then return "confirmed"
+	end considering
+	return "unconfirmed"
+end run`;
 
 export const ATOMIC_PASTE_SCRIPT = `on run argv
 	set transcriptText to item 1 of argv
@@ -194,12 +232,12 @@ export function createSecureInputPrefetch(deps: {
 }
 
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
-export function runOsascript(script: string, args: string[] = []): Promise<string> {
+export function runOsascript(script: string, args: string[] = [], timeoutMs = 5_000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "/usr/bin/osascript",
       ["-e", script, "--", ...args],
-      { timeout: 5_000 },
+      { timeout: timeoutMs },
       (error, stdout, stderr) => {
         if (error) reject(Object.assign(error, { stderr: String(stderr ?? "") }));
         else resolve(stdout.trim());
@@ -221,6 +259,21 @@ export async function runAtomicMacPaste(text: string, run: RunOsascript = runOsa
     const stderr = (error as { stderr?: unknown } | null)?.stderr;
     if (typeof stderr === "string" && stderr.includes(KEYSTROKE_SENT_MARKER)) throw new PasteAfterKeystrokeError(error);
     throw error;
+  }
+}
+
+/**
+ * Whether the focused field shows the transcript, from a short bounded AX
+ * read. Any failure, timeout or other answer is "not confirmed".
+ */
+export async function confirmMacPasteDelivered(
+  text: string,
+  run: RunOsascript = (script, args) => runOsascript(script, args, PASTE_CONFIRM_TIMEOUT_MS),
+): Promise<boolean> {
+  try {
+    return (await run(PASTE_CONFIRM_SCRIPT, [text])) === "confirmed";
+  } catch {
+    return false;
   }
 }
 
@@ -265,16 +318,29 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
         };
   } catch (error) {
     if (error instanceof PasteAfterKeystrokeError) {
-      // ⌘V already went to the validated field. Copying the transcript again
-      // would overwrite the person's clipboard and invite a second paste, so
-      // put their clipboard back instead.
-      deps.log?.("Dictation paste timed out after the keystroke; clipboard restored.", error.original);
-      try {
-        restoreClipboard?.();
-      } catch (restoreError) {
-        deps.log?.("Could not restore the clipboard after the paste.", restoreError);
+      // ⌘V was posted, but a busy app may not have read the pasteboard yet.
+      // Restoring now would let that queued ⌘V paste the person's previous
+      // clipboard, so the clipboard comes back only once the field shows the
+      // transcript. Otherwise the transcript stays on the clipboard as before.
+      if (restoreClipboard && deps.confirmDelivered) {
+        await (deps.wait ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(PASTE_CONFIRM_DELAY_MS);
+        if (await deps.confirmDelivered(text).catch(() => false)) {
+          deps.log?.("Dictation paste timed out after the keystroke; the field shows the transcript, clipboard restored.", error.original);
+          try {
+            restoreClipboard();
+          } catch (restoreError) {
+            deps.log?.("Could not restore the clipboard after the paste.", restoreError);
+          }
+          return { outcome: "pasted" };
+        }
       }
-      return { outcome: "pasted" };
+      deps.writeClipboard(text);
+      deps.log?.("Dictation paste timed out after the keystroke and could not be confirmed; transcript left on the clipboard.", error.original);
+      return {
+        outcome: "copied",
+        reason: "paste-unavailable",
+        message: "Check the field — transcript copied.",
+      };
     }
     deps.writeClipboard(text);
     deps.log?.("Dictation paste failed; transcript left on the clipboard.", error);

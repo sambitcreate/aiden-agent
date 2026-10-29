@@ -107,6 +107,12 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
 - Paste (7f1672ad4): the AppleScript transaction `log`s `KEYSTROKE_SENT_MARKER` to stderr after ⌘V. If osascript is
   killed by its 5 s timeout after that, `runAtomicMacPaste` throws `PasteAfterKeystrokeError` and dictation restores
   the saved clipboard (only if it still holds the transcript) instead of writing the transcript over it.
+  Review follow-up: the marker only proves ⌘V was posted, and a queued ⌘V could still paste a restored clipboard
+  (maybe a password). So after a killed transaction dictation waits `PASTE_CONFIRM_DELAY_MS` (1 s), then runs a
+  bounded (1.5 s) AX read (`PASTE_CONFIRM_SCRIPT`: focused element's AXValue contains the transcript, case-sensitive,
+  text passed as argv). Confirmed → restore and report pasted; unreadable or not found → transcript stays on the
+  clipboard, "Check the field — transcript copied." The saved clipboard is text/HTML/RTF only (no `readImage()` on
+  every paste); images, file URLs and app-specific types are neither read nor restored.
 - Pill cap (24971dcc8): `PcmRecorder` keeps at most `PCM_MAX_RECORDING_SAMPLES` (30 min at 16 kHz, main's on-device
   limit), trims the crossing chunk, fires `onlimit` once; the pill stops and transcribes what was kept. No warning UI.
 - Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
