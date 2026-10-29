@@ -8,6 +8,8 @@
 //   retries it in the same conversation, which keeps the partial work.
 // - A run the person started is never stopped on its own. The person gets one
 //   issue with Stop and Keep waiting; Keep waiting snoozes another 10 minutes.
+// - Time the computer spent asleep is not a stall: on wake every running Bot
+//   gets a fresh window, since no run can make progress while suspended.
 
 export const BOT_RUN_STALL_MS = 10 * 60_000;
 export const BOT_RUN_WATCHDOG_INTERVAL_MS = 60_000;
@@ -28,6 +30,8 @@ export interface BotRunWatchdogDependencies {
 
 export interface BotRunWatchdog {
   snooze(botId: string): void;
+  /** Restart every running Bot's window; call it when the computer wakes from sleep. */
+  resume(): void;
   /** One pass, for tests and for the interval. */
   check(): Promise<void>;
   dispose(): void;
@@ -68,11 +72,17 @@ export function createBotRunWatchdog(dependencies: BotRunWatchdogDependencies): 
     }
   }
 
+  function resume(): void {
+    const now = dependencies.now();
+    for (const botId of dependencies.running()) handledUntil.set(botId, now);
+  }
+
   const timer = dependencies.setInterval(() => void check(), BOT_RUN_WATCHDOG_INTERVAL_MS);
   return {
     snooze(botId) {
       handledUntil.set(botId, dependencies.now());
     },
+    resume,
     check,
     dispose: () => timer.cancel(),
   };

@@ -22,6 +22,7 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
   });
   return {
     watchdog, stopped, raised,
+    wakeFromSleep: () => watchdog.resume(),
     at: (value: number) => { now = value; },
     progressAt: (value: number) => { progress = value; },
     setWaiting: (value: boolean) => { waiting = value; },
@@ -107,4 +108,24 @@ test("a stall mark is consumed once", () => {
   stalls.mark("bot-1");
   assert.equal(stalls.consume("bot-1"), true);
   assert.equal(stalls.consume("bot-1"), false);
+});
+
+test("time asleep is not a stall: a run gets a fresh window when the computer wakes", async () => {
+  const routine = setup("routine");
+  const attended = setup("attended");
+  for (const run of [routine, attended]) {
+    // Last progress at 0, then the lid closes for 15 minutes.
+    run.at(15 * 60_000);
+    run.wakeFromSleep();
+    await run.watchdog.check();
+  }
+  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the first check after wake does not fire");
+
+  // Still no progress a full window after waking: now it is a real stall.
+  for (const run of [routine, attended]) {
+    run.at(15 * 60_000 + BOT_RUN_STALL_MS);
+    await run.watchdog.check();
+  }
+  assert.deepEqual(routine.stopped, ["bot-1"]);
+  assert.deepEqual(attended.raised, ["bot-1"]);
 });
