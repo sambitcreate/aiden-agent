@@ -411,6 +411,13 @@ Fix pass complete. Every branch below is pushed; none has an open PR and nothing
 - Most branches touch the `package.json` test chain and `scripts/ci-test-registry.json`. Resolve by union.
 - Point the AGENTS.md hotspot note at `test:serial`. The CLI branch removed the vendored-advisor bullet.
 
+### Storage follow-up (2026-10-29)
+Branch `claude/audit-fix-persistence-cpu`:
+- MAIN-15 is done. The diagnostic journal batches appends per drain, validates its directory once, and prunes only when due. It keeps no persistent fd.
+- MAIN-13 is partial. The usage store has a Map index and a 2 s debounced compact save, flushed on quit. Roll-up of old buckets is deferred, because it changes the "all" range and streaks.
+- MAIN-19 is partial. Prepared statements are cached per connection. `busy_timeout` is unchanged, and moving SQLite to a worker is deferred.
+- MAIN-29 is partial. The per-chat profile caches are LRU-bounded and journal snapshots expire on a timer. Pi compaction `sessions` is deferred until it has a lease, so eviction cannot create a second journal writer.
+
 ### Baseline failures on main (pre-existing, uninvestigated)
 - aiden-remote-files
 - workspace-files
