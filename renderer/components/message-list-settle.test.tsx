@@ -402,10 +402,12 @@ test("a streaming reply joins a paragraph at a time and stops fading once settle
   assert.equal(settled?.hasAttribute("data-streaming"), false, "and no longer fades anything in");
 });
 
-test("with reduced motion every streamed block shows as soon as it arrives", () => {
+test("with reduced motion streamed text shows whole at each release, unfinished blocks included", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const view = render(transcript({ messages: [prompt], streamingText: "One.\n\n" }));
+  assert.ok(view.container.textContent?.includes("One."), "the first text shows at once");
   view.rerender(transcript({ messages: [prompt], streamingText: "One.\n\nTwo.\n\n- three\n- four" }));
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   for (const text of ["One.", "Two.", "three", "four"]) {
     assert.ok(view.container.textContent?.includes(text), text);
   }
@@ -666,7 +668,7 @@ test("a generated image shows exactly once through handoff and settlement", () =
   assert.ok(onlyPreview(), "and once the saved reply settles");
 });
 
-test("links a reparsed reply replaces keep their previews, as the saved reply shows them", () => {
+test("links a reparsed reply replaces keep their previews, as the saved reply shows them", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const tight = Array.from(
     { length: 50 },
@@ -684,6 +686,7 @@ test("links a reparsed reply replaces keep their previews, as the saved reply sh
   const view = render(transcript({ messages: [prompt], streamingText: `${tight}\n` }));
   assert.equal(previews(view.container), 50, "the tight list previews its links while streaming");
   view.rerender(transcript({ messages: [prompt], streamingText: loose }));
+  await wait(STREAMING_REVEAL_RELEASE_MS + 20);
   assert.ok(view.container.querySelector("li > p"), "the list is loose now");
   assert.equal(previews(view.container), 50, "the replaced links keep their previews");
   view.rerender(
