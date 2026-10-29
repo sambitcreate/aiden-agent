@@ -5,6 +5,7 @@ import {
 } from "../../renderer/shared/compaction.js";
 import {
   GENERATION_TIMELINE_VERSION,
+  boundGenerationTimelineSteps,
   isTerminalAgentStep,
   isToolStep,
   type AgentStep,
@@ -764,10 +765,14 @@ export class GenerationTimelineProjector {
     return this.snapshot();
   }
 
+  /**
+   * The projector keeps every step; what it publishes stays within the step
+   * limit every reader accepts, so a long run keeps its trail once saved.
+   */
   snapshot(): GenerationTimeline {
     return {
       ...this.timeline,
-      steps: this.timeline.steps.map((step) => ({ ...step }) as AgentStep),
+      steps: boundGenerationTimelineSteps(this.timeline.steps.map((step) => ({ ...step }) as AgentStep)),
     };
   }
 

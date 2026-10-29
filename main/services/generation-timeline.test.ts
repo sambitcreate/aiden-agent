@@ -8,6 +8,7 @@ import {
 import { terminalAssistantThinkingSegments } from "./generation-runtime.js";
 import { markMcpAgentTool, mcpToolActivityLabel } from "./mcp-tool-identity.js";
 import { mcpAgentToolPresentation } from "./mcp-tool-result.js";
+import { assistantPresentationRows } from "../../renderer/lib/assistant-message-presentation.js";
 import {
   isToolStep,
   parseGenerationTimeline,
@@ -988,4 +989,85 @@ test("form fill activity persists counts without source or field values", () => 
   const timeline = projector.finish("completed");
   assert.equal(toolSteps(timeline)[0].detail, "1 filled · 1 not attempted · stopped early");
   assert.doesNotMatch(JSON.stringify(timeline), /private-document|Secret field|secret-value/);
+});
+
+test("a long run's saved timeline stays readable past the step limit", () => {
+  let now = 0;
+  const published: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value), () => (now += 100));
+  let reasoning = "";
+  const think = () => {
+    projector.thinkingStarted();
+    const start = reasoning.length;
+    reasoning += `thought ${start}. `;
+    projector.reasoningDelta(start, reasoning.length);
+    projector.thinkingEnded();
+  };
+  think();
+  projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
+  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  think();
+  projector.toolStarted("image", "display_image", { path: "previews/page.png" });
+  projector.toolFinished("image", "completed");
+  think();
+  projector.toolStarted("broken", "run_command", { description: "Run the tests" });
+  projector.toolFinished("broken", "failed");
+  for (let round = 0; round < 150; round += 1) {
+    think();
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  think();
+  projector.toolStarted("last", "grep", { pattern: "TODO" });
+
+  assert.ok(published.every((snapshot) => snapshot.steps.length <= 200));
+  const live = published[published.length - 1]!;
+  const newest = live.steps[live.steps.length - 1];
+  assert.equal(newest && isToolStep(newest) && newest.status, "pending");
+
+  const final = projector.finish("completed");
+  // 306 steps were recorded; the reader that used to drop the whole timeline now accepts it.
+  assert.ok(final.steps.length <= 200);
+  assert.deepEqual(parseGenerationTimeline(final, 0, reasoning.length), final);
+  // Every thought is still shown, in order, and keeps its time.
+  const rows = assistantPresentationRows("", final, reasoning);
+  assert.ok(rows);
+  assert.equal(
+    rows.filter((row) => row.kind === "reasoning").map((row) => row.content).join(""),
+    reasoning,
+  );
+  const thinkingMs = final.steps.reduce((total, step) => total + (isToolStep(step) ? 0 : step.durationMs ?? 0), 0);
+  assert.equal(thinkingMs, 154 * 100);
+  // Steps that carry something are kept: the edit's line counts, the image's anchor, the failure.
+  const kept = toolSteps(final);
+  assert.deepEqual(kept.find((step) => step.toolName === "edit_file")?.lineChanges, { additions: 4, deletions: 1 });
+  assert.ok(kept.some((step) => step.toolName === "display_image"));
+  assert.ok(kept.some((step) => step.status === "failed"));
+  // Merging older thoughts was enough: every tool call is still listed.
+  assert.equal(kept.length, 154);
+});
+
+test("a run of more tool calls than the step limit drops the oldest plain reads first", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  projector.toolStarted("edit", "edit_file", { path: "src/app.ts" });
+  projector.toolFinished("edit", "completed", { kind: "file_line_changes", version: 1, additions: 4, deletions: 1 });
+  projector.toolStarted("image", "display_image", { path: "previews/page.png" });
+  projector.toolFinished("image", "completed");
+  projector.toolStarted("broken", "run_command", { description: "Run the tests" });
+  projector.toolFinished("broken", "failed");
+  for (let round = 0; round < 250; round += 1) {
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.deepEqual(parseGenerationTimeline(final), final);
+  const kept = toolSteps(final);
+  assert.deepEqual(kept.slice(0, 3).map((step) => step.toolName), ["edit_file", "display_image", "run_command"]);
+  assert.equal(kept[2]?.status, "failed");
+  // The newest 197 reads remain; the 53 oldest went.
+  assert.equal(kept[3]?.target, "src/file-53.ts");
+  assert.equal(kept[kept.length - 1]?.target, "src/file-249.ts");
+  // Public call ids still name the original calls, so anything placed after them stays put.
+  assert.equal(kept[1]?.toolCallId, "call-2");
 });

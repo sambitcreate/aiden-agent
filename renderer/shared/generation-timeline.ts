@@ -148,6 +148,8 @@ const SAFE_ID = /^[a-z0-9._:-]+$/iu;
 const WINDOWS_ABSOLUTE_PATH = /^[a-z]:[\\/]/iu;
 const MAX_DETAIL_LENGTH = 120;
 const MAX_LINE_CHANGE_COUNT = 100_000_000;
+/** Every reader (chat storage, Aiden Remote, iOS, Android) rejects a longer timeline. */
+export const MAX_GENERATION_TIMELINE_STEPS = 200;
 
 export function isToolStep(step: AgentStep): step is AgentToolStep {
   return step.kind === "tool";
@@ -326,7 +328,7 @@ export function parseGenerationTimeline(
     !finiteTimestamp(candidate.startedAt) ||
     (candidate.finishedAt !== undefined && !finiteTimestamp(candidate.finishedAt)) ||
     !Array.isArray(candidate.steps) ||
-    candidate.steps.length > 200
+    candidate.steps.length > MAX_GENERATION_TIMELINE_STEPS
   ) {
     return undefined;
   }
@@ -444,6 +446,115 @@ export function parseGenerationTimeline(
       : { cancellationOrigin: candidate.cancellationOrigin as GenerationCancellationOrigin }),
     ...(claimCheck ? { claimCheck } : {}),
   };
+}
+
+/** The newest steps are never folded, so the live ticker and recent trail stay exact. */
+const BOUND_KEPT_TAIL = 40;
+
+/** Read-only calls whose row carries nothing beyond its line. */
+const ROUTINE_TOOLS = new Set([
+  "read_file",
+  "list_dir",
+  "glob",
+  "grep",
+  "run_command",
+  "web_search",
+  "browser_status",
+  "browser_snapshot",
+  "browser_wait_for",
+  "browser_scroll",
+]);
+
+/** Calls other rows point at (images and visuals are placed after them). */
+const ANCHOR_TOOLS = new Set([
+  "display_image",
+  "share_image",
+  "generate_image",
+  "render_artifact",
+  "render_ui",
+]);
+
+function carriesRecap(step: AgentToolStep): boolean {
+  return Boolean(
+    step.producedFile || step.lineChanges || step.questionnaire || step.extraction || step.recording,
+  );
+}
+
+/** Lower drops first; Infinity never drops. */
+function foldRank(step: AgentStep): number {
+  if (!isToolStep(step)) return Infinity;
+  if (!isTerminalAgentStep(step.status)) return Infinity;
+  if (step.status !== "completed") return 3;
+  if (ROUTINE_TOOLS.has(step.toolName) && !carriesRecap(step)) return 0;
+  if (!ANCHOR_TOOLS.has(step.toolName) && !carriesRecap(step)) return 1;
+  return 2;
+}
+
+function mergeThinking(steps: readonly AgentThinkingStep[]): AgentThinkingStep {
+  const first = steps[0]!;
+  const last = steps[steps.length - 1]!;
+  const start = steps.find((step) => step.reasoningStartOffset !== undefined)?.reasoningStartOffset;
+  const end = [...steps].reverse().find((step) => step.reasoningEndOffset !== undefined)
+    ?.reasoningEndOffset;
+  const merged: AgentThinkingStep = {
+    ...first,
+    updatedAt: Math.max(...steps.map((step) => step.updatedAt)),
+    durationMs: steps.reduce((total, step) => total + (step.durationMs ?? 0), 0),
+  };
+  if (last.finishedAt === undefined) delete merged.finishedAt;
+  else merged.finishedAt = last.finishedAt;
+  delete merged.reasoningStartOffset;
+  delete merged.reasoningEndOffset;
+  if (start !== undefined && end !== undefined) {
+    merged.reasoningStartOffset = start;
+    merged.reasoningEndOffset = end;
+  }
+  return merged;
+}
+
+/**
+ * Keep a long run's timeline within what every reader accepts. Older finished
+ * thinking stretches merge into the first one (its reasoning span covers all
+ * of theirs), then older settled tool steps drop: read-only calls first, then
+ * plain calls, then calls that carry a recap or anchor an image, then failed
+ * ones. Steps still running and the newest `BOUND_KEPT_TAIL` steps are kept.
+ */
+export function boundGenerationTimelineSteps(
+  steps: readonly AgentStep[],
+  max = MAX_GENERATION_TIMELINE_STEPS,
+): AgentStep[] {
+  if (steps.length <= max) return [...steps];
+  let excess = steps.length - max;
+  const tailStart = Math.max(0, steps.length - BOUND_KEPT_TAIL);
+  const kept: (AgentStep | null)[] = [...steps];
+
+  const thinking: number[] = [];
+  for (let index = 0; index < tailStart; index += 1) {
+    const step = steps[index]!;
+    if (isToolStep(step)) continue;
+    if (step.finishedAt === undefined) break;
+    thinking.push(index);
+  }
+  if (thinking.length > 1) {
+    const folded = thinking.slice(0, Math.min(excess, thinking.length - 1) + 1);
+    kept[folded[0]!] = mergeThinking(folded.map((index) => steps[index] as AgentThinkingStep));
+    for (const index of folded.slice(1)) kept[index] = null;
+    excess -= folded.length - 1;
+  }
+
+  for (let rank = 0; rank <= 3 && excess > 0; rank += 1) {
+    for (let index = 0; index < tailStart && excess > 0; index += 1) {
+      const step = kept[index];
+      if (step && foldRank(step) === rank) {
+        kept[index] = null;
+        excess -= 1;
+      }
+    }
+  }
+
+  return kept
+    .filter((step): step is AgentStep => step !== null)
+    .map((step, order) => (step.order === order ? step : { ...step, order }));
 }
 
 export function isTerminalAgentStep(status: AgentStepStatus): boolean {
