@@ -186,6 +186,11 @@ interface LiveTab {
   pipLease?: () => void;
   pipUnhost?: () => void;
   recording?: RecordingSession;
+  /**
+   * A recording the five-minute limit stopped. The next stop returns it (or its
+   * error) instead of refusing, so the caller still gets the video it asked for.
+   */
+  autoStopped?: Promise<BrowserRecording>;
   pendingRecorder?: BrowserWindow;
   visible: boolean;
   /** Actions and captures running on this tab; while any is, a hidden tab stays in its window. */
@@ -282,7 +287,6 @@ export class BrowserService {
   private readonly tabs = new Map<string, LiveTab>();
   private readonly popupOwners = new Map<number, { workspaceId: string; ownerDocumentId: string }>();
   private readonly sessions = new Map<string, Session>();
-  private readonly recordings = new Map<string, BrowserRecording>();
   private readonly terminalTails = new Map<string, string>();
   private readonly agentFileAcquisitions = new Map<string, Set<AbortController>>();
   private profiles: BrowserProfile[] = clone(BUILT_IN_BROWSER_PROFILES);
@@ -1316,6 +1320,9 @@ export class BrowserService {
         workspace.removeOwner = undefined;
         workspace.owner = undefined;
         void browserFileService.closeForWorkspace(workspaceId).catch(() => {});
+        // Nothing left to show a reopened window: the next use builds a fresh entry.
+        if (!workspace.state.tabs.length && !workspace.state.history.length && !workspace.state.servers.length)
+          this.workspaces.delete(workspaceId);
       }
   }
   closeForWorkspace(workspaceId: string): void {
@@ -2014,6 +2021,8 @@ export class BrowserService {
   private async startRecording(tab: LiveTab, fps: number, signal?: AbortSignal): Promise<void> {
     if (tab.recording) throw new Error("This browser tab is already recording.");
     browserBoundedNumber(fps, 1, 60, "Recording frame rate");
+    // A new recording supersedes an unclaimed automatic stop; its file stays on disk.
+    tab.autoStopped = undefined;
     const recorder = new BrowserWindow({
       show: false,
       width: 32,
@@ -2114,7 +2123,9 @@ export class BrowserService {
         recorder,
         pending: Promise.resolve(),
         stopTimer: setTimeout(() => {
-          void this.stopRecording(tab).catch(() => {});
+          const stopped = this.stopRecording(tab);
+          stopped.catch(() => {});
+          tab.autoStopped = stopped;
         }, 5 * 60_000),
       };
       tab.recording = recording;
@@ -2172,7 +2183,12 @@ export class BrowserService {
   }
   private async stopRecording(tab: LiveTab): Promise<BrowserRecording> {
     const recording = tab.recording;
-    if (!recording) throw new Error("This browser tab is not recording.");
+    if (!recording) {
+      const autoStopped = tab.autoStopped;
+      tab.autoStopped = undefined;
+      if (autoStopped) return autoStopped;
+      throw new Error("This browser tab is not recording.");
+    }
     tab.recording = undefined;
     tab.state.recording = false;
     clearTimeout(recording.stopTimer);
@@ -2208,7 +2224,6 @@ export class BrowserService {
         durationMs: Date.now() - recording.started,
         sizeBytes: bytes.length,
       };
-      this.recordings.set(result.id, result);
       return result;
     } finally {
       if (!recording.recorder.isDestroyed()) recording.recorder.destroy();
@@ -2564,9 +2579,8 @@ export class BrowserService {
         break;
       }
       case "reveal_recording": {
-        // A recording from an earlier launch is still on disk, under its id.
-        const recording = this.recordings.get(command.recordingId)
-          ?? await findBrowserRecording(app.getPath("userData"), command.recordingId);
+        // Every finished recording is on disk under its id, from this launch or an earlier one.
+        const recording = await findBrowserRecording(app.getPath("userData"), command.recordingId);
         if (!recording) throw new Error("This recording is no longer available.");
         shell.showItemInFolder(recording.path);
         break;

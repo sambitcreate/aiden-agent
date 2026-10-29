@@ -166,6 +166,9 @@ void app.whenReady().then(async () => {
   expiry.callback();
   await autoStopped;
   assert.equal(tab.state.recording, false);
+  const autoStoppedVideo = await native.stopRecording(tab);
+  assert.ok(autoStoppedVideo.sizeBytes > 0, "the next stop returns the video the limit saved");
+  await assert.rejects(native.stopRecording(tab), /not recording/, "an automatic stop is returned once");
   assert.deepEqual(policies(), [true, true, true], "automatic stop releases the window's last exception");
   assert.equal(isBackgrounded(), true);
   attachment();
