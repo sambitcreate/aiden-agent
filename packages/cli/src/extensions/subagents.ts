@@ -29,7 +29,7 @@ async function confirmOnce(ctx: ExtensionContext, title: string, body: string, s
   if (Buffer.byteLength(body) > 48_000) throw new Error("Approval exceeds the terminal display budget.");
   let cancel = () => {};
   try {
-    return await Promise.race([ctx.ui.confirm(title, body), new Promise<boolean>((resolve) => {
+    return await Promise.race([ctx.ui.confirm(title, body, { signal }), new Promise<boolean>((resolve) => {
       cancel = () => resolve(false); signal?.addEventListener("abort", cancel, { once: true });
       if (signal?.aborted) cancel();
     })]);
@@ -91,7 +91,7 @@ export function createSubagentsExtension(agentDir: string): InlineExtension {
       inheritedCeiling: SUBAGENT_READ_TOOL_NAMES, loadPersistedChatForFork: async () => ({ ...sessionChat(ctx.sessionManager), id: chatId }), projector, prepareRun: persistence.prepareRun,
       runChild: async (input) => {
         const controller = new AbortController(), runId = input.runId!;
-        const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal;
+        const signal = input.signal ? AbortSignal.any([input.signal, controller.signal]) : controller.signal, runSignal = signal;
         try {
         const assembly = await buildProductionSubagentChildTools({ workspaceRoot: cwd, permission: accessFor(agentDir, cwd), role: input.request.role, inheritedCeiling: input.inheritedCeiling,
           authority: input.v2Authority, currentAuthority: input.currentV2Authority, consumeNetworkOperation: input.consumeNetworkOperation, mcpMutationsEnabled: mutationsEnabled, shellEnabled, signal }, hosts);
@@ -114,7 +114,9 @@ export function createSubagentsExtension(agentDir: string): InlineExtension {
           projectRequestableSubagentMcpMutationInventoryV2(input.v2Authority!.capabilities.mcp), shellEnabled, false));
         active.set(runId, controller);
         try {
-          return await runCliSubagent(agentDir, { ...input, signal }, tools, async (name, toolCallId, args, context) => {
+          return await runCliSubagent(agentDir, { ...input, signal }, tools, async (name, toolCallId, args, context, toolSignal) => {
+            // The child's own stop signal also closes any approval prompt opened for it.
+            const signal = toolSignal ? AbortSignal.any([runSignal, toolSignal]) : runSignal;
             if (signal.aborted || accessFor(agentDir, cwd) === "none" || initialProviderState !== providerState()) throw new Error("Delegated authority was revoked.");
             const result = await write?.beforeToolCall(context!, signal) ?? await mutation?.beforeToolCall(context!, signal) ?? await shell?.beforeToolCall(context!, signal) ?? await outbound?.beforeToolCall(context!, signal);
             if (result?.block) throw new Error(result.reason ?? "Delegated effect was denied.");

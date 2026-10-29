@@ -1024,6 +1024,31 @@ test("isolated subagent inference executes only parent-owned tools with immutabl
   }
 });
 
+test("a subagent that hits its deadline during an unanswered approval settles and dismisses the gate", async (t) => {
+  const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
+  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "read-gated", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const runtime = await api.createCliModelRuntime(dir); let effects = 0, gateSignal;
+  // The gate stands in for a "Subagent: allow read_file once?" prompt nobody answers.
+  const result = await api.runCliSubagent(dir, { runtime: { model: runtime.getModel("cli-test", "test") }, workspaceRoot: dir, permission: "ask", thinkingLevel: "off", context: { mode: "fresh", revisionHash: "gate", messages: [] }, request: { role: "scout", label: "Gate", task: "Read the note" }, policy: { deadlineMs: 4000 } }, [{
+    name: "read_file", description: "Read the note", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async () => { effects++; return { content: [{ type: "text", text: "Apricot" }], details: {} }; },
+  }], (_name, _id, _args, _context, signal) => { gateSignal = signal; return new Promise(() => {}); });
+  assert.equal(result.status, "timed_out");
+  assert.equal(effects, 0);
+  assert.equal(gateSignal?.aborted, true);
+});
+
 test("shared auth coordinator commits a returned credential once and suppresses a cancelled login", async () => {
   const deviceId = crypto.randomUUID();
   let receivedDeviceId;
