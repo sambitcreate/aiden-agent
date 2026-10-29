@@ -64,7 +64,7 @@ import {
   acceptComposerAttachments,
 } from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
-import { useCommandSystem } from "../lib/command-system";
+import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
   completeSlashCommandToken,
@@ -88,7 +88,9 @@ import {
   selectedSkillStatus,
 } from "../lib/slash-command-core";
 import {
+  type SlashCommandActionHandlers,
   attemptSlashCommandAction,
+  executeSlashCommandAction,
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
@@ -112,7 +114,13 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
-import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import {
+  SLASH_COMMANDS,
+  type SkillCatalogEntry,
+  type SkillInvocationV1,
+  type SkillSource,
+} from "../shared/slash-commands";
+import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../shared/keybindings";
 import { filterForkTurnChoices, forkSummaryRows, forkTurnEligibility } from "../lib/chat-copy-view";
 import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
@@ -135,6 +143,19 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/heif",
 ]);
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
+
+
+/** Palette commands that run the / command of the same name, so both stay one action. */
+const PALETTE_SLASH_COMMANDS: Partial<Record<CommandId, string>> = {
+  "chat.rename": "name",
+  "chat.duplicate": "clone",
+  "chat.export": "export",
+  "chat.compact": "compact",
+  "chat.fork": "fork",
+  "chat.copyLatest": "copy",
+  "chat.details": "session",
+  "workspace.access": "access",
+};
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
@@ -1226,6 +1247,20 @@ export function Composer({
     [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
+  const copyLatestResponse = React.useCallback(async () => {
+    if (!latestAssistantResponse) return;
+    await navigator.clipboard.writeText(latestAssistantResponse);
+    toast.success("Latest response copied");
+  }, [latestAssistantResponse]);
+  const openAccessMenu = React.useCallback(() => {
+    setPermissionMenuOpen(true);
+    requestAnimationFrame(() => permissionControlRef.current?.focus());
+  }, []);
+  const openForkDialog = React.useCallback(() => {
+    setForkQuery("");
+    setForkDialogOpen(true);
+  }, []);
+
   const selectSlashResult = React.useCallback(
     async (result: SlashResult, submittedSession?: SlashSession) => {
       // A palette pick uses the live slash session; Send passes the command it parsed.
@@ -1307,20 +1342,10 @@ export function Composer({
         executeCommand: commandSystem.execute,
         openSettings: (section) => onOpenSettings?.(section),
         requestRename,
-        copyLatestResponse: async () => {
-          if (!latestAssistantResponse) return;
-          await navigator.clipboard.writeText(latestAssistantResponse);
-          toast.success("Latest response copied");
-        },
+        copyLatestResponse,
         openReview: () => onOpenReview?.(),
-        openAccess: () => {
-          setPermissionMenuOpen(true);
-          requestAnimationFrame(() => permissionControlRef.current?.focus());
-        },
-        openFork: () => {
-          setForkQuery("");
-          setForkDialogOpen(true);
-        },
+        openAccess: openAccessMenu,
+        openFork: openForkDialog,
         cloneChat,
         exportChat,
         compactChat,
@@ -1475,7 +1500,9 @@ export function Composer({
       slashTracker.epoch,
       dismissSlash,
       inputRef,
-      latestAssistantResponse,
+      copyLatestResponse,
+      openAccessMenu,
+      openForkDialog,
       cloneChat,
       createWorktreeFromSlash,
       exportChat,
@@ -1602,6 +1629,66 @@ export function Composer({
       finishAttachmentRead(token);
     }
   };
+
+  // ⌘K and shortcuts reach the same chat actions as the / commands. The draft
+  // stays as typed: a palette pick consumes no slash token, so draft rules don't apply.
+  const paletteSlashContext = React.useMemo(
+    () => ({ ...slashActionContext, payloadAfterToken: false }),
+    [slashActionContext],
+  );
+  const paletteSlashHandlers: SlashCommandActionHandlers = {
+    executeCommand: commandSystem.execute,
+    openSettings: (section) => onOpenSettings?.(section),
+    requestRename,
+    copyLatestResponse,
+    openReview: () => onOpenReview?.(),
+    openAccess: openAccessMenu,
+    openFork: openForkDialog,
+    cloneChat,
+    exportChat,
+    compactChat,
+    openSessionDetails: () => setSessionDialogOpen(true),
+  };
+  const paletteSlashCommand = (commandId: CommandId) => {
+    const name = PALETTE_SLASH_COMMANDS[commandId];
+    const command = name ? SLASH_COMMANDS.find((item) => item.name === name) : undefined;
+    const available =
+      surfaces.slashCommands &&
+      command !== undefined &&
+      slashCommandAvailability(command, paletteSlashContext).available;
+    const run = () => {
+      if (!command) return;
+      const outcome = executeSlashCommandAction(command, "", paletteSlashHandlers);
+      if (outcome instanceof Promise) {
+        void outcome.catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "That command could not be completed.");
+        });
+      }
+    };
+    return [run, available] as const;
+  };
+  const [renameChat, renameAvailable] = paletteSlashCommand("chat.rename");
+  useCommandHandler("chat.rename", renameChat, renameAvailable);
+  const [duplicateChat, duplicateAvailable] = paletteSlashCommand("chat.duplicate");
+  useCommandHandler("chat.duplicate", duplicateChat, duplicateAvailable);
+  const [exportOpenChat, exportAvailable] = paletteSlashCommand("chat.export");
+  useCommandHandler("chat.export", exportOpenChat, exportAvailable);
+  const [compactOpenChat, compactAvailable] = paletteSlashCommand("chat.compact");
+  useCommandHandler("chat.compact", compactOpenChat, compactAvailable);
+  const [forkChat, forkAvailable] = paletteSlashCommand("chat.fork");
+  useCommandHandler("chat.fork", forkChat, forkAvailable);
+  const [copyLatest, copyAvailable] = paletteSlashCommand("chat.copyLatest");
+  useCommandHandler("chat.copyLatest", copyLatest, copyAvailable);
+  const [chatDetails, detailsAvailable] = paletteSlashCommand("chat.details");
+  useCommandHandler("chat.details", chatDetails, detailsAvailable);
+  const [changeAccess, accessAvailable] = paletteSlashCommand("workspace.access");
+  useCommandHandler("workspace.access", changeAccess, accessAvailable);
+  const attachDisabled =
+    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked;
+  useCommandHandler("composer.attach", () => void handleAttach(), surfaces.attachments && !attachDisabled);
+  useCommandHandler("chat.stop", onStop, isGenerating && canStopGeneration);
+  const attachBinding = commandSystem.binding("composer.attach");
+  const stopBinding = commandSystem.binding("chat.stop");
 
   const readDroppedAttachments = async (files: File[]) => {
     const token = beginAttachmentRead("Dropped files are loading before sending.");
@@ -2266,6 +2353,9 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
+              // Approval keys stay off while this holds a draft, wherever focus is; the
+              // value marks staged attachments or a skill that the text alone doesn't show.
+              data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
@@ -2418,12 +2508,12 @@ export function Composer({
                   iconOnly
                   className="rounded-full"
                   onClick={handleAttach}
-                  disabled={
-                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked
-                  }
+                  disabled={attachDisabled}
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
                   }
+                  aria-keyshortcuts={ariaKeyShortcut(attachBinding)}
+                  title={attachBinding ? `Attach files or images (${prettyAccelerator(attachBinding)})` : undefined}
                   aria-busy={attaching || undefined}
                 >
                   {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
@@ -2613,8 +2703,12 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
-                    aria-keyshortcuts="Escape"
-                    title="Stop generating (Esc from an empty message)"
+                    aria-keyshortcuts={["Escape", ariaKeyShortcut(stopBinding)].filter(Boolean).join(" ")}
+                    title={
+                      stopBinding
+                        ? `Stop generating (${prettyAccelerator(stopBinding)}, or Esc from an empty message)`
+                        : "Stop generating (Esc from an empty message)"
+                    }
                   >
                     <Square className="fill-current" />
                   </Button>
