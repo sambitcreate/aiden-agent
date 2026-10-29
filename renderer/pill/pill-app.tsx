@@ -267,6 +267,13 @@ export function PillApp() {
           active.localPreview = preview;
           recorder.onchunk = (chunk) => preview.push(chunk);
         }
+        if (recorder instanceof PcmRecorder) {
+          // At on-device's 30-minute limit, stop and transcribe what was kept
+          // through the same path as the silence stop, rather than losing it all.
+          recorder.onlimit = () => {
+            void dictationApi.stopRecording();
+          };
+        }
         if (!(recorder instanceof PcmRecorder)) {
           recorder.ondataavailable = (event) => {
             if (event.data.size > 0) active.chunks.push(event.data);

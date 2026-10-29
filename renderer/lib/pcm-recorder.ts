@@ -12,6 +12,12 @@ export const PCM_SAMPLE_RATE = 16_000;
 /** Hangover after the user stops, so the last syllable reaches the worklet. */
 export const PCM_RECORDING_TAIL_MS = 80;
 const FLUSH_TIMEOUT_MS = 500;
+/**
+ * The longest recording kept, in samples: main's on-device limit (30 minutes at
+ * 16 kHz). A recording that reaches it stops taking audio and reports `onlimit`
+ * so the caller can stop and transcribe what was kept instead of losing it all.
+ */
+export const PCM_MAX_RECORDING_SAMPLES = PCM_SAMPLE_RATE * 60 * 30;
 
 /**
  * Shaped like the parts of MediaRecorder that capture code drives (`state`,
@@ -22,7 +28,11 @@ export class PcmRecorder {
   onstop: (() => void) | null = null;
   /** Each 100 ms PCM16 LE chunk as it is captured, for live dictation text. */
   onchunk: ((chunk: Uint8Array) => void) | null = null;
+  /** Fires once when the recording reaches its sample limit; later audio is dropped. */
+  onlimit: (() => void) | null = null;
   private readonly chunks: Uint8Array[] = [];
+  private keptBytes = 0;
+  private limitReported = false;
   private readonly encoder: Pcm16ChunkEncoder;
   private finished = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,14 +42,18 @@ export class PcmRecorder {
     private readonly source: MediaStreamAudioSourceNode,
     private readonly worklet: AudioWorkletNode,
     private readonly silentGain: GainNode,
+    private readonly maxSamples: number,
   ) {
     this.encoder = new Pcm16ChunkEncoder(context.sampleRate);
     worklet.port.onmessage = (event: MessageEvent<Float32Array | { type?: string }>) => {
       if (this.finished) return;
       if (event.data instanceof Float32Array) {
-        const chunks = this.encoder.push(event.data);
-        this.chunks.push(...chunks);
+        const chunks = this.keep(this.encoder.push(event.data));
         if (this.state === "recording") for (const chunk of chunks) this.onchunk?.(chunk);
+        if (this.keptBytes >= this.maxSamples * 2 && !this.limitReported) {
+          this.limitReported = true;
+          this.onlimit?.();
+        }
       } else if (event.data?.type === "flushed") this.finish();
     };
   }
@@ -48,7 +62,10 @@ export class PcmRecorder {
    * Wire the stream into the capture worklet. Audio is kept from this moment,
    * since the user is already speaking once the microphone is open.
    */
-  static async create(stream: MediaStream): Promise<PcmRecorder> {
+  static async create(
+    stream: MediaStream,
+    maxSamples: number = PCM_MAX_RECORDING_SAMPLES,
+  ): Promise<PcmRecorder> {
     const context = new AudioContext({ sampleRate: PCM_SAMPLE_RATE });
     try {
       await context.audioWorklet.addModule(
@@ -60,7 +77,7 @@ export class PcmRecorder {
       silentGain.gain.value = 0;
       source.connect(worklet).connect(silentGain).connect(context.destination);
       void context.resume().catch(() => {});
-      return new PcmRecorder(context, source, worklet, silentGain);
+      return new PcmRecorder(context, source, worklet, silentGain, maxSamples);
     } catch (error) {
       void context.close().catch(() => {});
       throw error;
@@ -90,12 +107,27 @@ export class PcmRecorder {
     this.state = "inactive";
     this.onstop = null;
     this.onchunk = null;
+    this.onlimit = null;
     this.release();
+  }
+
+  /** Stores encoded chunks up to the sample limit, trimming the one that crosses it. */
+  private keep(chunks: readonly Uint8Array[]): Uint8Array[] {
+    const kept: Uint8Array[] = [];
+    for (const chunk of chunks) {
+      const room = this.maxSamples * 2 - this.keptBytes;
+      if (room <= 0) break;
+      const part = chunk.byteLength > room ? chunk.subarray(0, room) : chunk;
+      this.chunks.push(part);
+      this.keptBytes += part.byteLength;
+      kept.push(part);
+    }
+    return kept;
   }
 
   private finish(): void {
     if (this.finished) return;
-    this.chunks.push(...this.encoder.flush());
+    this.keep(this.encoder.flush());
     this.release();
     const onstop = this.onstop;
     this.onstop = null;
