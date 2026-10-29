@@ -32,13 +32,14 @@ export interface PasteDeps {
    */
   saveClipboard?: (text: string) => () => void;
   /**
-   * After a transaction died past ⌘V: whether the focused field now holds the
-   * transcript. A ⌘V that was posted but not yet read by a busy app would
-   * paste whatever is on the clipboard when it is, so the clipboard is put
-   * back only once the text is seen in the field. Resolves false when that
-   * cannot be confirmed; never rejects.
+   * After a transaction died past ⌘V: whether the field the ⌘V targeted now
+   * holds one more copy of the transcript than it did before. A ⌘V that was
+   * posted but not yet read by a busy app would paste whatever is on the
+   * clipboard when it is, so the clipboard is put back only once the paste is
+   * seen in that field. Resolves false when that cannot be confirmed; never
+   * rejects.
    */
-  confirmDelivered?: (text: string) => Promise<boolean>;
+  confirmDelivered?: (text: string, target: PasteTarget) => Promise<boolean>;
   /** Waits before `confirmDelivered`, giving the target app time to read the pasteboard. */
   wait?: (ms: number) => Promise<void>;
   log?: (message: string, error?: unknown) => void;
@@ -52,9 +53,36 @@ export const SECURE_INPUT_COPIED_MESSAGE = "Transcript copied — press ⌘V to 
  */
 export const KEYSTROKE_SENT_MARKER = "aiden-paste:keystroke-sent";
 
+/**
+ * What the transaction recorded about the field it pasted into: the owning
+ * process and how many times the transcript already appeared in the field's
+ * value before ⌘V.
+ */
+export interface PasteTarget {
+  pid: number;
+  priorCount: number;
+}
+
+/**
+ * Reads the target from the marker line in a killed transaction's stderr.
+ * Null when the marker is missing or the field's value could not be read
+ * before ⌘V (`count=unknown`): such a paste can never be confirmed.
+ */
+export function parseKeystrokeMarker(stderr: string): PasteTarget | null {
+  const match = new RegExp(`${KEYSTROKE_SENT_MARKER} pid=(\\d+) count=(\\d+)\\b`).exec(stderr);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  const priorCount = Number(match[2]);
+  return Number.isSafeInteger(pid) && pid > 0 && Number.isSafeInteger(priorCount) ? { pid, priorCount } : null;
+}
+
 /** The paste transaction failed after it sent ⌘V: the text may already be in the field. */
 export class PasteAfterKeystrokeError extends Error {
-  constructor(readonly original: unknown) {
+  constructor(
+    readonly original: unknown,
+    /** Null when the transaction could not say where it pasted; the paste is then never confirmed. */
+    readonly target: PasteTarget | null = null,
+  ) {
     super(`The paste transaction failed after sending the keystroke: ${String(original)}`);
   }
 }
@@ -66,27 +94,67 @@ export const PASTE_CONFIRM_DELAY_MS = 1_000;
 export const PASTE_CONFIRM_TIMEOUT_MS = 1_500;
 
 /**
- * Reads the focused element's value and says whether it contains the
- * transcript (case-sensitive). The transcript arrives as argv, never interpolated.
+ * AppleScript handlers shared by the paste transaction and its delivery check.
+ * `countOccurrences` counts case-sensitive, non-overlapping copies of the
+ * transcript in a field value. `deliveryVerdict` confirms a paste only when the
+ * field holds more copies than before ⌘V, so text that was already there never
+ * counts. `keystrokeMarker` is the stderr line written after ⌘V, which
+ * `parseKeystrokeMarker` reads back.
  */
-export const PASTE_CONFIRM_SCRIPT = `on run argv
+export const PASTE_SCRIPT_HANDLERS = `on countOccurrences(haystack, needle)
+	if haystack is "" or needle is "" then return 0
+	set savedDelimiters to AppleScript's text item delimiters
+	considering case
+		set AppleScript's text item delimiters to needle
+		set itemCount to count of text items of haystack
+	end considering
+	set AppleScript's text item delimiters to savedDelimiters
+	return itemCount - 1
+end countOccurrences
+
+on deliveryVerdict(fieldValue, transcriptText, originalCount)
+	if (my countOccurrences(fieldValue, transcriptText)) is greater than originalCount then return "confirmed"
+	return "unconfirmed"
+end deliveryVerdict
+
+on keystrokeMarker(targetPid, originalCount)
+	return "${KEYSTROKE_SENT_MARKER} pid=" & targetPid & " count=" & originalCount
+end keystrokeMarker`;
+
+/**
+ * Reads the focused element of the process the ⌘V targeted (argv 2), never
+ * whichever app is frontmost now, and confirms only when its value holds more
+ * copies of the transcript than the transaction saw before ⌘V (argv 3). Text
+ * that was already there, another app, or an unreadable field is unconfirmed.
+ * Everything arrives as argv, never interpolated.
+ */
+export const PASTE_CONFIRM_SCRIPT = `${PASTE_SCRIPT_HANDLERS}
+
+on run argv
+	if (count of argv) is less than 3 then return "unconfirmed"
 	set transcriptText to item 1 of argv
+	try
+		set targetPid to (item 2 of argv) as integer
+		set originalCount to (item 3 of argv) as integer
+	on error
+		return "unconfirmed"
+	end try
+	if targetPid is less than 1 or originalCount is less than 0 then return "unconfirmed"
 	tell application "System Events"
 		try
-			set focusedProcess to first process whose frontmost is true
-			set focusedElement to value of attribute "AXFocusedUIElement" of focusedProcess
+			set targetProcess to first process whose unix id is targetPid
+			set focusedElement to value of attribute "AXFocusedUIElement" of targetProcess
 			set fieldValue to value of attribute "AXValue" of focusedElement as text
 		on error
 			return "unconfirmed"
 		end try
 	end tell
-	considering case
-		if fieldValue contains transcriptText then return "confirmed"
-	end considering
-	return "unconfirmed"
+	return my deliveryVerdict(fieldValue, transcriptText, originalCount)
 end run`;
 
-export const ATOMIC_PASTE_SCRIPT = `on run argv
+export const ATOMIC_PASTE_SCRIPT = `${PASTE_SCRIPT_HANDLERS}
+
+on run argv
 	set transcriptText to item 1 of argv
 	set previousClipboard to the clipboard as record
 	set originalValue to missing value
@@ -108,6 +176,8 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 		set the clipboard to transcriptText
 		return "copied"
 	end if
+	set originalCount to "unknown"
+	if originalValue is not missing value then set originalCount to my countOccurrences(originalValue, transcriptText)
 	delay 0.08
 	tell application "System Events"
 		try
@@ -129,7 +199,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 			return "copied"
 		end try
 	end tell
-	log "${KEYSTROKE_SENT_MARKER}"
+	log my keystrokeMarker(targetPid, originalCount)
 	set quietWindow to 0.2
 	set elapsed to 0
 	repeat while elapsed is less than 8
@@ -146,7 +216,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 				tell application "System Events"
 					set deliveredValue to value of attribute "AXValue" of targetElement as text
 				end tell
-				if deliveredValue is originalValue or deliveredValue does not contain transcriptText then return "copied"
+				if (my deliveryVerdict(deliveredValue, transcriptText, originalCount)) is not "confirmed" then return "copied"
 				on error
 				return "copied"
 			end try
@@ -257,21 +327,25 @@ export async function runAtomicMacPaste(text: string, run: RunOsascript = runOsa
     return (await run(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
   } catch (error) {
     const stderr = (error as { stderr?: unknown } | null)?.stderr;
-    if (typeof stderr === "string" && stderr.includes(KEYSTROKE_SENT_MARKER)) throw new PasteAfterKeystrokeError(error);
+    if (typeof stderr === "string" && stderr.includes(KEYSTROKE_SENT_MARKER)) {
+      throw new PasteAfterKeystrokeError(error, parseKeystrokeMarker(stderr));
+    }
     throw error;
   }
 }
 
 /**
- * Whether the focused field shows the transcript, from a short bounded AX
- * read. Any failure, timeout or other answer is "not confirmed".
+ * Whether the target process's focused field gained a copy of the transcript,
+ * from a short bounded AX read. Any failure, timeout or other answer is "not
+ * confirmed".
  */
 export async function confirmMacPasteDelivered(
   text: string,
+  target: PasteTarget,
   run: RunOsascript = (script, args) => runOsascript(script, args, PASTE_CONFIRM_TIMEOUT_MS),
 ): Promise<boolean> {
   try {
-    return (await run(PASTE_CONFIRM_SCRIPT, [text])) === "confirmed";
+    return (await run(PASTE_CONFIRM_SCRIPT, [text, String(target.pid), String(target.priorCount)])) === "confirmed";
   } catch {
     return false;
   }
@@ -320,11 +394,12 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
     if (error instanceof PasteAfterKeystrokeError) {
       // ⌘V was posted, but a busy app may not have read the pasteboard yet.
       // Restoring now would let that queued ⌘V paste the person's previous
-      // clipboard, so the clipboard comes back only once the field shows the
-      // transcript. Otherwise the transcript stays on the clipboard as before.
-      if (restoreClipboard && deps.confirmDelivered) {
+      // clipboard, so the clipboard comes back only once the targeted field
+      // shows a new copy of the transcript.
+      const target = error.target;
+      if (restoreClipboard && deps.confirmDelivered && target) {
         await (deps.wait ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))))(PASTE_CONFIRM_DELAY_MS);
-        if (await deps.confirmDelivered(text).catch(() => false)) {
+        if (await deps.confirmDelivered(text, target).catch(() => false)) {
           deps.log?.("Dictation paste timed out after the keystroke; the field shows the transcript, clipboard restored.", error.original);
           try {
             restoreClipboard();
@@ -334,8 +409,9 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
           return { outcome: "pasted" };
         }
       }
-      deps.writeClipboard(text);
-      deps.log?.("Dictation paste timed out after the keystroke and could not be confirmed; transcript left on the clipboard.", error.original);
+      // The transaction put the transcript on the clipboard before ⌘V. Writing
+      // it again would overwrite anything the person copied while we waited.
+      deps.log?.("Dictation paste timed out after the keystroke and could not be confirmed; clipboard left as it is.", error.original);
       return {
         outcome: "copied",
         reason: "paste-unavailable",

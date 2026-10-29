@@ -81,7 +81,7 @@ function livePasteDeps(): PasteDeps {
       ? (text) => runAtomicMacPaste(text)
       : async () => false,
     saveClipboard: behavior.accessibilityPaste ? saveClipboardForPaste : undefined,
-    confirmDelivered: behavior.accessibilityPaste ? (text) => confirmMacPasteDelivered(text) : undefined,
+    confirmDelivered: behavior.accessibilityPaste ? (text, target) => confirmMacPasteDelivered(text, target) : undefined,
     log: (message, error) => logger.warn("dictation", message, error),
   };
 }

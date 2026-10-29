@@ -114,6 +114,17 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   text passed as argv). Confirmed → restore and report pasted; unreadable or not found → transcript stays on the
   clipboard, "Check the field — transcript copied." The saved clipboard is text/HTML/RTF only (no `readImage()` on
   every paste); images, file URLs and app-specific types are neither read nor restored.
+  Second review (2026-10-29): a frontmost-field "contains" check confirmed pastes that never happened (the person
+  ⌘-Tabs to a Terminal already showing "yes", or the field already held the transcript), so the restore let a queued
+  ⌘V paste the old clipboard. Now the marker line is `<marker> pid=<targetPid> count=<n>`, n = case-exact copies of
+  the transcript in the field before ⌘V (`unknown` when unreadable). `parseKeystrokeMarker` puts both on
+  `PasteAfterKeystrokeError.target`; the confirm script gets them as argv, reads AXFocusedUIElement of *that pid*
+  (not the frontmost app) and confirms only when the count rose (`deliveryVerdict` in `PASTE_SCRIPT_HANDLERS`,
+  shared with the transaction's own quiet-window restore). No target or unknown count → never confirmed, no read.
+  The unconfirmed path no longer writes the transcript (the transaction already put it there; a write would clobber
+  what the person copied during the ~2.5 s wait). The handlers are tested by running them under osascript.
+  Deferred: a "previous clipboard couldn't be restored" note for image/file clipboards needs the pill to render a
+  message on `pasted`, which it does not today (UI change, needs screenshots).
 - Pill cap (24971dcc8): `PcmRecorder` keeps at most `PCM_MAX_RECORDING_SAMPLES` (30 min at 16 kHz, main's on-device
   limit), trims the crossing chunk, fires `onlimit` once; the pill stops and transcribes what was kept. No warning UI.
 - Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
