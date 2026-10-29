@@ -996,6 +996,62 @@ test("a managed worktree deleted outside Aiden comes back on its branch, with co
   assert.ok(!listed.some((line) => line.startsWith("prunable")), "the stale record is gone");
 });
 
+test("a failed restore keeps the folder when something was written into it meanwhile", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/edited");
+  const branchHead = await git(repository, ["rev-parse", "aiden/edited"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  // An editor still open on the folder writes into it as soon as it is back,
+  // and then saving the restored record fails.
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/edited", created.worktreeGitDir, created.ownershipToken, "",
+      async (restored) => {
+        await fs.writeFile(path.join(restored.path, "editor-unsaved-work.txt"), "unsaved\n");
+        throw new Error("disk full");
+      },
+    ),
+    (error: unknown) => error instanceof GitServiceError && /kept the folder/u.test(error.message),
+  );
+  assert.equal(
+    await fs.readFile(path.join(created.path, "editor-unsaved-work.txt"), "utf8"),
+    "unsaved\n",
+    "what was written is still there",
+  );
+  assert.equal(await git(repository, ["rev-parse", "aiden/edited"]), branchHead, "the branch is kept");
+});
+
+test("a deleted worktree whose branch now needs a checkout filter is not restored", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/filtered");
+  // After its first checkout, the branch gained a file that a configured
+  // filter would rewrite (and run a command for) on checkout.
+  const sentinel = path.join(await temporaryDirectory(t), "smudged");
+  await git(repository, ["config", "filter.probe.smudge", `touch ${JSON.stringify(sentinel)}; cat`]);
+  await fs.writeFile(path.join(created.path, ".gitattributes"), "data.txt filter=probe\n");
+  await fs.writeFile(path.join(created.path, "data.txt"), "data\n");
+  await git(created.path, ["add", ".gitattributes", "data.txt"]);
+  await git(created.path, ["commit", "-m", "Add filtered data"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/filtered", created.worktreeGitDir, created.ownershipToken, "",
+      async () => undefined,
+    ),
+    (error: unknown) => error instanceof GitServiceError,
+  );
+  await assert.rejects(fs.lstat(created.path), { code: "ENOENT" }, "no checkout was made");
+  await assert.rejects(fs.lstat(sentinel), { code: "ENOENT" }, "the filter never ran");
+  assert.ok(
+    (await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${created.path}`),
+    "Git's record of the deleted folder is left as it was",
+  );
+});
+
 test("a deleted worktree is not restored when its branch is gone, taken, or the record is not Aiden's", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

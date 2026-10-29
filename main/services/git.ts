@@ -6870,6 +6870,11 @@ export class GitService {
           `The branch “${branch}” no longer exists, so the worktree can't be restored.`,
         );
       }
+      // The branch may have changed since its first checkout: admit it the way
+      // creation does (no checkout filters, room on both volumes) before Git's
+      // record is touched or any file is written.
+      const checkoutBytes = await this.managedWorktreeCheckoutBytes(repo.topLevel, head);
+      await checkWorktreeAllocation(root, repo.commonDir, checkoutBytes);
       if (stale) {
         // The folder is gone, so this only clears Git's record of it. Without
         // --force, Git refuses if a folder with changes reappeared meanwhile.
@@ -6895,6 +6900,8 @@ export class GitService {
         mutation: true,
         signal,
       });
+      // The folder this call made, so a rollback never touches a replacement.
+      const added = await fs.lstat(target).catch(() => undefined);
       try {
         const registered = (await this.inspectWorktrees(repo, target)).find(
           (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
@@ -6924,18 +6931,45 @@ export class GitService {
         await commit(restored);
         return restored;
       } catch (error) {
-        // Remove only the checkout this call just added; the branch stays.
-        // It holds nothing but the branch's committed files, so --force
-        // cannot discard anything the person wrote.
+        // Remove only the checkout this call just added, and only while it
+        // still holds nothing but the branch's committed files: the folder is
+        // visible at once, so an editor may already have written into it.
+        // Anything changed or new keeps the folder. The branch always stays.
+        let kept: GitServiceError | undefined;
         try {
-          const added = (await this.inspectWorktrees(repo, repo.cwd)).find(
+          const registration = (await this.inspectWorktrees(repo, repo.cwd)).find(
             (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
           );
-          if (added) {
-            await this.run(repo.cwd, ["worktree", "remove", "--force", "--", added.path], {
-              hooksDisabled: true,
-              mutation: true,
-            });
+          if (registration) {
+            const now = await fs.lstat(target).catch(() => undefined);
+            const same = added !== undefined && now !== undefined && now.dev === added.dev && now.ino === added.ino;
+            const status = same
+              ? parseGitStatus(
+                  (
+                    await this.run(target, [
+                      "status",
+                      "--porcelain=v2",
+                      "--branch",
+                      "-z",
+                      "--untracked-files=all",
+                      "--ignored=matching",
+                    ])
+                  ).stdout,
+                )
+              : undefined;
+            if (!status || status.uncommitted > 0 || status.ignored > 0) {
+              kept = new GitServiceError(
+                "dirty_worktree",
+                "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",
+                error,
+              );
+            } else {
+              // No --force: Git refuses too if a change lands meanwhile.
+              await this.run(repo.cwd, ["worktree", "remove", "--", registration.path], {
+                hooksDisabled: true,
+                mutation: true,
+              });
+            }
           }
         } catch (rollbackError) {
           throw new GitServiceError(
@@ -6944,6 +6978,7 @@ export class GitService {
             { operationError: error, rollbackError },
           );
         }
+        if (kept) throw kept;
         throw error;
       }
     });
