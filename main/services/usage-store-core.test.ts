@@ -580,6 +580,72 @@ test("retains queued mutations across a transient persistence failure", async ()
   );
 });
 
+test("a burst inside the save window is written once and survives a reload after flush", async () => {
+  let value = createEmptyUsageDatabase();
+  let saves = 0;
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      saves += 1;
+      value = structuredClone(data);
+    },
+  };
+  const store = createUsageStore(persistence, () => NOW, { saveDelayMs: 60_000 });
+  await Promise.all(
+    Array.from({ length: 30 }, (_, index) =>
+      store.record(record({ providerId: "openai", modelId: `model-${index % 3}` })),
+    ),
+  );
+
+  assert.equal(saves, 0);
+  assert.equal((await store.summary("7d")).totals.requests, 30);
+
+  await store.flush();
+  assert.equal(saves, 1);
+  await store.flush();
+  assert.equal(saves, 1, "a clean store does not rewrite the ledger");
+
+  const reloaded = createUsageStore(persistence, () => NOW);
+  const summary = await reloaded.summary("7d");
+  assert.equal(summary.totals.requests, 30);
+  assert.equal(value.buckets.length, 3);
+});
+
+test("a failed coalesced save is reported and the aggregate is written by the next flush", async () => {
+  let value = createEmptyUsageDatabase();
+  let saveAttempts = 0;
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      saveAttempts += 1;
+      if (saveAttempts === 1) throw new Error("disk full");
+      value = structuredClone(data);
+    },
+  };
+  let reportFailure: (error: unknown) => void = () => undefined;
+  const failure = new Promise<unknown>((resolve) => {
+    reportFailure = resolve;
+  });
+  const store = createUsageStore(persistence, () => NOW, {
+    saveDelayMs: 5,
+    onSaveError: (error) => reportFailure(error),
+  });
+
+  await store.record(record({ providerId: "openai", modelId: "gpt-test" }));
+  assert.match(String(await failure), /disk full/u);
+  assert.equal(value.buckets.length, 0);
+
+  await store.flush();
+  assert.equal(
+    value.buckets.reduce((total, bucket) => total + bucket.requests, 0),
+    1,
+  );
+});
+
 
 test("TTS accounting survives reload and keeps unknown cost and usage separate from zero", async () => {
   const { ttsUsageRecord } = await import("./tts/service.js");
