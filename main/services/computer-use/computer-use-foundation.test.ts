@@ -1397,7 +1397,7 @@ test("a runtime directory that can never be removed does not block later session
   let stuckAttempts = 0;
   const host = fakeHost(root, logPath, [], {
     removeDirectory: async (directory, options) => {
-      stuckDirectory ??= directory;
+      stuckDirectory ??= String(directory);
       if (directory === stuckDirectory) {
         stuckAttempts += 1;
         throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });

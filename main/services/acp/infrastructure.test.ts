@@ -286,10 +286,14 @@ test("finished requests to a running agent are not kept alive until it exits", a
   t.after(() => agent.close());
   const connection = new AcpConnection(agent);
 
-  const signals: Array<WeakRef<AbortSignal>> = [];
+  // The type-check lib predates WeakRef; Node has had it since 14.6.
+  const WeakReference = (globalThis as unknown as {
+    WeakRef: new <T extends object>(target: T) => { deref(): T | undefined };
+  }).WeakRef;
+  const signals: Array<{ deref(): AbortSignal | undefined }> = [];
   for (let index = 0; index < 20; index += 1) {
     const controller = new AbortController();
-    signals.push(new WeakRef(controller.signal));
+    signals.push(new WeakReference(controller.signal));
     await connection.logout(controller.signal);
   }
   for (let round = 0; round < 5; round += 1) {
