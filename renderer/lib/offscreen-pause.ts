@@ -8,13 +8,19 @@
 // window behind other apps never repaints for nothing.
 
 let sharedObserver: IntersectionObserver | null = null;
+
+/** `toggleAttribute`, written out so lighter DOMs (the xmldom test harness) work too. */
+function markAttribute(element: Element, name: string, on: boolean): void {
+  if (on) element.setAttribute(name, "");
+  else element.removeAttribute(name);
+}
 let watchedDocument: Document | null = null;
 
 function visibilityObserver(): IntersectionObserver | null {
   if (typeof IntersectionObserver === "undefined") return null;
   sharedObserver ??= new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      entry.target.toggleAttribute("data-offscreen", !entry.isIntersecting);
+      markAttribute(entry.target, "data-offscreen", !entry.isIntersecting);
     }
   });
   return sharedObserver;
@@ -26,10 +32,7 @@ function watchDocumentVisibility(): void {
   const current = document;
   watchedDocument = current;
   const update = () =>
-    current.documentElement.toggleAttribute(
-      "data-document-hidden",
-      current.visibilityState === "hidden",
-    );
+    markAttribute(current.documentElement, "data-document-hidden", current.visibilityState === "hidden");
   update();
   current.addEventListener("visibilitychange", update);
 }
