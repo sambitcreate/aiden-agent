@@ -313,6 +313,8 @@ import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-chi
 import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
+import { interruptedWaits } from "./interrupted-waits-main.js";
+import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   parseSubagentModelSettings,
@@ -876,6 +878,25 @@ function endLoadMonitor(
   }
 }
 
+// What a foreground reply is waiting on is saved so a restart can offer it
+// again. It is offered only when the chat's latest run was cut short by a quit
+// or crash, so a record left behind by Stop is never shown.
+function rememberInterruptedWait(
+  streamId: string,
+  wait: Parameters<typeof interruptedWaits.remember>[1],
+): void {
+  const chatId = active.get(streamId)?.chatId;
+  if (!chatId) return;
+  void interruptedWaits.remember(chatId, wait).catch((error: unknown) => {
+    logger.warn("pi", "Could not save what the reply is waiting on.", error);
+  });
+}
+function forgetInterruptedWait(waitId: string): void {
+  void interruptedWaits.forget(waitId).catch((error: unknown) => {
+    logger.warn("pi", "Could not clear what the reply was waiting on.", error);
+  });
+}
+
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -883,8 +904,17 @@ const approvals = new ToolApprovalCoordinator(
     }
     chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:approval", prompt);
+    rememberInterruptedWait(prompt.streamId, {
+      kind: "approval",
+      waitId: prompt.approvalId,
+      askedAt: Date.now(),
+      summary: clipInterruptedWaitSummary(prompt.summary),
+    });
   },
   (approvalId, outcome) => {
+    // Allowed or denied by the person. A card the host withdrew (Stop, a
+    // closed window, quit) keeps it; only an interrupted run offers it.
+    if (outcome === "allowed" || outcome === "denied") forgetInterruptedWait(approvalId);
     chatActivityRegistry.resolveAttention(approvalId);
     recordRunAttentionResolved(hostRunRegistry, approvalId, {
       kind: "approval",
@@ -899,8 +929,17 @@ const questionnaires = new AskUserQuestionCoordinator(
     }
     chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:questionnaire", prompt);
+    rememberInterruptedWait(prompt.streamId, {
+      kind: "question",
+      waitId: prompt.promptId,
+      askedAt: Date.now(),
+      questions: prompt.questions,
+    });
   },
-  (promptId, response) => {
+  (promptId, response, settledBy) => {
+    // Answered or closed by the person, or expired. A card the host withdrew
+    // (Stop, a closed window, quit) keeps it; only an interrupted run offers it.
+    if (settledBy === "owner" || response.timedOut) forgetInterruptedWait(promptId);
     chatActivityRegistry.resolveAttention(promptId);
     recordRunAttentionResolved(hostRunRegistry, promptId, {
       kind: "question",

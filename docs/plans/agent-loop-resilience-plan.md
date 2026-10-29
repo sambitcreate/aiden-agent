@@ -81,7 +81,13 @@ Now (desktop chats on Mac and Linux; not the CLI, Bots or the phones):
 - Nothing is sent until the person presses Resume. It sends the visible turn "Continue where you left off." Aiden's existing recovery note for interrupted tool calls tells the model which actions may or may not have happened, so it checks before repeating one.
 - Stop, a finished reply, or any new message records a later run, so the card goes away.
 
+Waiting prompts (added after the first release):
+
+- A question card (`ask_user_question`) or tool approval that was open when Aiden quit or crashed is saved to `interrupted-waits.json` in userData, one record per chat, kept for 7 days. It is forgotten as soon as the person answers, approves, denies, or the question times out, and kept when the host ends it (quit, crash, closed window).
+- On the next launch, an interrupted question comes back above the composer with the note "Aiden closed while asking this. Your answers go as a new message, and Aiden picks up from there." Submitting sends the answers as a normal message (each question with its answer), which starts a new turn; closing the card leaves the Resume card in its place.
+- An interrupted approval keeps the Resume card and names the action: "Aiden closed while waiting for you to approve: …". Resume asks for approval again before anything runs.
+
 Known limit: after a crash the text that was streaming had not been saved yet, so it is gone; the model writes the answer again from the start. After a quit the text written so far stays.
 
-Code: `main/services/interrupted-reply.ts`, `abortForShutdown` in `PiAgentRuntimeHarness` (called by `llmClient.cancel` for the app-shutdown origin), the `chats:replyInterrupted` handler, and `InterruptedReplyCallout` in `message-list.tsx`. Tests: `interrupted-reply.test.ts`, the harness suite, and `tests/e2e/interrupted-reply-resume.spec.ts` (crash, quit, and Stop in the real app).
+Code: `main/services/interrupted-reply.ts` (with the saved waits in `interrupted-waits-main.ts`), `abortForShutdown` in `PiAgentRuntimeHarness` (called by `llmClient.cancel` for the app-shutdown origin), the `chats:replyInterrupted` and `chats:interruptedWait` handlers, and `InterruptedReplyCallout` in `message-list.tsx`. Tests: `interrupted-reply.test.ts`, the harness suite, `tests/e2e/interrupted-reply-resume.spec.ts` (crash, quit, and Stop in the real app), and `tests/e2e/interrupted-question-resume.spec.ts` (a question that comes back after a crash or quit).
 

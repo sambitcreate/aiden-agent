@@ -598,6 +598,8 @@ export type InterruptedReplyActions = {
   onResume: () => void;
   /** True while Resume is sending. */
   busy?: boolean;
+  /** The approval the reply was waiting on. It is never carried over; Resume asks again. */
+  approvalSummary?: string;
 };
 
 /** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
@@ -606,7 +608,9 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
     <Callout role="status" data-interrupted-reply="true">
       <Text variant="small-strong">This reply was interrupted</Text>
       <Text variant="small" color="secondary" className="mt-0.5 block">
-        Aiden closed before it finished. Resume to pick up where it stopped.
+        {actions.approvalSummary
+          ? `Aiden closed while waiting for you to approve: ${actions.approvalSummary}. Resume to pick up where it stopped; Aiden asks again before running it.`
+          : "Aiden closed before it finished. Resume to pick up where it stopped."}
       </Text>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="small" disabled={actions.busy} onClick={actions.onResume}>

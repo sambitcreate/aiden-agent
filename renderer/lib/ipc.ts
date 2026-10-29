@@ -1,4 +1,5 @@
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
@@ -1577,6 +1578,9 @@ export const chatsApi = {
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
+  /** The question or approval the interrupted reply was waiting on, or null. */
+  interruptedWait: (id: string) => invoke<InterruptedWaitV1 | null>("chats:interruptedWait", id),
+  dismissInterruptedWait: (waitId: string) => invoke<void>("chats:dismissInterruptedWait", waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
