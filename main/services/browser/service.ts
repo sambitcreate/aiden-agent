@@ -870,8 +870,14 @@ export class BrowserService {
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.backgroundThrottling.reset();
-      // An open Picture in Picture keeps its screencast through the reload, so it keeps its lease.
-      if (tab.pipLease) tab.pipLease = tab.backgroundThrottling.acquire();
+      // A crash also ends an open Picture in Picture: its screencast died with
+      // the renderer, and the replacement starts hidden, where it paints nothing.
+      if (tab.pip) {
+        this.endPictureInPicture(tab);
+        if (!tab.pip.isDestroyed()) tab.pip.destroy();
+        tab.pip = undefined;
+        tab.state.pictureInPicture = false;
+      }
       // A crashed renderer cannot keep producing screencast frames. Finalize
       // the recorder instead of leaving it alive through an unrelated recovery.
       if (tab.recording) void this.stopRecording(tab).catch(() => {});

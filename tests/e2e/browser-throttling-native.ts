@@ -229,6 +229,21 @@ void app.whenReady().then(async () => {
     await pipCommand(false);
     assert.equal(wc.getBackgroundThrottling(), true, "closing the preview releases the page");
     assert.equal(pipWindow.isDestroyed(), true);
+    // A crash ends the preview: its screencast dies with the renderer, and the
+    // replacement starts hidden, so a kept window would hold a frozen frame.
+    console.error("[throttling] crashing beside picture in picture");
+    await pipCommand(true);
+    const crashedPip = BrowserWindow.getAllWindows().find(window => window.getTitle() === "Browser Picture in Picture");
+    assert.ok(crashedPip, "Picture in Picture reopens");
+    const pipCrashed = new Promise<void>(resolve => wc.once("render-process-gone", () => resolve()));
+    const pipClosed = new Promise<void>(resolve => crashedPip.once("closed", () => resolve()));
+    const pipRecovered = new Promise<void>(resolve => wc.once("did-navigate", () => wc.once("did-stop-loading", () => resolve())));
+    wc.forcefullyCrashRenderer();
+    await pipCrashed;
+    assert.equal(tab.state.pictureInPicture, false, "a crash closes the preview");
+    assert.equal(wc.getBackgroundThrottling(), true, "a crash releases the preview's lease");
+    await pipClosed;
+    await pipRecovered;
     await wc.executeJavaScript("document.body.textContent = 'Local scheduling fixture'");
     native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
     attachment();
