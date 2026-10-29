@@ -62,10 +62,12 @@ export function createDaemonChats(agentDir: string) {
   const idleWaiters = new Map<string, Set<() => void>>();
   const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
   const approvals = new Map<string, { ownerId: string; resolve(allowed: boolean): void }>();
+  // Set once shutdown begins: no ingress (phone, Telegram, socket, Bot) may start a turn while it drains.
+  let closed = false;
   const sessionPath = (id: string) => join(root, "journals", `${createHash("sha256").update(id).digest("hex")}.jsonl`);
   const llmClient = {
     beginChatTurn(chatId: string, streamId: string, ownerId: string) {
-      if (deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
+      if (closed || deletion.isDeleting(chatId) || new Set([...reserved, ...active.keys()]).size >= 3) return null;
       const lease = admission.tryBegin(chatId, streamId, ownerId, active.has(chatId));
       if (lease) {
         reserved.add(chatId);
@@ -104,7 +106,7 @@ export function createDaemonChats(agentDir: string) {
       void llmClient.cancelChat(pair[0], "user_stop"); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
-      if (owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
+      if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
       let finish!: () => void;
       const settled = new Promise<void>((resolve) => { finish = resolve; });
       let releaseFile: () => void;
@@ -303,6 +305,6 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, admission, deletion, sessionPath,
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { closed = true; const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

@@ -1553,6 +1553,19 @@ test("daemon idle waits include cancelled append work before releasing workspace
   await daemon.stop();
 });
 
+test("a draining daemon admits no new chat turn while earlier work settles", async (t) => {
+  const dir = temporary(t), daemon = api.createDaemonChats(dir);
+  const lease = daemon.llmClient.beginChatTurn("draining", "stream", "owner"); assert.ok(lease);
+  lease.reserveAppendPayload(100);
+  let stopped = false;
+  const stopping = daemon.stop().then(() => { stopped = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(stopped, false);
+  assert.equal(daemon.llmClient.beginChatTurn("arrived-late", "stream", "owner"), null);
+  lease.settleAsyncWork(); await stopping;
+  assert.equal(daemon.llmClient.beginChatTurn("after-stop", "stream", "owner"), null);
+});
+
 test("the subagent rollback switch registers no tool and opens no history", async (t) => {
   const previous = process.env.AIDEN_SUBAGENTS_ENABLED;
   process.env.AIDEN_SUBAGENTS_ENABLED = "0";

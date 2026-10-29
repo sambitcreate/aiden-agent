@@ -29,8 +29,9 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   let remote: Awaited<ReturnType<typeof createCliRemote>> | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
+  let closing = false;
   const server = createServer((socket) => {
-    if (clients.size >= 64) { socket.destroy(); return; }
+    if (closing || clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let buffer = "", handled = false;
     socket.setEncoding("utf8");
@@ -44,6 +45,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       socket.setTimeout(610_000, () => socket.destroy());
       void (async () => {
         try {
+          if (closing) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer);
           if (!["schedule", "remote", "bots", "workspace"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "remote" && !remote) throw new Error("Start aiden serve --remote to use Remote controls.");
@@ -63,9 +65,14 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     process.stderr.write(`Aiden scheduler listening at ${path}\n`);
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {
-    const settled = await Promise.allSettled([bots.stop(),telegram.stopAndSettle(), chats.stop(), remote?.stop(), runtime.service.stopAndSettle()]);
+    // Refuse new control requests and stop accepting connections before draining.
+    closing = true;
+    const closed = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
+    // chats.stop() runs first and synchronously closes turn admission, so no ingress stopped
+    // alongside it can begin a turn that exit would cut short.
+    const settled = await Promise.allSettled([chats.stop(), bots.stop(), telegram.stopAndSettle(), remote?.stop(), runtime.service.stopAndSettle()]);
     for (const client of clients) client.destroy();
-    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closed;
     rmSync(path, { force: true });
     for (const result of settled) if (result.status === "rejected") process.stderr.write(`aiden: Daemon shutdown cleanup failed: ${String(result.reason)}\n`);
   }
