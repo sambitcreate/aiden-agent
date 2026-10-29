@@ -91,3 +91,27 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   scripts/ci-test-registry.json), plus catalog/downloads/protocol/worker-core/remote-speech/hook/pill/settings.
 - Pending: packaged-app check on the Mac (dylib + koffi from asar.unpacked), timing and live words by hand; then
   delete ~/.cache/aiden-voice-spike (3.5 GB) on the Mac.
+
+## Speech and media audit fixes (branch claude/audit-fix-speech-media-vms, 2026-10-29)
+
+- Worker host (`local-speech-worker-host.ts`, a2404240e): every disposed worker (retire, hang, crash, cancel, a
+  fork that lost a race) is tracked until it exits; after `exitWaitMs` (2 s) it gets SIGKILL by pid (`signalPid`
+  injectable), then one more bounded wait. `acquire` forks only after all retirements settle, so two native models
+  are never resident. Model delete runs release + file removal inside the speech lane (a queued warm-up can't reload
+  mid-delete) and retires a worker whose load failed part-way. An engine status probe that forked a worker only for
+  itself retires it afterwards. `shutDown()` stays synchronous (no change to main/index.ts sequencing).
+- Downloads (093c9ea5c): the stall timer pauses while the write stream drains (slow/full disk no longer reads as a
+  network stall; cancel ends the wait); tar failures map to the disk message (ENOSPC, quota) or plain retry advice.
+  Linux GlobalShortcuts portal ignores unknown informational event types; fails only on error/close or a known event
+  out of order.
+- Paste (7f1672ad4): the AppleScript transaction `log`s `KEYSTROKE_SENT_MARKER` to stderr after ⌘V. If osascript is
+  killed by its 5 s timeout after that, `runAtomicMacPaste` throws `PasteAfterKeystrokeError` and dictation restores
+  the saved clipboard (only if it still holds the transcript) instead of writing the transcript over it.
+- Pill cap (24971dcc8): `PcmRecorder` keeps at most `PCM_MAX_RECORDING_SAMPLES` (30 min at 16 kHz, main's on-device
+  limit), trims the crossing chunk, fires `onlimit` once; the pill stops and transcribes what was kept. No warning UI.
+- Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
+  while the live transcript or a hint hides the bars (scaleY/clip-path were rejected: they squash the rounded caps).
+  The capture worklet and the PCM16 encoder fill preallocated chunks; the encoder keeps its fractional offset across
+  pushes, so output no longer depends on how input was split.
+- Skipped: one shared AudioContext for pcm-recorder, analyser and live-pcm-capture (shared Live code, high risk for a
+  LOW item); the CLI speech host's dispose is left to its owner.
