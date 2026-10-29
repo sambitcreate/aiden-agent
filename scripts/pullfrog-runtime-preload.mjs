@@ -13,6 +13,7 @@ import { dirname, join, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 var PULLFROG_SOURCE_SHA = "0657d542f2e34565c6254d5c84581313e631cd90";
 var INSTALLER_SHA256 = "c21f552d791c65cbab4ebbda979ab21ab24addfbe167a20a60abb9858e947388";
+var SKILLS_SHA256 = "6749108d484db7425645f3dd980ec98974db907ba412453c9925401eda33e67b";
 var VERSIONS = { "opencode-ai": "1.18.5", "@anthropic-ai/claude-code": "2.1.150" };
 var INSTALLERS = ["installFromNpmTarball", "installFromGithub", "installFromGithubTarball", "installFromDirectTarball", "installFromCurl"];
 function lockedNpmExecutable(params, installerUrl) {
@@ -60,11 +61,20 @@ ${rewritten}
     (name) => name === "installFromNpmTarball" ? `export async function ${name}(params) { return lockedNpmExecutable(params, import.meta.url); }` : `export async function ${name}() { throw new Error("Pullfrog runtime downloads are disabled; use the frozen executable packages."); }`
   ).join("\n");
 }
+function rewritePullfrogSkills(source) {
+  if (createHash("sha256").update(source).digest("hex") !== SKILLS_SHA256) throw new Error("Pullfrog skills source changed; review the execution chain.");
+  const signature = "export function addSkill(";
+  if (source.split(signature).length !== 2) throw new Error("Unexpected Pullfrog skills exports.");
+  return `${source.replace(signature, "function unused_addSkill(")}
+export function addSkill(params) { log.warning(\`\${params.skill} skill not installed: runtime package installs are disabled.\`); }`;
+}
 
 // scripts/pullfrog-locked-runtime.mjs
+var REWRITES = { "/utils/install.ts": rewritePullfrogInstaller, "/utils/skills.ts": rewritePullfrogSkills };
 registerHooks({
   load(url, context, nextLoad) {
-    if (!url.startsWith("file:") || !url.endsWith("/utils/install.ts")) return nextLoad(url, context);
+    const suffix = Object.keys(REWRITES).find((candidate) => url.endsWith(candidate));
+    if (!url.startsWith("file:") || !suffix) return nextLoad(url, context);
     const packageUrl = new URL("../package.json", url);
     let packageName;
     try {
@@ -75,8 +85,9 @@ registerHooks({
     if (packageName !== "pullfrog") return nextLoad(url, context);
     if (process2.env.GITHUB_ACTION_REPOSITORY !== "pullfrog/pullfrog" || process2.env.GITHUB_ACTION_REF !== PULLFROG_SOURCE_SHA) throw new Error("Unreviewed Pullfrog action identity.");
     const source = readFileSync2(fileURLToPath2(url), "utf8");
-    const rewritten = rewritePullfrogInstaller(source, import.meta.url);
-    process2.stderr.write("Pullfrog locked executable installer active.\n");
+    const rewritten = REWRITES[suffix](source, import.meta.url);
+    process2.stderr.write(`Pullfrog locked ${suffix === "/utils/install.ts" ? "executable installer" : "skill setup"} active.
+`);
     return { format: "module-typescript", source: rewritten, shortCircuit: true };
   }
 });
