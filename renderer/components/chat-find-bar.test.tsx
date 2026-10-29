@@ -139,4 +139,17 @@ test("Esc closes the bar and gives focus back to what had it", async () => {
   assert.equal(closed, 1);
   assert.equal(screen.queryByRole("search"), null);
   assert.equal(document.activeElement, message);
+
+  // From one of the bar's buttons too.
+  act(() => {
+    screen.getByRole("button", { name: "Find" }).click();
+    message.focus();
+  });
+  await waitFor(() => assert.equal(document.activeElement, search()));
+  const close = screen.getByRole("button", { name: "Close find" });
+  close.focus();
+  fireEvent.keyDown(close, { key: "Escape" });
+  assert.equal(closed, 2);
+  assert.equal(screen.queryByRole("search"), null);
+  assert.equal(document.activeElement, message);
 });

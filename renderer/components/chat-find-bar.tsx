@@ -122,6 +122,13 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
       aria-label="Find in chat"
       data-chat-find-skip
       className="flex items-center gap-1 rounded-card bg-popover p-1 shadow-popover"
+      // Esc closes from any control in the bar, not only the search field.
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+      }}
     >
       <Input
         ref={inputRef}
@@ -134,11 +141,7 @@ export function ChatFindBar({ request, onClose }: { request: number; onClose(): 
         onChange={(event) => setQuery(event.target.value)}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
-          if (event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            close();
-          } else if (event.key === "Enter") {
+          if (event.key === "Enter") {
             event.preventDefault();
             step(event.shiftKey ? -1 : 1);
           } else if (event.key.toLowerCase() === "g" && (event.metaKey || event.ctrlKey) && !event.altKey) {
