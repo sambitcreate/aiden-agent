@@ -30,13 +30,28 @@ function dayKey(at: number, timeZone: string): string {
 
 export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDispatcherDependencies) {
   const heldTimers = new Map<string, { cancel(): void }>();
-  /** Runs started and not yet settled in the store, for `idle()`. */
+  /** Runs started and admissions still deciding, not yet settled in the store, for `idle()`. */
   const pending = new Set<Promise<void>>();
   let disposed = false;
+  /**
+   * Bumped by dispose(): work that began before a stop (an admission still
+   * awaiting, a startup replay still loading) never starts a run afterwards,
+   * even once a later start resumes the dispatcher. Its receipt stays for the
+   * next start to replay.
+   */
+  let generation = 0;
+  const live = (armedFor: number) => !disposed && armedFor === generation;
 
   function track(work: Promise<void>): void {
     const tracked = work.catch((error: unknown) => dependencies.onError?.(error)).finally(() => pending.delete(tracked));
     pending.add(tracked);
+  }
+
+  /** Counts `work` in `idle()` without changing what the caller sees. */
+  function admitting<T>(work: Promise<T>): Promise<T> {
+    const tracked = work.then(() => undefined, () => undefined).finally(() => pending.delete(tracked));
+    pending.add(tracked);
+    return work;
   }
 
   /** The receipt list with this event added. Callers admit only below the bound, so none is dropped. */
@@ -50,8 +65,9 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     return (routine.running?.length ?? 0) >= BOT_EVENT_RUNNING_MAX;
   }
 
-  /** Runs an accepted event, then drops its receipt once the run is recorded. */
-  async function start(routine: BotEventRoutine, event: { eventId: string; payload: string }): Promise<void> {
+  /** Runs an accepted event, then drops its receipt once the run is recorded. A stopped dispatcher keeps the receipt instead. */
+  async function start(routine: BotEventRoutine, event: { eventId: string; payload: string }, armedFor: number): Promise<void> {
+    if (!live(armedFor)) return;
     let settled = false;
     try {
       settled = (await dependencies.run(routine, { ...event, source: routine.trigger.kind }))?.settled !== false;
@@ -65,16 +81,18 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     }
   }
 
-  function armHeld(botId: string, routineId: string, at: number): void {
+  /** The held event stays in the store, so a stopped dispatcher leaves it for the next start to re-arm. */
+  function armHeld(botId: string, routineId: string, at: number, armedFor: number): void {
+    if (!live(armedFor)) return;
     const key = `${botId}\0${routineId}`;
     heldTimers.get(key)?.cancel();
     heldTimers.set(key, dependencies.setTimer(() => {
       heldTimers.delete(key);
-      if (!disposed) track(releaseHeld(botId, routineId));
+      if (live(armedFor)) track(releaseHeld(botId, routineId, armedFor));
     }, Math.max(0, at - dependencies.now())));
   }
 
-  async function releaseHeld(botId: string, routineId: string): Promise<void> {
+  async function releaseHeld(botId: string, routineId: string, armedFor: number): Promise<void> {
     const now = dependencies.now();
     const today = dayKey(now, dependencies.timeZone());
     let retryAt: number | undefined;
@@ -95,78 +113,91 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
         result: { routine, event },
       };
     });
-    if (claimed) await start(claimed.routine, claimed.event);
-    else if (retryAt !== undefined) armHeld(botId, routineId, retryAt);
+    if (claimed) await start(claimed.routine, claimed.event, armedFor);
+    else if (retryAt !== undefined) armHeld(botId, routineId, retryAt, armedFor);
+  }
+
+  async function emit(botId: string, routineId: string, event: { eventId: string; payload: string }, armedFor: number): Promise<BotRoutineEventOutcome> {
+    if (await dependencies.isPaused(botId)) return "disabled";
+    const now = dependencies.now();
+    const today = dayKey(now, dependencies.timeZone());
+    // Cut by length first, so a huge payload is never spread into an array.
+    const payload = [...event.payload.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2)]
+      .slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars).join("");
+    type Decision =
+      | { kind: "disabled" | "duplicate" | "daily_limit" }
+      | { kind: "held"; at: number }
+      | { kind: "queued"; routine: BotEventRoutine };
+    const decision = await dependencies.store.mutate<Decision>(botId, routineId, (routine) => {
+      if (!routine.enabled) return { result: { kind: "disabled" as const } };
+      if (routine.seenEventIds.includes(event.eventId) || routine.held?.eventId === event.eventId) {
+        return { result: { kind: "duplicate" as const } };
+      }
+      const seenEventIds = [...routine.seenEventIds, event.eventId].slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds);
+      const count = routine.day?.key === today ? routine.day.count : 0;
+      if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) {
+        return { next: { ...routine, seenEventIds }, result: { kind: "daily_limit" as const } };
+      }
+      const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
+      // Too soon, or every receipt slot is busy: hold it (the newest wins).
+      const nextAllowed = full(routine) ? Math.max(gapEnds, now + BOT_ROUTINE_EVENT_LIMITS.minGapMs) : gapEnds;
+      if (now < nextAllowed) {
+        return {
+          next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now } },
+          result: { kind: "held" as const, at: nextAllowed },
+        };
+      }
+      // The receipt is written with the claim, before the caller hears
+      // "queued": a quit before the run is recorded replays it.
+      return {
+        next: { ...routine, seenEventIds, running: withRunning(routine, { eventId: event.eventId, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
+        result: { kind: "queued" as const, routine },
+      };
+    });
+    if (!decision) return "unknown";
+    if (decision.kind === "held") {
+      armHeld(botId, routineId, decision.at, armedFor);
+      return "held";
+    }
+    if (decision.kind === "queued") {
+      track(start(decision.routine, { eventId: event.eventId, payload }, armedFor));
+      return "queued";
+    }
+    return decision.kind;
   }
 
   return {
-    async emit(botId: string, routineId: string, event: { eventId: string; payload: string }): Promise<BotRoutineEventOutcome> {
-      if (await dependencies.isPaused(botId)) return "disabled";
-      const now = dependencies.now();
-      const today = dayKey(now, dependencies.timeZone());
-      // Cut by length first, so a huge payload is never spread into an array.
-      const payload = [...event.payload.slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars * 2)]
-        .slice(0, BOT_ROUTINE_EVENT_LIMITS.payloadChars).join("");
-      type Decision =
-        | { kind: "disabled" | "duplicate" | "daily_limit" }
-        | { kind: "held"; at: number }
-        | { kind: "queued"; routine: BotEventRoutine };
-      const decision = await dependencies.store.mutate<Decision>(botId, routineId, (routine) => {
-        if (!routine.enabled) return { result: { kind: "disabled" as const } };
-        if (routine.seenEventIds.includes(event.eventId) || routine.held?.eventId === event.eventId) {
-          return { result: { kind: "duplicate" as const } };
-        }
-        const seenEventIds = [...routine.seenEventIds, event.eventId].slice(-BOT_ROUTINE_EVENT_LIMITS.seenIds);
-        const count = routine.day?.key === today ? routine.day.count : 0;
-        if (count >= BOT_ROUTINE_EVENT_LIMITS.perDay) {
-          return { next: { ...routine, seenEventIds }, result: { kind: "daily_limit" as const } };
-        }
-        const gapEnds = (routine.lastRunAt ?? -Infinity) + BOT_ROUTINE_EVENT_LIMITS.minGapMs;
-        // Too soon, or every receipt slot is busy: hold it (the newest wins).
-        const nextAllowed = full(routine) ? Math.max(gapEnds, now + BOT_ROUTINE_EVENT_LIMITS.minGapMs) : gapEnds;
-        if (now < nextAllowed) {
-          return {
-            next: { ...routine, seenEventIds, held: { eventId: event.eventId, payload, at: now } },
-            result: { kind: "held" as const, at: nextAllowed },
-          };
-        }
-        // The receipt is written with the claim, before the caller hears
-        // "queued": a quit before the run is recorded replays it.
-        return {
-          next: { ...routine, seenEventIds, running: withRunning(routine, { eventId: event.eventId, payload }, now), lastRunAt: now, day: { key: today, count: count + 1 } },
-          result: { kind: "queued" as const, routine },
-        };
-      });
-      if (!decision) return "unknown";
-      if (decision.kind === "held") {
-        armHeld(botId, routineId, decision.at);
-        return "held";
-      }
-      if (decision.kind === "queued") {
-        track(start(decision.routine, { eventId: event.eventId, payload }));
-        return "queued";
-      }
-      return decision.kind;
+    emit(botId: string, routineId: string, event: { eventId: string; payload: string }): Promise<BotRoutineEventOutcome> {
+      return admitting(emit(botId, routineId, event, generation));
     },
 
     /** After a restart: replay accepted events whose run wasn't recorded, and re-arm held ones. */
-    async rearm(routines: readonly BotEventRoutine[]): Promise<void> {
-      for (const routine of routines) {
-        for (const event of routine.running ?? []) {
-          track(start(routine, event));
+    rearm(routines: readonly BotEventRoutine[] | Promise<readonly BotEventRoutine[]>): Promise<void> {
+      const armedFor = generation;
+      return admitting((async () => {
+        for (const routine of await routines) {
+          for (const event of routine.running ?? []) {
+            track(start(routine, event, armedFor));
+          }
+          if (!routine.held) continue;
+          armHeld(routine.botId, routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs, armedFor);
         }
-        if (!routine.held) continue;
-        armHeld(routine.botId, routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs);
-      }
+      })());
     },
 
     dispose(): void {
       disposed = true;
+      generation += 1;
       for (const timer of heldTimers.values()) timer.cancel();
       heldTimers.clear();
     },
 
-    /** Resolves once every run started so far is recorded and its receipt settled (or kept). */
+    /** Accepts events again after `dispose()`; work begun before the stop stays stopped. */
+    resume(): void {
+      disposed = false;
+    },
+
+    /** Resolves once every admission and run started so far is decided, recorded and its receipt settled (or kept). */
     async idle(): Promise<void> {
       while (pending.size) await Promise.allSettled([...pending]);
     },

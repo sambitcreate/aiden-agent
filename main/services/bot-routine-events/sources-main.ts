@@ -260,8 +260,10 @@ export function rearmBotEventRoutines(): void {
 export function startBotEventRoutines(): void {
   if (started) return;
   started = true;
+  dispatcher.resume();
   rearmBotEventRoutines();
-  void botEventRoutines.all().then((routines) => dispatcher.rearm(routines)).catch(() => undefined);
+  // Counted by the dispatcher's idle(), and a load that resolves after a stop starts nothing.
+  void dispatcher.rearm(botEventRoutines.all()).catch(() => undefined);
   interval = setInterval(rearmBotEventRoutines, REARM_INTERVAL_MS);
   interval.unref?.();
 }

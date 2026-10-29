@@ -481,6 +481,98 @@ test("stopping a running event routine records it as uncertain once idle, keeps 
   assert.deepEqual(replayed, ["w1"]);
 });
 
+test("an event still being admitted when event routines stop starts no run, and its receipt is replayed on the next start", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const signals: AbortSignal[] = [];
+  const runner = createBotEventRunner({
+    executor: {
+      run: async (_task, options) => {
+        signals.push(options.signal!);
+        throw new Error("no run starts after a stop");
+      },
+    },
+    undelivered: () => false,
+  });
+  let unpause!: (paused: boolean) => void;
+  const pauseCheck = new Promise<boolean>((resolve) => { unpause = resolve; });
+  const dispatcher = createBotRoutineEventDispatcher({
+    store,
+    run: (r, event) => runner.run(r, event),
+    isPaused: () => pauseCheck,
+    now: Date.now,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel: () => undefined }),
+  });
+  const outcome = dispatcher.emit("bot-a", routine.id, { eventId: "w1", payload: "{}" });
+
+  // Quit while the pause check is still out.
+  dispatcher.dispose();
+  runner.abortAll();
+  let idle = false;
+  const stopped = dispatcher.idle().then(() => { idle = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(idle, false, "the stop waits for the admission still deciding");
+  unpause(false);
+  await stopped;
+
+  assert.equal(await outcome, "queued");
+  assert.deepEqual(signals, [], "no run started after the stop");
+  assert.deepEqual((await store.list("bot-a"))[0]?.running?.map((entry) => entry.eventId), ["w1"], "the accepted event stays recoverable");
+
+  // The next start replays it.
+  const replayed: string[] = [];
+  const restarted = createBotRoutineEventDispatcher({
+    store,
+    run: async (_r, event) => { replayed.push(event.eventId); return { settled: true }; },
+    isPaused: async () => false,
+    now: Date.now,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel: () => undefined }),
+  });
+  await restarted.rearm(store.list("bot-a"));
+  await restarted.idle();
+  assert.deepEqual(replayed, ["w1"]);
+});
+
+test("a startup replay whose routines load after event routines stop starts nothing, even after the next start", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const replayed: string[] = [];
+  const dispatcher = createBotRoutineEventDispatcher({
+    store,
+    run: async (_r, event) => { replayed.push(event.eventId); return { settled: true }; },
+    isPaused: async () => false,
+    now: Date.now,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel: () => undefined }),
+  });
+  assert.equal(await store.mutate("bot-a", routine.id, (current) => ({
+    next: { ...current, running: [{ eventId: "w1", payload: "{}", at: Date.now() }] },
+    result: true,
+  })), true);
+  let load!: (routines: BotEventRoutine[]) => void;
+  const loading = new Promise<BotEventRoutine[]>((resolve) => { load = resolve; });
+  const startup = dispatcher.rearm(loading);
+
+  dispatcher.dispose();
+  let idle = false;
+  const stopped = dispatcher.idle().then(() => { idle = true; });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(idle, false, "the stop waits for the startup load");
+  // A later start resumes the dispatcher before the old load lands.
+  dispatcher.resume();
+  load(await store.list("bot-a"));
+  await Promise.all([startup, stopped]);
+  await dispatcher.idle();
+
+  assert.deepEqual(replayed, [], "the replay begun before the stop does not run");
+  assert.deepEqual((await store.list("bot-a"))[0]?.running?.map((entry) => entry.eventId), ["w1"], "its receipt is kept for the next replay");
+  await dispatcher.rearm(store.list("bot-a"));
+  await dispatcher.idle();
+  assert.deepEqual(replayed, ["w1"], "the next start's own replay runs it");
+});
+
 test("a rearm still loading when event routines stop leaves no watch open", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
