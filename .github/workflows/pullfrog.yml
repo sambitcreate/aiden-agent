@@ -37,8 +37,8 @@ jobs:
         id: bootstrap
         env:
           GH_TOKEN: ${{ github.token }}
-          BOOTSTRAP_BLOB: "1147fd08a3859e97b5ea25076f89dcd92c3c0c12"
-          BOOTSTRAP_SHA256: "2f12b7d550253d78db94d5692b3deb6fddb40536c744c32a825a7edcde75ac1e"
+          BOOTSTRAP_BLOB: "abdf127c8414de0683857dd81987826c1d402a14"
+          BOOTSTRAP_SHA256: "635a55799a0f662c75eed3c1a9d6f0b1a64c89862f5d6293c05c228c41f37c84"
         shell: bash
         run: |
           python3 - <<'PYBOOT'

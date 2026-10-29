@@ -33,6 +33,24 @@ function verifyDirectoryChain(directory: string): void {
 }
 
 /**
+ * Every symlink along the requested path must belong to this user (or the system) and sit in a
+ * folder no other user can change, or another user could swap it after the checks below pass.
+ */
+function verifyLexicalAliases(requested: string): void {
+  if (process.platform === "win32") return;
+  for (let current = requested; ; current = dirname(current)) {
+    let info: Stats | undefined;
+    try { info = lstatSync(current); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (info?.isSymbolicLink()) {
+      if (process.getuid && info.uid !== 0 && info.uid !== process.getuid()) throw unsafe(current);
+      verifyDirectoryChain(realpathSync(dirname(current)));
+    }
+    if (dirname(current) === current) break;
+  }
+}
+
+/**
  * A dedicated root may be a symlink (for example one a dotfile manager made) when the link
  * itself, the folder it sits in and the folder it points to all belong to this user. The
  * protection then applies to the folder the link points to.
@@ -41,11 +59,11 @@ export function ensurePrivateDirectory(target: string, existing: "harden" | "rej
   const requested = resolve(target);
   if (requested === dirname(requested) || requested === resolve(homedir())) throw unsafe(target);
   mkdirSync(requested, { recursive: true, mode: 0o700 });
+  verifyLexicalAliases(requested);
   const link = lstatSync(requested);
   let absolute = requested;
   if (link.isSymbolicLink()) {
     verifyOwner(link, target);
-    verifyDirectoryChain(realpathSync(dirname(requested)));
     absolute = realpathSync(requested);
     if (absolute === dirname(absolute)) throw unsafe(target);
   }

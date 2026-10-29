@@ -25,7 +25,7 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 }
 
 export function createCliScheduler(agentDir: string) {
-  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; active: boolean; firstWrite: boolean }>();
+  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; active: boolean; firstWrite: boolean; cancellation: AbortController }>();
   const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
   const tasks = {
     load: () => persistence.load(),
@@ -38,7 +38,9 @@ export function createCliScheduler(agentDir: string) {
             assertScheduleApproval(agentDir, current.approval, current.firstWrite);
           } catch (error) {
             // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
+            // Aborting lets the shared lifecycle roll back writes this mutation already made.
             current.active = false;
+            current.cancellation.abort();
             throw error;
           }
           current.firstWrite = false;
@@ -111,7 +113,7 @@ export function createCliScheduler(agentDir: string) {
       const approval = JSON.parse(timezone) as ScheduleToolApproval;
       if (approval.action !== action) throw new Error("The approved schedule action changed.");
       assertScheduleApproval(agentDir, approval);
-      const current = { approval, active: true, firstWrite: true };
+      const current = { approval, active: true, firstWrite: true, cancellation: new AbortController() };
       try {
         return await approvedMutation.run(current, () => command(args.slice(0, 2)));
       } finally {
@@ -123,7 +125,7 @@ export function createCliScheduler(agentDir: string) {
     const revision = currentApproval?.active
       ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
       : undefined;
-    const mutationOptions = revision === undefined ? undefined : { expectedUpdatedAt: revision };
+    const mutationOptions = revision === undefined ? undefined : { expectedUpdatedAt: revision, signal: currentApproval!.cancellation.signal };
     switch (action) {
       case "list": return store.list();
       case "status": {
