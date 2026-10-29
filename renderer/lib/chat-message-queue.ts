@@ -33,12 +33,14 @@ interface QueueSnapshot {
 /** The subset of a compaction result that decides whether held follow-ups may proceed. */
 export type CompactionHoldOutcome = { compacted: true } | { compacted: false; reason: string };
 
-/** Unsent, document-local drafts. Never write attachment contents to browser storage. */
+/** Keeps a chat's queue in the module map only while a view watches it or it holds work. */
 interface QueueRetention {
   observed(queue: ChatMessageQueue): void;
+  /** No view watches the queue any more, or a change left an unwatched queue. */
   unobserved(queue: ChatMessageQueue): void;
 }
 
+/** Unsent, document-local drafts. Never write attachment contents to browser storage. */
 export class ChatMessageQueue {
   private snapshot: QueueSnapshot = { messages: [], paused: false };
   private listeners = new Set<() => void>();
@@ -61,6 +63,7 @@ export class ChatMessageQueue {
   private publish(next: QueueSnapshot) {
     this.snapshot = next;
     for (const listener of this.listeners) listener();
+    if (this.listeners.size === 0) this.retention?.unobserved(this);
   }
   private validate(message: QueuedChatMessage) {
     if (!message.text.trim() && message.attachments.length === 0) {
@@ -227,7 +230,10 @@ export function chatMessageQueue(chatId: string): ChatMessageQueue {
       },
       // Every visited chat would otherwise leave a record behind. Wait a task
       // so an immediate resubscribe (a remount) keeps the same queue.
+      // A mutation on an unwatched queue reruns the check, so a send that
+      // settles after its view left does not strand an empty queue.
       unobserved: (released) => {
+        if (!holdsNothing(released.getSnapshot())) return;
         setTimeout(() => {
           if (queues.get(chatId) === released && !released.observed && holdsNothing(released.getSnapshot())) {
             queues.delete(chatId);
