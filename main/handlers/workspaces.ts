@@ -13,6 +13,7 @@ import {
   gitCreateBranch,
   gitDiff,
   gitInfo,
+  gitManagedWorktreeBranchHead,
   gitPush,
   gitPushCapability,
   gitReview,
@@ -25,7 +26,12 @@ import {
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
-import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
+import {
+  checkedWorkspaceFolder,
+  displayWorkspaceFolder,
+  missingWorktreeOptions,
+  workspaceFolderPresence,
+} from "../services/workspace-folder-presence.js";
 import {
   workspaceFolderCheckApplies,
   type WorkspaceFolderPresenceResult,
@@ -430,10 +436,30 @@ export function registerWorkspaceHandlers(): void {
     if (!workspace || !workspaceFolderCheckApplies(workspace)) {
       return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
     }
+    const folder = checkedWorkspaceFolder(workspace)!;
+    const presence = await workspaceFolderPresence(folder);
+    const worktree =
+      presence === "missing"
+        ? await missingWorktreeOptions(workspace, await workspaceApplicationService.list(), {
+            branchHead: gitManagedWorktreeBranchHead,
+            worktrees: (repositoryPath) => gitWorktrees(repositoryPath),
+          })
+        : undefined;
     return {
-      presence: await workspaceFolderPresence(workspace.folderPath!),
-      folder: displayWorkspaceFolder(workspace.folderPath!),
+      presence,
+      folder: displayWorkspaceFolder(folder),
+      ...(worktree ? { worktree } : {}),
     } satisfies WorkspaceFolderPresenceResult;
+  });
+
+  // Put back a managed worktree whose folder was deleted outside Aiden.
+  ipcMain.handle("workspaces:restoreDeletedWorktree", async (event, workspaceId: unknown) => {
+    const id = asString(workspaceId, "workspaceId");
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Workspace access requires the active renderer document."),
+    );
+    return workspaceWorktreeApplicationService.restoreDeleted(owner, id);
   });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.

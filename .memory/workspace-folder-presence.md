@@ -3,9 +3,17 @@
 Adopted from Pi #11511 (deleted working directory) as part of the "six upstream changes" plan, step 1.
 
 - `main/services/workspace-folder-presence.ts`: `workspaceFolderPresence` (`present` / `missing` / `unknown`; ENOENT and ENOTDIR are missing, permission errors are `unknown` and never block), `workspaceFolderMissing` and `assertWorkspaceFolderPresent`. The assert runs before `assertManagedWorktreeAdmission` in `prepareGeneration` (llm-client), both scheduled-task paths, and the terminal drawer's open.
-- Scope (`workspaceFolderCheckApplies` in `renderer/shared/workspace-folder-presence.ts`): only workspaces with a folder, not No Access (the folder is never touched), and not Aiden-managed worktrees (they keep the managed-worktree admission error and their own restore flow; step 5 of the plan handles a deleted worktree).
+- Scope (`workspaceFolderCheckApplies` in `renderer/shared/workspace-folder-presence.ts`): only workspaces with a folder, not No Access (the folder is never touched), including Aiden-managed worktrees since step 5 (checked at the checkout root, `checkedWorkspaceFolder`).
 - Desktop: IPC `workspaces:folderPresence`; ChatPane queries it (10 s stale, refetch on focus), shows `WorkspaceFolderMissingNotice` (full sentence with `~/path` and Check again) above the composer, and refuses a send before append with a short toast so the text stays. If the IPC check itself fails the send goes ahead (main checks again). A send that drains from the queue instead fails at main and pauses the queue.
 - Phones and paired Macs: `AidenRemoteChatService` option `workspaceFolderMissing` refuses a turn before append with `workspace_unavailable` 409 wrapped in `AidenOperationNotExecutedError` (the same idempotency key runs once the folder is back). The message has no path, since Remote errors never carry one. iOS and Android show the server message. No protocol revision.
 - Workspace folders stay fixed by design (`workspaces:update` refuses `folderPath`), so there is no "Locate folder" action; workspace memory is keyed by the folder path too.
 - CLI: `runCli` checks `process.cwd()` first and prints one line, exit 1. Pi's own fix (#11511) is not in a Pi release yet and Aiden reads the cwd before Pi anyway.
 - Tests: `main/services/workspace-folder-presence.test.ts` (test:workspace-intake, core lane in ci-test-registry.json), a phone-turn case in `aiden-remote-chats.test.ts`, `tests/e2e/workspace-folder-missing.spec.ts`, CLI `tests/runtime.test.mjs` (fails with `uv_cwd` without the fix). No direct test of the `prepareGeneration`/scheduled refusal (heavy harness).
+
+## Deleted managed worktree (step 5a, 2026-10-29)
+
+- Owner chose "Restore, or new chat in main". `workspaces:folderPresence` adds `worktree: {branch, restorable, mainWorkspaceId?, mainWorkspaceName?}` from `missingWorktreeOptions` (restorable = branch head exists and no other worktree holds it; a Git error means not restorable).
+- Restore: `workspaces:restoreDeletedWorktree` -> `workspaceWorktreeApplicationService.restoreDeleted` -> `gitRestoreDeletedManagedWorktreeCheckout` (token check, `worktree remove --force` of the stale record, `worktree add` same path + branch, new token). Branch never created/deleted. `.worktreeinclude` re-provisioned, errors only logged.
+- New chat in main: `openNewChatIn(mainId, {gitMode: "checkout", initialText})`; without gitMode the draft inherited the remembered worktree mode.
+- Remote: `workspaceFolderRemoteRefusal` gives the worktree-specific path-free message.
+- Tests: two in managed-worktree-lifecycle.test.ts, workspace-folder-presence.test.ts, e2e `tests/e2e/worktree-folder-deleted.spec.ts` (navigate back via the sidebar; memory router has no goBack).

@@ -71,6 +71,30 @@ remain in place. Remote callers receive the same reason via the existing
 Remote retry. This phase does not claim control over independently detached or
 externally launched processes.
 
+## Deleted worktree folder (PR pending)
+
+A chat whose managed worktree folder was deleted outside Aiden (for example
+with `rm -rf` or the Finder) is checked at the checkout root like any other
+workspace folder. Sends are refused before they are added to the chat, and the
+notice above the composer offers two actions:
+
+- **Restore worktree** (`workspaces:restoreDeletedWorktree`) runs only while
+  the branch still exists and no other worktree has it checked out. Under the
+  repository's mutation lock it verifies the old ownership token in Git's
+  admin directory, clears the stale registration with
+  `git worktree remove --force`, checks the same branch out again at the same
+  managed path with hooks disabled, re-provisions `.worktreeinclude` files and
+  writes a new ownership token. It never creates, moves or deletes the branch,
+  so commits survive and uncommitted changes, which went with the folder, do
+  not. It refuses a present folder, a foreign token, a moved registration, a
+  branch that is gone, and a branch checked out elsewhere.
+- **New chat in main checkout** opens a draft in the repository's main
+  workspace (the nested-subpath match, or the repository root) in checkout mode
+  with the unsent message. The old chat is left as it was.
+
+Phones and paired Macs get `workspace_unavailable` with a path-free message
+telling the person to restore it from the chat on the Mac.
+
 ## Remaining phases
 
 - Setup script with bounded execution and explicit attended authority.

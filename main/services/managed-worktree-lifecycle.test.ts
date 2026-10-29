@@ -938,6 +938,82 @@ test("restore fails closed on branch conflicts and existing destinations", async
   assert.ok(created.path);
 });
 
+test("a managed worktree deleted outside Aiden comes back on its branch, with commits made since", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/fix");
+  await fs.writeFile(path.join(created.path, "fix.txt"), "fixed\n");
+  await git(created.path, ["add", "fix.txt"]);
+  await git(created.path, ["commit", "-m", "Fix"]);
+  const branchHead = await git(repository, ["rev-parse", "aiden/fix"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken,
+      created.worktreeDevice, created.worktreeInode,
+    ),
+    false,
+  );
+
+  const restored = await service.restoreDeletedManagedWorktreeCheckout(
+    repository, root, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken, "",
+  );
+  assert.equal(restored.path, created.path, "it is back in the same place");
+  assert.equal(await fs.readFile(path.join(restored.path, "fix.txt"), "utf8"), "fixed\n", "with the branch's commits");
+  assert.equal(await git(restored.path, ["rev-parse", "HEAD"]), branchHead);
+  assert.equal(await git(restored.path, ["branch", "--show-current"]), "aiden/fix");
+  assert.notEqual(restored.ownershipToken, created.ownershipToken);
+  assert.equal(
+    await service.managedWorktreeUsable(
+      repository, restored.path, "aiden/fix", restored.worktreeGitDir, restored.ownershipToken,
+      restored.worktreeDevice, restored.worktreeInode,
+    ),
+    true,
+    "Aiden admits the restored checkout under its new identity",
+  );
+  const listed = (await git(repository, ["worktree", "list", "--porcelain"])).split("\n");
+  assert.equal(listed.filter((line) => line === "branch refs/heads/aiden/fix").length, 1, "Git records it once");
+  assert.ok(!listed.some((line) => line.startsWith("prunable")), "the stale record is gone");
+});
+
+test("a deleted worktree is not restored when its branch is gone, taken, or the record is not Aiden's", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const restore = (created: Awaited<ReturnType<GitService["createWorktree"]>>, branch: string, token = created.ownershipToken) =>
+    service.restoreDeletedManagedWorktreeCheckout(repository, root, created.path, branch, created.worktreeGitDir, token, "");
+
+  // The folder is still there.
+  const present = await service.createWorktree(repository, root, "aiden/present");
+  await assert.rejects(restore(present, "aiden/present"), /already there/u);
+
+  // The branch was deleted after the folder.
+  const deleted = await service.createWorktree(repository, root, "aiden/deleted");
+  await fs.rm(deleted.path, { recursive: true, force: true });
+  await git(repository, ["worktree", "prune"]);
+  await git(repository, ["branch", "-D", "aiden/deleted"]);
+  await assert.rejects(restore(deleted, "aiden/deleted"), /no longer exists/u);
+  assert.equal(await service.managedWorktreeBranchHead(repository, "aiden/deleted"), undefined, "nothing recreated the branch");
+
+  // Another worktree now has the branch checked out.
+  const taken = await service.createWorktree(repository, root, "aiden/taken");
+  await fs.rm(taken.path, { recursive: true, force: true });
+  await git(repository, ["worktree", "prune"]);
+  const elsewhere = path.join(await temporaryDirectory(t), "elsewhere");
+  await git(repository, ["worktree", "add", elsewhere, "aiden/taken"]);
+  await assert.rejects(restore(taken, "aiden/taken"), /checked out in another worktree/u);
+
+  // Git's record of the folder carries another owner's marker: it is left alone.
+  const foreign = await service.createWorktree(repository, root, "aiden/foreign");
+  await fs.rm(foreign.path, { recursive: true, force: true });
+  await assert.rejects(restore(foreign, "aiden/foreign", randomUUID()));
+  assert.ok(
+    (await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${foreign.path}`),
+    "the registration it could not verify is kept",
+  );
+});
+
 function isExpectedCapacityDenial(error: unknown): boolean {
   return error instanceof InsufficientDiskSpaceError &&
     error.code === "insufficient_disk_space" &&

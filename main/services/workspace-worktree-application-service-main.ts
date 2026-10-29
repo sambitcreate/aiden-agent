@@ -20,6 +20,7 @@ import {
   gitRepositoryPaths,
   gitRestoreManagedWorktreeCheckout,
   gitResumeManagedWorktreeCheckout,
+  gitRestoreDeletedManagedWorktreeCheckout,
   gitRollbackWorktree,
   gitExpandManagedWorktreeIgnored,
   gitFetchWorktreeBase,
@@ -107,6 +108,16 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
   resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
+  restoreDeletedCheckout: (managed, root, workspaceSubpath, signal) => gitRestoreDeletedManagedWorktreeCheckout(
+    managed.repositoryPath,
+    root,
+    managed.worktreePath,
+    managed.branch,
+    managed.worktreeGitDir!,
+    managed.ownershipToken!,
+    workspaceSubpath,
+    signal,
+  ),
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>
     gitApplyManagedWorktreeSnapshot(worktreePath, worktreePath, snapshotCommit, signal),
   workspacePathExists: async (worktreePath) => {

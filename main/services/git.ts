@@ -6764,6 +6764,133 @@ export class GitService {
   }
 
   /**
+   * Put back the checkout of a managed worktree whose folder was deleted
+   * outside Aiden, at the same path and on its branch as the branch stands
+   * now. Git's stale registration is cleared only when it is the one Aiden
+   * recorded (its administrative directory and ownership marker) and still
+   * points at this path. A new ownership marker is written for the new
+   * registration. The branch is never created, moved or deleted: a branch
+   * that is gone, or checked out in another worktree, is refused.
+   */
+  async restoreDeletedManagedWorktreeCheckout(
+    cwd: string,
+    root: string,
+    worktreePath: string,
+    branch: string,
+    worktreeGitDir: string,
+    ownershipToken: string,
+    workspaceSubpath: string,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree> {
+    const repo = this.requireRepository(await this.repository(cwd));
+    await this.validateBranchName(repo, branch);
+    if (
+      workspaceSubpath !== "" &&
+      normalizedRelativeWorktreePath(workspaceSubpath) !== workspaceSubpath
+    ) {
+      throw new GitServiceError("invalid_input", "The managed worktree workspace path is invalid.");
+    }
+    return this.enqueueMutation(repo.commonDir, async () => {
+      const managedRoot = await fs.realpath(root);
+      const requestedTarget = path.resolve(worktreePath);
+      let canonicalParent: string;
+      try {
+        const parent = path.dirname(requestedTarget);
+        const parentStat = await fs.lstat(parent);
+        if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error("not a directory");
+        canonicalParent = await fs.realpath(parent);
+      } catch (cause) {
+        throw new GitServiceError(
+          "command_failed",
+          "Aiden's worktree folder could not be verified.",
+          cause,
+        );
+      }
+      const target = path.join(canonicalParent, path.basename(requestedTarget));
+      const relativeTarget = path.relative(managedRoot, target);
+      if (relativeTarget.length === 0 || relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
+        throw new GitServiceError(
+          "invalid_input",
+          "The worktree must be restored inside Aiden's worktree folder.",
+        );
+      }
+      if (await this.pathExists(target)) {
+        throw new GitServiceError("command_failed", "The worktree folder is already there.");
+      }
+      const worktrees = await this.inspectWorktrees(repo, repo.cwd);
+      const stale = await this.managedWorktreeRegistration(
+        repo,
+        worktrees,
+        worktreePath,
+        branch,
+        worktreeGitDir,
+        ownershipToken,
+      );
+      if (stale && path.resolve(stale.path) !== requestedTarget && path.resolve(stale.path) !== target) {
+        throw new GitServiceError(
+          "command_failed",
+          "This worktree was moved, so Aiden can't restore it in its old place.",
+        );
+      }
+      const others = worktrees.filter((worktree) => worktree !== stale);
+      if (others.some((worktree) => worktree.branch === branch)) {
+        throw new GitServiceError(
+          "invalid_ref",
+          `The branch “${branch}” is checked out in another worktree, so this one can't be restored.`,
+        );
+      }
+      if (others.some((worktree) => [requestedTarget, target].includes(path.resolve(worktree.path)))) {
+        throw new GitServiceError("command_failed", "Another worktree is registered at this folder.");
+      }
+      const head = await this.managedWorktreeBranchHead(repo.cwd, branch);
+      if (head === undefined) {
+        throw new GitServiceError(
+          "invalid_ref",
+          `The branch “${branch}” no longer exists, so the worktree can't be restored.`,
+        );
+      }
+      if (stale) {
+        // The folder is gone, so this only clears Git's record of it.
+        await this.run(repo.cwd, ["worktree", "remove", "--force", "--", stale.path], {
+          hooksDisabled: true,
+          mutation: true,
+          signal,
+        });
+      }
+      await this.run(repo.cwd, ["worktree", "add", "--", target, branch], {
+        hooksDisabled: true,
+        mutation: true,
+        signal,
+      });
+      const registered = (await this.inspectWorktrees(repo, target)).find(
+        (worktree) => worktree.branch === branch && path.resolve(worktree.path) === target,
+      );
+      if (!registered) {
+        throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+      }
+      const gitDirResult = await this.run(registered.path, ["rev-parse", "--path-format=absolute", "--git-dir"]);
+      const newGitDir = this.validatedWorktreeGitDir(repo, await fs.realpath(gitDirResult.stdout.trim()));
+      const newToken = randomUUID();
+      await this.persistWorktreeOwnership(newGitDir, newToken);
+      const checkout = await fs.lstat(registered.path);
+      if (!checkout.isDirectory() || checkout.isSymbolicLink()) {
+        throw new GitServiceError("command_failed", "The restored worktree could not be verified.");
+      }
+      return {
+        ...registered,
+        branch,
+        workspacePath: path.join(registered.path, workspaceSubpath),
+        repositoryPath: repo.topLevel,
+        worktreeGitDir: newGitDir,
+        ownershipToken: newToken,
+        worktreeDevice: checkout.dev,
+        worktreeInode: checkout.ino,
+        createdFromHead: head,
+      };
+    });
+  }
+
+  /**
    * Apply a snapshot commit to a restored worktree: the working tree gains the
    * snapshot contents while HEAD and index stay at the base commit, so the
    * delta reports as ordinary unstaged/untracked dirt and the synthetic commit
@@ -6907,6 +7034,28 @@ export const gitRestoreManagedWorktreeCheckout = (
     workspaceSubpath,
     signal,
   );
+export const gitRestoreDeletedManagedWorktreeCheckout = (
+  folderPath: string,
+  root: string,
+  worktreePath: string,
+  branch: string,
+  worktreeGitDir: string,
+  ownershipToken: string,
+  workspaceSubpath: string,
+  signal?: AbortSignal,
+) =>
+  gitService.restoreDeletedManagedWorktreeCheckout(
+    folderPath,
+    root,
+    worktreePath,
+    branch,
+    worktreeGitDir,
+    ownershipToken,
+    workspaceSubpath,
+    signal,
+  );
+export const gitManagedWorktreeBranchHead = (folderPath: string, branch: string) =>
+  gitService.managedWorktreeBranchHead(folderPath, branch);
 export const gitApplyManagedWorktreeSnapshot = (
   folderPath: string,
   worktreePath: string,

@@ -41,6 +41,7 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
@@ -81,7 +82,12 @@ import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
-import { WORKSPACE_FOLDER_MISSING_SEND_REFUSAL, workspaceFolderCheckApplies } from "../shared/workspace-folder-presence";
+import {
+  MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
+  WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
+  workspaceFolderCheckApplies,
+} from "../shared/workspace-folder-presence";
+import { useOptionalNewChatActions } from "../lib/new-chat-actions";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -324,8 +330,47 @@ export function ChatPane({ chatId }: { chatId: string }) {
   });
   const missingWorkspaceFolder =
     folderWorkspaceId !== undefined && folderPresenceQuery.data?.presence === "missing"
-      ? { name: effectiveWorkspace!.name, folder: folderPresenceQuery.data.folder }
+      ? {
+          id: folderWorkspaceId,
+          name: effectiveWorkspace!.name,
+          folder: folderPresenceQuery.data.folder,
+          worktree: folderPresenceQuery.data.worktree,
+        }
       : undefined;
+  // A deleted Aiden-managed worktree: put it back on its branch, or carry the
+  // unsent message to a new chat in the main checkout.
+  const newChatActions = useOptionalNewChatActions();
+  const [restoringWorktree, setRestoringWorktree] = React.useState(false);
+  const restoreDeletedWorktree = React.useCallback(
+    async (workspaceId: string) => {
+      setRestoringWorktree(true);
+      try {
+        await workspacesApi.restoreDeletedWorktree(workspaceId);
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+          qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) }),
+        ]);
+        toast.success("Worktree restored. You can send again.");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The worktree could not be restored.");
+      } finally {
+        setRestoringWorktree(false);
+      }
+    },
+    [qc],
+  );
+  const newChatInMainCheckout = React.useCallback(
+    (mainWorkspaceId: string) => {
+      if (!newChatActions) return;
+      const initialText = loadComposerDraft(chatId).text.trim();
+      void newChatActions
+        .openNewChatIn(mainWorkspaceId, { gitMode: "checkout", ...(initialText ? { initialText } : {}) })
+        .catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn't start a new chat.");
+        });
+    },
+    [chatId, newChatActions],
+  );
   const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
   folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
@@ -1888,7 +1933,9 @@ export function ChatPane({ chatId }: { chatId: string }) {
           })
           .catch(() => undefined);
         // The notice above the composer names the folder; the toast stays short.
-        if (presence?.presence === "missing") throw new Error(WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+        if (presence?.presence === "missing") {
+          throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+        }
       }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
@@ -3467,8 +3514,15 @@ export function ChatPane({ chatId }: { chatId: string }) {
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
                 folder={missingWorkspaceFolder.folder}
+                {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
                 checking={folderPresenceQuery.isFetching}
+                restoring={restoringWorktree}
                 onCheckAgain={() => void folderPresenceQuery.refetch()}
+                onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
+                onNewChatInMain={newChatActions ? () => {
+                  const mainWorkspaceId = missingWorkspaceFolder.worktree?.mainWorkspaceId;
+                  if (mainWorkspaceId) newChatInMainCheckout(mainWorkspaceId);
+                } : undefined}
               />
             ) : null}
             {questionnaire ? (
