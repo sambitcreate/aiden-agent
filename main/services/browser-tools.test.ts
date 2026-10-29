@@ -315,3 +315,17 @@ test("local documents use managed previews, preserve tab reuse and reject ambigu
   }
   assert.equal(h.calls.length, 4);
 });
+
+test("stopping a recording gives the model the saved file and the step only a playable recap", async () => {
+  const browser = harness();
+  const recording = { id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", path: "/private/aiden/recording.mp4", mimeType: "video/mp4", durationMs: 4_200, sizeBytes: 90_000 };
+  browser.setHandler(async (command) => ({ state: browser.state, ...(command.action === "record_stop" ? { recording } : {}) }));
+  const result = await browser.call("browser_recording_stop");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { tabId: "first", ...recording });
+  assert.deepEqual(result.details, { recording: { id: recording.id, mimeType: "video/mp4", durationMs: 4_200, sizeBytes: 90_000 } });
+
+  // A result the transcript can't play carries no recap; the model still gets it.
+  browser.setHandler(async () => ({ state: browser.state, recording: { ...recording, mimeType: "video/quicktime" } }));
+  assert.equal((await browser.call("browser_recording_stop")).details, null);
+});
+

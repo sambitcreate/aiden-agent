@@ -13,9 +13,14 @@ export function useChatMessageQueue(input: {
   contextKey: string;
   enabled: boolean;
   send: (message: QueuedChatMessage) => Promise<void>;
+  /**
+   * Resolves true once the chat's last run has fully settled. A local chat
+   * asks main; a remote chat already gates `enabled` on its host's run.
+   */
+  waitUntilIdle?: () => Promise<boolean>;
 }) {
   const queue = React.useMemo(() => chatMessageQueue(input.chatId), [input.chatId]);
-  const snapshot = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot);
+  const snapshot = React.useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot);
   const current = React.useRef<typeof input | null>(null);
   React.useLayoutEffect(() => {
     current.current = input;
@@ -31,7 +36,7 @@ export function useChatMessageQueue(input: {
         current.current?.chatId === input.chatId &&
         current.current?.contextKey === input.contextKey &&
         current.current?.enabled === true,
-      waitUntilIdle: () => chatsApi.waitUntilIdle(input.chatId),
+      waitUntilIdle: () => current.current?.waitUntilIdle?.() ?? chatsApi.waitUntilIdle(input.chatId),
       send: (message) => current.current!.send(message),
       isUnknownAppend: isAppendReconciliationRequired,
       onError: (error) =>

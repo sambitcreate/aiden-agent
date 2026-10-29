@@ -11,6 +11,7 @@ import {
   createModels,
   fauxAssistantMessage,
   fauxProvider,
+  normalizeContext,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -38,6 +39,8 @@ import {
 } from "./pi-compaction-session-store.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { ChatMessage } from "./types.js";
+import { UsageLimitGate, usageLimitMaxWaitMs } from "./usage-limit-core.js";
+import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
@@ -532,6 +535,45 @@ test("transient provider failures retry five times with growing waits before giv
     [16_000, 5, 6],
     [32_000, 6, 6],
   ]);
+});
+
+test("a usage limit the wait gave up on fails once with its reset time instead of retrying", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("usage-limit-give-up");
+  const request = user("past the plan window", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" });
+  let sends = 0;
+  const rejected = (message: string) => () => {
+    sends += 1;
+    const stream = createAssistantMessageEventStream();
+    const error = fauxAssistantMessage("", { stopReason: "error", errorMessage: message });
+    error.content = [];
+    stream.push({ type: "error", reason: "error", error });
+    stream.end();
+    return stream;
+  };
+  const limits = (maxHours: number) => ({
+    gate: new UsageLimitGate(),
+    owner: { kind: "chat" as const, id: "chat-1" },
+    providerLabel: "ChatGPT",
+    maxWaitMs: () => usageLimitMaxWaitMs(maxHours),
+    random: () => 0,
+  });
+  const window = "429 You have hit your ChatGPT usage limit (plus plan). Try again in ~420 min.";
+
+  // Seven hours away, past the six-hour longest wait: the wait gives up at once.
+  const gaveUp = await (await withUsageLimitWait(rejected(window), limits(6))(model, normalizeContext({ messages: [] }), {})).result();
+  const checked = await coordinator.check(gaveUp, { liveMessages: [request, gaveUp] });
+  assert.equal(checked.shouldRetry, false);
+  assert.notEqual(checked.failureCode, "retry-exhausted");
+  assert.match(gaveUp.errorMessage ?? "", /Aiden stopped waiting: the limit resets /u);
+  assert.equal(sends, 1);
+
+  // With waiting off the same rejection is an ordinary failure, retried as before.
+  const plain = await (await withUsageLimitWait(rejected(window), limits(0))(model, normalizeContext({ messages: [] }), {})).result();
+  const retried = await coordinator.check(plain, { liveMessages: [request, plain] });
+  assert.equal(retried.shouldRetry, true);
 });
 
 test("a timed-out request is tried three times in all", async () => {

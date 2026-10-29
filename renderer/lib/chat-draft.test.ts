@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   beginChatDraftSend, createChatDraft, discardChatDraft, findReusableChatDraft, finishChatDraftSend,
-  getChatDraft, listChatDrafts, requestChatDraftComposerFocus, retainChatDraft, setChatDraftHasContent,
+  getChatDraft, listChatDrafts, reopenClosedChatDraft, requestChatDraftComposerFocus, retainChatDraft, setChatDraftHasContent,
   subscribeChatDraftComposerFocus, subscribeChatDrafts, updateChatDraft,
 } from "./chat-draft";
 
@@ -17,6 +17,37 @@ test("leaving an unsent draft drops its renderer-only state", async () => {
   release();
   await flush();
   assert.equal(getChatDraft(draft.chat.id), undefined);
+});
+
+test("an empty draft left behind reopens blank at the same address; discarded, sent and unknown ones do not", async () => {
+  const left = createChatDraft("workspace-a", undefined, undefined, { gitMode: "worktree" });
+  const releaseLeft = retainChatDraft(left.chat.id);
+  updateChatDraft(left.chat.id, { title: "Renamed before leaving" });
+  releaseLeft();
+  await flush();
+  assert.equal(getChatDraft(left.chat.id), undefined);
+  const reopened = reopenClosedChatDraft(left.chat.id);
+  assert.equal(reopened?.chat.id, left.chat.id);
+  assert.equal(reopened?.chat.workspaceId, "workspace-a");
+  assert.equal(reopened?.chat.title, "New agent");
+  assert.deepEqual(reopened?.chat.messages, []);
+  assert.equal(reopened?.gitMode, "worktree");
+  assert.equal(getChatDraft(left.chat.id), reopened);
+  // An open draft is left alone.
+  assert.equal(reopenClosedChatDraft(left.chat.id), undefined);
+  assert.equal(getChatDraft(left.chat.id), reopened);
+  discardChatDraft(left.chat.id);
+  assert.equal(reopenClosedChatDraft(left.chat.id), undefined, "a draft closed on purpose stays closed");
+
+  const sent = createChatDraft("workspace-a");
+  const releaseSent = retainChatDraft(sent.chat.id);
+  beginChatDraftSend(sent.chat.id);
+  finishChatDraftSend(sent.chat.id, true);
+  releaseSent();
+  await flush();
+  assert.equal(reopenClosedChatDraft(sent.chat.id), undefined, "a sent draft is a saved chat now");
+  assert.equal(reopenClosedChatDraft("never-a-draft"), undefined);
+  assert.equal(getChatDraft("never-a-draft"), undefined);
 });
 
 test("an explicit entry point can seed only its new renderer draft", () => {

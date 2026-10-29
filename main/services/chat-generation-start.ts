@@ -3,7 +3,6 @@ import type { ChatStartParams } from "./types.js";
 interface ChatGenerationStartDependencies {
   start(streamId: string, params: ChatStartParams): Promise<boolean>;
   startTitle(input: { chatId: string; providerId: string; model: string }): void;
-  rememberSelection?(providerId: string, model: string): void;
 }
 
 /** Keep a stopped initialization from starting a second, background model request. */
@@ -12,11 +11,9 @@ export async function startGenerationAndMaybeTitle(
   streamId: string,
   params: ChatStartParams,
 ): Promise<boolean> {
-  // The selection reflects the user's explicit choice at send time, so persist
-  // it before learning whether generation itself succeeded.
-  if (params.providerId && params.model) {
-    dependencies.rememberSelection?.(params.providerId, params.model);
-  }
+  // A send never changes the model for new chats: an existing chat keeps its
+  // own model, and the desktop's new-chat pick is mirrored to the host's
+  // lastProviderId/lastModel when it is made (use-model-selection.ts).
   const started = await dependencies.start(streamId, params);
   if (started) {
     dependencies.startTitle({

@@ -1142,6 +1142,10 @@ test("a paused Bot stops its running turn, refuses new ones and runs again once 
   assert.equal(await runtime.isPaused(bot.id), true);
   const stopped = await running.idle();
   assert.equal(stopped.filter((event) => event.channel === "chat:done").length, 0, "the held reply never finishes");
+  // As on the Mac, the stopped reply is the person's Stop, not a deletion or a failure.
+  const stoppedTimeline = stopped.find((event) => event.channel === "chat:error")?.value.timeline;
+  assert.equal(stoppedTimeline?.status, "cancelled", JSON.stringify(stopped));
+  assert.equal(stoppedTimeline?.cancellationOrigin, "user_stop");
   held.end();
   assert.equal(statSync(join(dir, "bot-service", "bot-pauses.json")).mode & 0o777, 0o600);
   assert.deepEqual(await runtime.command(["pause", bot.id]), paused, "pausing again keeps the first time");
@@ -1531,6 +1535,68 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   for (const id of ["good", "hung"]) for (const pid of readFileSync(join(dir, `${id}.pid`), "utf8").trim().split("\n").map(Number)) {
     assert.throws(() => process.kill(pid, 0), /ESRCH/);
   }
+});
+
+test("interactive MCP keeps auto servers behind codemode, lists them for the model, and declares them when codemode is off", async (t) => {
+  const dir = temporary(t), auto = { ...fixtureServer(dir, "docs"), description: "Team documentation" }, visible = { ...fixtureServer(dir, "pinned"), exposure: "direct" };
+  api.atomicJson(join(dir, "aiden-mcp.json"), [auto, visible]);
+  const load = async (active) => {
+    const events = new Map(), tools = new Map();
+    await api.createMcpExtension(dir, { deferToCodemode: true }).factory({
+      on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.name, tool), getActiveTools: () => active });
+    t.after(() => events.get("session_shutdown")());
+    return { events, tools };
+  };
+  const scripted = await load(["read", "bash", "codemode"]);
+  scripted.events.get("session_start")();
+  assert.equal(scripted.tools.get("docs__first").exposure, "codemode", "an auto server's tools are reached from codemode scripts");
+  assert.deepEqual(scripted.tools.get("docs__first").namespace, { name: "docs", description: "Team documentation" });
+  assert.equal(scripted.tools.get("pinned__first").exposure, undefined, "an Always visible server stays declared");
+  const sections = { mcp_servers: "stale" };
+  await scripted.events.get("before_agent_start")({ systemPromptOptions: { sections } });
+  assert.match(sections.mcp_servers, /- docs: docs \(via codemode\) — "Team documentation"/);
+  assert.doesNotMatch(sections.mcp_servers, /pinned|<mcp_servers>/, "Pi wraps the section; declared servers need no listing");
+
+  const direct = await load(["read", "bash"]);
+  direct.events.get("session_start")();
+  assert.equal(direct.tools.get("docs__first").exposure, undefined, "without codemode the tools are declared directly");
+  const none = { mcp_servers: "stale" };
+  await direct.events.get("before_agent_start")({ systemPromptOptions: { sections: none } });
+  assert.equal(none.mcp_servers, undefined);
+});
+
+test("a codemode script reaches an MCP tool that was never declared to the model, and without codemode it is declared", async (t) => {
+  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...fixtureServer(dir, "docs"), description: "Team documentation" }]);
+  const run = async (defaultTools) => {
+    const faux = fauxProvider({ provider: "faux-codemode", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
+    const requests = [];
+    faux.setResponses([
+      (context) => { requests.push(context); return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.docs__first({ value: 'hi' }))" }), { stopReason: "toolUse" }); },
+      (context) => { requests.push(context); return fauxAssistantMessage("Done"); },
+    ]);
+    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createMcpExtension(dir, { deferToCodemode: true }), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+    // dispose() alone leaves extensions running; shutting down closes the MCP server process.
+    t.after(async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); });
+    await session.bindExtensions({});
+    await session.prompt("Look it up");
+    const declared = requests[0].messages.filter((message) => message.role === "system").flatMap((message) => (message.toolsAdded ?? []).map((tool) => tool.name));
+    const sections = requests[0].messages.filter((message) => message.role === "system").map((message) => message.sections?.mcp_servers ?? "").join("");
+    const result = session.messages.find((message) => message.role === "toolResult");
+    return { declared, sections, result: result.content.map((part) => part.text ?? "").join("\n") };
+  };
+  const scripted = await run(["read", "codemode"]);
+  assert.deepEqual(scripted.declared, ["read", "codemode"], "the MCP tool stays out of the model's declarations");
+  assert.match(scripted.sections, /- docs: docs \(via codemode\)/, "the model learns the service exists");
+  assert.match(scripted.result, /Echo hi/, "the script called the MCP tool");
+  const direct = await run(["read"]);
+  assert.ok(direct.declared.includes("docs__first"), "without codemode the MCP tool is declared directly");
+  assert.equal(direct.sections, "");
 });
 
 test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
@@ -2295,16 +2361,23 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const oldEntry = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (oldEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = oldEntry; });
-  let calls = 0, hold = false;
+  let calls = 0, hold = false, scriptResult, scriptTools;
   const server = createServer(async (request, response) => {
     let body = ""; for await (const chunk of request) body += chunk;
     const parsed = JSON.parse(body);
     const write = JSON.stringify(parsed.messages).includes("Write durable file") && !parsed.messages.some((message) => message.role === "tool");
+    const last = parsed.messages.at(-1);
+    const script = last.role === "user" && JSON.stringify(last.content).includes("Script durable file");
+    if (script) scriptTools = parsed.tools.map((tool) => tool.function.name);
+    if (last.role === "tool" && last.tool_call_id === "durable-script") scriptResult = JSON.stringify(last.content);
+    const call = write
+      ? { id: "durable-write", name: "write_file", arguments: { path: "durable.txt", content: "Written by the durable Bot" } }
+      : script ? { id: "durable-script", name: "codemode", arguments: { code: 'text(await tools.read_file({ path: "durable.txt" }))' } } : undefined;
     calls++;
     response.writeHead(200, { "content-type": "text/event-stream" });
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: write ? { role: "assistant", tool_calls: [{ index: 0, id: "durable-write", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "durable.txt", content: "Written by the durable Bot" }) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: "Durable answer" }, finish_reason: null }] })}\n\n`);
     if (hold) return;
-    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: write ? "tool_calls" : "stop" }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "durable", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
     response.end("data: [DONE]\n\n");
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -2373,6 +2446,11 @@ test("durable CLI Bot migration preserves history, dedupes across restart, and f
   const writeTurn = await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" });
   assert.equal((await host.durable.runtime.awaitReply(bot.id, writeTurn.submissionId, new AbortController().signal)).kind, "completed");
   assert.equal(readFileSync(join((await host.managedWorkspace.resolve(bot.id)).homePath, "durable.txt"), "utf8"), "Written by the durable Bot");
+  // Codemode runs in the bundle: the script's read is a nested call through the Bot's own checks.
+  const scriptTurn = await host.durable.runtime.send(bot.id, { text: "Script durable file", requestId: "durable-script-once" });
+  assert.equal((await host.durable.runtime.awaitReply(bot.id, scriptTurn.submissionId, new AbortController().signal)).kind, "completed");
+  assert.ok(scriptTools.includes("codemode") && scriptTools.includes("read_file"), "codemode sits next to the Bot's declared tools");
+  assert.match(scriptResult, /Written by the durable Bot/u, "the script read the file through the bundled sandbox");
   assert.equal((await host.durable.runtime.send(bot.id, { text: "Write durable file", requestId: "durable-write-once" })).deduped, true);
   const afterFirst = calls;
   assert.ok(afterFirst > 0);

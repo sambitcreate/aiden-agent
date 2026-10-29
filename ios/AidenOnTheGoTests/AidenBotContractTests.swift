@@ -2192,6 +2192,21 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card))
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.filter { $0.key != "why" && $0.key != "open" }), "why and open are optional")
         XCTAssertTrue(decodes(AidenRemoteBotHandoff.self, card.merging(["kind": "sign_in"]) { $1 }))
+        // Revision 40: a password-or-code card says it takes no note, and only ever as false.
+        let noNote = try XCTUnwrap(raw["noNoteHandoff"] as? [String: Any])
+        let decodedNoNote = try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: noNote))
+        XCTAssertFalse(decodedNoNote.takesNote)
+        XCTAssertTrue(try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: card)).takesNote)
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedNoNote)) as? [String: Any])
+        XCTAssertEqual(reencoded["takesNote"] as? Bool, false)
+        // Revision 43: a step on the Bot's own screen says so, only as true, on an action without a page.
+        let onMac = try XCTUnwrap(raw["onMacHandoff"] as? [String: Any])
+        let decodedOnMac = try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: onMac))
+        XCTAssertTrue(decodedOnMac.onMac)
+        XCTAssertNil(decodedOnMac.open)
+        XCTAssertFalse(try AidenRemoteJSONDecoder.decode(AidenRemoteBotHandoff.self, from: JSONSerialization.data(withJSONObject: card)).onMac)
+        let reencodedOnMac = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedOnMac)) as? [String: Any])
+        XCTAssertEqual(reencodedOnMac["onMac"] as? Bool, true)
         // The Mac stores a page as its WHATWG `href`, which keeps characters
         // such as `[`, `]` and `|` unescaped; the phone shows that card too.
         let jiraPage = "https://jira.example.com/browse?filter[status]=open&q=a|b"
@@ -2199,6 +2214,12 @@ final class AidenBotContractTests: XCTestCase {
         let refused: [(String, [String: Any])] = [
             ("an unknown key", card.merging(["origin": "https://bank.example.com"]) { $1 }),
             ("an unknown kind", card.merging(["kind": "approve"]) { $1 }),
+            ("takesNote as true", card.merging(["takesNote": true]) { $1 }),
+            ("takesNote as text", card.merging(["takesNote": "false"]) { $1 }),
+            ("takesNote as null", card.merging(["takesNote": NSNull()]) { $1 }),
+            ("onMac as false", onMac.merging(["onMac": false]) { $1 }),
+            ("onMac on a sign-in", onMac.merging(["kind": "sign_in"]) { $1 }),
+            ("onMac with a page", onMac.merging(["open": ["url": "https://shop.example.com"]]) { $1 }),
             ("a blank action", card.merging(["action": "   "]) { $1 }),
             ("a long action", card.merging(["action": String(repeating: "a", count: 161)]) { $1 }),
             ("a long why", card.merging(["why": String(repeating: "a", count: 401)]) { $1 }),
@@ -2259,5 +2280,41 @@ final class AidenBotContractTests: XCTestCase {
         XCTAssertTrue(offered.offersBotHandoffs, "the phone may ask for it")
         XCTAssertFalse(offered.supportsBotHandoffs, "but has not been granted it yet")
         XCTAssertTrue(try decoded(offered: true, grant: true).supportsBotHandoffs)
+    }
+
+    /// Revision 45 (`bot:images`): a shared image decodes as the Mac sends it
+    /// to holders, every other device reads the same entry as an assistant
+    /// line, and the bytes never ride the session.
+    func testRevision41SharedImagesDecodeLikeTheHostParser() throws {
+        let raw = try XCTUnwrap(try sharedFixtureObject()["botImages"] as? [String: Any])
+        XCTAssertEqual(raw["capability"] as? String, AidenRemoteCapability.botImages.rawValue)
+        XCTAssertTrue(AidenRemoteCapability.phoneNegotiable.contains(.botImages))
+        let entry = try XCTUnwrap(raw["entry"] as? [String: Any])
+        let decoded = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: entry))
+        guard case let .sharedImage(image) = decoded else { return XCTFail("expected a shared image") }
+        XCTAssertEqual(image.id, entry["id"] as? String)
+        XCTAssertEqual(image.name, entry["name"] as? String)
+        XCTAssertEqual(image.mimeType, entry["mimeType"] as? String)
+        XCTAssertEqual(image.size, entry["size"] as? Int)
+        XCTAssertEqual(image.attachment.kind, .image)
+        let legacy = try XCTUnwrap(raw["legacyEntry"] as? [String: Any])
+        let line = try AidenRemoteJSONDecoder.decode(AidenBotSessionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
+        guard case let .message(message) = line else { return XCTFail("expected the line other devices read") }
+        XCTAssertEqual(message.role, .assistant)
+        XCTAssertEqual(message.id, image.id)
+        // The phone's cache writes the entry back in the shape the Mac sent.
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? [String: Any])
+        XCTAssertEqual(NSDictionary(dictionary: reencoded), NSDictionary(dictionary: entry))
+        let refused: [(String, [String: Any])] = [
+            ("inline bytes", entry.merging(["data": "iVBORw0KGgo="]) { $1 }),
+            ("a GIF", entry.merging(["mimeType": "image/gif"]) { $1 }),
+            ("an empty image", entry.merging(["size": 0]) { $1 }),
+            ("an image over the limit", entry.merging(["size": 8 * 1_048_576 + 1]) { $1 }),
+            ("a blank name", entry.merging(["name": ""]) { $1 }),
+            ("a long name", entry.merging(["name": String(repeating: "a", count: 256)]) { $1 }),
+        ]
+        for (label, sample) in refused {
+            XCTAssertFalse(decodes(AidenBotSessionEntry.self, sample), label)
+        }
     }
 }

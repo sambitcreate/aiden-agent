@@ -1,6 +1,6 @@
 # Agent loop resilience
 
-Status: All five steps merged on 2026-10-27 in PRs #595 (step 1), #596 (1b), #597 (2), #598 (3) and #599 (4); on main, not yet released. The owner chose the order, the split and each behavior below on 2026-10-26.
+Status: All five steps merged on 2026-10-27 in PRs #595 (step 1), #596 (1b), #597 (2), #598 (3) and #599 (4); shipped in 0.62.0. The owner chose the order, the split and each behavior below on 2026-10-26.
 
 The agent loop sends the conversation to the model, runs the tools the model asks for, feeds the results back, and repeats until the task is done. A 2026-10-26 comparison against OpenCode, Pi's coding agent and pi-gui found five places where Aiden's loop gives up sooner than it needs to. Each step is its own pull request, in this order.
 

@@ -275,7 +275,9 @@ final class AidenBotRoutineNotifier {
         let preview = AidenScheduledRunNotifier.displaySafe(item.preview, limit: 200)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         content.body = preview.isEmpty ? routineName : "\(routineName): \(preview)"
-        content.threadIdentifier = "aiden.bot-routine.\(instanceId).\(item.botId)"
+        content.threadIdentifier = item.kind == .issue
+            ? "aiden.bot-issue.\(instanceId).\(item.botId)"
+            : "aiden.bot-routine.\(instanceId).\(item.botId)"
         content.sound = .default
         if let url = AidenDeepLink.botChatURL(instanceId: instanceId, botId: item.botId) {
             content.userInfo = [AidenRunAlertNotifier.deepLinkUserInfoKey: url.absoluteString]

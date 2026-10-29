@@ -49,7 +49,12 @@ export interface BotPendingHandoff {
   open?: { url: string };
   /** Sign-in only: the normalized https origin. */
   origin?: string;
-  /** Sign-in only: where the person signs in. Defaults to the Bot's browser. */
+  /**
+   * Where the step happens. A sign-in: where the person signs in (the Bot's
+   * browser when left out). An action: set only when the step is in the
+   * Bot's own browser or on its own computer, so Open brings that forward and
+   * a phone finishes it on the Mac instead of opening the page itself.
+   */
   target?: BotHandoffTarget;
   source: BotHandoffSource;
   /** Set when `source` is "rule". */
@@ -72,9 +77,12 @@ const CREDENTIAL_RULE_IDS: ReadonlySet<string> = new Set(
  * words to the Bot: it reaches the model with the answer. A card a
  * password-or-code rule opened takes none, so a password or code typed as a
  * note can never reach the Bot; it is answered on the card itself. (A sign-in
- * may still carry a note with Skip; no composer sends one with it.)
+ * may still carry a note with Skip; no composer sends one with it.) A paired
+ * Mac's card names no rule and says `takesNote: false` instead (Remote
+ * contract revision 40).
  */
-export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule">): boolean {
+export function botHandoffTakesNote(handoff: Pick<BotPendingHandoff, "rule"> & { takesNote?: boolean }): boolean {
+  if (handoff.takesNote === false) return false;
   return handoff.rule === undefined || !CREDENTIAL_RULE_IDS.has(handoff.rule.id);
 }
 

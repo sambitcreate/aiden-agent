@@ -771,6 +771,195 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Fetched web page acme.example")
     }
 
+    // MARK: Browser recordings (contract revision 46)
+
+    private static let fixtureRecordingID = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+
+    private func recordingStepJSON(
+        id: Int,
+        toolName: String = "browser_recording_stop",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        recording: String?
+    ) -> String {
+        let recap = recording.map { #","recording":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Stop browser recording","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset)\#(recap)}"#
+    }
+
+    private func recordingRecapJSON(
+        id: String = AidenChatTests.fixtureRecordingID,
+        mimeType: String = #""video/mp4""#,
+        durationMs: String = "12400",
+        sizeBytes: String = "1048576",
+        extra: String = ""
+    ) -> String {
+        #"{"id":"\#(id)","mimeType":\#(mimeType),"durationMs":\#(durationMs),"sizeBytes":\#(sizeBytes)\#(extra)}"#
+    }
+
+    func testBrowserRecordingStepFromTheSharedFixtureDecodesAndRoundTrips() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let section = try XCTUnwrap(root["browserRecordings"] as? [String: Any])
+        let rawStep = try XCTUnwrap(section["step"] as? [String: Any])
+        let rawRecording = try XCTUnwrap(rawStep["recording"] as? [String: Any])
+
+        let step = try JSONDecoder().decode(AidenAgentStep.self, from: JSONSerialization.data(withJSONObject: rawStep))
+        let recording = try XCTUnwrap(step.recording)
+        XCTAssertEqual(recording.id, rawRecording["id"] as? String)
+        XCTAssertEqual(recording.mimeType, .mp4)
+        XCTAssertEqual(recording.durationMs, rawRecording["durationMs"] as? Int)
+        XCTAssertEqual(recording.sizeBytes, rawRecording["sizeBytes"] as? Int)
+        XCTAssertTrue(recording.playsOnPhone)
+        // 12.4 s of 1 MiB reads as the desktop card shows it.
+        XCTAssertEqual(recording.durationLabel, "0:12")
+        XCTAssertEqual(recording.sizeLabel, "1.0 MB")
+        XCTAssertEqual(recording.accessibilityLabel, "Browser recording, 0:12")
+        // The fixture's route names the same chat-relative recording.
+        XCTAssertEqual(section["recordingPath"] as? String, "/chats/chat_fixture_01/recordings/\(recording.id)")
+        // The stop step stays an ordinary activity line, not a questionnaire or extract.
+        XCTAssertFalse(step.isQuestionnaire)
+        XCTAssertNil(step.extraction)
+
+        // The chat cache writes the recap back with exactly the keys the Mac sent.
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(step)) as? [String: Any])
+        let reencodedRecording = try XCTUnwrap(reencoded["recording"] as? [String: Any])
+        XCTAssertEqual(NSDictionary(dictionary: reencodedRecording), NSDictionary(dictionary: rawRecording))
+        XCTAssertEqual(try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step)).recording, recording)
+    }
+
+    func testMalformedOrMisplacedBrowserRecordingIsDroppedButTheStepStillDecodes() throws {
+        let invalidRecaps: [(String, String)] = [
+            ("an extra key", recordingRecapJSON(extra: #","path":"/Users/me/rec.mp4""#)),
+            ("no size", #"{"id":"\#(Self.fixtureRecordingID)","mimeType":"video/mp4","durationMs":12400}"#),
+            ("uppercase hex", recordingRecapJSON(id: "recording-0F1E2D3C-4B5A-4678-9ABC-DEF012345678")),
+            ("another prefix", recordingRecapJSON(id: "capture-0f1e2d3c-4b5a-4678-9abc-def012345678")),
+            ("a path in the id", recordingRecapJSON(id: "recording-../../0f1e2d3c-4b5a-4678-9abc-def0123")),
+            ("a short id", recordingRecapJSON(id: "recording-0f1e2d3c")),
+            ("QuickTime", recordingRecapJSON(mimeType: #""video/quicktime""#)),
+            ("a negative length", recordingRecapJSON(durationMs: "-1")),
+            ("a length over six minutes", recordingRecapJSON(durationMs: "360001")),
+            ("a fractional length", recordingRecapJSON(durationMs: "12400.5")),
+            ("a length as text", recordingRecapJSON(durationMs: #""12400""#)),
+            ("an empty file", recordingRecapJSON(sizeBytes: "0")),
+            ("a file over 128 MiB", recordingRecapJSON(sizeBytes: "134217729")),
+            ("a null size", recordingRecapJSON(sizeBytes: "null")),
+            ("not an object", #""recording""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(recordingStepJSON(id: 3, recording: invalid))
+            XCTAssertNil(step.recording, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "browser_recording_stop", name)
+        }
+
+        // Boundary values the desktop parser accepts still decode.
+        let boundaries = [
+            recordingRecapJSON(durationMs: "0", sizeBytes: "1"),
+            recordingRecapJSON(durationMs: "360000", sizeBytes: "134217728"),
+            recordingRecapJSON(mimeType: #""video/webm""#),
+        ]
+        for boundary in boundaries {
+            XCTAssertNotNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, recording: boundary)).recording, boundary)
+        }
+
+        // A recap only belongs on a completed stop step.
+        let valid = recordingRecapJSON()
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, toolName: "browser_recording_start", recording: valid)).recording)
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, status: "running", recording: valid)).recording)
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, status: "failed", recording: valid)).recording)
+    }
+
+    func testBrowserRecordingLabelsMatchTheDesktopCard() {
+        func recording(durationMs: Int = 0, sizeBytes: Int = 1, mimeType: AidenBrowserRecordingRecap.MimeType = .mp4) -> AidenBrowserRecordingRecap {
+            AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: mimeType, durationMs: durationMs, sizeBytes: sizeBytes)
+        }
+        // M:SS, rounded to the nearest second, half up.
+        let durations: [(Int, String)] = [
+            (0, "0:00"), (499, "0:00"), (500, "0:01"), (7_000, "0:07"),
+            (59_499, "0:59"), (59_500, "1:00"), (90_000, "1:30"), (360_000, "6:00"),
+        ]
+        for (milliseconds, label) in durations {
+            XCTAssertEqual(recording(durationMs: milliseconds).durationLabel, label, "\(milliseconds) ms")
+        }
+        // KB below 1 MiB (never 0 KB), MB with one decimal at or above it.
+        let sizes: [(Int, String)] = [
+            (1, "1 KB"), (511, "1 KB"), (1_536, "2 KB"), (655_360, "640 KB"), (1_048_575, "1024 KB"),
+            (1_048_576, "1.0 MB"), (1_310_720, "1.3 MB"), (1_258_291, "1.2 MB"), (134_217_728, "128.0 MB"),
+        ]
+        for (bytes, label) in sizes {
+            XCTAssertEqual(recording(sizeBytes: bytes).sizeLabel, label, "\(bytes) bytes")
+        }
+        // Only MP4 plays on the phone; a WebM fallback is watched on the Mac.
+        XCTAssertTrue(recording().playsOnPhone)
+        XCTAssertFalse(recording(mimeType: .webm).playsOnPhone)
+    }
+
+    func testChronologicalProjectionShowsARecordingAfterTheLineThatStoppedIt() throws {
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "browser_navigate", contentOffset: 7, questionnaire: nil),
+            recordingStepJSON(id: 2, contentOffset: 7, recording: recordingRecapJSON()),
+            questionnaireStepJSON(id: 3, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .recording, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1", "tool-2", "tool-3"], ["tool-2"], []])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        XCTAssertEqual(rows[2].steps.first?.recording?.id, Self.fixtureRecordingID)
+
+        // The stop stays in the activity feed; fallback transcripts list the card after it.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-2", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.recordingSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.extractionSteps(timeline), [])
+
+        // An extract and a recording in one group each follow it, in timeline order.
+        let mixedSteps = [
+            recordingStepJSON(id: 1, contentOffset: 7, recording: recordingRecapJSON()),
+            extractStepJSON(id: 2, contentOffset: 7, extraction: extractRecapJSON([extractedPrice])),
+        ]
+        let mixed = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(mixedSteps.joined(separator: ","))]}"#.utf8
+        ))
+        let mixedRows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: mixed))
+        XCTAssertEqual(mixedRows.map(\.kind), [.text, .tool, .recording, .extraction, .text])
+    }
+
+    func testBrowserRecordingFailuresTellAGoneRecordingFromOtherFailures() throws {
+        let envelope = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+        )
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.server(statusCode: 404, body: envelope.error)), .missing)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.unexpectedStatus(404)), .missing)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.server(statusCode: 503, body: envelope.error)), .failed)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.invalidResponse), .failed)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: URLError(.notConnectedToInternet)), .failed)
+        XCTAssertNotEqual(AidenBrowserRecordingLoad.missingMessage, AidenBrowserRecordingLoad.failedMessage)
+    }
+
+    func testBrowserRecordingFileIsNamedByItsIdAndTypeAndIsRemovedAfterPlaying() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recording-file-\(UUID())", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D])
+        let mp4 = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
+        let file = try AidenBrowserRecordingFile.write(video, for: mp4, in: root)
+        XCTAssertEqual(file.lastPathComponent, "\(Self.fixtureRecordingID).mp4")
+        XCTAssertEqual(file.deletingLastPathComponent().path, AidenBrowserRecordingFile.directory(in: root).path)
+        XCTAssertEqual(try Data(contentsOf: file), video)
+        AidenBrowserRecordingFile.remove(file)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        let webm = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .webm, durationMs: 1_000, sizeBytes: 4)
+        XCTAssertEqual(AidenBrowserRecordingFile.url(for: webm, in: root).lastPathComponent, "\(Self.fixtureRecordingID).webm")
+
+        // An id the recorder never names is never written.
+        let escaping = AidenBrowserRecordingRecap(id: "../recording", mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
+        XCTAssertThrowsError(try AidenBrowserRecordingFile.write(video, for: escaping, in: root))
+        XCTAssertThrowsError(try AidenBrowserRecordingFile.write(Data(), for: mp4, in: root))
+    }
+
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
         let progress = try AidenRemoteJSONDecoder.decode(
             AidenRemoteChatTaskProgress.self,
@@ -1816,6 +2005,69 @@ final class AidenChatTests: XCTestCase {
             mac.lock.withLock { mac.queries },
             ["scheme=dark&theme=dusk", "scheme=dark&theme=dusk", "scheme=light&theme=dusk"]
         )
+    }
+
+    @MainActor
+    func testBrowserRecordingPlaysFromTheMacAndSaysWhenOneIsGone() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        final class Mac: @unchecked Sendable {
+            let lock = NSLock()
+            var paths: [String] = []
+        }
+        let mac = Mac()
+        let presentID = Self.fixtureRecordingID
+        let goneID = "recording-11111111-2222-4333-8444-555555555555"
+        let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70] + Array(repeating: UInt8(7), count: 32))
+        let notFound = Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-browser-recordings-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { request in
+                let path = request.url?.path ?? ""
+                switch path {
+                case "/api/aiden/v1/server":
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case "/api/aiden/v1/chats/chat-progress-lifecycle/recordings/\(presentID)":
+                    mac.lock.withLock { mac.paths.append(path) }
+                    return (200, "video/mp4", video)
+                case "/api/aiden/v1/chats/chat-progress-lifecycle/recordings/\(goneID)":
+                    mac.lock.withLock { mac.paths.append(path) }
+                    return (404, "application/json; charset=utf-8", notFound)
+                default:
+                    return nil
+                }
+            }
+        )
+        XCTAssertTrue(model.supportsBrowserRecordings)
+
+        let present = AidenBrowserRecordingRecap(id: presentID, mimeType: .mp4, durationMs: 12_400, sizeBytes: video.count)
+        let played = await model.browserRecording(present)
+        guard case .ready(let file) = played else {
+            return XCTFail("The Mac's recording should be saved for the player, got \(played).")
+        }
+        defer { AidenBrowserRecordingFile.remove(file) }
+        XCTAssertEqual(file.lastPathComponent, "\(presentID).mp4")
+        XCTAssertEqual(try Data(contentsOf: file), video)
+
+        let gone = AidenBrowserRecordingRecap(id: goneID, mimeType: .mp4, durationMs: 1_000, sizeBytes: 1_024)
+        let goneResult = await model.browserRecording(gone)
+        XCTAssertEqual(goneResult, .missing)
+
+        // A WebM recording is watched on the Mac; the phone never asks for it.
+        let webm = AidenBrowserRecordingRecap(id: presentID, mimeType: .webm, durationMs: 12_400, sizeBytes: video.count)
+        let webmResult = await model.browserRecording(webm)
+        XCTAssertEqual(webmResult, .failed)
+        XCTAssertEqual(mac.lock.withLock { mac.paths.count }, 2)
+    }
+
+    @MainActor
+    func testBrowserRecordingsStayOnTheMacWhenItDoesNotServeThem() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        XCTAssertFalse(model.supportsBrowserRecordings)
+        let recording = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .mp4, durationMs: 1_000, sizeBytes: 1_024)
+        let result = await model.browserRecording(recording)
+        XCTAssertEqual(result, .failed)
     }
 
     @MainActor
@@ -5648,7 +5900,10 @@ final class AidenChatTests: XCTestCase {
             case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
             case .questionnaire: return "questionnaire"
             case .extraction: return "extraction"
+            case .recording: return "recording"
             case .visual(let visual): return "visual:\(visual.id)"
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
             }
         }
         XCTAssertEqual(rows.map(describe), [
@@ -5682,6 +5937,64 @@ final class AidenChatTests: XCTestCase {
             AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline)?.map(describe),
             ["text:Before.", "tool:call-1", "text:After."]
         )
+    }
+
+    func testChronologicalRowsDrawEachImageBeneathTheStepThatProducedIt() throws {
+        // Revision 44: an assistant image names the step that made it.
+        let message = try AidenRemoteJSONDecoder.decode(AidenChatMessage.self, from: Data(#"""
+        {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+         "attachments":[
+           {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+           {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+           {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+           {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"}],
+         "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+           {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+           {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """#.utf8))
+        let attachments = try XCTUnwrap(message.attachments)
+        XCTAssertEqual(attachments.map(\.toolCallId), ["call-2", "call-1", nil, nil], "a malformed step id is dropped, not the image")
+
+        let images = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: message.text, reasoning: "", timeline: message.timeline, images: images
+        ))
+        func describe(_ row: AidenChronologicalRow) -> String {
+            switch row.kind {
+            case .text: return "text:\(row.text)"
+            case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
+            default: return "other"
+            }
+        }
+        XCTAssertEqual(rows.map(describe), [
+            "text:Before.", "tool:call-1", "images:shown", "text:Middle.", "tool:call-2", "images:shared_a", "text:After.",
+        ])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        // Only images without a step are left for the strip after the reply.
+        XCTAssertEqual(AidenChronologicalProjection.placedImageIDs(in: rows), ["shown", "shared_a"])
+        // The offline transcript cache keeps the step.
+        XCTAssertEqual(try JSONDecoder().decode(AidenChatMessage.self, from: JSONEncoder().encode(message)), message)
+
+        // While the reply streams, a generate_image placeholder sits beneath its
+        // step, split from the next step exactly as its image will be once the
+        // reply commits, so nothing moves at the hand-off.
+        let live = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Generate image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_search","label":"Search","status":"running","startedAt":1100,"updatedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        let liveRows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, imageSlots: ["call-1", "call-7"]
+        ))
+        XCTAssertEqual(liveRows.map(describe), ["text:Before.", "tool:call-1", "slot:call-1", "tool:call-2", "text:Here it is."])
+        XCTAssertEqual(AidenChronologicalProjection.placedImageSlots(in: liveRows), ["call-1"], "a slot without its step stays after the reply")
+        let generated = try JSONDecoder().decode(AidenMessageAttachment.self, from: Data(
+            #"{"id":"generated","name":"Image.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"}"#.utf8
+        ))
+        let committed = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, images: [generated]
+        ))
+        XCTAssertEqual(committed.map(describe), ["text:Before.", "tool:call-1", "images:generated", "tool:call-2", "text:Here it is."])
     }
 
     func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
@@ -10251,11 +10564,17 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         contentType: String,
         data: Data
     ) -> (HTTPURLResponse, Data) {
+        var headers = ["Content-Type": contentType]
+        // Media routes answer as the Mac does (revision 46 recordings).
+        if contentType.hasPrefix("video/") {
+            headers["Cache-Control"] = "no-store"
+            headers["X-Content-Type-Options"] = "nosniff"
+        }
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: status,
             httpVersion: nil,
-            headerFields: ["Content-Type": contentType]
+            headerFields: headers
         )!
         return (response, data)
     }
@@ -14181,8 +14500,8 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertEqual(other, ["generation-0"])
     }
 
-    private func image(_ id: String) -> AidenMessageAttachment {
-        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10)
+    private func image(_ id: String, call: String? = nil) -> AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10, toolCallId: call)
     }
 
     private func settledMessage(
@@ -14227,6 +14546,26 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: displayOnly))
         let failed = settledMessage(steps: [imageStep(.failed)], attachments: [image("other")])
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: failed))
+    }
+
+    func testImagesThatNameTheirStepRevealOnlyTheGeneratedOne() {
+        // Revision 44: each image names its call, so the generated image is
+        // found even after a shared image and beside a displayed one.
+        let placed = settledMessage(
+            steps: [
+                imageStep(.completed, index: 1, toolName: "share_image"),
+                imageStep(.completed, index: 2),
+                imageStep(.completed, index: 3, toolName: "display_image"),
+            ],
+            attachments: [image("shared_a", call: "call-1"), image("generated", call: "call-2"), image("shown", call: "call-3")]
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: placed), "generated")
+        // A placed reply whose generated image never arrived reveals nothing.
+        let missing = settledMessage(
+            steps: [imageStep(.completed, index: 1, toolName: "share_image"), imageStep(.completed, index: 2)],
+            attachments: [image("shared_a", call: "call-1")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: missing))
     }
 
     func testElapsedTimeUsesHostTimestampsNotThePhoneClock() {

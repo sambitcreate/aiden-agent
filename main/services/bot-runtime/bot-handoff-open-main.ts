@@ -23,8 +23,8 @@ import { openBotHandoff, type BotHandoffOpened, type BotHandoffOpeners, type Bot
 
 let computerOpener: BotComputerHandoffOpener | undefined;
 
-/** The Bot's own computer, loaded only for a sign-in card that names it. */
-async function openOnBotComputer(botId: string, waitId: string, url: string): Promise<boolean> {
+/** The Bot's own computer, loaded only for a card that names it. */
+async function openOnBotComputer(botId: string, waitId: string, url: string | undefined): Promise<boolean> {
   const { botComputers, botComputersEnabled } = await import("../bot-computers/bot-computers-main.js");
   if (!botComputersEnabled()) return false;
   const computers = botComputers();

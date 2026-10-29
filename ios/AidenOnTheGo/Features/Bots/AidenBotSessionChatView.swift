@@ -41,6 +41,7 @@ struct AidenBotSessionChatView: View {
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var spending = AidenSpendingNoticeModel()
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -55,6 +56,21 @@ struct AidenBotSessionChatView: View {
 
     private var canWrite: Bool {
         coordinator.connectionState == .connected && canCompose
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    private var spendingRefreshKey: String {
+        [
+            coordinator.activeInstanceId ?? "",
+            String(coordinator.server?.supportsSpendingLimits == true),
+            String(model?.isRunning == true),
+            String(model?.entries.count ?? 0),
+            model?.errorMessage ?? "",
+        ].joined(separator: "|")
     }
 
     /// Messages are taken while the Mac is still connecting: they wait in the
@@ -185,6 +201,10 @@ struct AidenBotSessionChatView: View {
         }
         .task(id: filesLookupKey) {
             await loadFilesTools()
+        }
+        // Revision 47: re-read the Bot's month after each reply, send and refusal.
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: .bot(botID), transport: spendingTransport)
         }
         // Chat activity is changed in Advanced; reread the Bot when it closes.
         .onChange(of: isShowingAdvanced) { _, showing in
@@ -370,6 +390,16 @@ struct AidenBotSessionChatView: View {
                         ForEach(model.outgoing) { message in
                             outgoingBubble(message, model: model)
                         }
+                        ForEach(model.openIssues) { issue in
+                            // Revision 42: a "Needs you" card from the host.
+                            AidenBotIssueCardView(
+                                issue: issue,
+                                canAct: canWrite && model.canActOnIssue,
+                                isBusy: model.actingIssue?.id == issue.id,
+                                onAct: { action in Task { await model.actOnIssue(issue, action: action) } }
+                            )
+                            .id("issue:\(issue.id)")
+                        }
                         AidenBotStatusLineView(model: model)
                         Color.clear.frame(height: 1).id("bottom")
                     }
@@ -526,6 +556,15 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .sharedImage(image):
+            // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+            AidenMessageImageAttachmentsView(
+                attachments: [image.attachment],
+                edge: .leading,
+                loadData: { attachment in await model.sharedImageData(entryId: attachment.id) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 48)
         }
     }
 
@@ -700,6 +739,16 @@ struct AidenBotSessionChatView: View {
                     onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
                 )
                 .id(handoff.waitId)
+            }
+            if let current = spending.spending, !model.needsModel, !model.isPaused {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: bot?.name,
+                    isAllowing: spending.isAllowing,
+                    canAllow: canWrite,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
             }
             if model.needsModel {
                 AidenBotNeedsModelCard(
@@ -883,14 +932,18 @@ struct AidenBotSessionChatView: View {
 
     /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
     /// finished on the Mac or skipped, so the composer waits for either.
+    /// Revision 40: so does a password-or-code card, which takes no note.
     private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
-        model.isPaused || model.handoff?.kind == .signIn
+        model.isPaused || model.handoff?.kind == .signIn || model.composerHeldForNoNote
     }
 
     private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
         if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
         switch model.handoff?.kind {
-        case .action: return AidenBotSessionCopy.handoffNotePlaceholder
+        case .action:
+            return model.composerHeldForNoNote
+                ? AidenBotSessionCopy.handoffNoNotePlaceholder
+                : AidenBotSessionCopy.handoffNotePlaceholder
         case .signIn: return AidenBotSessionCopy.signInPlaceholder
         case nil: return "Message"
         }
@@ -1017,8 +1070,9 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func composerControls(_ model: AidenBotSessionModel) -> some View {
         if model.isRunning {
-            if model.composerAnswersHandoff {
-                // A waiting step's note goes with a plain Send, never Steer or Queue.
+            if model.composerAnswersHandoff || composerIsHeld(model) {
+                // A waiting step's note goes with a plain Send, never Steer or Queue,
+                // and a held composer offers neither.
                 sendButton(model)
             } else if model.offersBusyModes {
                 busyPill(model)
@@ -1364,6 +1418,98 @@ struct AidenBotRoutineProposalCardView: View {
                     .font(.footnote)
                     .foregroundStyle(palette.secondary)
             }
+        }
+    }
+}
+
+/// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
+/// two actions. A card that offers nothing a phone can do (the Mac's own
+/// settings opened it) says "Open on your Mac".
+struct AidenBotIssueCardView: View {
+    let issue: AidenRemoteBotIssue
+    let canAct: Bool
+    let isBusy: Bool
+    let onAct: (AidenBotIssueAction) -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var symbol: String {
+        switch issue.kind {
+        case .preflightFailed: "wrench.and.screwdriver"
+        case .routineFailed: "clock.badge.exclamationmark"
+        case .routinePaused: "pause.circle"
+        case .runStalled: "hourglass"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(palette.foreground)
+                .frame(width: 40, height: 40)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(AidenBotSessionCopy.issueNeedsYou)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                Text(issue.title)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                if !issue.body.isEmpty {
+                    Text(issue.body)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                actions
+                    .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if issue.actions.isEmpty {
+            // `open_settings` never crosses the wire: the rest is on the Mac.
+            Text(AidenBotSessionCopy.issueOpenOnMac)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+        } else if canAct {
+            HStack(spacing: 10) {
+                ForEach(Array(issue.actions.enumerated()), id: \.offset) { index, action in
+                    Button(AidenBotSessionModel.issueActionTitle(action)) { onAct(action) }
+                        .modifier(AidenBotIssueButtonStyle(isPrimary: index == issue.actions.count - 1))
+                }
+            }
+            .disabled(isBusy)
+        } else {
+            Text(AidenBotSessionCopy.finishOnMacReadOnly)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+        }
+    }
+}
+
+/// The last action is primary: it carries the solid fill; the other stays bordered.
+private struct AidenBotIssueButtonStyle: ViewModifier {
+    let isPrimary: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isPrimary {
+            content
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
         }
     }
 }
