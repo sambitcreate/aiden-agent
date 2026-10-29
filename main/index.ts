@@ -94,6 +94,7 @@ import {
   loadSubagentPackagedSoakSession,
   SUBAGENT_PACKAGED_SOAK_CHAT_ID,
   SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
+  SUBAGENT_PACKAGED_SOAK_QUIT_FINALIZATION_GRACE_MS,
   requiresSubagentPackagedSoakFailureExit,
   subagentPackagedSoakAction,
   tryFinalizeSubagentPackagedSoakQuitReceipt,
@@ -165,7 +166,11 @@ import { botSkillContentWatcher } from "./services/bot-capability-services-main.
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
-import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
+import {
+  createLifecycleCheck,
+  shouldQuitAfterAllWindowsClose,
+  shouldReleaseAuxiliaryWindows,
+} from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
@@ -205,7 +210,9 @@ let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
 let forceAppQuit = false;
 let cleanupStarted = false;
-let lifecycleCheckInFlight = false;
+const lifecycleCheck = createLifecycleCheck((error) =>
+  logger.error("main", "A window action queued after a lifecycle check failed.", error),
+);
 let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
@@ -353,11 +360,70 @@ function cleanupApplication(): void {
 }
 
 /**
- * Last-resort bound on the whole quit. Every step below has its own budget;
- * this only catches work that escapes them, so Aiden never stays half-shut
+ * Per-step quit budgets. Each one is at least the service's own internal
+ * grace, so the outer deadline never cuts a step short of the bound the
+ * service already enforces on itself.
+ */
+const SHUTDOWN_BUDGET_MS = {
+  geminiLive: 3_000,
+  // Generation grace (6 s) plus the Gemini context-cache deletes that
+  // llmClient.shutdown() runs after it. A delete still in flight at the
+  // deadline reports the step as unsettled; the cache entries expire on
+  // their own TTL server-side.
+  parentGenerations: 8_000,
+  backgroundJobs: 6_000,
+  modelPace: 1_000,
+  subagentRuntime: 7_000,
+  spending: 1_000,
+  soakReceipt: SUBAGENT_PACKAGED_SOAK_QUIT_FINALIZATION_GRACE_MS,
+  remoteAccess: 5_000,
+  providerSignIn: 2_000,
+  // computerUseStatus.shutdown() waits up to its own 5 s grace.
+  computerUseStatus: 5_500,
+  // scheduleService.stopAndSettle() waits up to 5 s for running tasks.
+  botIngress: 5_500,
+  botRuntime: 5_000,
+  subagentRunStore: 3_000,
+  terminalHistory: 2_000,
+  designWork: 2_000,
+  imageRuns: 2_000,
+  studioAssets: 2_000,
+  browser: 3_000,
+  botComputers: 5_000,
+  // Recordings get 2 s and SSH hosts 5 s; the local simulator host stop has
+  // no bound of its own, so this deadline caps it.
+  devices: 8_000,
+  mcpServers: 3_000,
+  // flushSubagentRuntimeDiagnostics + flushDiagnosticJournal + flushDiagnosticHealth.
+  diagnostics: 3_000,
+} as const;
+
+/**
+ * Last-resort bound on the whole quit: the serial steps, the slowest branch
+ * of the parallel teardown, the diagnostic flushes, and 5 s of slack. It only
+ * catches work that escapes the step budgets, so Aiden never stays half-shut
  * with its window gone. Exit code 1 marks the shutdown as incomplete.
  */
-const SHUTDOWN_HARD_CEILING_MS = 45_000;
+const SHUTDOWN_HARD_CEILING_MS = (() => {
+  const b = SHUTDOWN_BUDGET_MS;
+  const serial =
+    b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.subagentRuntime + b.spending + b.soakReceipt + b.remoteAccess;
+  const parallel = Math.max(
+    b.providerSignIn,
+    b.computerUseStatus,
+    b.botIngress + b.botRuntime,
+    b.subagentRunStore,
+    b.terminalHistory,
+    b.designWork,
+    b.imageRuns + b.studioAssets,
+    b.browser,
+    b.botComputers,
+    b.devices,
+    b.mcpServers,
+  );
+  return serial + parallel + b.diagnostics + 5_000;
+})();
 const pendingShutdownSteps = new Set<string>();
 
 /** Run one shutdown step within its budget; a miss or failure is logged, never fatal. */
@@ -411,12 +477,12 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     }
   }
   const disarmShutdownCeiling = armShutdownCeiling();
-  await settleShutdownStep("voice", "Gemini Live", 3_000, () => geminiLiveService.shutdown());
+  await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
   llmClient.abortAll();
-  const parentShutdown = await settleShutdownStep("main", "Parent generations", 8_000, () =>
+  const parentShutdown = await settleShutdownStep("main", "Parent generations", SHUTDOWN_BUDGET_MS.parentGenerations, () =>
     llmClient.shutdown(),
   );
   const parentSettled = parentShutdown.status === "fulfilled" && parentShutdown.value;
@@ -428,11 +494,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   }
   // Background jobs and done-when checks stop with the app; follows and
   // checks are saved for the next launch. Bounded so a stuck job never holds quit.
-  await settleShutdownStep("follow-through", "Background jobs", 6_000, () => shutdownFollowThrough());
+  await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
-  await settleShutdownStep("main", "Model pace samples", 1_000, () => modelPaceRecorder.flush());
-  const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", 7_000, () =>
+  await settleShutdownStep("main", "Model pace samples", SHUTDOWN_BUDGET_MS.modelPace, () => modelPaceRecorder.flush());
+  const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
     subagentRuntimeRegistry.shutdown(),
   );
   const subagentsSettled = subagentShutdown.status === "fulfilled" && subagentShutdown.value;
@@ -443,7 +509,7 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     );
   }
   // Every reply has settled: save the last spending and usage-limit changes.
-  await settleShutdownStep("main", "Spending and usage limits", 1_000, () =>
+  await settleShutdownStep("main", "Spending and usage limits", SHUTDOWN_BUDGET_MS.spending, () =>
     Promise.all([spending.flush(), usageLimits.flush()]),
   );
   const session = pendingPackagedSubagentSoakReceipt;
@@ -490,55 +556,55 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     app.exit(1);
     return;
   }
-  await settleShutdownStep("aiden-remote", "Remote Access", 5_000, () =>
+  await settleShutdownStep("aiden-remote", "Remote Access", SHUTDOWN_BUDGET_MS.remoteAccess, () =>
     stopAidenRemoteServiceAndSettle(),
   );
   cleanupApplication();
   await Promise.all([
-    settleShutdownStep("main", "Provider sign-in", 2_000, () => shutdownProviderAuthFlow()),
-    settleShutdownStep("computer-use", "Computer Use status", 2_000, () => computerUseStatus.shutdown()),
+    settleShutdownStep("main", "Provider sign-in", SHUTDOWN_BUDGET_MS.providerSignIn, () => shutdownProviderAuthFlow()),
+    settleShutdownStep("computer-use", "Computer Use status", SHUTDOWN_BUDGET_MS.computerUseStatus, () => computerUseStatus.shutdown()),
     (async () => {
       // Stop Bot ingress first so nothing reopens the runtime, then close
       // every Bot harness: a running turn is left interrupted (Resume on
       // next start) and the profile lock is released.
-      await settleShutdownStep("bots", "Bot schedules and Telegram", 3_000, () =>
+      await settleShutdownStep("bots", "Bot schedules and Telegram", SHUTDOWN_BUDGET_MS.botIngress, () =>
         Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]),
       );
-      await settleShutdownStep("bots", "The Bot runtime", 5_000, async () => {
+      await settleShutdownStep("bots", "The Bot runtime", SHUTDOWN_BUDGET_MS.botRuntime, async () => {
         const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
         await shutdownBotSessionRuntime();
       });
     })(),
-    settleShutdownStep("subagents", "Subagent run store", 3_000, async () => {
+    settleShutdownStep("subagents", "Subagent run store", SHUTDOWN_BUDGET_MS.subagentRunStore, async () => {
       await subagentRunStore.flush();
       await subagentRunStore.close();
     }),
-    settleShutdownStep("terminal", "Terminal history", 2_000, () => terminalService.flushHistory()),
+    settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () => terminalService.flushHistory()),
     // Run settlements record their end through the project store, so they drain
     // first and in-flight store writes after them. A store that was never
     // opened (flags off) resolves at once.
-    settleShutdownStep("design", "Design work", 2_000, async () => {
+    settleShutdownStep("design", "Design work", SHUTDOWN_BUDGET_MS.designWork, async () => {
       await designRunService.drain();
       await designProjectStore.drain();
     }),
     (async () => {
       // Image runs record their end (and close the run ledger) before the asset store closes.
       // A ledger that was never opened (flag off) resolves at once.
-      await settleShutdownStep("create-images", "Image runs", 2_000, () =>
+      await settleShutdownStep("create-images", "Image runs", SHUTDOWN_BUDGET_MS.imageRuns, () =>
         createImagesRuntime.shutdown("app-quit"),
       );
-      await settleShutdownStep("studio", "Studio asset store", 2_000, () => studioAssetStore.close());
+      await settleShutdownStep("studio", "Studio asset store", SHUTDOWN_BUDGET_MS.studioAssets, () => studioAssetStore.close());
     })(),
-    settleShutdownStep("browser", "The browser", 3_000, () => browserService.shutdown()),
+    settleShutdownStep("browser", "The browser", SHUTDOWN_BUDGET_MS.browser, () => browserService.shutdown()),
     // Every running Bot computer is asked to stop, then forced, inside the budget;
     // a computer that never started (or no Apple silicon) resolves at once.
-    settleShutdownStep("bot-computers", "Bot computers", 5_000, async () => {
+    settleShutdownStep("bot-computers", "Bot computers", SHUTDOWN_BUDGET_MS.botComputers, async () => {
       const { shutdownBotComputers } = await import("./services/bot-computers/bot-computers-main.js");
       await shutdownBotComputers(4_000);
     }),
-    settleShutdownStep("devices", "Devices", 3_000, () => shutdownDevices()),
+    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () => shutdownDevices()),
     // Stdio children that miss the budget are still signalled by their transports' close.
-    settleShutdownStep("main", "MCP servers", 3_000, () =>
+    settleShutdownStep("main", "MCP servers", SHUTDOWN_BUDGET_MS.mcpServers, () =>
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
@@ -769,8 +835,7 @@ async function persistMainWindowState(window: BrowserWindow): Promise<void> {
 }
 
 async function requestWindowClose(window: BrowserWindow): Promise<void> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
     // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
@@ -786,10 +851,17 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
     }
     await persistMainWindowState(window);
     protectedAction = "close";
-    if (authorization === "unresponsive") window.destroy();
-    else window.close();
+    if (authorization === "unresponsive") {
+      // destroy() fires window-all-closed and before-quit synchronously; run it
+      // after the check is released so a last-window close still quits.
+      lifecycleCheck.afterRelease(() => {
+        if (!window.isDestroyed()) window.destroy();
+      });
+    } else {
+      window.close();
+    }
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
@@ -797,8 +869,7 @@ async function requestWindowReload(
   window: BrowserWindow,
   options: { ignoreCache?: boolean } = {},
 ): Promise<void> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     if (!(await authorizeProtectedAction(window, "reload"))) return;
     closeGuard = {
@@ -811,13 +882,12 @@ async function requestWindowReload(
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
     else window.webContents.reload();
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
 async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return false;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return false;
   try {
     if (!confirmImageRequestsBeforeQuit(window)) return false;
     const authorization = await authorizeProtectedActionOrForce(window, "close", "quit");
@@ -859,7 +929,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
     if (!shutdownStarted && installUpdateOnQuit) {
       installUpdateOnQuit = false;
       appUpdateService.announceSnapshot();
@@ -915,14 +985,13 @@ async function restoreRendererOnboardingCompletion(
 
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   if (
-    lifecycleCheckInFlight ||
     shutdownStarted ||
     installUpdateOnQuit ||
-    window.isDestroyed()
+    window.isDestroyed() ||
+    !lifecycleCheck.tryBegin()
   ) {
     return false;
   }
-  lifecycleCheckInFlight = true;
   let settingsPrepared = false;
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
@@ -1010,7 +1079,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
     if (settingsPrepared) computerUseSettings.resumeAfterCancelledShutdown();
     throw error;
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
@@ -1159,7 +1228,7 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
       reason: "unavailable",
     };
   }
-  if (lifecycleCheckInFlight || shutdownStarted) {
+  if (lifecycleCheck.inFlight || shutdownStarted) {
     return {
       accepted: false,
       reason: "busy",
@@ -1890,12 +1959,12 @@ if (!ownsSingleInstanceLock) {
     logger.info("electron-lifecycle", "Application before-quit", {
       forceAppQuit,
       shutdownStarted,
-      lifecycleCheckInFlight,
+      lifecycleCheckInFlight: lifecycleCheck.inFlight,
       hasMainWindow: Boolean(mainWindow && !mainWindow.isDestroyed()),
     });
     if (forceAppQuit) return;
     event.preventDefault();
-    if (shutdownStarted || lifecycleCheckInFlight) return;
+    if (shutdownStarted || lifecycleCheck.inFlight) return;
     // The quit a last-window close confirmed takes its coverage here, once.
     const confirmedByWindowClose = imageQuitCoverage.consume();
     if (mainWindow && !mainWindow.isDestroyed()) {

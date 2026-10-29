@@ -18,6 +18,8 @@ const PILL_BOTTOM_OFFSET = 15;
 
 let pillWindow: BrowserWindow | null = null;
 let loading: Promise<BrowserWindow> | null = null;
+/** The pill being created, so destroyPill() can reach it before it loads. */
+let loadingWindow: BrowserWindow | null = null;
 let pillUrl = "";
 
 function positionPill(window: BrowserWindow): void {
@@ -67,12 +69,16 @@ async function createPillWindow(): Promise<BrowserWindow> {
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setAlwaysOnTop(true, process.platform === "darwin" ? "status" : "normal");
 
+  loadingWindow = window;
   window.on("closed", () => {
-    pillWindow = null;
+    if (pillWindow === window) pillWindow = null;
+    if (loadingWindow === window) loadingWindow = null;
   });
 
   const loaded = new Promise<BrowserWindow>((resolve, reject) => {
     window.webContents.once("did-finish-load", () => resolve(window));
+    // A pill destroyed mid-load never finishes; settle its waiters instead.
+    window.once("closed", () => reject(new Error("Pill window closed before it loaded")));
     window.webContents.once("did-fail-load", (_event, code, description) =>
       reject(new Error(`Pill window failed to load (${code}): ${description}`)),
     );
@@ -94,6 +100,7 @@ async function ensurePill(): Promise<{ window: BrowserWindow; created: boolean }
   if (!loading) {
     loading = createPillWindow().finally(() => {
       loading = null;
+      loadingWindow = null;
     });
   }
   pillWindow = await loading;
@@ -126,6 +133,8 @@ export function hidePill(): void {
 export function destroyPill(): void {
   if (pillWindow && !pillWindow.isDestroyed()) pillWindow.destroy();
   pillWindow = null;
+  if (loadingWindow && !loadingWindow.isDestroyed()) loadingWindow.destroy();
+  loadingWindow = null;
 }
 
 export function isCurrentPillEvent(event: IpcMainInvokeEvent): boolean {

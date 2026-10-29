@@ -7,11 +7,20 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
 - `withDeadline(work, ms)` in `main/services/quit-barrier.ts` settles any step
   as fulfilled, rejected or timed-out. It does not cancel the work.
 - `shutdownAndQuit` runs every service step through `settleShutdownStep` with
-  its own budget: serial steps first (Gemini Live 3 s, parent generations 8 s,
-  background jobs 6 s, model pace 1 s, subagents 7 s, spending 1 s, Remote
-  5 s), then the independent stores in parallel (2-5 s each). A step that
-  times out is logged and skipped.
-- A hard ceiling (`SHUTDOWN_HARD_CEILING_MS`, 45 s, unref'd) calls
+  its budget from `SHUTDOWN_BUDGET_MS` in `main/index.ts`: serial steps first
+  (Gemini Live 3 s, parent generations 8 s, background jobs 6 s, model pace
+  1 s, subagents 7 s, spending 1 s, soak receipt 5 s, Remote 5 s), then the
+  independent stores in parallel. A step that times out is logged and skipped.
+- Each budget is at least the service's own internal grace: bot ingress 5.5 s
+  (`stopAndSettle` waits 5 s), Computer Use status 5.5 s (5 s grace), devices
+  8 s (recordings 2 s + SSH 5 s; local host stop is unbounded).
+- Parent generations share 8 s between the 6 s generation grace and Gemini
+  context-cache deletes (8 s request timeout each). A slow delete reports the
+  step unsettled, which skips the soak receipt; cache entries expire on their
+  server-side TTL.
+- A hard ceiling (`SHUTDOWN_HARD_CEILING_MS`, unref'd) is derived from the
+  budgets: serial sum + the longest parallel branch (bot ingress then bot
+  runtime, 10.5 s) + diagnostics + 5 s slack, about 54.5 s. It calls
   `app.exit(1)` and logs which steps were still pending. It is disarmed only
   when the update installer takes over. Exit code 1 keeps the soak receipt
   fail-closed.
@@ -22,6 +31,12 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   renderer does not answer, window close and app quit show "Aiden isn't
   responding" with Keep Aiden Open / Close Anyway (Quit Anyway); the force
   path calls `window.destroy()`. Reload and onboarding reset never force.
+- `createLifecycleCheck` (application-lifecycle-core) gates close, reload,
+  quit and onboarding reset. `destroy()` fires window-all-closed and
+  before-quit synchronously, and before-quit drops a quit while a check is in
+  flight, so a forced window close queues `destroy()` with `afterRelease`.
+  Otherwise Close Anyway on the last Linux/Windows window left a headless
+  Aiden running.
 
 ## Startup and window races
 - `mainWindowLoads.retryFailed(start)` (superseding-task-core) restarts a
@@ -41,6 +56,9 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
 ## Dictation pill
 - The pill is `markAuxiliaryWindow`'d, so on Linux it no longer keeps the app
   alive after the last real window closes; the release branch also destroys it.
+- `destroyPill()` also destroys a pill that is still loading (`loadingWindow`),
+  and a pill closed mid-load rejects its `ensurePill` waiters instead of
+  leaving them pending.
 
 ## Native IPC (F8) and broadcasts (F9)
 - `main/native-ipc-core.ts`: media types are allow-listed; `aiden:dialog:open`
