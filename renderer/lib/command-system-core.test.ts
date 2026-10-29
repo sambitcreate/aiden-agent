@@ -3,7 +3,6 @@ import test from "node:test";
 import { applyKeybindingMutation, effectiveBindings } from "../shared/keybindings";
 import {
   commandExecutionAllowed,
-  menuKeyAlreadySeen,
   paletteCommands,
   resolveCommandForKeyEvent,
   workspaceCommandVisibility,
@@ -213,17 +212,6 @@ test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
-});
-
-test("a menu item's key that the page already saw is not run a second time", () => {
-  const pressed = { event: event("f", "KeyF"), at: 1000 };
-  assert.equal(menuKeyAlreadySeen(pressed, "Command+F", 1200), true, "the same press, just after");
-  assert.equal(menuKeyAlreadySeen(pressed, "Command+Shift+F", 1200), false, "another key");
-  assert.equal(menuKeyAlreadySeen(pressed, "Command+F", 2500), false, "too long ago to be this press");
-  assert.equal(menuKeyAlreadySeen(null, "Command+F", 1200), false, "the page never saw a key");
-  assert.equal(menuKeyAlreadySeen(pressed, null, 1200), false, "no key set");
-  const linux = { event: { ...event("f", "KeyF"), metaKey: false, ctrlKey: true }, at: 1000 };
-  assert.equal(menuKeyAlreadySeen(linux, "Command+F", 1200, "linux"), true, "Command is Ctrl off a Mac");
 });
 
 test("⌘/ opens the keyboard list from the message box too", () => {

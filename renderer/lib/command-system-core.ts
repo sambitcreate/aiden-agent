@@ -78,26 +78,6 @@ export function resolveCommandForKeyEvent(
   return null;
 }
 
-/** How long after a keydown a menu item's key may still be that same press. */
-export const MENU_KEY_ECHO_MS = 1000;
-
-/**
- * A menu item that only shows its key can still be fired by that key on
- * macOS, after the page has seen it (see application-menu-core). The page
- * already acted on the press, or chose not to (focus in a text field, the
- * terminal, a dialog open), so the menu's copy is dropped. A press the page
- * never saw is the menu's to run.
- */
-export function menuKeyAlreadySeen(
-  last: { event: KeyboardEventLike; at: number } | null,
-  binding: string | null | undefined,
-  now: number,
-  platform: KeyboardPlatform = "darwin",
-): boolean {
-  if (!last || !binding || now - last.at > MENU_KEY_ECHO_MS) return false;
-  return matchesAccelerator(last.event, binding, platform);
-}
-
 /**
  * Commands the palette may list for these capabilities; gated commands are absent, not disabled.
  * Commands that belong to what is on screen (the open chat, its folder) are absent while

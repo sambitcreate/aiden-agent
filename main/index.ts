@@ -1721,11 +1721,8 @@ function setupApplicationMenu(
       available: applicationMenuAvailable,
       actions: {
         checkForUpdates: () => void appUpdateService.checkNow(true),
-        deliverCommand: (commandId, viaKey) =>
-          deliverMainWindowNotificationSafely("app:command", {
-            commandId,
-            source: viaKey ? "menu-key" : "menu",
-          }),
+        deliverCommand: (commandId) =>
+          deliverMainWindowNotificationSafely("app:command", { commandId }),
         reload: (ignoreCache) => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             void requestWindowReload(mainWindow, { ignoreCache });

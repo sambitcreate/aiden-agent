@@ -87,26 +87,24 @@ test("macOS gets View, Go and Chat menus, and Help lists Keyboard Shortcuts", ()
 });
 
 test("menu items for in-app keys show the key as set, without taking it from the page", () => {
-  const delivered: Array<[string, boolean | undefined]> = [];
+  const delivered: string[] = [];
   const menu = applicationMenuTemplate({
     platform: "linux",
     appName: "Aiden Agent",
     // A key someone changed in Settings, and one they turned off.
     bindings: { "chat.find": "Command+Shift+G", "chat.stop": null },
-    actions: { ...actions, deliverCommand: (commandId, viaKey) => delivered.push([commandId, viaKey]) },
+    actions: { ...actions, deliverCommand: (commandId) => delivered.push(commandId) },
   });
   const chat = submenu(menu, "Chat");
   const find = item(chat, "Find in Chat");
   assert.equal(find.accelerator, "CommandOrControl+Shift+G");
   assert.equal(find.registerAccelerator, false, "the page keeps the key");
   assert.equal(item(chat, "Stop Reply").accelerator, undefined);
-  // A click runs the command; the item's own key comes back marked, for the page to drop.
+  // A click runs the command. The key firing the item (macOS does, for a key
+  // the page left alone, as in the terminal) runs nothing.
   find.click?.({} as never, undefined, { triggeredByAccelerator: false } as never);
   find.click?.({} as never, undefined, { triggeredByAccelerator: true } as never);
-  assert.deepEqual(delivered, [
-    ["chat.find", false],
-    ["chat.find", true],
-  ]);
+  assert.deepEqual(delivered, ["chat.find"]);
 });
 
 test("menu items grey out while the app can't run them, once it has said what it can run", () => {

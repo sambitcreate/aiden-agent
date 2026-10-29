@@ -3,8 +3,7 @@ import { COMMAND_IDS, electronAcceleratorForPlatform } from "../../renderer/shar
 
 export interface ApplicationMenuActions {
   checkForUpdates(): void;
-  /** `viaKey`: the item's key fired it, not a click (see `shownItem`). */
-  deliverCommand(commandId: string, viaKey?: boolean): void;
+  deliverCommand(commandId: string): void;
   reload(ignoreCache: boolean): void;
 }
 
@@ -47,17 +46,18 @@ export function applicationMenuTemplate({
   });
   // The renderer owns these keys: whether they act depends on focus and on
   // what is open (a text field, the terminal, the browser). So the menu shows
-  // the key without taking it. On Linux and Windows the key is not registered;
-  // on macOS the page sees the key first, and a key the page left alone also
-  // reaches the menu, which hands it back marked `viaKey` for the renderer to
-  // drop.
+  // the key without taking it. On Linux and Windows the key is not registered.
+  // macOS still fires the item for a key the page left alone (or never saw,
+  // from inside a frame), so a click the key triggered is ignored.
   const shownItem = (label: string, commandId: string): MenuItemConstructorOptions => ({
     label,
     accelerator: platformMenuAccelerator(bindings[commandId], platform),
     registerAccelerator: false,
     enabled: !available || available.has(commandId),
-    click: (_item, _window, event) =>
-      actions.deliverCommand(commandId, event?.triggeredByAccelerator === true),
+    click: (_item, _window, event) => {
+      if (event?.triggeredByAccelerator) return;
+      actions.deliverCommand(commandId);
+    },
   });
   const fileItems: MenuItemConstructorOptions[] = [
     commandItem("New Chat", "chat.new"),

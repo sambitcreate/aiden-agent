@@ -7,11 +7,9 @@ import {
   COMMAND_IDS,
   prettyAccelerator,
   type CommandId,
-  type KeyboardEventLike,
 } from "../shared/keybindings";
 import {
   commandExecutionAllowed,
-  menuKeyAlreadySeen,
   resolveCommandForKeyEvent,
 } from "./command-system-core";
 import { toast } from "../components/ui";
@@ -87,12 +85,6 @@ export function CommandSystemProvider({
       >),
     [shortcuts.data?.effective],
   );
-
-  const bindingsRef = React.useRef(bindings);
-  bindingsRef.current = bindings;
-  const platformRef = React.useRef(capabilities.platform);
-  platformRef.current = capabilities.platform;
-  const lastKeyDown = React.useRef<{ event: KeyboardEventLike; at: number } | null>(null);
 
   const register = React.useCallback((commandId: CommandId, handler: CommandHandler) => {
     const list = handlers.current.get(commandId) ?? [];
@@ -173,19 +165,9 @@ export function CommandSystemProvider({
   }, [queryClient]);
 
   React.useEffect(() => {
-    return onNotification<{ commandId?: unknown; source?: unknown }>("app:command", ({ commandId, source }) => {
-      if (typeof commandId !== "string" || !(commandId in COMMAND_BY_ID)) return;
-      if (
-        source === "menu-key" &&
-        menuKeyAlreadySeen(
-          lastKeyDown.current,
-          bindingsRef.current[commandId as CommandId],
-          performance.now(),
-          platformRef.current,
-        )
-      )
-        return;
-      execute(commandId as CommandId);
+    return onNotification<{ commandId?: unknown }>("app:command", ({ commandId }) => {
+      if (typeof commandId === "string" && commandId in COMMAND_BY_ID)
+        execute(commandId as CommandId);
     });
   }, [execute]);
 
@@ -212,17 +194,6 @@ export function CommandSystemProvider({
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      lastKeyDown.current = {
-        event: {
-          key: event.key,
-          code: event.code,
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          altKey: event.altKey,
-          shiftKey: event.shiftKey,
-        },
-        at: performance.now(),
-      };
       const target = event.target instanceof HTMLElement ? event.target : null;
       const commandId = resolveCommandForKeyEvent(event, bindings, {
         editable: isEditable(target),

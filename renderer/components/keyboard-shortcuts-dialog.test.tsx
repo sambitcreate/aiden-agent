@@ -151,7 +151,7 @@ function menuCommandsSent(): string[] | undefined {
   return sent[sent.length - 1]?.args[0] as string[] | undefined;
 }
 
-test("the menu bar learns which commands can run now, and a menu key the page saw isn't run twice", async () => {
+test("the menu bar learns which commands can run now, and its items run them", async () => {
   const queryClient = createBotTestQueryClient();
   let found = 0;
   const app = (open: boolean) => (
@@ -159,7 +159,6 @@ test("the menu bar learns which commands can run now, and a menu key the page sa
       <CommandSystemProvider>
         {open ? <Handler commandId="chat.find" onRun={() => (found += 1)} /> : null}
         <textarea aria-label="Message" />
-        <div data-command-scope="terminal" tabIndex={0} aria-label="Terminal" />
       </CommandSystemProvider>
     </QueryClientProvider>
   );
@@ -177,17 +176,7 @@ test("the menu bar learns which commands can run now, and a menu key the page sa
   await waitFor(() => assert.ok(menuCommandsSent()?.includes("chat.find")));
 
   // A click on the menu item runs it.
-  emitBotTestNotification("app:command", { commandId: "chat.find", source: "menu" });
+  emitBotTestNotification("app:command", { commandId: "chat.find" });
   assert.equal(found, 1);
-  // The terminal keeps Ctrl+Shift+G, so the page leaves it; the menu's copy of
-  // that same press must not run it behind the terminal's back.
-  const terminal = screen.getByLabelText("Terminal");
-  fireEvent.keyDown(terminal, { key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
-  emitBotTestNotification("app:command", { commandId: "chat.find", source: "menu-key" });
-  assert.equal(found, 1);
-  // A key press the page never saw (a different key last) is the menu's to run.
-  fireEvent.keyDown(terminal, { key: "a", code: "KeyA" });
-  emitBotTestNotification("app:command", { commandId: "chat.find", source: "menu-key" });
-  assert.equal(found, 2);
   queryClient.clear();
 });
