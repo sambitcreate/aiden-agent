@@ -125,7 +125,10 @@ export function createCliScheduler(agentDir: string) {
     const revision = currentApproval?.active
       ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
       : undefined;
-    const mutationOptions = revision === undefined ? undefined : { expectedUpdatedAt: revision, signal: currentApproval!.cancellation.signal };
+    // A new task has no revision to pin, but its receipt can still be cancelled.
+    const mutationOptions = currentApproval?.active
+      ? { ...(revision === undefined ? {} : { expectedUpdatedAt: revision }), signal: currentApproval.cancellation.signal }
+      : undefined;
     switch (action) {
       case "list": return store.list();
       case "status": {
