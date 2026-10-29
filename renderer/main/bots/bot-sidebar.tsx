@@ -31,6 +31,7 @@ import { BotDeleteDialog } from "./bot-delete-dialog";
 import { BotRowMenus, useBotMenuActions, type BotMenuAction } from "./bot-menu";
 import { botRowLine, matchesBotSearch, useBotRows, type BotSidebarRow } from "./bot-sidebar-rows";
 import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
+import { pauseWhenUnseen } from "../../lib/offscreen-pause";
 
 const ROW_FOCUS =
   "outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
@@ -134,6 +135,7 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
                   <span
                     id={lineId}
                     aria-hidden="true"
+                    ref={line.kind === "working" ? pauseWhenUnseen : undefined}
                     className={cn(
                       "block min-w-0 truncate text-small text-secondary",
                       line.kind === "working" && "agent-thinking-shimmer",

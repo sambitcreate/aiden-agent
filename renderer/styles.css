@@ -2232,6 +2232,12 @@ textarea {
   -webkit-text-fill-color: transparent;
   animation: aiden-thinking-shimmer 1.8s ease-in-out infinite;
 }
+/* The shimmer repaints its text every frame, so it pauses while scrolled away
+   or while the window is hidden (lib/offscreen-pause.ts). */
+.agent-thinking-shimmer[data-offscreen],
+:root[data-document-hidden] .agent-thinking-shimmer {
+  animation-play-state: paused !important;
+}
 
 /*
  * Released text fades in by opacity alone, so nothing shifts while the reader
@@ -3385,7 +3391,7 @@ textarea {
 /* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
    pauses the scan but never the arriving image's own fade. */
 .image-scan-slot[data-offscreen] *,
-.image-scan-slot[data-document-hidden] *,
+:root[data-document-hidden] .image-scan-slot *,
 .image-scan-slot[data-arrival="reveal"] .image-scan-live,
 .image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
 /* Arrival: the cover slides away under a bright edge, revealing the image. */

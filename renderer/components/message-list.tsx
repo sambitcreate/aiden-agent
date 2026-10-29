@@ -81,6 +81,7 @@ import {
   type VisualDrafts,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
@@ -1155,6 +1156,13 @@ function AgentActivityTransition({
         variant="small"
         color="secondary"
         title={current.label}
+        ref={
+          current.phase === "thinking" ||
+          current.phase === "loading" ||
+          current.phase === "visualizing"
+            ? pauseWhenUnseen
+            : undefined
+        }
         className={
           current.phase === "thinking" ||
           current.phase === "loading" ||

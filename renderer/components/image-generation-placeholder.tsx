@@ -4,6 +4,7 @@
 
 import * as React from "react";
 import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
+import { observeOffscreen } from "../lib/offscreen-pause";
 import type { Attachment } from "../lib/types";
 import { inlineImageSource } from "./message-attachments";
 import {
@@ -34,30 +35,11 @@ function useReduceMotion(): boolean {
   return reduce;
 }
 
-/** One shared observer pauses every offscreen placeholder. */
-let sharedObserver: IntersectionObserver | null = null;
-function visibilityObserver(): IntersectionObserver | null {
-  if (typeof IntersectionObserver === "undefined") return null;
-  sharedObserver ??= new IntersectionObserver((entries) => {
-    for (const entry of entries) entry.target.toggleAttribute("data-offscreen", !entry.isIntersecting);
-  });
-  return sharedObserver;
-}
-
 /** Pause while offscreen or while the window is hidden. */
 function usePauseWhenUnseen(ref: React.RefObject<HTMLElement | null>): void {
   React.useEffect(() => {
     const node = ref.current;
-    if (!node) return;
-    const observer = visibilityObserver();
-    observer?.observe(node);
-    const onVisibility = () => node.toggleAttribute("data-document-hidden", document.visibilityState === "hidden");
-    onVisibility();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      observer?.unobserve(node);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    return node ? observeOffscreen(node) : undefined;
   }, [ref]);
 }
 

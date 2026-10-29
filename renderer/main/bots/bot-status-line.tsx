@@ -17,6 +17,7 @@ import {
 } from "../../shared/bot-activity";
 import type { BotLiveActivity } from "../../shared/bot-live";
 import type { BotChatActivityWording } from "../../shared/bots";
+import { pauseWhenUnseen } from "../../lib/offscreen-pause";
 
 function useClock(fixed: number | undefined): number {
   const [now, setNow] = React.useState(() => fixed ?? Date.now());
@@ -126,7 +127,7 @@ export function BotStatusLine({
         >
           <AidenActivityMark mark={display.mark} size={20} className="shrink-0 text-primary" />
           <span aria-hidden="true" className="flex min-w-0 items-center gap-1 text-small text-secondary">
-            <span className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
+            <span ref={shimmer ? pauseWhenUnseen : undefined} className={`shrink-0 ${shimmer ? "agent-thinking-shimmer" : ""}`}>{display.word}</span>
             {detail ? (
               <span className="hidden min-w-0 truncate text-tertiary group-hover/status:inline group-focus-visible/status:inline">
                 · {detail}

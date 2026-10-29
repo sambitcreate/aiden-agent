@@ -8,6 +8,7 @@ import {
   reduceReasoningDisclosure,
 } from "../lib/reasoning-disclosure";
 import { useStickySectionCollapse } from "../lib/sticky-section";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 interface ReasoningBlockProps {
   content: string;
@@ -29,7 +30,7 @@ export function ReasoningBlock({
   if (!content.trim()) {
     return (
       <div role="status" aria-live="polite" className="reasoning-surface rounded-card bg-well px-3 py-2 text-small-strong text-secondary">
-        <span className={cn(active && "agent-thinking-shimmer")}>{label}</span>
+        <span ref={active ? pauseWhenUnseen : undefined} className={cn(active && "agent-thinking-shimmer")}>{label}</span>
       </div>
     );
   }
@@ -112,7 +113,7 @@ function ReadableReasoningBlock({
         }}
         className="transcript-sticky-header flex h-9 w-full items-center gap-2 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out hover:text-primary focus-visible:outline-none"
       >
-        <span className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>{label}</span>
+        <span ref={active ? pauseWhenUnseen : undefined} className={cn("min-w-0 flex-1", active && "agent-thinking-shimmer")}>{label}</span>
         <ChevronRight
           aria-hidden="true"
           className={cn(
