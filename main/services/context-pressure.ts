@@ -63,7 +63,12 @@ export function rememberChatContextProfile(
   generationProfiles.set(chatId, createGenerationContextProfile(options, scope));
 }
 
-const promptCacheRefreshes = new RecentChatCache<PromptCacheRefresh>(RECENT_CHAT_PROFILE_LIMIT);
+/**
+ * Not LRU-bounded: evicting a refresh would show a still-warm prompt cache as
+ * expired. Each entry is three short fields for a chat cache warming touched,
+ * and it is released when the chat is deleted.
+ */
+const promptCacheRefreshes = new Map<string, PromptCacheRefresh>();
 
 /** Cache warming refreshed this chat's cache; ambient reads keep the later expiry. */
 export function rememberPromptCacheRefresh(chatId: string, refresh: PromptCacheRefresh): void {

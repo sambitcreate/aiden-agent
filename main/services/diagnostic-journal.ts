@@ -77,8 +77,10 @@ let openBatch: string[] | null = null;
 // The earliest moment a rotated segment can pass retention. Appends prune only
 // once the clock reaches it (or after a rotation), not on every line.
 let nextRotationExpiryAtMs = 0;
-// The log directory is validated once per session and again after any failure.
-let directoryValidated = false;
+// The identity of the log directory as last fully validated. Each append
+// re-checks it with one lstat, so a directory swapped for a symlink or another
+// directory mid-session is validated again (and refused) instead of trusted.
+let validatedDirectory: { dev: number; ino: number } | null = null;
 
 function rotatedPath(target: string, index: number): string {
   return `${target}.${index}`;
@@ -88,7 +90,7 @@ function fatalPath(target: string): string {
   return path.join(path.dirname(target), "aiden-fatal.log");
 }
 
-function ensurePrivateDirectory(directory: string): void {
+function ensurePrivateDirectory(directory: string): { dev: number; ino: number } {
   try {
     const metadata = lstatSync(directory);
     if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
@@ -110,6 +112,7 @@ function ensurePrivateDirectory(directory: string): void {
     const metadata = fstatSync(descriptor);
     if (!metadata.isDirectory()) throw new Error("Diagnostic directory changed during validation.");
     fchmodSync(descriptor, 0o700);
+    return { dev: metadata.dev, ino: metadata.ino };
   } finally {
     closeSync(descriptor);
   }
@@ -268,6 +271,18 @@ function pruneExpiredSync(target: string): void {
   }
 }
 
+function isValidatedDirectory(directory: string): boolean {
+  if (!validatedDirectory) return false;
+  const metadata = lstatSync(directory, { throwIfNoEntry: false });
+  return (
+    metadata !== undefined &&
+    metadata.isDirectory() &&
+    !metadata.isSymbolicLink() &&
+    metadata.dev === validatedDirectory.dev &&
+    metadata.ino === validatedDirectory.ino
+  );
+}
+
 function openAppendNoFollow(target: string): Promise<fs.FileHandle> {
   return fs.open(
     target,
@@ -278,9 +293,9 @@ function openAppendNoFollow(target: string): Promise<fs.FileHandle> {
 
 async function appendNoFollow(target: string, contents: string): Promise<void> {
   const directory = path.dirname(target);
-  if (!directoryValidated) {
-    ensurePrivateDirectory(directory);
-    directoryValidated = true;
+  if (!isValidatedDirectory(directory)) {
+    validatedDirectory = null;
+    validatedDirectory = ensurePrivateDirectory(directory);
   }
   let handle: fs.FileHandle;
   try {
@@ -288,9 +303,8 @@ async function appendNoFollow(target: string, contents: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     // The directory disappeared since it was validated: recreate it privately.
-    directoryValidated = false;
-    ensurePrivateDirectory(directory);
-    directoryValidated = true;
+    validatedDirectory = null;
+    validatedDirectory = ensurePrivateDirectory(directory);
     handle = await openAppendNoFollow(target);
   }
   try {
@@ -384,7 +398,11 @@ async function pruneExpired(target: string): Promise<void> {
  * segment never exceeds its cap, and retained rotations are pruned before a
  * write whenever one of them can have expired.
  */
-async function appendBatch(target: string, lines: readonly string[]): Promise<void> {
+async function appendBatch(
+  target: string,
+  lines: readonly string[],
+  progress: { written: number },
+): Promise<void> {
   let index = 0;
   while (index < lines.length) {
     const first = lines[index]!;
@@ -401,6 +419,7 @@ async function appendBatch(target: string, lines: readonly string[]): Promise<vo
       index += 1;
     }
     await appendNoFollow(target, chunk);
+    progress.written = index;
   }
 }
 
@@ -508,7 +527,7 @@ export function initDiagnosticJournal(options: DiagnosticJournalOptions): void {
   queue = Promise.resolve();
   openBatch = null;
   nextRotationExpiryAtMs = 0;
-  directoryValidated = false;
+  validatedDirectory = null;
   pendingWrites = 0;
   droppedWrites = 0;
   writeFailed = false;
@@ -596,16 +615,19 @@ function enqueueLine(line: string): void {
   }
   const target = targetPath;
   const batch = [line];
+  const progress = { written: 0 };
   openBatch = batch;
   queue = queue
     .then(async () => {
       // Lines admitted from here on belong to a later append.
       if (openBatch === batch) openBatch = null;
-      await appendBatch(target, batch);
+      await appendBatch(target, batch, progress);
     })
     .catch(() => {
       writeFailed = true;
-      directoryValidated = false;
+      validatedDirectory = null;
+      // The failed chunk and the rest of its batch are not written.
+      droppedWrites += batch.length - progress.written;
     })
     .finally(() => {
       pendingWrites -= batch.length;

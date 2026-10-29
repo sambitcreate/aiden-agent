@@ -232,9 +232,10 @@ export class MemoryStore {
   }
 
   private async db(): Promise<DatabaseSync> {
-    // Modes are repaired when the handle opens and after every write. SQLite
-    // gives the WAL and SHM files the database file's mode, and reads create
-    // neither, so a cached handle needs no chmod round trip per query.
+    // Modes are repaired when the handle opens, after every write and on
+    // close. SQLite creates any WAL or SHM file (a read can recreate them in
+    // WAL mode) with the database file's mode, so a cached handle needs no
+    // chmod round trip per query.
     if (this.database) return this.database;
     // Concurrent cold opens would each build a handle and race the schema;
     // share a single in-flight open instead.

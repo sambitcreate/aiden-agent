@@ -412,6 +412,7 @@ export interface UsageStoreOptions {
    * request. Callers that set it must call `flush()` before exit; `record`
    * then resolves once the aggregate is in memory and reports later save
    * failures through `onSaveError`. Omitted, every record waits for its save.
+   * A failed coalesced save is retried after another delay.
    */
   saveDelayMs?: number;
   onSaveError?: (error: unknown) => void;
@@ -424,7 +425,12 @@ export function createUsageStore(
 ): {
   record(record: UsageRequestRecord): Promise<void>;
   summary(range: UsageDateRange): Promise<UsageSummary>;
-  /** Write any coalesced aggregate now; resolves once it is durable. */
+  /**
+   * Write any coalesced aggregate now; resolves once it is durable. Meant for
+   * shutdown: from then on every record waits for its own save, so usage
+   * recorded by work that settles after the flush is not left on a timer the
+   * exiting process never runs.
+   */
   flush(): Promise<void>;
 } {
   const saveDelayMs =
@@ -437,6 +443,7 @@ export function createUsageStore(
     index: Map<string, DailyUsageBucket>;
   }> | null = null;
   let dirty = false;
+  let writeThrough = saveDelayMs === 0;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function loadDatabase(): Promise<{
@@ -488,7 +495,11 @@ export function createUsageStore(
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      enqueueFlush().catch((error: unknown) => options.onSaveError?.(error));
+      enqueueFlush().catch((error: unknown) => {
+        options.onSaveError?.(error);
+        // Keep retrying on the same cadence rather than waiting for a record.
+        if (dirty && !writeThrough) scheduleSave();
+      });
     }, saveDelayMs);
     saveTimer.unref?.();
   }
@@ -556,9 +567,17 @@ export function createUsageStore(
         } else if (!record.local) {
           bucket.unpricedHostedRequests += 1;
         }
-        if (saveDelayMs === 0) {
-          // Without a delay every record waits for its own save, as before.
-          await persistence.save(database);
+        if (writeThrough) {
+          // Without a delay, or after the shutdown flush, every record waits
+          // for its own save. Anything a failed coalesced save left behind is
+          // written with it.
+          dirty = false;
+          try {
+            await persistence.save(database);
+          } catch (error) {
+            dirty = saveDelayMs > 0;
+            throw error;
+          }
         } else {
           dirty = true;
           scheduleSave();
@@ -574,6 +593,9 @@ export function createUsageStore(
       return summaryFromDatabase(database, range, now());
     },
 
-    flush: enqueueFlush,
+    flush() {
+      writeThrough = true;
+      return enqueueFlush();
+    },
   };
 }

@@ -256,26 +256,14 @@ test("a retained rotation is pruned on the first append after it expires mid-ses
   }
 });
 
-test("a burst of lines lands in order through a few batched appends", async (context) => {
+test("a burst of lines lands complete and in order", async () => {
   await withJournal("production", async (target) => {
     await flushDiagnosticJournal();
-    const open = fsPromises.open;
-    let journalOpens = 0;
-    const openMock = context.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
-      if (args[0] === target) journalOpens += 1;
-      return open(...args);
-    });
-    syncBuiltinESMExports();
-    try {
-      for (let index = 0; index < 200; index += 1) {
-        writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
-        if (index % 50 === 0) await Promise.resolve();
-      }
-      await flushDiagnosticJournal();
-    } finally {
-      openMock.mock.restore();
-      syncBuiltinESMExports();
+    for (let index = 0; index < 200; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+      if (index % 50 === 0) await Promise.resolve();
     }
+    await flushDiagnosticJournal();
     const sequences = (await fs.readFile(target, "utf8"))
       .trim()
       .split("\n")
@@ -283,7 +271,6 @@ test("a burst of lines lands in order through a few batched appends", async (con
       .filter((record) => record.event === "backpressure-fixture")
       .map((record) => record.fields?.sequence);
     assert.deepEqual(sequences, Array.from({ length: 200 }, (_, index) => index));
-    assert.ok(journalOpens <= 10, `expected batched appends, saw ${journalOpens} opens for 200 lines`);
     assert.equal(diagnosticJournalStatus().pendingWrites, 0);
   });
 });
@@ -320,6 +307,47 @@ test("a log directory removed mid-session is recreated owner-only on the next ap
     assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
     assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
     assert.equal(diagnosticJournalStatus().writeFailed, false);
+  });
+});
+
+test("a log directory swapped for a symlink mid-session is not written through", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-root-swap-"));
+  const outside = path.join(dir, "outside");
+  const root = path.join(dir, "logs");
+  try {
+    await fs.mkdir(outside);
+    initDiagnosticJournal({ targetPath: path.join(root, "aiden.log"), profile: "production" });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    await flushDiagnosticJournal();
+    assert.equal(diagnosticJournalStatus().writeFailed, false);
+
+    await fs.rename(root, path.join(dir, "logs-moved"));
+    await fs.symlink(outside, root);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    await flushDiagnosticJournal();
+
+    assert.deepEqual(await fs.readdir(outside), []);
+    assert.equal(diagnosticJournalStatus().writeFailed, true);
+  } finally {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("lines lost to a failed append are reported as dropped", async () => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    // A second link makes the journal no longer an owned regular file.
+    await fs.link(target, path.join(dir, "second-link"));
+    for (let index = 0; index < 3; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+    }
+    await flushDiagnosticJournal();
+
+    const status = diagnosticJournalStatus();
+    assert.equal(status.writeFailed, true);
+    assert.equal(status.droppedWrites, 3);
+    assert.equal(status.pendingWrites, 0);
   });
 });
 

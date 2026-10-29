@@ -613,9 +613,13 @@ test("a burst inside the save window is written once and survives a reload after
   assert.equal(value.buckets.length, 3);
 });
 
-test("a failed coalesced save is reported and the aggregate is written by the next flush", async () => {
+test("a failed coalesced save is reported and retried without waiting for another request", async () => {
   let value = createEmptyUsageDatabase();
   let saveAttempts = 0;
+  let markSaved: () => void = () => undefined;
+  const saved = new Promise<void>((resolve) => {
+    markSaved = resolve;
+  });
   const persistence: UsagePersistence = {
     async load() {
       return structuredClone(value);
@@ -624,26 +628,45 @@ test("a failed coalesced save is reported and the aggregate is written by the ne
       saveAttempts += 1;
       if (saveAttempts === 1) throw new Error("disk full");
       value = structuredClone(data);
+      markSaved();
     },
   };
-  let reportFailure: (error: unknown) => void = () => undefined;
-  const failure = new Promise<unknown>((resolve) => {
-    reportFailure = resolve;
-  });
+  const failures: unknown[] = [];
   const store = createUsageStore(persistence, () => NOW, {
     saveDelayMs: 5,
-    onSaveError: (error) => reportFailure(error),
+    onSaveError: (error) => failures.push(error),
   });
 
   await store.record(record({ providerId: "openai", modelId: "gpt-test" }));
-  assert.match(String(await failure), /disk full/u);
-  assert.equal(value.buckets.length, 0);
+  await saved;
 
-  await store.flush();
+  assert.match(String(failures[0]), /disk full/u);
   assert.equal(
     value.buckets.reduce((total, bucket) => total + bucket.requests, 0),
     1,
   );
+});
+
+test("usage recorded after the shutdown flush is still persisted", async () => {
+  let value = createEmptyUsageDatabase();
+  const persistence: UsagePersistence = {
+    async load() {
+      return structuredClone(value);
+    },
+    async save(data) {
+      value = structuredClone(data);
+    },
+  };
+  const store = createUsageStore(persistence, () => NOW, { saveDelayMs: 60_000 });
+  await store.record(record({ providerId: "openai", modelId: "chat-model" }));
+  await store.flush();
+
+  // Work that settles after the flush (an image job, a routine) still records.
+  await store.record(record({ providerId: "fal", modelId: "image-model" }));
+  await store.record(record({ providerId: "fal", modelId: "image-model" }));
+
+  const reloaded = createUsageStore(persistence, () => NOW);
+  assert.equal((await reloaded.summary("7d")).totals.requests, 3);
 });
 
 
