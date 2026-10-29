@@ -284,6 +284,11 @@ export class AcpHarnessRuntime {
   async close(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    // Launches already handed to a caller are stopped here; ones still
+    // starting dispose themselves once they see `disposed`. Wait for both.
+    const pending = [...this.inflight];
+    await Promise.allSettled(pending.map((record) => record.launched?.dispose()));
+    await Promise.allSettled(pending.map((record) => record.done));
     await this.closeAll();
   }
 

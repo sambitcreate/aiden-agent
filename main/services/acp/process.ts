@@ -20,6 +20,28 @@ const TERM_GRACE_MS = 1_000;
 const KILL_GRACE_MS = 1_500;
 let nextGeneration = 1;
 
+/**
+ * Process groups of agents that are still running. If the app exits before
+ * their async teardown finishes, the exit hook kills them synchronously so
+ * they never outlive Aiden.
+ */
+const liveGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", () => {
+    for (const pgid of liveGroups) {
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+  });
+}
+
 export interface AcpProcessExit {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -71,11 +93,17 @@ export class AcpProcess {
       detached: this.platform !== "win32",
     }) as ChildProcessWithoutNullStreams;
     this.child = child;
+    const group = this.platform !== "win32" && options.spawnImpl === undefined ? child.pid : undefined;
+    if (group !== undefined) {
+      installExitHook();
+      liveGroups.add(group);
+    }
     if (child.pid !== undefined) options.onSpawn?.(child.pid);
 
     const finish = (code: number | null, signal: NodeJS.Signals | null, note?: string) => {
       if (this.settled) return;
       this.settled = true;
+      if (group !== undefined) liveGroups.delete(group);
       // The leader is gone, but helpers it started may live on in its group.
       // The group id cannot be reused while any member exists.
       if (this.platform !== "win32" && child.pid) {

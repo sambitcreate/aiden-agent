@@ -83,7 +83,9 @@ export function registerAcpHarnessHandlers(): void {
     return statusOf(providerId as string, entry);
   });
 
+  // Starts stopping agents as early as possible; the quit sequence in
+  // main/index.ts awaits the same idempotent shutdown within its budget.
   app.once("before-quit", () => {
-    void shutdownAntigravity();
+    void shutdownAntigravity().catch(() => undefined);
   });
 }

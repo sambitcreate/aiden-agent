@@ -39,6 +39,7 @@ import {
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
 import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -547,6 +548,15 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
+      // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+      Promise.race([
+        shutdownAntigravity().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("acp", "Agent harness processes did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("acp", "Agent harness processes did not stop cleanly.", error)),
     ]);
   } catch (error) {
     logger.error(

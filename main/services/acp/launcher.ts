@@ -11,6 +11,7 @@ import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { AcpHarnessError } from "./errors.js";
 import type { AcpHarnessDefinition, AcpLaunchPurpose } from "./harness.js";
 import type { AcpRuntimeInstaller } from "./installer.js";
 import { ACP_RUN_MARKER_ENV, AcpPidLedger } from "./pid-ledger.js";
@@ -44,18 +45,59 @@ export function hookDirectory(stateDir: string, temporary: string = tmpdir()): s
   return path.join(temporary, `aiden-acp-hooks-${process.getuid?.() ?? "user"}`);
 }
 
+type LeaseOverride = {
+  runtimeDir: string;
+  asset: Parameters<AcpHarnessDefinition["prepareLaunch"]>[0]["asset"];
+  release(): void;
+};
+
 export class AcpRuntimeLauncher implements AcpProcessLauncher {
+  /** Every process this launcher started that is not yet disposed, whatever its purpose. */
+  private readonly live = new Set<AcpLaunchedProcess>();
+  private readonly starting = new Set<Promise<unknown>>();
+  private closed = false;
+
   constructor(private readonly options: AcpLauncherOptions) {}
 
   launch(purpose: AcpLaunchPurpose, cwd: string, observers: AcpLaunchObservers = {}): Promise<AcpLaunchedProcess> {
     return this.launchWith(purpose, cwd, observers);
   }
 
-  async launchWith(
+  launchWith(
     purpose: AcpLaunchPurpose,
     cwd: string,
     observers: AcpLaunchObservers = {},
-    leaseOverride?: { runtimeDir: string; asset: Parameters<AcpHarnessDefinition["prepareLaunch"]>[0]["asset"]; release(): void },
+    leaseOverride?: LeaseOverride,
+  ): Promise<AcpLaunchedProcess> {
+    if (this.closed) return Promise.reject(new AcpHarnessError("unavailable", "The agent runtime is shutting down."));
+    const started = this.start(purpose, cwd, observers, leaseOverride).then(async (launched) => {
+      // Shutdown may have begun while this process was starting.
+      if (!this.closed) return launched;
+      await launched.dispose();
+      throw new AcpHarnessError("unavailable", "The agent runtime is shutting down.");
+    });
+    const settled = started.catch(() => undefined);
+    this.starting.add(settled);
+    void settled.then(() => this.starting.delete(settled));
+    return started;
+  }
+
+  /**
+   * App quit: refuse new launches and stop every process this launcher
+   * started, including sign-in, sign-out and validation agents that no
+   * runtime session owns.
+   */
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    await Promise.allSettled([...this.starting]);
+    await Promise.allSettled([...this.live].map((launched) => launched.dispose()));
+  }
+
+  private async start(
+    purpose: AcpLaunchPurpose,
+    cwd: string,
+    observers: AcpLaunchObservers,
+    leaseOverride: LeaseOverride | undefined,
   ): Promise<AcpLaunchedProcess> {
     const lease = leaseOverride ?? this.options.installer.acquire();
     let tmpDir: string | undefined;
@@ -88,17 +130,20 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
       });
       const directory = tmpDir;
       let disposed: Promise<void> | undefined;
-      return {
+      const launched: AcpLaunchedProcess = {
         process: child,
         dispose: () => {
           disposed ??= (async () => {
             await child.close();
             lease.release();
             await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+            this.live.delete(launched);
           })();
           return disposed;
         },
       };
+      this.live.add(launched);
+      return launched;
     } catch (error) {
       lease.release();
       if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);

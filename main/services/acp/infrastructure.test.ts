@@ -163,6 +163,54 @@ test("closing a process stops its whole group, including children that ignore TE
   assert.ok(stopped(), "the grandchild that ignored TERM was killed with its group");
 });
 
+test("an agent still running when Aiden exits is killed with the app", { skip: process.platform === "win32" }, async () => {
+  const dir = tempDir();
+  const script = path.join(dir, "app.mts");
+  const processModule = new URL("./process.ts", import.meta.url).href;
+  // The app starts an agent that ignores TERM and exits before any async teardown runs.
+  writeFileSync(
+    script,
+    `import { AcpProcess } from ${JSON.stringify(processModule)};
+const agent = new AcpProcess({
+  command: process.execPath,
+  args: ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+  cwd: ${JSON.stringify(dir)},
+  env: { PATH: process.env.PATH ?? "" },
+});
+process.stdout.write(String(agent.pid));
+setTimeout(() => process.exit(0), 200);
+`,
+  );
+  const agentPid = Number(
+    execFileSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8", timeout: 30_000 }).trim(),
+  );
+  assert.ok(Number.isSafeInteger(agentPid) && agentPid > 1);
+  const running = () => {
+    try {
+      process.kill(agentPid, 0);
+    } catch {
+      return false;
+    }
+    try {
+      return !execFileSync("ps", ["-o", "stat=", "-p", String(agentPid)], { encoding: "utf8" }).trim().startsWith("Z");
+    } catch {
+      return false;
+    }
+  };
+  try {
+    for (let attempt = 0; attempt < 100 && running(); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(running(), false, "the agent did not outlive the app");
+  } finally {
+    try {
+      process.kill(agentPid, "SIGKILL");
+    } catch {
+      // Already stopped.
+    }
+  }
+});
+
 function fakeLedgerSystem(processes: Record<number, { group: number; command: string; env?: string[] }>) {
   const killed: number[] = [];
   const alive = new Set(Object.keys(processes).map(Number));
