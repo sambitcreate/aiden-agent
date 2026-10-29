@@ -19,28 +19,15 @@ type MenuClickEvent = Partial<
 >;
 
 /**
- * Whether a menu item was fired by its own shortcut rather than chosen. Electron
+ * Whether a menu item was fired by a shortcut rather than chosen. Electron
  * marks every activation that isn't a mouse click as `triggeredByAccelerator`,
- * Return in an open menu included, so the shortcut is told apart by the
- * modifiers held: every shortcut has one, and choosing from a menu needs none.
+ * Return in an open menu included, so a shortcut is told apart by the
+ * modifiers held. That covers Aiden's keys and ones assigned in macOS
+ * System Settings; choosing from a menu needs none.
  */
-export function firedByItsKey(
-  event: MenuClickEvent | undefined,
-  binding: string | null | undefined,
-  platform: NodeJS.Platform,
-): boolean {
-  if (!event?.triggeredByAccelerator || !binding) return false;
-  const parts = new Set(binding.split("+"));
-  const mac = platform === "darwin";
-  const held = {
-    Command: Boolean(mac ? event.metaKey : event.ctrlKey),
-    Control: Boolean(mac ? event.ctrlKey : event.metaKey),
-    Alt: Boolean(event.altKey),
-    Shift: Boolean(event.shiftKey),
-  };
-  return (Object.keys(held) as Array<keyof typeof held>).every(
-    (modifier) => held[modifier] === parts.has(modifier),
-  );
+export function firedByShortcut(event: MenuClickEvent | undefined): boolean {
+  if (!event?.triggeredByAccelerator) return false;
+  return Boolean(event.metaKey || event.ctrlKey || event.altKey || event.shiftKey);
 }
 
 export function platformMenuAccelerator(
@@ -77,14 +64,14 @@ export function applicationMenuTemplate({
   // what is open (a text field, the terminal, the browser). So the menu shows
   // the key without taking it. On Linux and Windows the key is not registered.
   // macOS still fires the item for a key the page left alone (or never saw,
-  // from inside a frame), so that press is ignored (see `firedByItsKey`).
+  // from inside a frame), so that press is ignored (see `firedByShortcut`).
   const shownItem = (label: string, commandId: string): MenuItemConstructorOptions => ({
     label,
     accelerator: platformMenuAccelerator(bindings[commandId], platform),
     registerAccelerator: false,
     enabled: !available || available.has(commandId),
     click: (_item, _window, event) => {
-      if (firedByItsKey(event, bindings[commandId], platform)) return;
+      if (firedByShortcut(event)) return;
       actions.deliverCommand(commandId);
     },
   });

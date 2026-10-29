@@ -104,7 +104,7 @@ test("menu items for in-app keys show the key as set, without taking it from the
   assert.deepEqual(delivered, ["chat.find"]);
 });
 
-test("on a Mac a menu item runs when chosen, by mouse or Return, but not when its key fires it", () => {
+test("on a Mac a menu item runs when chosen, by mouse or Return, but not when a shortcut fires it", () => {
   const delivered: string[] = [];
   const menu = applicationMenuTemplate({
     platform: "darwin",
@@ -121,8 +121,11 @@ test("on a Mac a menu item runs when chosen, by mouse or Return, but not when it
   press("Change Model…", { triggeredByAccelerator: true });
   assert.deepEqual(delivered, ["chat.find", "chat.find", "model.change"]);
   // ⇧⌘G that the page left alone (the terminal keeps it) or never saw (an
-  // artifact frame) comes back as the item's key, and runs nothing.
+  // artifact frame) comes back as the item's key, and runs nothing. So does a
+  // key given to an item in macOS System Settings, whatever Aiden has set.
   press("Find in Chat", { triggeredByAccelerator: true, metaKey: true, shiftKey: true });
+  press("Find in Chat", { triggeredByAccelerator: true, metaKey: true, altKey: true });
+  press("Change Model…", { triggeredByAccelerator: true, metaKey: true, altKey: true });
   assert.deepEqual(delivered, ["chat.find", "chat.find", "model.change"]);
 });
 
