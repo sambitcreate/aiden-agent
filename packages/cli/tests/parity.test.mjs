@@ -518,6 +518,31 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
+test("serve stop force-stops a daemon stuck in shutdown along with its process group", { skip: process.platform === "win32" }, async (t) => {
+  const dir = temporary(t), fixture = join(dir, "stuck-serve.mjs"), helperPid = join(dir, "helper.pid");
+  // A daemon whose shutdown never finishes, holding a helper (an MCP server, the Remote advertiser) in its group.
+  writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
+writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));
+setInterval(() => {}, 1e9);`);
+  const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
+  t.after(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } });
+  const ready = Date.now() + 10_000;
+  while (!existsSync(helperPid) && Date.now() < ready) await new Promise((resolve) => setTimeout(resolve, 25));
+  const helper = Number(readFileSync(helperPid, "utf8"));
+  mkdirSync(join(dir, "serve.lock"), { recursive: true });
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: child.pid, argv: [process.execPath, fixture, "serve"], startedAt: Date.now() });
+  writeFileSync(api.daemonSocket(dir), "");
+  const stopped = await api.stopDaemon(dir, 1_000);
+  assert.deepEqual(stopped, { stopped: true, pid: child.pid, forced: true });
+  assert.equal(api.pidAlive(child.pid), false);
+  const helperGone = Date.now() + 5_000;
+  while (api.pidAlive(helper) && Date.now() < helperGone) await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(api.pidAlive(helper), false, "the daemon's helper must not be orphaned");
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+});
+
 test("MCP validates transports and redacts configured secrets from listing", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   assert.throws(() => api.validateMcpServer({ id: "remote", name: "Remote", transport: "http", url: "http://example.com", enabled: true }), /HTTPS/);

@@ -276,22 +276,20 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
       if (child.exitCode === null) killTree("SIGKILL");
       throw error;
     }
-    // A foreground `serve` could have won the lease between our status check
-    // and the child's acquire — the socket then belongs to the other process.
-    // Only report our pid when the child actually recorded ownership.
-    const owner = serveOwner(agentDir);
-    if (!owner || owner.pid !== childPid) {
-      killTree("SIGTERM");
-      throw new Error("The Aiden daemon is already running.");
-    }
+    // waitForSocket returns only once the child recorded itself as the serve owner,
+    // so a foreground `serve` that won the lease first has already failed the start.
     return { pid: childPid, log };
   } finally {
     releaseStart();
   }
 }
 
-/** SIGTERM the daemon recorded in the serve lease and wait for it to release. */
-export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number }> {
+/**
+ * SIGTERM the daemon recorded in the serve lease and wait for it to release.
+ * Graceful shutdown cancels every turn first, so a daemon still running after
+ * the wait is stuck: it and its process group are then SIGKILLed.
+ */
+export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<{ stopped: boolean; pid?: number; forced?: true }> {
   recoverStaleServeLease(agentDir);
   const owner = serveOwner(agentDir);
   if (!owner || !validPid(owner.pid)) {
@@ -339,6 +337,18 @@ export async function stopDaemon(agentDir: string, timeoutMs = 15_000): Promise<
     }
     polls += 1;
     await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+  }
+  // Re-verify the PID before the forced kill: it must still be this daemon.
+  if (pidAlive(pid) && classifyPid(pid, owner) === "daemon") {
+    // A background daemon leads its own process group; killing the group also
+    // takes its stdio MCP servers and Remote advertiser instead of orphaning them.
+    try { process.kill(-pid, "SIGKILL"); } catch { try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ } }
+    const killDeadline = Date.now() + 5_000;
+    while (pidAlive(pid) && Date.now() < killDeadline) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+  if (!pidAlive(pid)) {
+    clearServeArtifacts(agentDir, owner);
+    return { stopped: true, pid, forced: true };
   }
   throw new Error(`The Aiden daemon (PID ${pid}) did not stop within ${Math.round(timeoutMs / 1000)}s — try kill -9 ${pid} and remove ${join(agentDir, SERVE_LOCK)}.`);
 }
