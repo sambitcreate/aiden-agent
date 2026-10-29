@@ -8697,6 +8697,20 @@ struct AidenQuestionCard: View {
 
     private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
 
+    private var hint: String {
+        let recommended = !AidenQuestionAnswerDraft.recommendedSelections(for: prompt.questions).isEmpty
+        switch (prompt.questions.count > 1, recommended) {
+        case (true, true):
+            return String(localized: "Recommended answers are already selected. Questions you leave blank are skipped.")
+        case (true, false):
+            return String(localized: "Answer what you can — unanswered questions are skipped.")
+        case (false, true):
+            return String(localized: "The recommended answer is already selected. Change it or type your own.")
+        case (false, false):
+            return String(localized: "Choose an option or type your own answer.")
+        }
+    }
+
     private func binding(for index: Int) -> Binding<String> {
         Binding(
             get: { draft.customAnswers[index] ?? "" },
@@ -8720,9 +8734,7 @@ struct AidenQuestionCard: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(palette.foreground)
 
-                        Text(prompt.questions.count > 1
-                             ? String(localized: "Answer what you can — unanswered questions are skipped.")
-                             : String(localized: "Choose an option or type your own answer."))
+                        Text(hint)
                             .font(.caption)
                             .foregroundStyle(palette.secondary)
                             .fixedSize(horizontal: false, vertical: true)

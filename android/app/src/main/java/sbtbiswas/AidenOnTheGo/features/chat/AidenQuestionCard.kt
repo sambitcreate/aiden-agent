@@ -118,11 +118,16 @@ fun AidenQuestionCard(
                         fontWeight = FontWeight.Bold,
                         color = palette.foreground
                     )
+                    val hasRecommendation = remember(prompt.id) {
+                        AidenQuestionAnswerDraft.recommendedSelections(prompt.questions).isNotEmpty()
+                    }
                     Text(
-                        text = if (prompt.questions.size > 1) {
-                            stringResource(R.string.chat_question_multi_hint)
-                        } else {
-                            stringResource(R.string.chat_question_single_hint)
+                        text = when {
+                            prompt.questions.size > 1 && hasRecommendation ->
+                                stringResource(R.string.chat_question_multi_recommended_hint)
+                            prompt.questions.size > 1 -> stringResource(R.string.chat_question_multi_hint)
+                            hasRecommendation -> stringResource(R.string.chat_question_single_recommended_hint)
+                            else -> stringResource(R.string.chat_question_single_hint)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.secondary

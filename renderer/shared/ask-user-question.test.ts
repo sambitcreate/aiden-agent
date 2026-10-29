@@ -5,6 +5,7 @@ import {
   ASK_USER_QUESTION_VERSION,
   ASK_USER_RECAP_MAX_CUSTOM_LENGTH,
   askUserQuestionMsUntilExpiry,
+  formatAskUserQuestionAnswers,
   buildAskUserQuestionRecap,
   parseAskUserQuestionRecap,
   formatLateAskUserQuestionFollowUp,
@@ -287,7 +288,16 @@ test("an option the agent marks as recommended starts as the answer", () => {
   const response = parseAskUserQuestionResponse({ version: ASK_USER_QUESTION_VERSION, promptId: "q-1", cancelled: false, answers: [...answers.values()] }, prompt);
   assert.deepEqual(response?.answers, [...answers.values()]);
 
-  // What the person sees afterwards drops the marker.
+  // Two options that read the same once the marker is dropped, or a marked
+  // reserved word, are not a valid questionnaire.
+  const twin = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Now (Recommended)", description: "r" }] };
+  assert.equal(parseAskUserQuestions([twin]), undefined);
+  const reserved = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Other (Recommended)", description: "o" }] };
+  assert.equal(parseAskUserQuestions([reserved]), undefined);
+
+  // What the person sees afterwards drops the marker; the model keeps the label it wrote.
+  assert.match(formatLateAskUserQuestionFollowUp(marked, response!.answers) ?? "", /Answer: Postgres\n/u);
+  assert.match(formatAskUserQuestionAnswers(marked, response!.answers), /Answer: Postgres \(Recommended\)\n/u);
   assert.equal(summarizeAskUserQuestionResponse(marked, response!), "Database: Postgres\nSizes: S, L\nShip: Skipped");
   assert.deepEqual(
     buildAskUserQuestionRecap(marked, response!)?.items.map((item) => item.answers),

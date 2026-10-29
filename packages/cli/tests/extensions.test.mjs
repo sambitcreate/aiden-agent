@@ -222,6 +222,53 @@ try {
 	assert.match(out, /ask-user-timeout-ok/);
 });
 
+test("CLI ask-user starts on the recommended option, and a multi-select starts with its recommendations picked", () => {
+	const out = evalModule(`
+import { createTerminalAskUserQuestionRequest } from ${askUserCoreUrl};
+const shown = [];
+// The terminal select returns its first row when the person just presses Enter.
+const request = createTerminalAskUserQuestionRequest(() => ({
+	select: async (title, options) => {
+		shown.push(title);
+		return options[0];
+	},
+}));
+const result = await request("call-one", [
+	{
+		question: "Which database?",
+		header: "Database",
+		multiSelect: false,
+		options: [
+			{ label: "SQLite", description: "Embedded." },
+			{ label: "Postgres (Recommended)", description: "Relational." },
+		],
+	},
+	{
+		question: "Which checks?",
+		header: "Checks",
+		multiSelect: true,
+		options: [
+			{ label: "Lint (Recommended)", description: "Style." },
+			{ label: "Test", description: "Behavior." },
+			{ label: "Types (Recommended)", description: "Types." },
+		],
+	},
+]);
+const expected = [
+	{ questionIndex: 0, kind: "option", answer: "Postgres (Recommended)" },
+	{ questionIndex: 1, kind: "multi", selected: ["Lint (Recommended)", "Types (Recommended)"] },
+];
+if (result.cancelled || JSON.stringify(result.answers) !== JSON.stringify(expected)) {
+	throw new Error("Enter did not accept the recommendations: " + JSON.stringify(result));
+}
+if (!shown[1].includes("picked: Lint (Recommended), Types (Recommended)")) {
+	throw new Error("the multi-select did not show its starting picks: " + shown[1]);
+}
+console.log("ask-user-recommended-ok");
+`);
+	assert.match(out, /ask-user-recommended-ok/);
+});
+
 test("memory scope id matches the desktop SAFE_ID charset and is stable per folder", () => {
 	const out = evalModule(`
 import { workspaceScopeId, memoryEnabledFor } from ${JSON.stringify(

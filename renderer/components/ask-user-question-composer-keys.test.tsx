@@ -1,7 +1,7 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   ASK_USER_QUESTION_VERSION,
   type AskUserQuestionPromptV1,
@@ -94,7 +94,7 @@ test("the shortcut footnote steps aside while a custom answer is being written",
 
 // The composer moves focus on the next animation frame. Compare by identity: a
 // failing assert.equal would try to print the whole happy-dom node graph.
-function expectFocusOn(role: "button" | "textbox", name: RegExp) {
+function expectFocusOn(role: "button" | "checkbox" | "textbox", name: RegExp) {
   return waitFor(() =>
     assert.ok(
       document.activeElement === screen.getByRole(role, { name }),
@@ -169,7 +169,7 @@ test("the recommended option starts selected and focused, so Enter accepts it", 
   assert.equal(screen.getByRole("button", { name: /Database C/u }).getAttribute("aria-pressed"), "false");
   // The marker reads as a tag beside the label, not as part of it.
   assert.equal(card.textContent?.includes("(Recommended)"), false);
-  assert.match(row.textContent ?? "", /Database BRecommended/u);
+  within(row).getByText("Recommended");
   await expectFocusOn("button", /Database B/u);
 
   fireEvent.keyDown(document.activeElement!, { key: "Enter" });
@@ -179,8 +179,10 @@ test("the recommended option starts selected and focused, so Enter accepts it", 
   ]);
 });
 
-test("every recommended option of a multi-select starts checked and can be unchecked", () => {
+test("every recommended option of a multi-select starts checked and can be unchecked", async () => {
   const { card, responses } = mount([recommended("Extras", true)]);
+  // Enter would toggle a row here, so focus stays on the first one.
+  await expectFocusOn("checkbox", /Extras A/u);
   fireEvent.keyDown(card, { key: "3" });
   fireEvent.keyDown(card, { key: "Enter", metaKey: true });
   assert.deepEqual(responses.map((response) => response.answers), [

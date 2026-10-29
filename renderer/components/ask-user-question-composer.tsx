@@ -46,11 +46,10 @@ export function AskUserQuestionComposer({
   // Advancing replaces the focused row when the next question's labels differ, and
   // closing the custom field removes it, so focus would fall to the body and the
   // card's shortcuts would stop working. Focus already in the card is left alone.
-  // A preselected row takes focus so Enter accepts it.
-  const selectedRow = question.options.findIndex((option) =>
-    answer?.kind === "option"
-      ? answer.answer === option.label
-      : answer?.kind === "multi" && answer.selected.includes(option.label),
+  // A preselected single answer takes focus so Enter accepts it. In a
+  // multi-select Enter toggles a row, so focus stays on the first one.
+  const selectedRow = question.options.findIndex(
+    (option) => answer?.kind === "option" && answer.answer === option.label,
   );
   const focusRow = React.useRef(0);
   focusRow.current = Math.max(0, selectedRow);
@@ -203,7 +202,7 @@ export function AskUserQuestionComposer({
                 }}
               >
                 {index + 1}. {item.header}
-                {answers.has(index) ? <Check className="ml-1 size-3" aria-label="Answered" /> : null}
+                {answers.has(index) ? <Check className="ml-1 size-3" aria-label="Has an answer" /> : null}
               </Button>
             ))}
           </div>

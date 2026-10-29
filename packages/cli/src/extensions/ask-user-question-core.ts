@@ -4,6 +4,7 @@ import {
 	type AskUserQuestionAnswerV1,
 	type AskUserQuestionResponseV1,
 	type AskUserQuestionV1,
+	parseRecommendedOptionLabel,
 } from "../../../../renderer/shared/ask-user-question.ts";
 
 export interface SelectUi {
@@ -63,8 +64,11 @@ export async function requestQuestionnaire(
 	for (const [index, question] of questions.entries()) {
 		if (signal?.aborted) return interrupted({ kind: "cancelled" });
 		const title = `(${index + 1}/${questions.length}) ${question.question}`;
+		const labels = question.options.map((option) => option.label);
+		const recommended = labels.filter((label) => parseRecommendedOptionLabel(label).recommended);
 		if (question.multiSelect === true) {
-			const selected: string[] = [];
+			// Recommended options start picked, so Done (the first row) accepts them.
+			const selected: string[] = [...recommended];
 			for (;;) {
 				const remaining = question.options
 					.map((option) => option.label)
@@ -86,8 +90,10 @@ export async function requestQuestionnaire(
 				selected.push(selection.choice);
 			}
 		} else {
+			// The recommended option leads, so the starting row accepts it.
 			const selection = await select(title, [
-				...question.options.map((option) => option.label),
+				...recommended.slice(0, 1),
+				...labels.filter((label) => label !== recommended[0]),
 				"Skip question",
 			]);
 			if (selection.kind !== "selected") return interrupted(selection);

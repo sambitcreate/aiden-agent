@@ -163,6 +163,7 @@ export function recommendedAskUserAnswers(
 export function formatAskUserQuestionAnswers(
   questions: readonly AskUserQuestionV1[],
   answers: readonly AskUserQuestionAnswerV1[],
+  label: (label: string) => string = (value) => value,
 ): string {
   const byIndex = new Map(answers.map((answer) => [answer.questionIndex, answer]));
   return questions
@@ -170,9 +171,9 @@ export function formatAskUserQuestionAnswers(
       const answer = byIndex.get(index);
       if (!answer) return `${index + 1}. ${question.question}\nAnswer: Skipped`;
       if (answer.kind === "multi") {
-        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.join(", ")}`;
+        return `${index + 1}. ${question.question}\nAnswer: ${answer.selected.map(label).join(", ")}`;
       }
-      return `${index + 1}. ${question.question}\nAnswer: ${answer.answer}`;
+      return `${index + 1}. ${question.question}\nAnswer: ${answer.kind === "option" ? label(answer.answer) : answer.answer}`;
     })
     .join("\n\n");
 }
@@ -209,7 +210,8 @@ export function formatLateAskUserQuestionFollowUp(
   answers: readonly AskUserQuestionAnswerV1[],
 ): string | undefined {
   if (answers.length === 0) return undefined;
-  return `Answering your earlier question, which expired before I replied:\n\n${formatAskUserQuestionAnswers(questions, answers)}`;
+  // Sent as the person's own message, so it reads without the marker.
+  return `Answering your earlier question, which expired before I replied:\n\n${formatAskUserQuestionAnswers(questions, answers, askUserOptionDisplayLabel)}`;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -252,22 +254,26 @@ export function parseAskUserQuestions(value: unknown): AskUserQuestionV1[] | und
     ) {
       return undefined;
     }
+    // Labels are compared as the person reads them, without the
+    // "(Recommended)" marker, so two options never look the same.
     const labels = new Set<string>();
     const options: AskUserQuestionOptionV1[] = [];
     for (const candidateOption of input.options) {
       const option = record(candidateOption);
       const label = boundedString(option?.label, ASK_USER_MAX_LABEL_LENGTH);
       const description = boundedString(option?.description, ASK_USER_MAX_DESCRIPTION_LENGTH);
+      const shown = label === undefined ? undefined : askUserOptionDisplayLabel(label);
       if (
         !option ||
         !label ||
+        !shown ||
         !description ||
-        labels.has(label) ||
-        RESERVED_OPTION_LABELS.has(label)
+        labels.has(shown) ||
+        RESERVED_OPTION_LABELS.has(shown)
       ) {
         return undefined;
       }
-      labels.add(label);
+      labels.add(shown);
       options.push({ label, description });
     }
     seenQuestions.add(question);
