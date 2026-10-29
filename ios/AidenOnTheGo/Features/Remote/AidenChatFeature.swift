@@ -1377,7 +1377,8 @@ final class AidenChatViewModel {
     private func scheduleRateLimitedSendRetry(
         replacing attempt: AidenChatDraftStore.PendingSend,
         error: AidenRemoteClientError,
-        session: AidenChatDraftStore.Session
+        session: AidenChatDraftStore.Session,
+        context: AidenRemoteRequestContext
     ) async -> Bool {
         await draftStore.settlePendingSend(key: attempt.key, session: session)
         turnAttempts.reset()
@@ -1395,7 +1396,9 @@ final class AidenChatViewModel {
             return false
         }
         pendingSend = fresh
-        guard rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
+        // The resend belongs to the pairing that authorized this message; a
+        // re-pair while the record was being saved leaves Retry to the person.
+        guard coordinator.isCurrent(context), rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
             isPendingSendRefusedBecauseBusy = true
             return true
         }
@@ -1411,7 +1414,7 @@ final class AidenChatViewModel {
             guard let self, !Task.isCancelled, self.pendingSend?.key == key else { return }
             self.rateLimitedSendRetryTask = nil
             self.isWaitingToRetryRateLimitedSend = false
-            await self.send(retry: true, automatic: true)
+            await self.send(retry: true, automatic: true, authority: context)
         }
         return true
     }
@@ -3028,10 +3031,12 @@ final class AidenChatViewModel {
     }
 
     func send(retry: Bool = false) async {
-        await send(retry: retry, automatic: false)
+        await send(retry: retry, automatic: false, authority: nil)
     }
 
-    private func send(retry: Bool, automatic: Bool) async {
+    /// `authority` is the pairing that authorized an automatic resend; it is
+    /// never swapped for a newer pairing of the same Mac.
+    private func send(retry: Bool, automatic: Bool, authority: AidenRemoteRequestContext?) async {
         if !automatic {
             // A person's own send or Retry replaces a scheduled resend.
             cancelRateLimitedSendRetry()
@@ -3056,7 +3061,10 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
             return
         }
-        guard let context = try? coordinator.requestContext(for: instanceId) else { return }
+        guard let context = authority ?? (try? coordinator.requestContext(for: instanceId)),
+              coordinator.isCurrent(context) else { return }
+        // A saved send is only ever sent with the device credential it was made under.
+        if let retryAttempt, retryAttempt.deviceId != context.deviceId { return }
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
         let modelSelection = turnModelSelection
@@ -3256,7 +3264,7 @@ final class AidenChatViewModel {
             streamState = nil
             if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
                let session = draftSession,
-               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session) {
+               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session, context: context) {
                 // The Mac was only busy: keep the send and try it again.
                 return
             }
