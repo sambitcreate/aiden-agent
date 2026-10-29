@@ -482,12 +482,15 @@ function foldRank(step: AgentStep): number {
   if (!isToolStep(step)) return Infinity;
   if (!isTerminalAgentStep(step.status)) return Infinity;
   // Subagent chips sit on their row, and phones fetch only recordings a saved step names.
-  if (step.toolName === "subagent" || step.recording) return Infinity;
+  if (step.toolName === "subagent" || step.recording) return LAST_RESORT_RANK;
   if (step.status !== "completed") return 3;
   if (ROUTINE_TOOLS.has(step.toolName) && !carriesRecap(step)) return 0;
   if (!ANCHOR_TOOLS.has(step.toolName) && !carriesRecap(step)) return 1;
   return 2;
 }
+
+/** Folded only when the run cannot fit otherwise. */
+const LAST_RESORT_RANK = 4;
 
 function mergeThinking(steps: readonly AgentThinkingStep[]): AgentThinkingStep {
   const first = steps[0]!;
@@ -504,7 +507,9 @@ function mergeThinking(steps: readonly AgentThinkingStep[]): AgentThinkingStep {
   else merged.finishedAt = last.finishedAt;
   delete merged.reasoningStartOffset;
   delete merged.reasoningEndOffset;
-  if (start !== undefined && end !== undefined) {
+  // A reopened last thought is still streaming, so the span stays open like a single open thought.
+  if (start !== undefined && last.finishedAt === undefined) merged.reasoningStartOffset = start;
+  else if (start !== undefined && end !== undefined) {
     merged.reasoningStartOffset = start;
     merged.reasoningEndOffset = end;
   }
@@ -555,12 +560,14 @@ function canDrop(list: readonly AgentStep[], index: number): boolean {
 /**
  * Keep a long run's timeline within what every reader accepts. Older settled
  * tool steps drop, oldest first: read-only calls, then plain calls, then calls
- * that carry a recap or anchor an image, then failed ones. When a drop leaves
- * two finished thoughts side by side they join, so every thought stays where
- * it happened and its reasoning stays shown. A drop never moves reply text or
- * an image. The newest `BOUND_KEPT_TAIL` steps fold only when nothing older
- * can, and running steps never do. `folds` remembers each decision: pass the
- * same object on every update of one run so a folded step stays folded.
+ * that carry a recap or anchor an image, then failed ones. Two finished
+ * thoughts left side by side join, so every thought stays where it happened
+ * and its reasoning stays shown. The careful passes never move reply text or
+ * an image's row and keep the newest `BOUND_KEPT_TAIL` steps for last; when
+ * that is not enough (a run that writes a line before every call), the last
+ * passes drop regardless, since moved text beats losing the whole timeline.
+ * Only steps still running never fold. `folds` remembers each decision: pass
+ * the same object on every update of one run so a folded step stays folded.
  */
 export function boundGenerationTimelineSteps(
   steps: readonly AgentStep[],
@@ -592,30 +599,40 @@ export function boundGenerationTimelineSteps(
     if (group && group.length > 1) list[index] = mergeThinking(group);
   }
 
-  for (const keepTail of [true, false]) {
-    for (let rank = 0; rank <= 3 && list.length > max; rank += 1) {
+  /** Joins `list[index]` into the thought before it when both are finished. */
+  const mergeIntoPrevious = (index: number, careful: boolean): boolean => {
+    const earlier = list[index - 1];
+    const later = list[index];
+    if (!isFinishedThinking(earlier) || !isFinishedThinking(later)) return false;
+    if (careful && earlier.contentOffset !== later.contentOffset) return false;
+    const group = [...(groups.get(earlier.id) ?? [earlier]), ...(groups.get(later.id) ?? [later])];
+    groups.set(earlier.id, group);
+    groups.delete(later.id);
+    folds.mergedInto.set(later.id, earlier.id);
+    list[index - 1] = mergeThinking(group);
+    list.splice(index, 1);
+    return true;
+  };
+
+  const passes = [
+    { careful: true, keepTail: true },
+    { careful: true, keepTail: false },
+    { careful: false, keepTail: true },
+    { careful: false, keepTail: false },
+  ];
+  for (const { careful, keepTail } of passes) {
+    const lastRank = careful ? LAST_RESORT_RANK - 1 : LAST_RESORT_RANK;
+    for (let rank = 0; rank <= lastRank && list.length > max; rank += 1) {
       for (let index = 0; list.length > max && index < list.length - (keepTail ? BOUND_KEPT_TAIL : 0);) {
+        if (mergeIntoPrevious(index, careful)) continue;
         const step = list[index]!;
-        if (foldRank(step) !== rank || !canDrop(list, index)) {
+        if (foldRank(step) !== rank || (careful && !canDrop(list, index))) {
           index += 1;
           continue;
         }
         folds.dropped.add(step.id);
         list.splice(index, 1);
-        const earlier = list[index - 1];
-        const later = list[index];
-        if (
-          isFinishedThinking(earlier) &&
-          isFinishedThinking(later) &&
-          earlier.contentOffset === later.contentOffset
-        ) {
-          const group = [...(groups.get(earlier.id) ?? [earlier]), ...(groups.get(later.id) ?? [later])];
-          groups.set(earlier.id, group);
-          groups.delete(later.id);
-          folds.mergedInto.set(later.id, earlier.id);
-          list[index - 1] = mergeThinking(group);
-          list.splice(index, 1);
-        }
+        mergeIntoPrevious(index, careful);
       }
     }
   }

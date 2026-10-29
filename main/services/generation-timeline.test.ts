@@ -1136,3 +1136,21 @@ test("folding a long run never moves its reply text or an image's row", () => {
   assert.ok(visualRow && visualRow.kind === "activity");
   assert.equal((visualRow.steps[0] as AgentToolStep).target, "src/lead.ts");
 });
+
+test("a run that writes a line before every call still keeps a timeline past the step limit", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  let content = "";
+  for (let round = 0; round < 230; round += 1) {
+    content += `Now reading file ${round}. `;
+    projector.setContentOffset(content.length);
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const final = projector.finish("completed");
+  assert.equal(final.steps.length, 200);
+  assert.deepEqual(parseGenerationTimeline(final, content.length), final);
+  // The reply's words all survive; only where some calls sat between them is lost.
+  const rows = assistantPresentationRows(content, final)!;
+  assert.equal(rows.filter((row) => row.kind === "text").map((row) => row.content).join(""), content);
+  assert.equal(toolSteps(final)[0]?.target, "src/file-30.ts");
+});
