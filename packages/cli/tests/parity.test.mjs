@@ -518,28 +518,41 @@ test("serve lifecycle identifies a live daemon by its recorded argv", async (t) 
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
-test("serve stop force-stops a daemon stuck in shutdown along with its process group", { skip: process.platform === "win32" }, async (t) => {
+/** A `serve` whose shutdown never finishes, holding a helper (an MCP server, a `tee`) in its process group. */
+async function stuckServe(t, { detached }) {
   const dir = temporary(t), fixture = join(dir, "stuck-serve.mjs"), helperPid = join(dir, "helper.pid");
-  // A daemon whose shutdown never finishes, holding a helper (an MCP server, the Remote advertiser) in its group.
   writeFileSync(fixture, `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
 process.on("SIGTERM", () => {});
 const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1e9)"], { stdio: "ignore" });
 writeFileSync(${JSON.stringify(helperPid)}, String(helper.pid));
 setInterval(() => {}, 1e9);`);
+  // Its own group either way, so the test can clean up; only owner.json says whether startDaemon spawned it.
   const child = spawn(process.execPath, [fixture, "serve"], { stdio: "ignore", detached: true });
   t.after(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { /* already gone */ } });
   const ready = Date.now() + 10_000;
   while (!existsSync(helperPid) && Date.now() < ready) await new Promise((resolve) => setTimeout(resolve, 25));
   const helper = Number(readFileSync(helperPid, "utf8"));
   mkdirSync(join(dir, "serve.lock"), { recursive: true });
-  api.atomicJson(join(dir, "serve.lock", "owner.json"), { pid: child.pid, argv: [process.execPath, fixture, "serve"], startedAt: Date.now() });
+  api.atomicJson(join(dir, "serve.lock", "owner.json"), { ...(detached ? { detached: true } : {}), pid: child.pid, argv: [process.execPath, fixture, "serve"], startedAt: Date.now() });
   writeFileSync(api.daemonSocket(dir), "");
-  const stopped = await api.stopDaemon(dir, 1_000);
-  assert.deepEqual(stopped, { stopped: true, pid: child.pid, forced: true });
-  assert.equal(api.pidAlive(child.pid), false);
+  return { dir, pid: child.pid, helper };
+}
+
+test("serve stop force-stops a background daemon stuck in shutdown along with its process group", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper } = await stuckServe(t, { detached: true });
+  assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
+  assert.equal(api.pidAlive(pid), false);
   const helperGone = Date.now() + 5_000;
   while (api.pidAlive(helper) && Date.now() < helperGone) await new Promise((resolve) => setTimeout(resolve, 25));
   assert.equal(api.pidAlive(helper), false, "the daemon's helper must not be orphaned");
+  assert.equal(existsSync(join(dir, "serve.lock")), false);
+});
+
+test("serve stop force-stops only the serve process of a stuck foreground serve, sparing its shell job", { skip: process.platform === "win32" }, async (t) => {
+  const { dir, pid, helper } = await stuckServe(t, { detached: false });
+  assert.deepEqual(await api.stopDaemon(dir, 1_000), { stopped: true, pid, forced: true });
+  assert.equal(api.pidAlive(pid), false);
+  assert.equal(api.pidAlive(helper), true, "a process sharing the foreground serve's group survives");
   assert.equal(existsSync(join(dir, "serve.lock")), false);
 });
 
@@ -1211,6 +1224,16 @@ test("scheduled inference budgets the streamed reply size, not every cumulative 
   // A reply that really exceeds the budget still stops.
   reply = { chunks: 80, size: 32 * 1024 };
   await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), /response budget exhausted/);
+  // Blocks some providers deliver whole, without deltas, still count once; streamed blocks are not counted twice at their end.
+  const meter = api.createReplyMeter(), partial = { content: [] };
+  meter.add({ type: "text_delta", contentIndex: 0, delta: "ab", partial });
+  meter.add({ type: "text_delta", contentIndex: 0, delta: "cd", partial });
+  assert.equal(meter.add({ type: "text_end", contentIndex: 0, content: "abcd", partial }), 4);
+  assert.equal(meter.add({ type: "toolcall_end", contentIndex: 1, toolCall: { type: "toolCall", id: "c", name: "read", arguments: { path: "notes.md" } }, partial }), 4 + '{"path":"notes.md"}'.length);
+  meter.nextMessage();
+  assert.equal(meter.add({ type: "thinking_end", contentIndex: 0, content: "x".repeat(10), partial }), 33);
+  const redacted = { content: [{ type: "thinking", thinking: "", redacted: true, thinkingSignature: "s".repeat(3 * 1024 * 1024) }] };
+  assert.ok(meter.add({ type: "thinking_end", contentIndex: 0, content: "", partial: redacted }) > 2 * 1024 * 1024);
 });
 
 test("MCP paginates tools, fences schema drift, and terminates its stdio transport", async (t) => {

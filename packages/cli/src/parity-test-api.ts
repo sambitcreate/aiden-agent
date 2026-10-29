@@ -38,7 +38,7 @@ export { createCliMcpPool } from "./mcp.ts";
 
 export { createCliProviderCredentials } from "./provider-credentials.ts";
 
-export { runScheduledInference } from "./scheduled-inference.ts";
+export { createReplyMeter, runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
 
