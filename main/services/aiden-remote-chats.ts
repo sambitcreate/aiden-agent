@@ -1226,8 +1226,8 @@ export class AidenRemoteChatService {
           text: string,
           chatId: string,
         ): Promise<{ workspaceId: string; branch: string }>;
-        /** The branch of the managed worktree this workspace is, if it is one. */
-        worktreeBranch(workspaceId: string): Promise<string | undefined>;
+        /** The branch of the worktree New worktree made for this chat, when the chat is in it. */
+        worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined>;
       };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
@@ -1901,9 +1901,9 @@ export class AidenRemoteChatService {
    * Contract revision 48: put an empty chat in a new managed worktree made
    * from its workspace, named from the message about to be sent, so that
    * message runs there. The worktree is keyed by the chat, so a retry never
-   * makes a second one. An empty chat that is already in a worktree (an
-   * earlier attempt finished after the phone stopped waiting) answers with
-   * that worktree, whatever revision or key the retry carries. A chat that
+   * makes a second one. An empty chat that is already in the worktree made
+   * for it (an earlier attempt finished after the phone stopped waiting)
+   * answers with that worktree, whatever revision or key the retry carries. A chat that
    * already has messages stays where it is.
    */
   async moveToNewWorktree(
@@ -1938,7 +1938,7 @@ export class AidenRemoteChatService {
         async () => {
           const chat = await this.chat(chatId);
           if (chat.messages.length === 0 && chat.workspaceId) {
-            const branch = await newWorktrees.worktreeBranch(chat.workspaceId);
+            const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
             if (branch) return { chat: projectAidenRemoteChat(chat), branch };
           }
           requireRevision(revision, chat);

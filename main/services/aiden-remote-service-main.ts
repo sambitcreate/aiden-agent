@@ -538,6 +538,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               branches: (folderPath) => gitBranches(folderPath),
               ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
               owner: (deviceId) => workspaceOwners.owner(deviceId),
+              record: (key) => firstMessageWorktrees.record(key),
             }),
             application: chatApplicationService,
             chatStore,

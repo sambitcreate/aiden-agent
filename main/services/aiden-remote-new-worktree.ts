@@ -16,6 +16,7 @@ import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
 import {
   FirstMessageWorktreeError,
   FirstMessageWorktreeSettingsChangedError,
+  type FirstMessageWorktreeRecord,
 } from "./first-message-worktree.js";
 import { InsufficientDiskSpaceError, WorktreeCapacityUnavailableError } from "./managed-worktree-capacity.js";
 import type { GitBranches, Workspace } from "./types.js";
@@ -30,6 +31,8 @@ export interface AidenRemoteNewWorktreeDependencies {
     owner: WorkspaceOperationDocumentOwner,
   ): Promise<FirstMessageWorktreeInfo>;
   owner(deviceId: string): WorkspaceOperationDocumentOwner;
+  /** The coordinator's record for a key. */
+  record(key: string): Promise<FirstMessageWorktreeRecord | undefined>;
 }
 
 /** The coordinator key for a phone chat's worktree; one worktree per chat. */
@@ -57,7 +60,14 @@ function remoteFailure(error: unknown, baseRef: string): AidenRemoteServiceError
 
 export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktreeDependencies) {
   return {
-    async worktreeBranch(workspaceId: string): Promise<string | undefined> {
+    /**
+     * The branch of the worktree an earlier New worktree made for this chat,
+     * when the chat's workspace is that worktree. Any other worktree, even a
+     * managed one, is not this chat's setup.
+     */
+    async worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined> {
+      const record = await dependencies.record(phoneChatWorktreeKey(chatId));
+      if (record?.state !== "ready" || record.workspaceId !== workspaceId) return undefined;
       return (await dependencies.getWorkspace(workspaceId))?.managedWorktree?.branch;
     },
     async create(

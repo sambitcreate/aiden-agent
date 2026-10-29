@@ -33,6 +33,7 @@ function harness(options: {
   workspace?: Workspace | undefined;
   branches?: GitBranches | Error;
   ensure?: (request: FirstMessageWorktreeRequest, seed: string) => Promise<{ workspaceId: string; branch: string }>;
+  records?: Record<string, { state: "pending" | "failed" | "ready"; workspaceId: string }>;
 } = {}) {
   const requests: Array<{ request: FirstMessageWorktreeRequest; seed: string }> = [];
   const owners: string[] = [];
@@ -58,6 +59,22 @@ function harness(options: {
     owner: (deviceId) => {
       owners.push(deviceId);
       return owner;
+    },
+    record: async (key) => {
+      const entry = options.records?.[key];
+      return entry && {
+        key,
+        sourceWorkspaceId: "site",
+        ...entry,
+        baseRef: "main",
+        fromOrigin: true,
+        branch: "aiden/fix",
+        ownershipToken: "token",
+        baseCommit: "abc123",
+        startPoint: "main",
+        baseSource: "local" as const,
+        updatedAt: 0,
+      };
     },
   });
   return { service, requests, owners };
@@ -122,11 +139,28 @@ test("a workspace that can't have a worktree is refused before anything is made"
   }
 });
 
-test("a workspace reports its worktree's branch only when it is a managed worktree", async () => {
+test("a chat's finished setup is only the worktree New worktree made for that chat", async () => {
   const managedWorktree = { repositoryPath: "/r", worktreePath: "/w", branch: "aiden/fix", createdFromHead: "abc" };
-  assert.equal(await harness({ workspace: { ...site, managedWorktree } }).service.worktreeBranch("site"), "aiden/fix");
-  assert.equal(await harness().service.worktreeBranch("site"), undefined);
-  assert.equal(await harness({ workspace: undefined }).service.worktreeBranch("site"), undefined);
+  const inWorktree = { workspace: { ...site, id: "site-worktree", managedWorktree } };
+  const made = { [phoneChatWorktreeKey("chat-1")]: { state: "ready" as const, workspaceId: "site-worktree" } };
+  assert.equal(await harness({ ...inWorktree, records: made }).service.worktreeBranch("chat-1", "site-worktree"), "aiden/fix");
+  assert.equal(
+    await harness({ ...inWorktree, records: made }).service.worktreeBranch("chat-2", "site-worktree"),
+    undefined,
+    "another chat's worktree",
+  );
+  assert.equal(await harness(inWorktree).service.worktreeBranch("chat-1", "site-worktree"), undefined, "a worktree this chat never made");
+  assert.equal(
+    await harness({ ...inWorktree, records: { [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" } } })
+      .service.worktreeBranch("chat-1", "site-worktree"),
+    undefined,
+    "an attempt that never finished",
+  );
+  assert.equal(
+    await harness({ records: made }).service.worktreeBranch("chat-1", "site"),
+    undefined,
+    "the chat is no longer in the worktree made for it",
+  );
 });
 
 test("Git failures reach the phone as fixed sentences, never Git's own words", async () => {
