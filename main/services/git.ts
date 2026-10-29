@@ -4747,6 +4747,27 @@ export class GitService {
     }
   }
 
+  /**
+   * Undo a failed restore's own removal: move its checkout and Git record
+   * back from wherever the removal set them aside and drop that removal's
+   * journal. True when both are back in place.
+   */
+  private async returnSetAsideRestore(target: string, gitDir: string, token: string): Promise<boolean> {
+    const removal = this.managedWorktreeRemovalPaths(target, gitDir, token);
+    const putBack = async (original: string, setAside: string[]) => {
+      if (await this.pathExists(original)) return true;
+      for (const candidate of setAside) {
+        if ((await this.pathExists(candidate)) && (await this.restoreQuarantinedPath(candidate, original))) return true;
+      }
+      return false;
+    };
+    const checkoutBack = await putBack(target, [removal.checkout, removal.checkoutAuthorization]);
+    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization]);
+    if (!checkoutBack || !recordBack) return false;
+    await fs.rm(removal.journal, { force: true });
+    return true;
+  }
+
   private async restoreQuarantinedPath(quarantine: string, original: string): Promise<boolean> {
     try {
       if (await this.pathExists(original)) return false;
@@ -6965,7 +6986,10 @@ export class GitService {
                 () => undefined,
               );
             } catch (removalError) {
-              if (!(removalError instanceof GitServiceError && removalError.code === "dirty_worktree")) throw removalError;
+              // The removal may stop after setting the folder and its Git
+              // record aside (a write landed late): put both back first, so
+              // "kept" means the folder is where it was.
+              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token))) throw removalError;
               kept = new GitServiceError(
                 "dirty_worktree",
                 "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",

@@ -1060,6 +1060,42 @@ test("a failed restore never deletes an ignored file written while it was undoin
   }
 });
 
+test("a failed restore puts the folder back when a late write stops its removal", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  let removals = 0;
+  const service = new GitService({
+    cacheTtlMs: 0,
+    // An editor holding the folder open saves into it after it was set aside
+    // and checked, just before the removal asks for the last time.
+    worktreeDirectoryRemover: async (identity) => {
+      removals += 1;
+      await fs.writeFile(path.join(identity.path, "editor-unsaved-work.txt"), "unsaved\n");
+      await identity.authorize?.(identity.path, "digest");
+      throw new Error("the removal should have been refused");
+    },
+  });
+  const created = await service.createWorktree(repository, root, "aiden/late");
+  const branchHead = await git(repository, ["rev-parse", "aiden/late"]);
+  await fs.rm(created.path, { recursive: true, force: true });
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/late", created.worktreeGitDir, created.ownershipToken, "",
+      async () => { throw new Error("disk full"); },
+    ),
+    (error: unknown) => error instanceof GitServiceError && /kept the folder/u.test(error.message),
+  );
+  assert.equal(removals, 1);
+  assert.equal(await fs.readFile(path.join(created.path, "editor-unsaved-work.txt"), "utf8"), "unsaved\n", "back where it was");
+  assert.equal(await git(created.path, ["branch", "--show-current"]), "aiden/late", "and still a checkout of its branch");
+  assert.equal(await git(repository, ["rev-parse", "aiden/late"]), branchHead, "the branch is kept");
+  assert.deepEqual(
+    (await fs.readdir(path.dirname(created.path))).filter((name) => name.startsWith(".aiden-")),
+    [],
+    "nothing is left set aside",
+  );
+});
+
 test("a deleted worktree whose branch now needs a checkout filter is not restored", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
