@@ -1542,7 +1542,9 @@ test("portable file aliases fail visibly without chmod or replacing their target
 test("a portable root linked to a folder this user owns is protected and used through the link", { skip: process.platform === "win32" }, async (t) => {
   const r = await roots(t);
   const dotfiles = path.join(r.localRoot, "dotfiles", "aiden");
-  await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 }); await fs.chmod(dotfiles, 0o755);
+  await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 });
+  // Fix every folder's mode so the umask (0002 on many Linux setups) can't make them group-writable.
+  for (const folder of [r.localRoot, path.dirname(dotfiles), dotfiles]) await fs.chmod(folder, 0o755);
   await fs.writeFile(path.join(dotfiles, "config.json"), JSON.stringify({ skills: [{ id: "s1", name: "kept", description: "d", instructions: "i", enabled: true }] }));
   await fs.chmod(path.join(dotfiles, "config.json"), 0o644);
   await fs.symlink(dotfiles, r.portableRoot);
@@ -1563,6 +1565,19 @@ test("a portable root link is refused when another user could replace it", { ski
   await fs.symlink(target, linkInShared);
   assert.throws(() => ensurePrivateDirectory(linkInShared), /storage must be a private/u, "another user could swap the link");
   assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
+});
+
+test("a link partway along the path is refused when another user could replace it", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  await fs.chmod(r.localRoot, 0o755);
+  const shared = path.join(r.localRoot, "shared"); await fs.mkdir(shared); await fs.chmod(shared, 0o777);
+  const owned = path.join(r.localRoot, "owned"); await fs.mkdir(owned, { mode: 0o755 }); await fs.chmod(owned, 0o755);
+  const state = path.join(owned, "state"); await fs.mkdir(state, { mode: 0o700 });
+  await fs.symlink(owned, path.join(shared, "alias"));
+  assert.throws(() => ensurePrivateDirectory(path.join(shared, "alias", "state"), "reject"), /storage must be a private/u, "another user could swap the alias");
+  // The same path through a link in a folder only this user can change is fine.
+  await fs.symlink(owned, path.join(r.localRoot, "safe-alias"));
+  assert.doesNotThrow(() => ensurePrivateDirectory(path.join(r.localRoot, "safe-alias", "state"), "reject"));
 });
 
 test("private storage rejects canonical home aliases and replaceable ancestors without changing permissions", { skip: process.platform === "win32" }, async (t) => {
