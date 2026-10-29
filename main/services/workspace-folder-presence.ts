@@ -9,7 +9,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Workspace } from "./types.js";
-import { workspaceFolderMissingMessage } from "../../renderer/shared/workspace-folder-presence.js";
+import {
+  workspaceFolderCheckApplies,
+  workspaceFolderMissingMessage,
+} from "../../renderer/shared/workspace-folder-presence.js";
 
 /** `present`, `missing`, or `unknown` when the check itself could not answer. */
 export type WorkspaceFolderPresence = "present" | "missing" | "unknown";
@@ -54,13 +57,22 @@ export class WorkspaceFolderMissingError extends Error {
   }
 }
 
+type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree">;
+
+/** Whether this workspace's folder is checked and gone. */
+export async function workspaceFolderMissing(workspace: CheckedWorkspace, stat?: Stat): Promise<boolean> {
+  return (
+    workspaceFolderCheckApplies(workspace) &&
+    (await workspaceFolderPresence(workspace.folderPath!, stat)) === "missing"
+  );
+}
+
 /** Refuse to start a turn in a workspace whose folder is gone. */
 export async function assertWorkspaceFolderPresent(
-  workspace: Pick<Workspace, "name" | "folderPath">,
+  workspace: CheckedWorkspace,
   stat?: Stat,
 ): Promise<void> {
-  if (!workspace.folderPath) return;
-  if ((await workspaceFolderPresence(workspace.folderPath, stat)) === "missing") {
+  if (await workspaceFolderMissing(workspace, stat)) {
     throw new WorkspaceFolderMissingError(workspace);
   }
 }

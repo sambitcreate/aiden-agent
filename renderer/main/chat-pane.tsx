@@ -81,7 +81,7 @@ import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
-import { workspaceFolderMissingMessage } from "../shared/workspace-folder-presence";
+import { WORKSPACE_FOLDER_MISSING_SEND_REFUSAL, workspaceFolderCheckApplies } from "../shared/workspace-folder-presence";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -313,7 +313,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
   // A moved or deleted folder is named above the composer, and a send is
   // refused before it reaches the agent (main refuses it again at start).
-  const folderWorkspaceId = effectiveWorkspace?.folderPath ? effectiveWorkspace.id : undefined;
+  const folderWorkspaceId =
+    effectiveWorkspace && workspaceFolderCheckApplies(effectiveWorkspace) ? effectiveWorkspace.id : undefined;
   const folderPresenceQuery = useQuery({
     queryKey: queryKeys.workspaceFolderPresence(folderWorkspaceId ?? ""),
     queryFn: () => workspacesApi.folderPresence(folderWorkspaceId!),
@@ -1878,14 +1879,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       const folderWorkspace = folderWorkspaceRef.current;
       if (folderWorkspace) {
-        const presence = await qc.fetchQuery({
-          queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
-          queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
-          staleTime: 0,
-        });
-        if (presence.presence === "missing") {
-          throw new Error(workspaceFolderMissingMessage(folderWorkspace.name, presence.folder));
-        }
+        // A failed check is no reason to refuse; main checks again at start.
+        const presence = await qc
+          .fetchQuery({
+            queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+            queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+            staleTime: 0,
+          })
+          .catch(() => undefined);
+        // The notice above the composer names the folder; the toast stays short.
+        if (presence?.presence === "missing") throw new Error(WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
       }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {

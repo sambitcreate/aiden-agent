@@ -10,6 +10,7 @@ import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
@@ -608,6 +609,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.acceptsProgressCapabilities === true &&
                 device.capabilities.includes("questions:respond")
               );
+            },
+            workspaceFolderMissing: async (workspaceId) => {
+              const workspace = await configStore.getWorkspace(workspaceId);
+              return workspace !== undefined && (await workspaceFolderMissing(workspace));
             },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(

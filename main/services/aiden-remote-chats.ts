@@ -10,6 +10,7 @@ import {
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -1218,6 +1219,11 @@ export class AidenRemoteChatService {
        * excluded from that device's turns so a prompt can never be stranded.
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Whether a workspace's folder was moved or deleted, so a paired device
+       * hears why before its message is stored. Absent: never refused here.
+       */
+      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2348,6 +2354,20 @@ export class AidenRemoteChatService {
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
+            if (
+              workspaceId &&
+              !authoritative.botId &&
+              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
+            ) {
+              // Nothing ran, so the same send runs once the folder is back.
+              throw new AidenOperationNotExecutedError(
+                new AidenRemoteServiceError(
+                  "workspace_unavailable",
+                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
+                  409,
+                ),
+              );
+            }
             const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
             try {
               if (parsed.skill) turn.reserveSkillPreparation();

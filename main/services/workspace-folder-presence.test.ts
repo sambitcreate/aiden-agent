@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import {
   assertWorkspaceFolderPresent,
   displayWorkspaceFolder,
+  workspaceFolderMissing,
   workspaceFolderPresence,
 } from "./workspace-folder-presence.js";
 
@@ -30,23 +31,43 @@ test("a file where the folder used to be counts as missing", async () => {
 test("a check that cannot answer is not reported as missing", async () => {
   const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
   assert.equal(await workspaceFolderPresence("/anywhere", () => Promise.reject(denied)), "unknown");
-  await assertWorkspaceFolderPresent({ name: "Locked", folderPath: "/anywhere" }, () => Promise.reject(denied));
+  assert.equal(
+    await workspaceFolderMissing({ name: "Locked", folderPath: "/anywhere", permission: "ask" }, () => Promise.reject(denied)),
+    false,
+  );
 });
 
 test("starting in a missing folder is refused with the workspace and folder named", async () => {
   const gone = path.join(root, "deleted-project");
   await assert.rejects(
-    assertWorkspaceFolderPresent({ name: "Website", folderPath: gone }),
+    assertWorkspaceFolderPresent({ name: "Website", folderPath: gone, permission: "ask" }),
     (error: Error & { code?: string }) => {
       assert.equal(error.code, "workspace_folder_missing");
-      assert.match(error.message, /“Website”/u);
-      assert.ok(error.message.includes(gone) || error.message.includes(displayWorkspaceFolder(gone)));
-      assert.match(error.message, /moved, renamed or deleted/u);
+      assert.equal(
+        error.message,
+        `The folder for “Website” is missing: ${gone}. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, or start the chat in another workspace.`,
+      );
       return true;
     },
   );
-  // A workspace without a folder has nothing to check.
-  await assertWorkspaceFolderPresent({ name: "No folder", folderPath: undefined });
+});
+
+test("only workspaces whose chats use their folder are checked", async () => {
+  const gone = path.join(root, "never-there");
+  assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "ask" }), true);
+  // No folder, No Access (the folder is never touched), and an Aiden-managed
+  // worktree (it has its own restore flow) are left alone.
+  assert.equal(await workspaceFolderMissing({ name: "No folder", folderPath: undefined, permission: "ask" }), false);
+  assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "none" }), false);
+  assert.equal(
+    await workspaceFolderMissing({
+      name: "Website",
+      folderPath: gone,
+      permission: "ask",
+      managedWorktree: { repositoryPath: root, worktreePath: gone, branch: "aiden/fix", createdFromHead: "abc123" },
+    }),
+    false,
+  );
 });
 
 test("the home folder is shown as ~ and other paths are left alone", () => {

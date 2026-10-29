@@ -26,7 +26,10 @@ import { githubCurrentPullRequest } from "../services/github/github-runtime-main
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
-import type { WorkspaceFolderPresenceResult } from "../../renderer/shared/workspace-folder-presence.js";
+import {
+  workspaceFolderCheckApplies,
+  type WorkspaceFolderPresenceResult,
+} from "../../renderer/shared/workspace-folder-presence.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -424,10 +427,12 @@ export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:folderPresence", async (_event, workspaceId: unknown) => {
     if (typeof workspaceId !== "string" || !workspaceId) throw new Error("A workspace id is required.");
     const workspace = await workspaceApplicationService.get(workspaceId);
-    if (!workspace?.folderPath) return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
+    if (!workspace || !workspaceFolderCheckApplies(workspace)) {
+      return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
+    }
     return {
-      presence: await workspaceFolderPresence(workspace.folderPath),
-      folder: displayWorkspaceFolder(workspace.folderPath),
+      presence: await workspaceFolderPresence(workspace.folderPath!),
+      folder: displayWorkspaceFolder(workspace.folderPath!),
     } satisfies WorkspaceFolderPresenceResult;
   });
 
