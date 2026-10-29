@@ -181,9 +181,12 @@ class AidenNewWorktreeTest {
             runBlocking { client.moveChatToNewWorktree("chat_fixture_new_worktree", "r", "  \n ") }
         }
         assertEquals("a blank message never reaches the Mac", sent, server.requestCount)
+    }
 
+    @Test
+    fun aLongFirstMessageIsCutAtTheMacsLimitNotRefused() = runBlocking<Unit> {
         // The Mac counts code points: a long first message is cut there, not refused on the phone.
-        server.enqueue(reply(200, moved))
+        server.enqueue(reply(200, newWorktree.getValue("response").jsonObject))
         val emoji = "\uD83D\uDE80"
         client.moveChatToNewWorktree("chat_fixture_new_worktree", "chat_revision_new_worktree_1", "Fix " + emoji.repeat(5_000))
         val longText = Json.parseToJsonElement(server.takeRequest(5, TimeUnit.SECONDS)!!.body.readUtf8())
