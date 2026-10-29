@@ -3,7 +3,8 @@
 // focused while global dictation runs. Recording capture happens in this
 // window's renderer, so dictation works even when the main window is closed.
 
-import { BrowserWindow, logger, screen } from "../platform.js";
+import { BrowserWindow, logger, registerBroadcastReceiver, screen } from "../platform.js";
+import { PILL_NOTIFICATION_CHANNELS } from "../../renderer/pill-preload-channels.js";
 import type { IpcMainInvokeEvent } from "electron";
 import { getPillPreloadPath, getWindowUrl } from "./window-paths.js";
 import { isTrustedPillSender } from "./pill-window-security.js";
@@ -59,6 +60,8 @@ async function createPillWindow(): Promise<BrowserWindow> {
   // The pill is never an app window: it must not keep Linux or Windows
   // running after the last real window closes, and app UI never targets it.
   markAuxiliaryWindow(window);
+  // The pill hears only the notifications its preload forwards.
+  registerBroadcastReceiver(window, PILL_NOTIFICATION_CHANNELS);
 
   // Float above other apps (including fullscreen spaces) without stealing focus.
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });

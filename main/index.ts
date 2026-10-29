@@ -5,6 +5,7 @@ import {
   ipcMain,
   logger,
   powerMonitor,
+  registerBroadcastReceiver,
   registerNativeHandlers,
   screen,
   shell,
@@ -1318,6 +1319,7 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
   writeDiagnosticEvent({

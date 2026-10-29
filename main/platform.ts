@@ -15,7 +15,7 @@ import {
   shell,
   systemPreferences,
   type IpcMain,
-  type OpenDialogOptions,
+  type IpcMainInvokeEvent,
 } from "electron";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import {
@@ -24,6 +24,13 @@ import {
   writeLegacyDiagnostic,
 } from "./services/diagnostic-journal.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import {
+  createBroadcastReceivers,
+  parseMediaRequestType,
+  parseMediaStatusType,
+  parseOpenDialogOptions,
+} from "./native-ipc-core.js";
+import { rendererDocumentOwner } from "./services/renderer-document-owner.js";
 
 type LogValue = unknown;
 
@@ -70,6 +77,28 @@ export function onBroadcast(observer: (channel: NotificationChannel) => void): (
   return () => broadcastObservers.delete(observer);
 }
 
+const broadcastReceivers = createBroadcastReceivers<BrowserWindow>();
+
+/**
+ * Opt a window into renderer notifications. Only windows with an Aiden
+ * preload register: the main window for every channel, the dictation pill for
+ * the few it listens to. Registration ends when the window closes.
+ */
+export function registerBroadcastReceiver(
+  window: BrowserWindow,
+  channels: ReadonlySet<string> | null = null,
+): void {
+  broadcastReceivers.register(
+    window,
+    {
+      isDestroyed: () => window.isDestroyed() || window.webContents.isDestroyed(),
+      send: (channel, payload) => window.webContents.send(channel, payload),
+    },
+    channels,
+  );
+  window.once("closed", () => broadcastReceivers.unregister(window));
+}
+
 function broadcast(channel: NotificationChannel, payload: unknown): void {
   for (const observer of [...broadcastObservers]) {
     try {
@@ -78,11 +107,9 @@ function broadcast(channel: NotificationChannel, payload: unknown): void {
       logger.warn("ipc", `A ${channel} observer failed.`, error);
     }
   }
-  for (const window of BrowserWindow.getAllWindows()) {
+  for (const receiver of broadcastReceivers.targets(channel)) {
     try {
-      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send(channel, payload);
-      }
+      receiver.send(channel, payload);
     } catch (error) {
       logger.warn("ipc", `Could not deliver ${channel} notification.`, error);
     }
@@ -109,15 +136,22 @@ async function waitForAccessibilityTrust(): Promise<boolean> {
   return systemPreferences.isTrustedAccessibilityClient(false);
 }
 
+/** Native requests come only from the active main frame of an Aiden window. */
+function requireNativeSender(event: IpcMainInvokeEvent): void {
+  rendererDocumentOwner(event, () => new Error("Native request came from an inactive renderer."));
+}
+
 export function registerNativeHandlers(): void {
   if (nativeHandlersRegistered) return;
   nativeHandlersRegistered = true;
 
-  electronIpcMain.handle("aiden:dialog:open", async (event, options?: OpenDialogOptions) => {
+  electronIpcMain.handle("aiden:dialog:open", async (event, input?: unknown) => {
+    requireNativeSender(event);
+    const options = parseOpenDialogOptions(input);
     const parent = BrowserWindow.fromWebContents(event.sender);
     return parent
-      ? dialog.showOpenDialog(parent, options ?? {})
-      : dialog.showOpenDialog(options ?? {});
+      ? dialog.showOpenDialog(parent, options)
+      : dialog.showOpenDialog(options);
   });
 
   electronIpcMain.handle("aiden:theme:get", () => ({
@@ -133,18 +167,20 @@ export function registerNativeHandlers(): void {
     nativeTheme.themeSource = source;
     return true;
   });
-  electronIpcMain.handle(
-    "aiden:media:status",
-    (_event, mediaType: "microphone" | "camera" | "screen") =>
-      process.platform === "darwin"
-        ? systemPreferences.getMediaAccessStatus(mediaType)
-        : "unknown",
-  );
-  electronIpcMain.handle("aiden:media:request", (_event, mediaType: "microphone" | "camera") =>
-    process.platform === "darwin"
+  electronIpcMain.handle("aiden:media:status", (event, input: unknown) => {
+    requireNativeSender(event);
+    const mediaType = parseMediaStatusType(input);
+    return process.platform === "darwin"
+      ? systemPreferences.getMediaAccessStatus(mediaType)
+      : "unknown";
+  });
+  electronIpcMain.handle("aiden:media:request", (event, input: unknown) => {
+    requireNativeSender(event);
+    const mediaType = parseMediaRequestType(input);
+    return process.platform === "darwin"
       ? systemPreferences.askForMediaAccess(mediaType)
-      : true,
-  );
+      : true;
+  });
   electronIpcMain.handle("aiden:accessibility:status", () =>
     hostPlatformCapabilities().accessibilityPaste
       ? systemPreferences.isTrustedAccessibilityClient(false)
