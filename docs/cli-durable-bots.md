@@ -34,6 +34,7 @@ For rollback, stop the daemon first, retain the whole profile, and move only `bo
 | Hand-offs, `sign_in`, Bot rules, Bot computers | Supported (Bot computers on Apple silicon only) | Unavailable; `bot:handoffs` is not advertised |
 | Starter presets | Supported | Shared crash-safe starter and creation-key store |
 | Connection approvals | Supported | Local CLI or paired Remote approval response |
+| Codemode scripts over connection, file, shell and lookup tools | Supported | Shared core (Pi Durable codemode); each scripted MCP call asks for approval like a direct one, and a pending one survives Resume |
 | Automatic memory review/compaction steering | Supported | Unavailable; no background review is started |
 | Proactivity proposals and notification feed | Supported | Unavailable; feature withheld |
 | Rich activity, staged attachments, connection setup | Supported | Unavailable; features withheld |

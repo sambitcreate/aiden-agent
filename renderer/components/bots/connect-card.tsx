@@ -45,7 +45,12 @@ export interface ConnectCardProps {
   onDismiss?: (pluginId: string) => void;
   /** Visible Connect text; phones use "Finish on your Mac". The accessible name stays "Connect {name}". */
   connectLabel?: string;
-  /** Setup or a connection request is in progress. */
+  /**
+   * "Add to this Bot", for an app that is connected in Aiden but left out of
+   * this Bot's access. Without it such a card falls back to Connect.
+   */
+  onAddToBot?: (pluginId: string) => void;
+  /** Setup, a connection request, or Add to this Bot is in progress. */
   busy?: boolean;
 }
 
@@ -54,13 +59,57 @@ export function ConnectCard({
   onConnect,
   onDismiss,
   connectLabel = "Connect",
+  onAddToBot,
   busy = false,
 }: ConnectCardProps) {
   const suggestion = connectionSuggestionFor(card.pluginId);
   if (!suggestion) return null;
   const title = `Connect ${suggestion.name}`;
+  const notNow = onDismiss ? (
+    <Button
+      variant="transparent"
+      size="small"
+      aria-label={`Not now for ${suggestion.name}`}
+      onClick={() => onDismiss(card.pluginId)}
+    >
+      Not now
+    </Button>
+  ) : null;
 
-  if (card.status !== "pending") {
+  if (card.status === "needs_access" && onAddToBot) {
+    const addTitle = `Add ${suggestion.name} to this Bot`;
+    return (
+      <div data-connect-card-status="needs_access" className="max-w-md">
+        <BotNoticeCard
+          label={addTitle}
+          iconTile={<ConnectionIconTile suggestion={suggestion} className="bg-control" />}
+          title={addTitle}
+          actions={
+            <>
+              {notNow}
+              <Button
+                variant="accent"
+                size="small"
+                aria-label={addTitle}
+                disabled={busy}
+                aria-busy={busy || undefined}
+                onClick={() => onAddToBot(card.pluginId)}
+              >
+                Add to this Bot
+              </Button>
+            </>
+          }
+        >
+          <p>{card.reason}</p>
+          <p className="mt-1 text-tertiary">
+            {suggestion.name} is connected in Aiden, but this Bot’s access doesn’t include it yet.
+          </p>
+        </BotNoticeCard>
+      </div>
+    );
+  }
+
+  if (card.status === "connected" || card.status === "dismissed") {
     const connected = card.status === "connected";
     return (
       <div
@@ -90,16 +139,7 @@ export function ConnectCard({
         title={title}
         actions={
           <>
-            {onDismiss ? (
-              <Button
-                variant="transparent"
-                size="small"
-                aria-label={`Not now for ${suggestion.name}`}
-                onClick={() => onDismiss(card.pluginId)}
-              >
-                Not now
-              </Button>
-            ) : null}
+            {notNow}
             <Button
               variant="accent"
               size="small"

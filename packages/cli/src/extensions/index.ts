@@ -312,7 +312,7 @@ export async function createAidenInlineExtensions(): Promise<InlineExtension[]> 
 	const extensions: InlineExtension[] = [captureExtension, createProviderParityExtension(agentDir), createSessionParityExtension(agentDir), createAppExtension(agentDir)];
 	// Aiden's /mcp replaces Pi's built-in MCP extension in every session, children included.
 	if (process.env.AIDEN_CHILD === "1") return [...extensions, createMcpExtension(agentDir, { connect: false })];
-	extensions.push(createSubagentsExtension(agentDir), createOnboardingExtension(agentDir), createWorkflowCommands(agentDir), createArtifactsExtension(agentDir), createMcpExtension(agentDir), createScheduleExtension(agentDir));
+	extensions.push(createSubagentsExtension(agentDir), createOnboardingExtension(agentDir), createWorkflowCommands(agentDir), createArtifactsExtension(agentDir), createMcpExtension(agentDir, { deferToCodemode: true }), createScheduleExtension(agentDir));
 	for (const candidate of candidates) {
 		try {
 			const extension = await candidate.build();

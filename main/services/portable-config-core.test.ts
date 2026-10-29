@@ -1521,18 +1521,15 @@ test("portable files and owned recovery archives are private without changing th
   assert.equal((await fs.stat(r.portableFile)).mode & 0o777, 0o600);
 });
 
-test("portable root/file aliases fail visibly without chmod or replacing their targets", async (t) => {
-  for (const variant of ["root-symlink", "file-symlink", "file-hardlink"] as const) {
+test("portable file aliases fail visibly without chmod or replacing their targets", async (t) => {
+  for (const variant of ["file-symlink", "file-hardlink"] as const) {
     const r = await roots(t);
     const outside = path.join(r.localRoot, "outside"); await fs.mkdir(outside);
     const victim = path.join(outside, "important.json"); await fs.writeFile(victim, "keep these bytes");
     const before = (await fs.stat(victim)).mode;
-    if (variant === "root-symlink") await fs.symlink(outside, r.portableRoot);
-    else {
-      await fs.mkdir(r.portableRoot);
-      if (variant === "file-symlink") await fs.symlink(victim, r.portableFile);
-      else await fs.link(victim, r.portableFile);
-    }
+    await fs.mkdir(r.portableRoot);
+    if (variant === "file-symlink") await fs.symlink(victim, r.portableFile);
+    else await fs.link(victim, r.portableFile);
     const bundle = stores(r);
     await assert.rejects(bundle.portable.load(), /storage must be a private/u);
     await assert.rejects(bundle.portable.update(() => {}), /storage must be a private/u);
@@ -1541,6 +1538,32 @@ test("portable root/file aliases fail visibly without chmod or replacing their t
   }
 });
 
+
+test("a portable root linked to a folder this user owns is protected and used through the link", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const dotfiles = path.join(r.localRoot, "dotfiles", "aiden");
+  await fs.mkdir(dotfiles, { recursive: true, mode: 0o755 }); await fs.chmod(dotfiles, 0o755);
+  await fs.writeFile(path.join(dotfiles, "config.json"), JSON.stringify({ skills: [{ id: "s1", name: "kept", description: "d", instructions: "i", enabled: true }] }));
+  await fs.chmod(path.join(dotfiles, "config.json"), 0o644);
+  await fs.symlink(dotfiles, r.portableRoot);
+  const bundle = stores(r);
+  assert.equal((await bundle.portable.load()).skills?.[0]?.name, "kept");
+  await bundle.portable.update((draft) => { draft.skills = []; });
+  assert.equal((await fs.lstat(r.portableRoot)).isSymbolicLink(), true, "the link stays a link");
+  assert.equal((await fs.stat(dotfiles)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(path.join(dotfiles, "config.json"))).mode & 0o777, 0o600);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dotfiles, "config.json"), "utf8")).skills, []);
+});
+
+test("a portable root link is refused when another user could replace it", { skip: process.platform === "win32" }, async (t) => {
+  const r = await roots(t);
+  const shared = path.join(r.localRoot, "shared"); await fs.mkdir(shared); await fs.chmod(shared, 0o777);
+  const target = path.join(r.localRoot, "target"); await fs.mkdir(target, { mode: 0o755 }); await fs.chmod(target, 0o755);
+  const linkInShared = path.join(shared, "aiden");
+  await fs.symlink(target, linkInShared);
+  assert.throws(() => ensurePrivateDirectory(linkInShared), /storage must be a private/u, "another user could swap the link");
+  assert.equal((await fs.stat(target)).mode & 0o777, 0o755);
+});
 
 test("private storage rejects canonical home aliases and replaceable ancestors without changing permissions", { skip: process.platform === "win32" }, async (t) => {
   const r = await roots(t);

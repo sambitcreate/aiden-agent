@@ -80,7 +80,7 @@ The interactive gallery that the set was chosen from is `docs/aiden-thinking-ani
 | scale | 1 | 1.18 | 1 | 1 |
 | opacity | 0.2 | 1 | 0.2 | 0.2 |
 
-### `glance` (waiting for approval or an answer)
+### `glance` (waiting for approval, an answer or a provider usage limit)
 
 - Shapes: two rounded rects ("eyes"), 3.4 × 7, corner radius 1.7, at x = 7 and x = 13.6, y = 8.5, inside one group.
 - Group translateX, D = 4 s, d = 0, easing `look`: 0 → 0; 0.14 → 0; 0.24 → −2.6; 0.40 → −2.6; 0.52 → 2.6; 0.68 → 2.6; 0.80 → 0; 1 → 0.

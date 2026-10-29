@@ -163,12 +163,11 @@ export function telegramBotPausedLine(name: string | undefined): string {
 }
 
 /** Duck-typed: this module only imports the session's types (the CLI bundles it without the runtime). */
-function isPausedByPerson(cause: unknown): boolean {
-  return (
-    cause instanceof Error &&
-    cause.name === "BotSessionError" &&
-    (cause as { reason?: unknown }).reason === "paused_by_person"
-  );
+/** A send the Bot refused for a reason the chat should hear: a pause, or the month's spending limit. */
+function sessionRefusal(cause: unknown): "paused_by_person" | "spending_limit" | undefined {
+  if (!(cause instanceof Error) || cause.name !== "BotSessionError") return undefined;
+  const reason = (cause as { reason?: unknown }).reason;
+  return reason === "paused_by_person" || reason === "spending_limit" ? reason : undefined;
 }
 
 export function telegramBotRequestId(message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId">): string {
@@ -370,7 +369,8 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
           ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         });
       } catch (cause) {
-        if (!isPausedByPerson(cause)) throw cause;
+        const refusal = sessionRefusal(cause);
+        if (refusal === undefined) throw cause;
         // Not admitted and no row: the update is consumed with one fixed line.
         const name = await deps.botName?.(message.botId).catch(() => undefined);
         try {
@@ -378,7 +378,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
             chatId: message.chatId,
             ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
             ownerUserId: message.ownerUserId,
-            text: telegramBotPausedLine(name),
+            text: refusal === "paused_by_person" ? telegramBotPausedLine(name) : (cause as Error).message,
           });
         } catch (deliveryError) {
           deps.onError?.("Telegram could not tell a chat its Bot is paused.", deliveryError);

@@ -3232,6 +3232,32 @@ test("chat appearance mutations merge inside the settings lease and reject stale
   await assert.rejects(h.store.updateAppControl({ ...operation, value: "light" }, () => true), /Settings changed/u);
 });
 
+test("chat color theme and new-chat model controls save what Settings would save", async (t) => {
+  const h = await harness(t);
+  const { appControlRevision, appControlValue } = await import("./app-controls-core.js");
+  const { getPresetVariant, normalizeAppearanceConfig } = await import("../../renderer/shared/appearance.js");
+  await h.store.setSettings({ appControlPolicy: "safe", lastProviderId: "lmstudio", lastModel: "qwen3-8b" });
+  let state = { settings: await h.store.getSettings() };
+  await h.store.setSettings({ appearance: { ...normalizeAppearanceConfig(state.settings.appearance), mode: "dark", chatWidth: "wide" } });
+  state = { settings: await h.store.getSettings() };
+  await h.store.updateAppControl({ control: "appearance.theme", value: "moss", expectedRevision: appControlRevision(state, "appearance.theme"), operationId: "theme" }, () => true);
+  let saved = await h.store.getSettings();
+  assert.deepEqual(saved.appearance?.light, getPresetVariant("moss", "light"));
+  assert.deepEqual(saved.appearance?.dark, getPresetVariant("moss", "dark"));
+  assert.equal(appControlValue({ settings: saved }, "appearance.theme"), "moss");
+  // Other appearance choices are kept.
+  assert.equal(saved.appearance?.mode, "dark");
+  assert.equal(saved.appearance?.chatWidth, "wide");
+
+  state = { settings: saved };
+  await h.store.updateAppControl({ control: "models.newChat", value: "openai::gpt-5.5", expectedRevision: appControlRevision(state, "models.newChat"), operationId: "model" }, () => true);
+  saved = await h.store.getSettings();
+  assert.equal(saved.lastProviderId, "openai");
+  assert.equal(saved.lastModel, "gpt-5.5");
+  // The model control leaves the switches alone.
+  assert.equal(saved.skillsEnabled, state.settings.skillsEnabled);
+});
+
 test("chat controls cannot widen a disabled or revoked paired-host policy", async (t) => {
   const h = await harness(t);
   const { appControlRevision } = await import("./app-controls-core.js");

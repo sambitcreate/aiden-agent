@@ -194,7 +194,9 @@ test("agent local-file preview requests exact approval and releases its listener
     await expect(allow).toBeVisible({ timeout: 45_000 });
     await expect(page.getByText(/Open this exact local document and its listed assets/)).toBeVisible();
     expect(scenario.issuedToolNames).toEqual(["browser", "browser_open"]);
-    await allow.click();
+    // ⌘↩ (Ctrl+Enter off the Mac) allows once from the empty message box.
+    await page.locator("textarea").first().focus();
+    await page.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+Enter`);
     await expect(page.getByText("The managed preview is ready.", { exact: true }).first()).toBeVisible({ timeout: 45_000 });
     expect(scenario.error).toBeUndefined();
     expect(JSON.stringify(scenario.results[2]?.content)).toContain("Exact local document");

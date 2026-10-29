@@ -413,6 +413,8 @@ When a Bot has no routines, the Routines group shows a "Try a daily check-in" ro
 
 There is no hidden heartbeat, and the self-intro is unchanged.
 
+*Amendment, 2026-10-27:* the owner approved visible, person-created event watches (spec `2026-10-27-bot-autonomy-design.md` D2). File-change and link triggers ship first; email and calendar watches wait on a spike. A pre-fire health check may refresh a sign-in and connect a Bot's granted services up to 30 minutes before a fire (D1).
+
 ### 11.6 Remove `openingGreeting`
 
 The field is removed from `BotDefinition`, `BotCreateInput`, `BOT_LIMITS.openingGreetingChars`, store normalization (a legacy key is ignored on read and dropped on the next write), `bots:update` params, the `ChatStore` greeting copy, the Remote `botDetail`/`botCreate`/identity PATCH, and the Advanced UI on all clients.

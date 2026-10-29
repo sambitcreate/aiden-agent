@@ -338,7 +338,13 @@ export class BotCapabilityCatalogMainService {
   /** Return a safe unavailable tombstone view for settings/repair UX. */
   async reconcile(
     binding: BoundBotCustomSelection,
-    input: { audienceId: string; botId: string; signal?: AbortSignal },
+    input: {
+      audienceId: string;
+      botId: string;
+      signal?: AbortSignal;
+      /** A snapshot already captured under the caller's live inventory lease. */
+      snapshot?: BotCapabilityCatalogSnapshot;
+    },
   ): Promise<ReconciledBotCustomSelection> {
     assertBoundBotCustomSelectionOpaqueIds(
       binding,
@@ -346,11 +352,12 @@ export class BotCapabilityCatalogMainService {
     );
     return reconcileBoundBotCustomSelection(
       binding,
-      await this.snapshot({
-        audienceId: input.audienceId,
-        signal: input.signal,
-        botId: input.botId,
-      }),
+      input.snapshot ??
+        (await this.snapshot({
+          audienceId: input.audienceId,
+          signal: input.signal,
+          botId: input.botId,
+        })),
     );
   }
 }

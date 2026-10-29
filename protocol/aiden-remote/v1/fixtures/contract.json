@@ -1,5 +1,5 @@
 {
-  "contractRevision": 39,
+  "contractRevision": 47,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1448,6 +1448,22 @@
       "resolvedAt": "2026-08-18T19:02:30.000Z"
     }
   },
+  "chatContextPressure": {
+    "chatId": "chat_fixture_01",
+    "pressure": {
+      "contextTokens": 48250,
+      "contextWindow": 200000,
+      "inputBudgetTokens": 168000,
+      "reservedTokens": 32000,
+      "percentOfWindow": 24.125,
+      "percentOfUsableInput": 28.72,
+      "shouldCompact": false,
+      "messageTokens": 30250,
+      "staticTokens": 18000,
+      "source": "provider-anchored",
+      "computedAt": 1787166120000
+    }
+  },
   "chatSkills": {
     "skills": [
       {
@@ -1539,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 39,
+    "contractRevision": 47,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2134,7 +2150,7 @@
         "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
         "name": "Daily check-in",
         "prompt": "Check in briefly…",
-        "label": "Every day at 9:00 AM",
+        "label": "Every day at 9:00 AM · UTC",
         "status": "pending",
         "createdAt": "2026-08-19T15:02:05.000Z"
       },
@@ -2144,7 +2160,7 @@
         "proposalId": "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
         "name": "Weekly meal plan",
         "prompt": "Plan this week's meals.",
-        "label": "Every Sunday at 9:00 AM",
+        "label": "Every Sunday at 9:00 AM · UTC",
         "status": "accepted",
         "routineId": "task_fixture_routine_02",
         "createdAt": "2026-08-19T15:03:00.000Z"
@@ -2402,6 +2418,19 @@
   },
   "botHandoffs": {
     "capability": "bot:handoffs",
+    "noNoteHandoff": {
+      "waitId": "8a1d3c5e-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "kind": "action",
+      "action": "Enter the code your bank texted you",
+      "takesNote": false
+    },
+    "onMacHandoff": {
+      "waitId": "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b",
+      "kind": "action",
+      "action": "Choose the delivery slot on the checkout page",
+      "why": "The shop wants you to pick the time yourself.",
+      "onMac": true
+    },
     "session": {
       "botId": "bot_fixture_01",
       "epoch": "epoch_fixture_36",
@@ -3055,5 +3084,267 @@
         }
       }
     ]
+  },
+  "botImages": {
+    "capability": "bot:images",
+    "entry": {
+      "type": "shared_image",
+      "id": "entry_fixture_shared_image_01",
+      "name": "weekly-sales.png",
+      "mimeType": "image/png",
+      "size": 48213
+    },
+    "legacyEntry": {
+      "type": "message",
+      "id": "entry_fixture_shared_image_01",
+      "role": "assistant",
+      "text": "I shared an image: weekly-sales.png. Open this chat on your Mac to see it."
+    },
+    "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
+  },
+  "browserRecordings": {
+    "step": { "id": "tool-5", "order": 0, "kind": "tool", "toolCallId": "call-5", "toolName": "browser_recording_stop", "label": "Stop browser recording", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079672400, "finishedAt": 1787079672400, "contentOffset": 0, "recording": { "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", "mimeType": "video/mp4", "durationMs": 12400, "sizeBytes": 1048576 } },
+    "recordingPath": "/chats/chat_fixture_01/recordings/recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+  },
+  "botIssues": {
+    "capability": "bot:issues",
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 12,
+      "state": "idle",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "issues": [
+        {
+          "id": "issue_fixture_preflight_01",
+          "kind": "preflight_failed",
+          "title": "Gmail needs reconnecting",
+          "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+          "actions": [],
+          "createdAt": "2026-10-27T08:58:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_routine_01",
+          "kind": "routine_paused",
+          "title": "Paused \"Morning brief\" after 3 failed tries",
+          "body": "Gmail needs signing in again.",
+          "routineId": "task_fixture_routine_01",
+          "actions": [
+            {
+              "kind": "open_chat"
+            },
+            {
+              "kind": "resume_routine",
+              "routineId": "task_fixture_routine_01"
+            }
+          ],
+          "createdAt": "2026-10-27T09:01:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_stall_01",
+          "kind": "run_stalled",
+          "title": "A reply has been quiet for 10 minutes",
+          "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+          "actions": [
+            {
+              "kind": "stop_run"
+            },
+            {
+              "kind": "keep_waiting"
+            }
+          ],
+          "createdAt": "2026-10-27T09:06:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_fixed_01",
+          "kind": "routine_failed",
+          "title": "The evening round-up failed",
+          "body": "The model was unavailable.",
+          "actions": [],
+          "createdAt": "2026-10-26T19:00:00.000Z",
+          "resolved": true
+        }
+      ]
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_01",
+        "seq": 13,
+        "type": "issues",
+        "payload": {
+          "issues": [
+            {
+              "id": "issue_fixture_preflight_01",
+              "kind": "preflight_failed",
+              "title": "Gmail needs reconnecting",
+              "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+              "actions": [],
+              "createdAt": "2026-10-27T08:58:00.000Z",
+              "resolved": false
+            },
+            {
+              "id": "issue_fixture_routine_01",
+              "kind": "routine_paused",
+              "title": "Paused \"Morning brief\" after 3 failed tries",
+              "body": "Gmail needs signing in again.",
+              "routineId": "task_fixture_routine_01",
+              "actions": [],
+              "createdAt": "2026-10-27T09:01:00.000Z",
+              "resolved": true
+            },
+            {
+              "id": "issue_fixture_stall_01",
+              "kind": "run_stalled",
+              "title": "A reply has been quiet for 10 minutes",
+              "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+              "actions": [
+                {
+                  "kind": "stop_run"
+                },
+                {
+                  "kind": "keep_waiting"
+                }
+              ],
+              "createdAt": "2026-10-27T09:06:00.000Z",
+              "resolved": false
+            }
+          ]
+        }
+      }
+    ],
+    "act": {
+      "request": {
+        "action": {
+          "kind": "stop_run"
+        }
+      },
+      "response": {
+        "result": "done"
+      }
+    },
+    "notOpen": {
+      "result": "not_open"
+    },
+    "summary": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        },
+        "asset": {
+          "assetRevision": "avatar_revision_3",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512,
+          "byteSize": 1024
+        }
+      },
+      "health": "ready",
+      "sessionState": "interrupted",
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T18:45:00.000Z",
+      "revision": "bot_revision_7",
+      "issueCount": 2
+    },
+    "notification": {
+      "notifications": [
+        {
+          "id": "delivery_fixture_issue_01",
+          "kind": "issue",
+          "botId": "bot_fixture_01",
+          "botName": "Scout",
+          "routineName": "Gmail needs reconnecting",
+          "finishedAt": "2026-10-27T08:58:00.000Z",
+          "preview": "The morning check couldn't reach Gmail."
+        }
+      ],
+      "now": "2026-10-27T09:10:00.000Z"
+    }
+  },
+  "spending": {
+    "chat": {
+      "spending": {
+        "period": "chat",
+        "state": "nearing",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 4.1,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatReached": {
+      "spending": {
+        "period": "chat",
+        "state": "reached",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 5.37,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatAllowMore": {
+      "request": {},
+      "response": {
+        "spending": {
+          "period": "chat",
+          "state": "under",
+          "limitUsd": 5,
+          "allowedUsd": 10,
+          "spentUsd": 5.37,
+          "allowMoreUsd": 5,
+          "revision": "sp_fixture_chat_2"
+        }
+      }
+    },
+    "bot": {
+      "spending": {
+        "period": "month",
+        "state": "reached",
+        "limitUsd": 20,
+        "allowedUsd": 20,
+        "spentUsd": 20.4,
+        "allowMoreUsd": 20,
+        "periodStart": "2026-10-15T00:00:00.000Z",
+        "periodEnd": "2026-11-15T00:00:00.000Z",
+        "revision": "sp_fixture_bot_1"
+      }
+    },
+    "none": {
+      "spending": null
+    },
+    "refusal": {
+      "error": {
+        "code": "operation_stale",
+        "message": "This chat reached its $5.00 spending limit. Allow more to keep going.",
+        "requestId": "request_fixture_40",
+        "retryable": false
+      }
+    },
+    "conflict": {
+      "error": {
+        "code": "revision_conflict",
+        "message": "The spending limit changed. Refresh it before trying again.",
+        "requestId": "request_fixture_40",
+        "retryable": false,
+        "details": {
+          "currentRevision": "sp_fixture_chat_2"
+        }
+      }
+    }
   }
 }

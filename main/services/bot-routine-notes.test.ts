@@ -197,7 +197,6 @@ function routineHarness(notes: ReturnType<typeof notesStore>) {
   const executor = createBotRoutineExecutor({
     store,
     ports: () => ports,
-    notify: () => undefined,
     broadcast: () => undefined,
   });
   const scheduler = createScheduleServiceCore({

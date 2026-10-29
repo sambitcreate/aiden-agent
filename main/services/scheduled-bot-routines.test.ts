@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { scheduledJobs, type Cron } from "croner";
+import { BotSessionError } from "./bot-runtime/bot-session-service.js";
 import type {
   BotRoutinePorts,
   BotRoutineSubmissionOutcome,
@@ -8,17 +9,18 @@ import type {
 } from "./bot-routines-port.js";
 import { createScheduleServiceCore, type ScheduledRunTrigger } from "./schedule-service-core.js";
 import { createScheduleStore } from "./schedule-store.js";
+import type { BotDeliveryInput } from "./bot-delivery/funnel.js";
 import {
   BOT_ROUTINE_CATCH_UP_WINDOW_MS,
   createBotRoutineCatchUp,
   createBotRoutineCatchUpTrigger,
   createBotRoutineExecutor,
+  botRoutineRequestId,
   createBotRoutineService,
   countSkippedWhilePaused,
   parseBotRoutineCreate,
   parseBotRoutineRunNow,
   parseBotRoutineUpdate,
-  type BotRoutineResultDelivery,
 } from "./scheduled-bot-routines.js";
 import type { ScheduledTask } from "./types.js";
 
@@ -54,7 +56,7 @@ class FakeBotSession implements BotRoutinePorts {
   silenced: Array<{ botId: string; submissionId: string }> = [];
   resumeCalls = 0;
   dismissCalls = 0;
-  private submissions = new Map<string, string>();
+  submissions = new Map<string, string>();
   failAfterNextAdmission = false;
   failBeforeNextAdmission = false;
 
@@ -91,16 +93,20 @@ class FakeBotSession implements BotRoutinePorts {
     this.silenced.push({ botId, submissionId });
   }
 
-  /** What the routine handed to the Bot's other surfaces (its Telegram chat). */
-  deliveries: BotRoutineResultDelivery[] = [];
+  /**
+   * What a visible routine result or failure handed to the delivery funnel;
+   * the harness stands in for the real log, Mac banner and Telegram.
+   */
+  deliveries: BotDeliveryInput[] = [];
   failNextDelivery = false;
 
-  async deliverResult(delivery: BotRoutineResultDelivery): Promise<void> {
+  async deliver(input: BotDeliveryInput): Promise<"sent"> {
     if (this.failNextDelivery) {
       this.failNextDelivery = false;
       throw new Error("The delivery queue is unavailable.");
     }
-    this.deliveries.push(delivery);
+    this.deliveries.push(input);
+    return "sent";
   }
 
   // The session's recovery actions exist on the real service; a routine must
@@ -121,12 +127,11 @@ function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } =
     new MemoryPersistence<unknown[]>([]),
   );
   const session = new FakeBotSession();
-  const notifications: Array<{ taskId: string; body: string }> = [];
   const controllers = new Map<string, AbortController>();
   const executor = createBotRoutineExecutor({
     store,
     ports: () => session,
-    notify: (task, body) => void notifications.push({ taskId: task.id, body }),
+    deliver: (input) => session.deliver(input),
     broadcast: () => undefined,
   });
   const run = (task: ScheduledTask, runId?: string, trigger?: ScheduledRunTrigger) => {
@@ -163,7 +168,19 @@ function harness(options: { bots?: string[]; pendingRetryIntervalMs?: number } =
     defaultTimezone: () => "UTC",
     notifyChanged: () => undefined,
   });
-  return { store, session, notifications, executor, run, scheduler, routines, bots };
+  return {
+    store,
+    session,
+    executor,
+    run,
+    scheduler,
+    routines,
+    bots,
+    /** What reached the person's Mac banner: the routine, and the delivered text. */
+    get notifications(): Array<{ taskId: string; body: string }> {
+      return session.deliveries.map((input) => ({ taskId: input.routineTask?.id ?? "", body: input.body }));
+    },
+  };
 }
 
 function jobFor(taskId: string) {
@@ -260,7 +277,7 @@ test("a paused recurring routine observes a fire Pi had already admitted", async
   const run = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(run.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a person-paused Bot holds an admitted fire until Resume without resubmitting it", async (t) => {
@@ -294,7 +311,7 @@ test("a person-paused Bot holds an admitted fire until Resume without resubmitti
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("restart completes delivery after a run was recorded without re-running Pi", async (t) => {
@@ -317,12 +334,12 @@ test("restart completes delivery after a run was recorded without re-running Pi"
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(h.session.sends.length, 0);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
   assert.equal((await h.store.get(routine.id))?.lastResult, "success");
   assert.equal((await h.store.get(routine.id))?.lastRunAt, (await h.store.runById(routine.id, requestId))?.finishedAt);
 });
 
-test("an unavailable runtime cannot overwrite a saved answer awaiting delivery", async (t) => {
+test("an unavailable runtime and delivery cannot overwrite a saved answer awaiting delivery", async (t) => {
   const h = harness();
   t.after(() => h.scheduler.stop());
   const routine = await h.routines.create({
@@ -340,7 +357,7 @@ test("an unavailable runtime cannot overwrite a saved answer awaiting delivery",
   const unavailable = createBotRoutineExecutor({
     store: h.store,
     ports: async () => { throw new Error("Bot runtime unavailable."); },
-    notify: () => undefined,
+    deliver: async () => { throw new Error("The delivery queue is unavailable."); },
     broadcast: () => undefined,
   });
   const previous = await unavailable.run((await h.store.get(routine.id))!, {
@@ -352,7 +369,85 @@ test("an unavailable runtime cannot overwrite a saved answer awaiting delivery",
 
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
+});
+
+test("delivery never waits for the Bot runtime", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Daily reminder",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Check the inbox.",
+  });
+  const due = Date.now() - 1_000;
+  await h.store.updateRuntime(routine.id, { nextRunAt: due });
+  await h.store.claimRoutineFire(routine.id, due, Date.now() + 60_000);
+  const requestId = `routine:${routine.id}:${due}`;
+  await h.store.recordRun({
+    id: requestId, taskId: routine.id, startedAt: due, finishedAt: Date.now(),
+    result: "success", output: "One urgent message.",
+  });
+  const bodies: string[] = [];
+  const executor = createBotRoutineExecutor({
+    store: h.store,
+    ports: async () => { throw new Error("Bot runtime unavailable."); },
+    deliver: async ({ body }) => {
+      bodies.push(body);
+      return "sent";
+    },
+    broadcast: () => undefined,
+  });
+
+  await executor.run((await h.store.get(routine.id))!, {
+    runId: requestId, trigger: { kind: "automatic", fireTime: due }, signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(bodies, ["One urgent message."], "the saved answer reaches the person");
+  assert.equal((await h.store.get(routine.id))?.pendingRoutineFires?.length ?? 0, 0, "the fire settled");
+});
+
+test("a replayed event run observes the turn admitted before a quit, and a recorded one never sends again", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Receipts",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "Sort the receipts.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  const trigger: ScheduledRunTrigger = { kind: "event", eventId: "e1", source: "file_change", payload: "a.pdf" };
+  const requestId = botRoutineRequestId(task.id, trigger);
+  // Pi admitted the turn, then Aiden quit before the run was recorded.
+  h.session.submissions.set(requestId, "sub-admitted");
+  const replayed = await h.run(task, requestId, trigger);
+  assert.equal(h.session.sends.length, 0, "the admitted turn is observed, not sent again");
+  assert.equal(replayed.result, "success");
+  assert.equal(replayed.id, requestId);
+  assert.equal(h.session.deliveries.length, 1);
+  const again = await h.run(task, requestId, trigger);
+  assert.equal(again.id, requestId);
+  assert.equal(h.session.sends.length, 0);
+  assert.equal((await h.store.runs(task.id)).filter((entry) => entry.id === requestId).length, 1);
+});
+
+test("an event run whose reply is lost after admission stays unknown, and its replay observes the same turn", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const routine = await h.routines.create({
+    botId: "bot-chef", name: "Hook",
+    schedule: { kind: "daily", time: "09:00" }, prompt: "React to the call.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  const trigger: ScheduledRunTrigger = { kind: "event", eventId: "w9", source: "webhook", payload: "{}" };
+  const requestId = botRoutineRequestId(task.id, trigger);
+  h.session.replies.push(Promise.reject(new Error("The reply stream dropped.")) as never);
+  const lost = await h.run(task, requestId, trigger);
+  assert.equal(lost.result, "blocked");
+  assert.notEqual(lost.id, requestId, "an unknown outcome is not the event's answer");
+  assert.equal(h.session.deliveries.length, 0);
+  const replayed = await h.run(task, requestId, trigger);
+  assert.equal(replayed.id, requestId);
+  assert.equal(replayed.result, "success");
+  assert.equal(h.session.sends.length, 1, "the admitted turn is observed, never sent twice");
 });
 
 test("recovery waits for another run on the Bot routine and still submits its pending fire", async (t) => {
@@ -401,7 +496,7 @@ test("an ambiguous Pi admission stays pending and restart observes its original 
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a pending fire retries while Aiden stays open after an ambiguous admission", async (t) => {
@@ -424,7 +519,7 @@ test("a pending fire retries while Aiden stays open after an ambiguous admission
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("an automatic send failure before Pi admission is a visible terminal error", async () => {
@@ -477,7 +572,7 @@ test("cancelling an admitted automatic turn leaves the fire for idempotent recov
   const recovered = await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(recovered.result, "success");
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 test("a failed delivery handoff leaves the saved result for restart", async (t) => {
@@ -499,7 +594,7 @@ test("a failed delivery handoff leaves the saved result for restart", async (t) 
   await h.scheduler.start();
   await waitForRoutineRun(h, routine.id, requestId);
   assert.equal(h.session.sends.length, 1);
-  assert.deepEqual(h.session.deliveries.map(({ text }) => text), ["One urgent message."]);
+  assert.deepEqual(h.session.deliveries.map(({ body }) => body), ["One urgent message."]);
 });
 
 /**
@@ -621,6 +716,108 @@ test("failures always surface, even when the Bot would otherwise stay silent", a
     ["The AI service is unreachable.", "This Bot needs an AI model before its routines can run."],
   );
   assert.equal(h.session.sends.length, 1, "no submission is attempted without a model");
+});
+
+test("records a classified failure on the run", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const task = (await h.store.get(routine.id))!;
+  h.session.replies.push({
+    kind: "failed",
+    error: "model_error",
+    reason: "model_error",
+    detail: "429 rate limit",
+  });
+
+  const run = await h.run(task, undefined, { kind: "automatic", fireTime: 1 });
+
+  assert.equal(run.result, "error");
+  assert.equal(run.failure?.kind, "temporary");
+  assert.equal(run.failure?.code, "rate_limit");
+  // The person and the healing features see the provider's words, not the code.
+  assert.match(run.error ?? "", /429 rate limit/u);
+  assert.notEqual(run.error, "model_error");
+
+  // Persisted with the run, not only returned by the executor.
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.failure?.kind, "temporary");
+  assert.match(stored?.failure?.detail ?? "", /429 rate limit/u);
+});
+
+test("a Bot session refusal from the send is classified, not recorded as a generic failure", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  // The real service refuses the send before Pi admission when the Bot has no model.
+  h.session.send = async () => {
+    throw new BotSessionError("needs_model");
+  };
+
+  const run = await h.run((await h.store.get(routine.id))!, undefined, {
+    kind: "automatic",
+    fireTime: 1,
+  });
+
+  assert.equal(run.result, "error");
+  // Task 5 raises an immediate "set a model" issue from this kind.
+  assert.equal(run.failure?.kind, "model_setup");
+  assert.equal(run.failure?.code, "needs_model");
+  // The person reads the refusal, not `run_failed`.
+  assert.match(run.error ?? "", /needs an AI model/u);
+
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.failure?.kind, "model_setup");
+
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.notifications[0]?.body, run.error);
+});
+
+test("a provider detail carrying a credential is redacted on the run and its notification", async () => {
+  const h = harness();
+  const routine = await h.routines.create({
+    botId: "bot-scout",
+    name: "Inbox sweep",
+    schedule: { kind: "daily", time: "07:30" },
+    prompt: "Tell me about urgent mail.",
+  });
+  const secret = "sk-live-2f4c9a1b8e7d6c5f4a3b2c1d";
+  h.session.replies.push({
+    kind: "failed",
+    error: "model_error",
+    reason: "model_error",
+    detail: `401 Unauthorized: api key ${secret} was rejected`,
+  });
+
+  const run = await h.run((await h.store.get(routine.id))!, undefined, {
+    kind: "automatic",
+    fireTime: 1,
+  });
+
+  assert.equal(run.result, "error");
+  // Classification still reads the provider's words: 401 means sign in again.
+  assert.equal(run.failure?.kind, "sign_in");
+  // The detail survives, minus the credential.
+  assert.match(run.error ?? "", /401 Unauthorized/u);
+  assert.match(run.error ?? "", /\[redacted\]/u);
+  assert.equal(run.error?.includes(secret), false);
+  assert.equal(run.failure?.detail?.includes(secret), false);
+
+  const [stored] = await h.store.runs(routine.id);
+  assert.equal(stored?.error?.includes(secret), false);
+  assert.equal(stored?.failure?.detail?.includes(secret), false);
+
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0]?.body ?? "", /401 Unauthorized/u);
+  assert.equal(h.notifications[0]?.body.includes(secret), false);
 });
 
 test("a routine that fires while its Bot is paused is skipped without touching the paused turn", async (t) => {
@@ -1267,9 +1464,91 @@ test("a visible reply or a failure reaches the Bot's other surfaces once; silenc
   h.session.states.set("bot-scout", { kind: "interrupted", submissionId: "sub-paused" });
   await h.run(task, undefined, { kind: "automatic", fireTime: 4 });
 
-  assert.deepEqual(h.session.deliveries, [
-    { botId: "bot-scout", requestId: `routine:${routine.id}:1`, routineName: "Inbox sweep", text: "Rent is due Friday." },
-    // The failure's own text stays on the Mac.
-    { botId: "bot-scout", requestId: `routine:${routine.id}:3`, routineName: "Inbox sweep", text: "I couldn't finish this routine." },
-  ]);
+  assert.deepEqual(
+    h.session.deliveries.map(({ botId, requestId, title, body, status }) => ({ botId, requestId, title, body, status })),
+    [
+      {
+        botId: "bot-scout", requestId: `routine:${routine.id}:1`, title: "Inbox sweep",
+        body: "Rent is due Friday.", status: "succeeded",
+      },
+      // The Mac banner keeps the failure's own text; Telegram and phones show
+      // the fixed line for a failed row.
+      {
+        botId: "bot-scout", requestId: `routine:${routine.id}:3`, title: "Inbox sweep",
+        body: "The AI service at /Users/sam is unreachable.", status: "failed",
+      },
+    ],
+  );
+});
+
+test("a wake-up fires once into its Bot's chat as the Bot's own note, then leaves the routines list", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const setAt = Date.UTC(nextYear, 2, 14, 15, 10);
+  const wakeUp = await h.routines.create({
+    botId: "bot-chef",
+    name: "Wake-up",
+    schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "See whether the dough has risen.",
+    wakeUp: { setAt },
+  });
+  assert.deepEqual((await h.routines.list("bot-chef")).map((routine) => routine.id), [wakeUp.id]);
+  await h.scheduler.start();
+  h.session.replies.push({ kind: "completed", text: "Your dough should be ready to shape." });
+
+  await fireWhenDue(t, jobFor(wakeUp.id));
+
+  assert.deepEqual(
+    h.session.sends.map(({ botId, text, label }) => ({ botId, text, label })),
+    [
+      {
+        botId: "bot-chef",
+        text: "You set this wake-up at 3:10 PM: See whether the dough has risen.\n\nIf there is nothing new to report, reply exactly [SILENT].",
+        label: "Wake-up",
+      },
+    ],
+  );
+  assert.deepEqual(h.notifications, [{ taskId: wakeUp.id, body: "Your dough should be ready to shape." }]);
+  assert.equal((await h.store.get(wakeUp.id))?.enabled, false);
+  assert.deepEqual(await h.routines.list("bot-chef"), [], "a spent wake-up is hidden");
+});
+
+test("a wake-up skipped while its Bot was paused catches up once after Resume", async (t) => {
+  const h = harness();
+  t.after(() => h.scheduler.stop());
+  const nextYear = new Date().getUTCFullYear() + 1;
+  const wakeUp = await h.routines.create({
+    botId: "bot-chef",
+    name: "Wake-up",
+    schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+    prompt: "Ask how the bake went.",
+    wakeUp: { setAt: Date.UTC(nextYear, 2, 14, 9, 0) },
+  });
+  h.session.states.set("bot-chef", { kind: "interrupted", submissionId: "paused" });
+  await h.scheduler.start();
+  await fireWhenDue(t, jobFor(wakeUp.id));
+  const [missed] = await h.store.runs(wakeUp.id);
+  assert.equal(missed?.reason, "bot_paused");
+  assert.equal(h.session.sends.length, 0);
+
+  h.session.states.set("bot-chef", { kind: "idle" });
+  const catchUp = createBotRoutineCatchUp({ store: h.store, scheduler: h.scheduler, now: () => missed!.startedAt + 1 });
+  await settle(await catchUp.catchUp("bot-chef"));
+  assert.equal(h.session.sends.length, 1);
+  assert.match(h.session.sends[0]!.text, /^You set this wake-up at 9:00 AM: Ask how the bake went\./u);
+  assert.deepEqual(await catchUp.catchUp("bot-chef"), [], "it catches up once");
+});
+
+test("a wake-up marker cannot be added through the routine IPC parser", () => {
+  const nextYear = new Date().getUTCFullYear() + 1;
+  assert.throws(() =>
+    parseBotRoutineCreate({
+      botId: "bot-chef",
+      name: "Wake-up",
+      schedule: { kind: "once", date: `${nextYear}-03-14`, time: "17:00" },
+      prompt: "Forged.",
+      wakeUp: { setAt: 1 },
+    }),
+  );
 });

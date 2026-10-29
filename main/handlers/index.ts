@@ -35,6 +35,8 @@ import { registerFormFillHandlers } from "./form-fill.js";
 import { registerModelInsightsHandlers } from "./model-insights.js";
 import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
+import { registerUsageLimitHandlers } from "./usage-limits.js";
+import { registerSpendingHandlers } from "./spending.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -60,6 +62,8 @@ import { registerCreateImagesIpc } from "./create-images/index.js";
 import { initializeAdvisorRuntime } from "../services/advisor-runtime-main.js";
 import { initializeForkSummaries } from "../services/fork-summary-service-main.js";
 import { modelPaceRecorder } from "../services/model-pace-runtime.js";
+import { usageLimits } from "../services/usage-limit-main.js";
+import { spending } from "../services/spending-main.js";
 
 import { ipcMain, logger } from "../platform.js";
 
@@ -111,6 +115,14 @@ export function registerHandlers(): void {
   registerModelPaceHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     recorder: modelPaceRecorder,
+  });
+  registerUsageLimitHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    limits: usageLimits,
+  });
+  registerSpendingHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    spending,
   });
   registerDictationHandlers();
   registerScheduledTaskHandlers();

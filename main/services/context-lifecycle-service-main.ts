@@ -14,7 +14,9 @@ import { piUpgradeBehaviorEnabledAtStartup } from "./pi-upgrade-rollout.js";
 import { piUpgradeChatBehaviorEligible } from "./pi-upgrade-rollout.js";
 import { piUpgradeRolloutStore } from "./pi-upgrade-rollout-main.js";
 import { isPackagedRuntime } from "../runtime-mode.js";
-import { assistantUsageRecord } from "./usage-accounting.js";
+import { assistantUsageRecord, isLocalModelProvider } from "./usage-accounting.js";
+import { spending } from "./spending-main.js";
+import { responseCostUsd, spendCounts } from "./spending-service.js";
 import { usageStore } from "./usage-store.js";
 
 export const contextLifecycleService = new ContextLifecycleService({
@@ -42,15 +44,25 @@ export const contextLifecycleService = new ContextLifecycleService({
     const settings = await configStore.getSettings();
     return { compactionEngine: compactionEngineFrom(settings.compactionEngine), compactionModelOverrides: settings.compactionModelOverrides };
   },
-  recordUsage: (message, runtime) =>
-    usageStore.record(
+  recordUsage: async (message, runtime, chatId) => {
+    // A compaction summary is the chat's spending too.
+    const cost = responseCostUsd(message);
+    if (cost > 0) {
+      const chat = await chatStore.get(chatId).catch(() => undefined);
+      const owner = chat?.botId ? { kind: "bot" as const, id: chat.botId } : { kind: "chat" as const, id: chatId };
+      if (await spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models })) {
+        await spending.record(owner, cost).catch(() => undefined);
+      }
+    }
+    await usageStore.record(
       assistantUsageRecord({
         message,
         provider: runtime.provider,
         model: runtime.model,
         source: "compaction",
       }),
-    ),
+    );
+  },
   resolveThinkingLevel: async (chat, audience, runtime) => {
     const settings = await configStore.getSettings();
     const requested =

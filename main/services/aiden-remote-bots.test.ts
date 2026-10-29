@@ -99,6 +99,7 @@ function fixture(
     createBotError?: unknown;
     chatActivity?: boolean;
     sessionStates?: AidenRemoteBotServiceOptions["sessionStates"];
+    issues?: AidenRemoteBotServiceOptions["issues"];
     capabilityCatalog?: (
       audienceId: string,
       botId?: string,
@@ -299,6 +300,24 @@ test("Bot projection exposes semantic identity without private paths or credenti
   assert.equal(serialized.includes("workspace"), false);
   assert.equal(serialized.includes("credential"), false);
   assert.equal(serialized.includes("/Users/"), false);
+});
+
+test("a Bot summary carries issueCount only while it holds open issues, and an unreadable count never fails the list", async () => {
+  const app = fixture([bot("bot_1"), bot("bot_2"), bot("bot_3")], {
+    issues: {
+      openCount: async (botId) => {
+        if (botId === "bot_3") throw new Error("the issue file could not be read");
+        return botId === "bot_1" ? 2 : 0;
+      },
+    },
+  });
+  const list = parseAidenRemoteBotList(await app.service.list());
+  assert.deepEqual(list.bots.map(({ id, issueCount }) => [id, issueCount]), [
+    ["bot_1", 2],
+    ["bot_2", undefined],
+    ["bot_3", undefined],
+  ]);
+  assert.equal((await app.service.summaryOf("bot_1")).issueCount, 2);
 });
 
 test("Remote Bot inbox and avatar adapter stay device-scoped, mutation-gated, and idempotent", async () => {
