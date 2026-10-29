@@ -51,7 +51,9 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
     removeEvents = session.subscribe((event) => {
       if (event.type === "turn_start" && ++turns > 24) controller.abort(new Error("Scheduled turn budget exhausted."));
       if (event.type === "message_end" && event.message.role === "assistant") produced.push(event.message);
-      if (event.type === "message_update" && (bytes += Buffer.byteLength(JSON.stringify(event.assistantMessageEvent))) > 2 * 1024 * 1024) controller.abort(new Error("Scheduled response budget exhausted."));
+      // Each update also carries the whole partial message; count only its new delta so the budget grows linearly with the reply.
+      const update = event.type === "message_update" ? event.assistantMessageEvent : undefined;
+      if (update && "delta" in update && (bytes += Buffer.byteLength(update.delta)) > 2 * 1024 * 1024) controller.abort(new Error("Scheduled response budget exhausted."));
     });
     await check(); await session.prompt(task.prompt!, { expandPromptTemplates: false }); combined.throwIfAborted();
     const last = produced.at(-1);

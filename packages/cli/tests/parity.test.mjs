@@ -1110,6 +1110,31 @@ test("scheduled inference enforces saved read-only tools and rejects revoked aut
   assert.equal(requests.length, 1);
 });
 
+test("scheduled inference budgets the streamed reply size, not every cumulative partial", async (t) => {
+  const dir = temporary(t);
+  let reply = { chunks: 0, size: 0 };
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) void chunk;
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (let index = 0; index < reply.chunks; index++) {
+      response.write(`data: ${JSON.stringify({ id: "schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta: { ...(index ? {} : { role: "assistant" }), content: String(index % 10).repeat(reply.size) }, finish_reason: null }] })}\n\n`);
+    }
+    response.write(`data: ${JSON.stringify({ id: "schedule", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const task = { providerId: "cli-test", model: "test", permission: "read-only", prompt: "Write the daily report", mcpServerIds: [], mcpServerBindings: [], webSearchEnabled: false };
+  // A 64 KB report in small deltas is far under the 2 MiB budget, though its cumulative partials total about 64 MB.
+  reply = { chunks: 2_000, size: 32 };
+  const result = await api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {});
+  assert.equal(result.length, 64_000);
+  // A reply that really exceeds the budget still stops.
+  reply = { chunks: 80, size: 32 * 1024 };
+  await assert.rejects(api.runScheduledInference(dir, dir, task, new AbortController().signal, async () => {}), /response budget exhausted/);
+});
+
 test("MCP paginates tools, fences schema drift, and terminates its stdio transport", async (t) => {
   const dir = temporary(t), revision = join(dir, "changed"), pidFile = join(dir, "pid");
   const server = { id: "fixture", name: "Fixture", transport: "stdio", command: process.execPath, args: [join(pkg, "tests/fixtures/mcp-stdio.mjs"), revision, pidFile], enabled: true };
