@@ -1973,16 +1973,16 @@ export interface RunCommandLeftovers {
   begin(): {
     env: Record<string, string>;
     /**
-     * Returns a line for the tool result when they were taken over. `output`
-     * is what they still write to when they kept the command's output open;
-     * an adopter reads it, and it is drained otherwise.
+     * Returns a line for the tool result, if any. `output` is what they still
+     * write to when they kept the command's output open: it is drained here
+     * unless `adopted` says a job now reads it.
      */
     adopt(
       processGroup: number,
       command: string,
       description?: string,
       output?: { stdout: Readable; stderr: Readable },
-    ): Promise<string | undefined>;
+    ): Promise<{ note: string; adopted: boolean } | undefined>;
   };
 }
 
@@ -2036,18 +2036,18 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
-      const adopted =
+      const handoff =
         leftovers && result.leftoverProcessGroup !== undefined
           ? await leftovers
               .adopt(result.leftoverProcessGroup, command, description, result.leftoverOutput)
               .catch(() => undefined)
           : undefined;
-      if (!adopted && result.leftoverOutput) {
-        // Not tracked: keep their output flowing so a full pipe never stalls them.
+      if (!handoff?.adopted && result.leftoverOutput) {
+        // Not tracked (a refused handoff too): keep their output flowing so a full pipe never stalls them.
         result.leftoverOutput.stdout.resume();
         result.leftoverOutput.stderr.resume();
       }
-      const combined = [result.stdout, result.stderr, adopted].filter(Boolean).join("\n").trim();
+      const combined = [result.stdout, result.stderr, handoff?.note].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

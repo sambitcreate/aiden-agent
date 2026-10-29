@@ -38,6 +38,8 @@ export const JOB_SETTLED_PORT_SCAN_MS = 30_000;
 const JOB_PORT_SETTLE_AGE_MS = 60_000;
 /** How often an adopted job's process group is checked for having ended. */
 export const ADOPTED_JOB_POLL_MS = 1_000;
+/** How many polls pass between looks for a job's own (marked) processes. */
+const ADOPTED_JOB_OWNER_CHECK_POLLS = 5;
 /**
  * How long what a command left behind must keep running before it is taken
  * over, so a straggler that is already exiting is not listed as a job.
@@ -458,8 +460,27 @@ export class BackgroundJobs {
       input.output.stderr.resume();
     }
     this.jobs.set(input.id, record);
+    // The group can outlive the job: a helper started without the marker, or
+    // ended processes nobody has reaped yet. So every few polls, look for live
+    // marked processes too; a failed look proves nothing and changes nothing.
+    let polls = 0;
+    let looking = false;
     record.adoptedTimer = setInterval(() => {
-      if (!groupExists(group)) this.finishAdopted(record);
+      if (!groupExists(group)) {
+        this.finishAdopted(record);
+        return;
+      }
+      polls += 1;
+      if (polls % ADOPTED_JOB_OWNER_CHECK_POLLS !== 0 || looking || record.adoptedStop) return;
+      looking = true;
+      void this.markedMembers(group, input.id)
+        .then((left) => {
+          if (left.length === 0 && !record.adoptedStop) this.finishAdopted(record);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          looking = false;
+        });
     }, this.adoptedPollMs);
     record.adoptedTimer.unref?.();
     this.writeRecord();
@@ -527,6 +548,9 @@ export class BackgroundJobs {
     await Promise.all(jobs.map((job) => this.stopRecord(job, reason)));
     if (forget) {
       for (const job of jobs) {
+        // A stop that could not be confirmed keeps the job, so quitting and
+        // the next launch still stop what may be running.
+        if (job.view.state === "running") continue;
         this.jobs.delete(job.view.id);
         await fsp.rm(job.logPath, { force: true }).catch(() => undefined);
       }

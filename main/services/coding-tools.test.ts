@@ -3072,7 +3072,7 @@ test("run_command hands what a command leaves running to the chat, whether or no
                 await new Promise((resolve) => setTimeout(resolve, 300));
               }
               adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(laterOutput !== undefined ? { laterOutput } : {}) });
-              return `adopted ${current}`;
+              return { note: `adopted ${current}`, adopted: true };
             },
           };
         },
@@ -3106,6 +3106,46 @@ test("run_command hands what a command leaves running to the chat, whether or no
     assert.equal(afterReturn[0], (beforeReturn[beforeReturn.length - 1] ?? 0) + 1, "the adopter reads on from the last line the result showed");
     // Each command carried its own marker.
     assert.notEqual(adoptions[0]?.marker, adoptions[1]?.marker);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run_command keeps a refused handoff's output flowing and still shows the refusal", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-refused-"));
+  const groups: number[] = [];
+  let handed: { stdout: import("node:stream").Readable; stderr: import("node:stream").Readable } | undefined;
+  try {
+    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => console.log("tick"), 40);');
+    const runCommand = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          return {
+            env: { AIDEN_BACKGROUND_JOB: "job_refused0" },
+            // A chat at its job limit: nothing reads the output, only a note comes back.
+            adopt: async (group, _command, _description, output) => {
+              groups.push(group);
+              handed = output;
+              return { note: "[not tracked: the chat has too many jobs]", adopted: false };
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const result = await runCommand.execute("refused", { command: "node server.cjs &" });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    assert.match(text, /not tracked: the chat has too many jobs/u);
+    assert.ok(handed, "the server kept the command's output open");
+    assert.equal(handed.stdout.isPaused(), false, "nobody reads it, so it is drained rather than left to fill");
+    assert.equal(handed.stderr.isPaused(), false);
   } finally {
     for (const group of groups) {
       try {

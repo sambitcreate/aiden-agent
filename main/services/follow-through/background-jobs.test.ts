@@ -470,6 +470,77 @@ test("an adopted job that ends by itself reads as ended, and the chat is not tol
   assert.equal(ended.length, 0);
 });
 
+test("an adopted job ends when its own processes do, even while an unmarked helper keeps the group", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir, { listeningPorts: null, adoptedPollMs: 50 });
+  const id = newBackgroundJobId();
+  const pidFile = path.join(dir, "helper.pid");
+  // The marked server starts an unmarked helper in its own group, then ends.
+  const result = await leaveServerRunning(
+    dir,
+    id,
+    `const { spawn } = require("node:child_process");
+const env = { ...process.env };
+delete env.AIDEN_BACKGROUND_JOB;
+const helper = spawn("sleep", ["60"], { env, stdio: "ignore" });
+require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(helper.pid));
+setTimeout(() => process.exit(0), 1_000);
+`,
+  );
+  let helper = 0;
+  t.after(async () => {
+    if (helper) process.kill(helper, "SIGKILL");
+    await cleanUp(jobs, dir);
+  });
+  await eventually(async () => (await fs.readFile(pidFile, "utf8").catch(() => "")).length > 0, "the helper to start");
+  helper = Number(await fs.readFile(pidFile, "utf8"));
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  await eventually(() => jobs.get("chat-1", id)?.state === "exited", "the adopted job to end");
+  assert.ok(alive(helper), "the unmarked helper was never the job's, and is left alone");
+  assert.equal(jobs.runningCount("chat-1"), 0, "an ended job no longer takes a place");
+});
+
+test("deleting a chat whose job could not be confirmed stopped keeps owning that job", { skip }, async (t) => {
+  const dir = await tempDir();
+  let lookupsFail = false;
+  const { jobs, start } = harness(dir, {
+    listeningPorts: null,
+    processGroupMembers: async (pgid) => {
+      if (lookupsFail) throw new Error("ps timed out");
+      return defaultProcessGroupMembers(pgid);
+    },
+  });
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setInterval(() => {}, 1_000);\n");
+  const group = result.leftoverProcessGroup!;
+  t.after(async () => {
+    lookupsFail = false;
+    await cleanUp(jobs, dir);
+  });
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: group }));
+  lookupsFail = true;
+  await jobs.stopChat("chat-1", "chat-deleted", true);
+  const groupRuns = () => {
+    try {
+      process.kill(-group, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.ok(groupRuns(), "the server still runs");
+  assert.equal(jobs.runningCount("chat-1"), 1, "Aiden still owns it, so quitting will stop it");
+  // The next save (another chat's job starting) still keeps it, so the next
+  // launch can stop it after a crash.
+  const other = start("sleep 30", "chat-2");
+  const saved = () => fs.readFile(path.join(dir, "logs", "running.json"), "utf8").catch(() => "");
+  await eventually(async () => (await saved()).includes(other.id), "the record to be saved again");
+  assert.ok((await saved()).includes(id));
+  lookupsFail = false;
+  await jobs.shutdown();
+  assert.equal(jobs.get("chat-1", id)?.state, "stopped", "quitting stopped it");
+});
+
 test("quitting stops what commands left running, like any job", { skip }, async () => {
   const dir = await tempDir();
   const { jobs } = harness(dir, { listeningPorts: null });

@@ -244,16 +244,20 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
             });
           } catch (error) {
             if (!(error instanceof BackgroundJobLimitError)) throw error;
-            return `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself, for example with kill.]`;
+            return {
+              note: `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself, for example with kill.]`,
+              adopted: false,
+            };
           }
           if (!job) return undefined;
-          return [
+          const note = [
             `[Aiden: this command left processes running. They are now background job ${job.id}: the person sees it beside the chat with a Stop button, and it stops when the chat is deleted or Aiden quits.`,
             output
               ? `Read its output with background_job action "read".`
               : "Its output went elsewhere, so Aiden does not capture it.",
             "Next time, start servers and watchers with the background_job tool.]",
           ].join(" ");
+          return { note, adopted: true };
         },
       };
     },
