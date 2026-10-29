@@ -1564,6 +1564,22 @@ test("MCP migration skips a malformed native mcp.json with a warning and leaves 
   assert.equal(readFileSync(legacy, "utf8"), "{ not json");
 });
 
+test("advisor attempt accounting keeps recording usage past any number of attempts", async (t) => {
+  const dir = temporary(t), file = join(dir, "usage.json");
+  const record = (id) => api.recordUsageRecord(dir, { timestamp: 1, source: "advisor", providerId: "p", providerLabel: "p", modelId: "m", modelLabel: "m", local: false, status: "failed", tokens: null, costStatus: "unavailable" }, id);
+  await record(undefined);
+  // A long-lived ledger that already holds 100,000 accounted attempts.
+  const seeded = Array.from({ length: 100_000 }, (_, index) => index.toString(16).padStart(64, "0"));
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), accountedAttempts: seeded }));
+  await record("fresh-attempt");
+  await record("fresh-attempt");
+  await record("another-attempt");
+  await record("another-attempt");
+  const summary = await api.usageSummary(dir);
+  assert.equal(summary.totals.requests, 3, "each new attempt is recorded exactly once");
+  assert.ok(JSON.parse(readFileSync(file, "utf8")).accountedAttempts.length < seeded.length, "the replay window does not grow without bound");
+});
+
 test("daemon idle waits include cancelled append work before releasing workspace authority", async (t) => {
   const dir = temporary(t), daemon = api.createDaemonChats(dir);
   const lease = daemon.llmClient.beginChatTurn("pending", "stream", "owner"); assert.ok(lease);
