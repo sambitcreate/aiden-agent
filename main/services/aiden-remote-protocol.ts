@@ -174,7 +174,16 @@ export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
  * assistant line naming the image and pointing to the Mac instead.
  */
 export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 45 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION;
+/**
+ * Contract revision 46 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`):
+ * a completed `browser_recording_stop` step on a version 3 generation timeline
+ * may carry a display-only `recording` recap (id, type, length, size), and a
+ * device that may read the chat reads the video from
+ * `GET /chats/{chatId}/recordings/{recordingId}`. Older clients ignore it.
+ */
+export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -547,6 +556,13 @@ export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
  * the host ships its viewer bundle; visual entries gain no new key.
  */
 export const AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1" as const;
+/**
+ * Server feature token for browser recordings (contract revision 46):
+ * `GET /chats/{chatId}/recordings/{recordingId}` serves a video the agent
+ * recorded of a browser tab, for a chat whose timeline names it. Announced
+ * only while the route is wired.
+ */
+export const AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE = "chat-browser-recordings-v1" as const;
 /**
  * Server feature token for `GET /chats/{chatId}/context` (contract revision
  * 41): the host's next-request context pressure for one workspace chat.
@@ -1967,6 +1983,7 @@ export interface AidenRemoteContractFixture {
   scheduleCards?: AidenRemoteScheduleCardsFixture;
   /** Revision 45 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
   botImages?: AidenRemoteBotImagesFixture;
+  browserRecordings?: AidenRemoteBrowserRecordingsFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -6573,6 +6590,40 @@ export interface AidenRemoteBotImagesFixture {
   imagePath: string;
 }
 
+/** Revision 46: a recording stop step as the timeline carries it, and where its video is read. */
+export interface AidenRemoteBrowserRecordingsFixture {
+  /** A completed `browser_recording_stop` tool step with its `recording` recap. */
+  step: Record<string, unknown>;
+  /** The path, under the base path, the device reads the video from. */
+  recordingPath: string;
+}
+
+function parseBrowserRecordingsFixture(value: unknown): AidenRemoteBrowserRecordingsFixture {
+  if (!isRecord(value)) throw new Error("Browser recordings fixture must be an object.");
+  assertExactKeys(value, ["step", "recordingPath"], "Browser recordings fixture");
+  if (!isRecord(value.step)) throw new Error("Browser recordings fixture step must be an object.");
+  const timeline = parseGenerationTimeline({
+    version: 3,
+    generationId: "fixture",
+    status: "completed",
+    startedAt: 0,
+    finishedAt: 0,
+    steps: [value.step],
+  });
+  const step = timeline?.steps[0];
+  if (!step || step.kind !== "tool" || !step.recording) {
+    throw new Error("Browser recordings fixture step must be a completed recording stop with its recap.");
+  }
+  if (
+    typeof value.recordingPath !== "string" ||
+    !/^\/chats\/[A-Za-z0-9._:-]{1,128}\/recordings\/[A-Za-z0-9._:-]{1,128}$/u.test(value.recordingPath) ||
+    !value.recordingPath.endsWith(`/${step.recording.id}`)
+  ) {
+    throw new Error("Browser recordings fixture recordingPath must name the recording.");
+  }
+  return { step: value.step, recordingPath: value.recordingPath };
+}
+
 function parseBotImagesFixture(value: unknown): AidenRemoteBotImagesFixture {
   if (!isRecord(value)) throw new Error("Bot images fixture must be an object.");
   assertExactKeys(value, ["capability", "entry", "legacyEntry", "imagePath"], "Bot images fixture");
@@ -7667,6 +7718,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     botImages = parseBotImagesFixture(value.botImages);
   }
+  let browserRecordings: AidenRemoteBrowserRecordingsFixture | undefined;
+  if (value.browserRecordings !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION) {
+      throw new Error(`Browser recording fixtures require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}.`);
+    }
+    browserRecordings = parseBrowserRecordingsFixture(value.browserRecordings);
+  }
   if (value.peerRouteAdvertisement !== undefined) {
     if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
     const advertisement = value.peerRouteAdvertisement;
@@ -7764,6 +7822,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
     ...(botImages ? { botImages } : {}),
+    ...(browserRecordings ? { browserRecordings } : {}),
   };
 }
 

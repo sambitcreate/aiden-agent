@@ -1675,6 +1675,250 @@ class AidenChatTest {
         }
     }
 
+    private val recordingRecapJson =
+        """{"id":"recording-0f1e2d3c-4b5a-4678-9abc-def012345678","mimeType":"video/mp4","durationMs":12400,"sizeBytes":1048576}"""
+
+    private fun recordingTimelineJson(
+        recording: String = recordingRecapJson,
+        toolName: String = "browser_recording_stop",
+        status: String = "completed"
+    ) = """{"version":3,"generationId":"generation-recording","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+        """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"browser_recording_start","label":"Start browser recording","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},""" +
+        """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"$toolName","label":"Stop browser recording","status":"$status","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":7,"recording":$recording},""" +
+        """{"id":"tool-3","order":2,"kind":"tool","toolCallId":"call-3","toolName":"read_file","label":"Read file","status":"completed","startedAt":1500,"updatedAt":1600,"finishedAt":1600,"contentOffset":7}]}"""
+
+    @Test
+    fun canonicalFixtureBrowserRecordingStepCarriesItsRecap() {
+        val root = Json.parseToJsonElement(javaClass.classLoader!!.getResource("contract.json")!!.readText()).jsonObject
+        assertTrue(root.getValue("contractRevision").jsonPrimitive.content.toInt() >= 46)
+        val section = root.getValue("browserRecordings").jsonObject
+        val step = wireJson.decodeFromJsonElement(AidenAgentStep.serializer(), section.getValue("step"))
+        val recap = step.recordingRecap
+        assertNotNull(recap)
+        assertEquals("recording-0f1e2d3c-4b5a-4678-9abc-def012345678", recap!!.id)
+        assertEquals("video/mp4", recap.mimeType)
+        assertEquals("mp4", recap.fileExtension)
+        assertEquals("0:12", recap.durationLabel)
+        assertEquals("1.0 MB", recap.sizeLabel)
+        // The route the Mac serves names the chat and the recap's own id.
+        assertEquals(
+            "/chats/chat_fixture_01/recordings/${recap.id}",
+            section.getValue("recordingPath").jsonPrimitive.content
+        )
+    }
+
+    @Test
+    fun browserRecordingFollowsTheLineThatSavedItAndStaysInTheTally() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson())
+        val recap = timeline.steps[1].recordingRecap
+        assertNotNull(recap)
+        assertEquals(12_400L, recap!!.durationMs)
+        assertEquals(1_048_576L, recap.sizeBytes)
+
+        val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+        assertEquals(
+            listOf("TEXT:Before.", "TOOL:tool-1,tool-2,tool-3", "RECORDING:tool-2", "TEXT:After."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+        assertEquals(recap, rows[2].recording)
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+
+        // The stop stays an activity line, and fallback transcripts list its card.
+        assertEquals(3, AidenAgentActivityPresentation.activityTimeline(timeline).steps.size)
+        assertEquals(listOf("tool-2"), AidenAgentActivityPresentation.recordingSteps(timeline).map { it.id })
+        assertTrue(AidenAgentActivityPresentation.extractionSteps(timeline).isEmpty())
+
+        // The chat cache re-encodes the step; the recap survives the round trip.
+        val cached = json.decodeFromString<AidenGenerationTimeline>(json.encodeToString(timeline))
+        assertEquals(recap, cached.steps[1].recordingRecap)
+        assertFalse(wireJson.encodeToString(timeline.steps[0]).contains("\"recording\":"))
+    }
+
+    @Test
+    fun aPageReadAndARecordingInOneGroupEachFollowTheirOwnLine() {
+        val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+            """{"version":3,"generationId":"generation-both","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[""" +
+                """{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"browser_recording_stop","label":"Stop browser recording","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":0,"recording":$recordingRecapJson},""" +
+                """{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_fetch","label":"Fetch web page","status":"completed","startedAt":1100,"updatedAt":1500,"finishedAt":1500,"contentOffset":0,"detail":"acme.example","extraction":${extractRecapJson(extractedPriceJson)}}]}"""
+        )
+        val rows = AidenChronologicalProjection.rows("Done.", "", timeline)!!
+        assertEquals(
+            listOf("TOOL:tool-1,tool-2", "RECORDING:tool-1", "EXTRACTION:tool-2", "TEXT:Done."),
+            rows.map { row -> "${row.kind}:${row.text.ifEmpty { row.steps.joinToString(",") { it.id } }}" }
+        )
+    }
+
+    @Test
+    fun malformedOrMisplacedRecordingRecapIsDroppedButTheStopStaysAnActivityLine() {
+        val id = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+        fun recordingJson(
+            recordingId: String = "\"$id\"",
+            mimeType: String = "\"video/mp4\"",
+            durationMs: String = "12400",
+            sizeBytes: String = "1048576",
+            extra: String = ""
+        ) = """{"id":$recordingId,"mimeType":$mimeType,"durationMs":$durationMs,"sizeBytes":$sizeBytes$extra}"""
+        val malformed = listOf(
+            "uppercase hex in the id" to recordingJson(recordingId = "\"recording-0F1E2D3C-4b5a-4678-9abc-def012345678\""),
+            "id without its prefix" to recordingJson(recordingId = "\"0f1e2d3c-4b5a-4678-9abc-def012345678\""),
+            "id with a path" to recordingJson(recordingId = "\"recording-0f1e2d3c-4b5a-4678-9abc-def012345678/x\""),
+            "numeric id" to recordingJson(recordingId = "7"),
+            "quicktime" to recordingJson(mimeType = "\"video/quicktime\""),
+            "uppercase type" to recordingJson(mimeType = "\"VIDEO/MP4\""),
+            "type with parameters" to recordingJson(mimeType = "\"video/webm; codecs=vp9\""),
+            "negative length" to recordingJson(durationMs = "-1"),
+            "length over six minutes" to recordingJson(durationMs = "360001"),
+            "fractional length" to recordingJson(durationMs = "12400.5"),
+            "string length" to recordingJson(durationMs = "\"12400\""),
+            "null length" to recordingJson(durationMs = "null"),
+            "boolean size" to recordingJson(sizeBytes = "true"),
+            "empty file" to recordingJson(sizeBytes = "0"),
+            "file over 128 MiB" to recordingJson(sizeBytes = "134217729"),
+            "size beyond a safe integer" to recordingJson(sizeBytes = "9007199254740993"),
+            "an extra key" to recordingJson(extra = ""","path":"/Users/me/rec.mp4""""),
+            "a missing key" to """{"id":"$id","mimeType":"video/mp4","durationMs":12400}""",
+            "not an object" to "\"$id\"",
+            "an array" to "[]",
+            "null" to "null"
+        )
+        for ((case, recording) in malformed) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson(recording))
+            val step = timeline.steps[1]
+            assertNull(case, step.recording)
+            assertEquals(case, "browser_recording_stop", step.toolName)
+            val rows = AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+            assertTrue(case, rows.none { it.kind == AidenChronologicalRow.Kind.RECORDING })
+            assertEquals(case, listOf("tool-1", "tool-2", "tool-3"),
+                rows.single { it.kind == AidenChronologicalRow.Kind.TOOL }.steps.map { it.id })
+        }
+
+        // Boundary values the desktop accepts still decode, including a whole number written as JSON reads it.
+        val accepted = listOf(
+            recordingJson(durationMs = "0", sizeBytes = "1"),
+            recordingJson(durationMs = "360000", sizeBytes = "134217728"),
+            recordingJson(mimeType = "\"video/webm\""),
+            recordingJson(durationMs = "12400.0"),
+            recordingJson(sizeBytes = "1.048576e6")
+        )
+        for (recording in accepted) {
+            assertNotNull(recording, wireJson.decodeFromString<AidenGenerationTimeline>(recordingTimelineJson(recording))
+                .steps[1].recordingRecap)
+        }
+        assertEquals("webm", wireJson.decodeFromString<AidenGenerationTimeline>(
+            recordingTimelineJson(recordingJson(mimeType = "\"video/webm\""))
+        ).steps[1].recordingRecap?.fileExtension)
+
+        // A recap on another tool or an unfinished stop is ignored.
+        for ((toolName, status) in listOf("browser_recording_start" to "completed", "browser_recording_stop" to "failed")) {
+            val timeline = wireJson.decodeFromString<AidenGenerationTimeline>(
+                recordingTimelineJson(toolName = toolName, status = status)
+            )
+            assertNull(timeline.steps[1].recordingRecap)
+            assertTrue(AidenAgentActivityPresentation.recordingSteps(timeline).isEmpty())
+            assertTrue(AidenChronologicalProjection.rows("Before.After.", "", timeline)!!
+                .none { it.kind == AidenChronologicalRow.Kind.RECORDING })
+        }
+    }
+
+    @Test
+    fun recordingLabelsReadAsTheDesktopCardDoes() {
+        val durations = listOf(
+            0L to "0:00", 499L to "0:00", 500L to "0:01", 12_400L to "0:12",
+            59_499L to "0:59", 59_500L to "1:00", 90_000L to "1:30", 360_000L to "6:00"
+        )
+        for ((milliseconds, label) in durations) {
+            assertEquals("$milliseconds", label, AidenBrowserRecordingRecap.durationLabel(milliseconds))
+        }
+        val sizes = listOf(
+            1L to "1 KB", 511L to "1 KB", 1_536L to "2 KB", 655_360L to "640 KB",
+            1_048_575L to "1024 KB", 1_048_576L to "1.0 MB", 1_258_291L to "1.2 MB",
+            1_310_720L to "1.3 MB", 134_217_728L to "128.0 MB"
+        )
+        for ((bytes, label) in sizes) {
+            assertEquals("$bytes", label, AidenBrowserRecordingRecap.sizeLabel(bytes))
+        }
+    }
+
+    @Test
+    fun playReadsTheRecordingIntoTheCacheAndA404SaysItIsGone() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-recording-").toFile()
+        val recordings = File(directory, "recordings")
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val present = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+        val gone = "recording-11111111-2222-4333-8444-555555555555"
+        val video = ByteArray(4_096) { (it % 251).toByte() }
+        val initial = AidenChat(
+            id = "chat-recording", workspaceId = "workspace-recording", title = "Recording",
+            messages = listOf(AidenChatMessage("reply-one", AidenChatRole.ASSISTANT, "Recorded", createdAt = Instant.EPOCH)),
+            createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "r1"
+        )
+        val grants = listOf(AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ)
+        val wireJson = Json(json) { explicitNulls = false }
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                "/api/aiden/v1/server" -> MockResponse().setBody("""{"protocolVersion":1,"instanceId":"instance-recording","name":"Recording Mac","appVersion":"1.0","capabilities":${json.encodeToString(grants)},"serverCapabilities":${json.encodeToString(grants)},"features":["chat-browser-recordings-v1"],"connectionMode":"lan","serverTime":"2026-10-27T12:00:00Z"}""")
+                "/api/aiden/v1/workspaces" -> MockResponse().setBody("""{"workspaces":[]}""")
+                "/api/aiden/v1/chats/chat-recording" -> MockResponse().setBody(wireJson.encodeToString(initial))
+                "/api/aiden/v1/chats/chat-recording/recordings/$present" -> MockResponse()
+                    .setHeader("Content-Type", "video/mp4")
+                    .setHeader("Cache-Control", "no-store")
+                    .setHeader("X-Content-Type-Options", "nosniff")
+                    .setBody(okio.Buffer().write(video))
+                else -> MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json")
+                    .setBody("""{"error":{"code":"not_found","message":"Recording not found.","requestId":"req_1","retryable":false}}""")
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-recording", deviceId = "device-recording", endpoint = server.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob),
+                    browserRecordingDir = recordings
+                )
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                val model = AidenChatViewModel(initial.id, coordinator, cache, drafts, initial)
+                viewModels.put("recording", model)
+                assertTrue(model.canPlayBrowserRecordings)
+
+                // A stale file from an earlier Play is dropped before the next one is read.
+                recordings.mkdirs()
+                File(recordings, "$gone.webm").writeBytes(byteArrayOf(1))
+                val loaded = model.browserRecording(AidenBrowserRecordingRecap(present, "video/mp4", 12_400, video.size.toLong()))
+                val ready = loaded as AidenBrowserRecordingLoad.Ready
+                assertEquals("video/mp4", ready.recording.mimeType)
+                assertEquals(File(recordings, "$present.mp4"), ready.recording.file)
+                assertArrayEquals(video, ready.recording.file.readBytes())
+                assertEquals(listOf("$present.mp4"), recordings.list()!!.sorted())
+
+                assertEquals(
+                    AidenBrowserRecordingLoad.Missing,
+                    model.browserRecording(AidenBrowserRecordingRecap(gone, "video/mp4", 1_000, 10))
+                )
+                // Nothing is left behind for the recording the Mac no longer has.
+                assertTrue(recordings.list()!!.isEmpty())
+                viewModels.clearAndJoin()
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun fixtureVisualMessage(): AidenChatMessage {
         val data = javaClass.classLoader!!.getResourceAsStream("contract.json")!!.bufferedReader().use { it.readText() }
         val chat = wireJson.decodeFromJsonElement(AidenChat.serializer(), Json.parseToJsonElement(data).jsonObject.getValue("chat"))

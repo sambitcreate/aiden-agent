@@ -64,6 +64,7 @@ import {
   AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_VISUALS_FEATURE,
   AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE,
+  AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE,
   AIDEN_REMOTE_CHAT_CONTEXT_PRESSURE_FEATURE,
   AIDEN_REMOTE_CONTEXT_MODEL_ID,
   AIDEN_REMOTE_CHAT_MESSAGES_WINDOW_MAX_LIMIT,
@@ -204,7 +205,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -454,6 +455,7 @@ export type AidenRemoteRouteLabel =
   | "chatProgressEvents"
   | "chatAttachment"
   | "chatVisualDocument"
+  | "chatBrowserRecording"
   | "turns"
   | "models"
   | "stream"
@@ -561,6 +563,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
     "/chats/:id/attachments/:attachmentName/content",
   ],
   chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
+  chatBrowserRecording: ["/chats/:id/recordings/:recordingId"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -1577,6 +1580,7 @@ export interface AidenRemoteServerFeatureSupport {
   messagesWindow: boolean;
   visuals: boolean;
   visualViewer: boolean;
+  browserRecordings: boolean;
   fork: boolean;
   forkSummary: boolean;
   contextPressure: boolean;
@@ -1628,6 +1632,7 @@ export function aidenRemoteServerFeatures(
       : []),
     ...(support.visuals ? [AIDEN_REMOTE_CHAT_VISUALS_FEATURE] : []),
     ...(support.visualViewer ? [AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE] : []),
+    ...(support.browserRecordings ? [AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE] : []),
     ...(support.fork ? [AIDEN_REMOTE_CHAT_FORK_FEATURE] : []),
     ...(support.forkSummary ? [AIDEN_REMOTE_CHAT_FORK_SUMMARY_FEATURE] : []),
     // Host-wide features are announced to desktops only.
@@ -2270,6 +2275,8 @@ export function createAidenRemoteRequestHandler(
             messagesWindow: Boolean(dependencies.chats?.messagesWindow),
             visuals: Boolean(dependencies.chats),
             visualViewer: Boolean(dependencies.chats?.visualDocument) && dependencies.chats?.supportsVisualViewer === true,
+            browserRecordings:
+              Boolean(dependencies.chats?.browserRecording) && dependencies.chats?.supportsBrowserRecordings === true,
             fork: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForks === true,
             forkSummary: Boolean(dependencies.chats?.fork) && dependencies.chats?.supportsForkSummaries === true,
             contextPressure: Boolean(dependencies.chats?.contextPressure) && dependencies.chats?.supportsContextPressure === true,
@@ -4083,6 +4090,22 @@ export function createAidenRemoteRequestHandler(
             attachmentContentMatch[1]!,
             attachmentContentMatch[2]!,
           ),
+        );
+        return;
+      }
+      const browserRecordingMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/recordings\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      if (browserRecordingMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "chatBrowserRecording";
+        const device = await authenticate(request, dependencies.devices, "chat:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!dependencies.chats?.browserRecording || dependencies.chats.supportsBrowserRecordings !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        await requireChatAccess(dependencies.chats, device, browserRecordingMatch[1]!, "read");
+        writeAttachmentContent(
+          response,
+          await dependencies.chats.browserRecording(browserRecordingMatch[1]!, browserRecordingMatch[2]!),
         );
         return;
       }

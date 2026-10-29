@@ -253,6 +253,37 @@ test("extracted values show as a card under their activity line, which stays in 
   );
 });
 
+test("a browser recording shows as a card under its activity line, which stays in the group", () => {
+  const recording = {
+    id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678",
+    mimeType: "video/mp4" as const,
+    durationMs: 12_400,
+    sizeBytes: 1_048_576,
+  };
+  const stopped = step("stop", 1, "browser_recording_stop", "completed", { contentOffset: 7, recording });
+  const rows = assistantPresentationRows(
+    "Before.After.",
+    timeline("completed", [positionedTool(0, 7, "browser_recording_start"), stopped]),
+  );
+  assert.deepEqual(
+    rows?.map((row) =>
+      row.kind === "text"
+        ? [row.kind, row.content]
+        : row.kind === "activity"
+          ? [row.kind, row.steps.map((entry) => entry.id)]
+          : row.kind === "recording"
+            ? [row.kind, row.step.recording.id]
+            : [row.kind],
+    ),
+    [
+      ["text", "Before."],
+      ["activity", ["tool-1", "stop"]],
+      ["recording", recording.id],
+      ["text", "After."],
+    ],
+  );
+});
+
 test("unreadable thinking remains a chronological status row", () => {
   const thought = { ...thinking("think-1", 0, 1_000), contentOffset: 7 };
   const rows = assistantPresentationRows("Before.After.", timeline("completed", [thought]));
