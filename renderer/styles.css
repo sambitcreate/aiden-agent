@@ -1004,8 +1004,21 @@ textarea {
   }
 }
 
-.reasoning-surface {
-  --scroll-fade-size: 20px;
+/* A reasoning disclosure's body folds on a grid track so it can ease between
+   zero and its natural height. It only ever folds when the reader asks. */
+.reasoning-body {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.reasoning-body > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.reasoning-body[data-state="closing"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 /* Section headers inside the transcript (Thinking disclosures, expanded
@@ -2253,6 +2266,40 @@ textarea {
 
 :root[data-reduce-motion="false"] .reasoning-surface[data-streaming="true"] {
   animation: aiden-reasoning-surface-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+:root[data-reduce-motion="false"] .reasoning-body {
+  transition:
+    grid-template-rows 240ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms ease-out;
+}
+
+@starting-style {
+  :root[data-reduce-motion="false"] .reasoning-body {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* The collapsed row's latest thought rolls in inside the row's own height. */
+:root[data-reduce-motion="false"] .reasoning-line-in {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  animation: aiden-reasoning-line-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes aiden-reasoning-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .agent-event-presence[data-presence="visible"],
