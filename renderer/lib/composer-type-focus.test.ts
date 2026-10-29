@@ -185,7 +185,8 @@ test("keys already settled by the event never run the page checks", () => {
     assert.deepEqual(decide(value, extras), { action: "ignore" });
   }
   assert.equal(reads.length, 0, reads.join(", "));
-  // A key typed in the focused composer stops at the focus check, before the overlay search.
+  // Typing in the focused composer, the common case, never pays for the
+  // document-wide overlay search or the composer's layout read.
   const focused = Object.defineProperties({}, {
     ...watched,
     composerFocused: { get: () => (reads.push("composerFocused"), true) },
