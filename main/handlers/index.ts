@@ -148,11 +148,4 @@ export function registerHandlers(): void {
   registerCreateImagesIpc();
 
   logger.info("handlers", "✓ IPC handlers registered");
-
-  // TODO: Add more handlers here using ipcMain.handle()
-  // Example:
-  // ipcMain.handle('file:read', async (event, path) => {
-  //   const fs = await import('fs/promises');
-  //   return await fs.readFile(path, 'utf-8');
-  // });
 }
