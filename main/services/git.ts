@@ -4752,18 +4752,32 @@ export class GitService {
    * back from wherever the removal set them aside and drop that removal's
    * journal. True when both are back in place.
    */
-  private async returnSetAsideRestore(target: string, gitDir: string, token: string): Promise<boolean> {
+  private async returnSetAsideRestore(
+    target: string,
+    gitDir: string,
+    token: string,
+    checkout: { dev: number; ino: number },
+  ): Promise<boolean> {
     const removal = this.managedWorktreeRemovalPaths(target, gitDir, token);
-    const putBack = async (original: string, setAside: string[]) => {
-      if (await this.pathExists(original)) return true;
-      for (const candidate of setAside) {
-        if ((await this.pathExists(candidate)) && (await this.restoreQuarantinedPath(candidate, original))) return true;
-      }
-      return false;
+    // Something set aside goes back only to a free path; with nothing set
+    // aside, what is at the path must be the original (for the checkout, the
+    // very directory this restore made). Anything else keeps the journal.
+    const putBack = async (original: string, setAside: string[], isOriginal: () => Promise<boolean>) => {
+      const moved = [];
+      for (const candidate of setAside) if (await this.pathExists(candidate)) moved.push(candidate);
+      if (moved.length > 1) return false;
+      if (moved.length === 1) return this.restoreQuarantinedPath(moved[0]!, original);
+      return isOriginal();
     };
-    const checkoutBack = await putBack(target, [removal.checkout, removal.checkoutAuthorization]);
-    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization]);
-    if (!checkoutBack || !recordBack) return false;
+    const checkoutBack = await putBack(target, [removal.checkout, removal.checkoutAuthorization], async () => {
+      const now = await fs.lstat(target).catch(() => undefined);
+      return now !== undefined && now.isDirectory() && now.dev === checkout.dev && now.ino === checkout.ino;
+    });
+    // A checkout that cannot go back leaves its Git record set aside too, as
+    // the removal's journal describes it.
+    if (!checkoutBack) return false;
+    const recordBack = await putBack(gitDir, [removal.gitDir, removal.gitDirAuthorization], () => this.pathExists(gitDir));
+    if (!recordBack) return false;
     await fs.rm(removal.journal, { force: true });
     return true;
   }
@@ -6989,7 +7003,7 @@ export class GitService {
               // The removal may stop after setting the folder and its Git
               // record aside (a write landed late): put both back first, so
               // "kept" means the folder is where it was.
-              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token))) throw removalError;
+              if (!(await this.returnSetAsideRestore(target, owned.gitDir, owned.token, added))) throw removalError;
               kept = new GitServiceError(
                 "dirty_worktree",
                 "Restoring the worktree failed after something changed in its folder, so Aiden kept the folder. Copy out what you need, then delete the folder and choose Restore again.",

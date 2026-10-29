@@ -1096,6 +1096,42 @@ test("a failed restore puts the folder back when a late write stops its removal"
   );
 });
 
+test("a failed restore keeps its removal record when something new took the folder's place", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  let target = "";
+  const service = new GitService({
+    cacheTtlMs: 0,
+    // A late save lands in the set-aside folder while another program makes
+    // a new folder at the old path.
+    worktreeDirectoryRemover: async (identity) => {
+      await fs.writeFile(path.join(identity.path, "editor-unsaved-work.txt"), "unsaved\n");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "watcher.txt"), "watcher\n");
+      await identity.authorize?.(identity.path, "digest");
+    },
+  });
+  const created = await service.createWorktree(repository, root, "aiden/collide");
+  target = created.path;
+  await fs.rm(created.path, { recursive: true, force: true });
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/collide", created.worktreeGitDir, created.ownershipToken, "",
+      async () => { throw new Error("disk full"); },
+    ),
+    (error: unknown) => error instanceof GitServiceError && !/kept the folder/u.test(error.message),
+  );
+  assert.equal(await fs.readFile(path.join(created.path, "watcher.txt"), "utf8"), "watcher\n", "the new folder is left alone");
+  const setAside = (await fs.readdir(path.dirname(created.path))).filter((name) => name.startsWith(".aiden-"));
+  assert.ok(setAside.some((name) => name.endsWith(".json")), "the removal record is kept for recovery");
+  const folder = setAside.find((name) => !name.endsWith(".json"))!;
+  assert.equal(
+    await fs.readFile(path.join(path.dirname(created.path), folder, "editor-unsaved-work.txt"), "utf8"),
+    "unsaved\n",
+    "and the saved work is still in the set-aside folder",
+  );
+});
+
 test("a deleted worktree whose branch now needs a checkout filter is not restored", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);
