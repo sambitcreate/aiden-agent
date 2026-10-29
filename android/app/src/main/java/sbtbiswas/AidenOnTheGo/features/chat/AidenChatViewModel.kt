@@ -210,6 +210,12 @@ class AidenChatViewModel(
     /** The Mac was busy and the saved send will go out again on its own. */
     private val _isWaitingToRetryRateLimitedSend = MutableStateFlow(false)
     val isWaitingToRetryRateLimitedSend: StateFlow<Boolean> = _isWaitingToRetryRateLimitedSend.asStateFlow()
+    /**
+     * The Mac kept refusing the saved send with a retryable 429 until the automatic resends ran
+     * out. Nothing was appended, so Retry is safe.
+     */
+    private val _isPendingSendRefusedBecauseBusy = MutableStateFlow(false)
+    val isPendingSendRefusedBecauseBusy: StateFlow<Boolean> = _isPendingSendRefusedBecauseBusy.asStateFlow()
     private var rateLimitedSendRetries = 0
     private var rateLimitedSendRetryJob: Job? = null
     /** Waits out a retryable 429 before sending again; tests shorten it. */
@@ -1464,6 +1470,7 @@ class AidenChatViewModel(
         rateLimitedSendRetryJob?.cancel()
         rateLimitedSendRetryJob = null
         _isWaitingToRetryRateLimitedSend.value = false
+        _isPendingSendRefusedBecauseBusy.value = false
     }
 
     /**
@@ -1490,7 +1497,10 @@ class AidenChatViewModel(
             return false
         }
         _pendingSend.value = fresh
-        if (rateLimitedSendRetries >= MAX_RATE_LIMITED_SEND_RETRIES) return true
+        if (rateLimitedSendRetries >= MAX_RATE_LIMITED_SEND_RETRIES) {
+            _isPendingSendRefusedBecauseBusy.value = true
+            return true
+        }
         val delayMillis = error.retryAfterSeconds?.let { it * 1_000L }
             ?: AidenTerminalReconciliation.retryDelayMilliseconds(rateLimitedSendRetries)
         rateLimitedSendRetries++
@@ -1582,6 +1592,7 @@ class AidenChatViewModel(
                 val session = draftSession ?: error("The chat draft is not ready.")
                 withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
                 _pendingSend.value = attempt
+                _isPendingSendRefusedBecauseBusy.value = false
                 // Clear the stored draft before the turn can reach the server.
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
@@ -1624,6 +1635,7 @@ class AidenChatViewModel(
                     return@launch
                 }
                 _pendingSend.value = null
+                _isPendingSendRefusedBecauseBusy.value = false
                 turnAttempts.reset()
                 rateLimitedSendRetries = 0
                 if (retryAttempt == null) _selectedSkill.value = null
@@ -1654,6 +1666,7 @@ class AidenChatViewModel(
                         if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
                             session?.let { withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, it) } }
                             _pendingSend.value = null
+                            _isPendingSendRefusedBecauseBusy.value = false
                             turnAttempts.reset()
                             rateLimitedSendRetries = 0
                         }
@@ -2262,6 +2275,7 @@ class AidenChatViewModel(
                 val pending = saved ?: AidenChatDraftStore.PendingSend(deviceId, AidenTurnStart(text), key.toString(), System.currentTimeMillis(), emptyList(), streamId, mode)
                 withContext(ioDispatcher) { draftStore.savePendingSend(pending, session) }
                 _pendingSend.value = pending
+                _isPendingSendRefusedBecauseBusy.value = false
                 check(pending.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val result = client.submitStreamInput(
                     id = streamId,
@@ -2287,6 +2301,7 @@ class AidenChatViewModel(
                 }
                 if (activeClient() !== client) return@launch
                 _pendingSend.value = null
+                _isPendingSendRefusedBecauseBusy.value = false
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {
                     if (retry) consumeRunInputDraft(text) else draftWriter?.writeSoon(_draft.value)
@@ -3651,4 +3666,18 @@ class AidenChatViewModel(
             }
         }
     }
+}
+
+/** The notice under a send the phone could not settle on its own, as the chat screen shows it. */
+internal fun aidenSendRecoveryMessage(
+    sendRecoveryError: String?,
+    pendingSend: AidenChatDraftStore.PendingSend?,
+    isWaitingToRetryRateLimitedSend: Boolean,
+    isPendingSendRefusedBecauseBusy: Boolean
+): String = sendRecoveryError ?: when {
+    isWaitingToRetryRateLimitedSend -> "Aiden Agent is busy. Your message will be sent again in a moment."
+    isPendingSendRefusedBecauseBusy && pendingSend?.canRetry() == true ->
+        "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
+    pendingSend?.canRetry() == true -> "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+    else -> "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
 }

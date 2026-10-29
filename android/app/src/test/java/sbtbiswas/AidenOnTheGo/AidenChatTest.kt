@@ -52,6 +52,7 @@ import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
 import sbtbiswas.AidenOnTheGo.features.chat.AidenForeignRunAttachPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.AidenVisualSnapshotRefreshPolicy
 import sbtbiswas.AidenOnTheGo.features.chat.aidenEligibleImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.aidenSendRecoveryMessage
 import sbtbiswas.AidenOnTheGo.features.chat.aidenUnsupportedHtmlArtifacts
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisibleMessageAttachments
 import sbtbiswas.AidenOnTheGo.features.chat.aidenVisualDisplay
@@ -4767,11 +4768,27 @@ class AidenChatTest {
         }
     )
 
+    private fun sendRecoveryNotice(model: AidenChatViewModel) = aidenSendRecoveryMessage(
+        model.sendRecoveryError.value,
+        model.pendingSend.value,
+        model.isWaitingToRetryRateLimitedSend.value,
+        model.isPendingSendRefusedBecauseBusy.value
+    )
+
+    private val dropTurnAnswers = java.util.concurrent.atomic.AtomicBoolean(true)
+
     @Test
     fun busyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() = withTurnHarness(
-        answer = { n -> if (n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES) rateLimitedTurn(retryable = true) else acceptedTurn(n) },
+        answer = { n ->
+            when {
+                n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES -> rateLimitedTurn(retryable = true)
+                dropTurnAnswers.get() -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                else -> acceptedTurn(n)
+            }
+        },
         expectedTurns = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES,
         block = { model, turns, arrived ->
+            val refusals = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES
             val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
             model.rateLimitedSendRetryDelay = { waits += it; yield() }
             model.updateDraft("Hello")
@@ -4784,13 +4801,31 @@ class AidenChatTest {
             assertNull(model.presentedError.value)
             assertTrue("the send stays saved for the person's Retry", model.pendingSend.value?.canRetry() == true)
             assertTrue(model.canRetrySend)
+            assertEquals(
+                "the Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown",
+                "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+                sendRecoveryNotice(model)
+            )
 
+            // The person's Retry clears the busy notice; this time the answer is lost.
             model.send(retry = true)
-            val acceptedId = "accepted-${AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES + 2}"
-            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == acceptedId } == true } }
+            assertFalse(model.isPendingSendRefusedBecauseBusy.value)
+            withTimeout(5_000) {
+                while (turns.size < refusals + 1) yield()
+                model.isStarting.first { !it }
+            }
+            assertNotNull("an unconfirmed send stays saved", model.pendingSend.value)
+            assertEquals(
+                "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window.",
+                sendRecoveryNotice(model)
+            )
+
+            dropTurnAnswers.set(false)
+            model.send(retry = true)
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id.startsWith("accepted-") } == true } }
             val keys = turns.map { it.getHeader("Idempotency-Key") }
-            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES + 2, keys.size)
-            assertEquals("every refused attempt was replaced by a fresh key", keys.size, keys.toSet().size)
+            assertEquals("every refused attempt was replaced by a fresh key", refusals + 1, keys.toSet().size)
+            assertEquals("a send whose answer was lost replays its key", keys[refusals], keys.last())
             assertNull(model.pendingSend.value)
         }
     )

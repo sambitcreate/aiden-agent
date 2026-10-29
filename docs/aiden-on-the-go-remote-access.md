@@ -151,7 +151,9 @@ as busy (`429 rate_limited` with `retryable: true`) is different: nothing was ad
 the chat, so Aiden On The Go for iPhone and Android saves the same request under a new
 key and sends it again on its own after the delay the host asked for
 (`details.retryAfterSeconds`, else the `Retry-After` header, held between 1 and 60
-seconds). After three busy refusals in a row the request stays saved for **Retry**. A
+seconds). If three automatic resends are refused as busy too, the request stays saved
+for **Retry** and the notice says Aiden Agent is still busy and the message wasn’t sent,
+so retrying is safe. A
 `429` the host marks `retryable: false` fails the send and returns the text to the
 composer. When the window ends,
 review the conversation on the host before dismissing the notice and making a new

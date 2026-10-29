@@ -246,10 +246,17 @@ final class AidenChatTests: XCTestCase {
         )
         let fixture = AidenStreamRecoveryFixture(chat: model.chat)
         let turns = AidenRecordedTurnStarts()
+        let automaticSends = 1 + AidenChatViewModel.maxRateLimitedSendRetries
         AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
             if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
-                turns.record(request)
-                return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Busy","requestId":"busy","retryable":true}}"#.utf8))
+                let n = turns.record(request)
+                if n <= automaticSends {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Busy","requestId":"busy","retryable":true}}"#.utf8))
+                }
+                if n == automaticSends + 1 {
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
             }
             return fixture.response(request)
         }
@@ -257,7 +264,6 @@ final class AidenChatTests: XCTestCase {
         await model.load(observeProgress: false)
         model.draft = "Hello"
         await model.send()
-        let automaticSends = 1 + AidenChatViewModel.maxRateLimitedSendRetries
         try await waitUntil { turns.count == automaticSends && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(turns.count, automaticSends, "Resends stop at their limit")
@@ -265,10 +271,30 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNotNil(model.pendingSend)
         XCTAssertTrue(model.canRetrySend)
         XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+            "The Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown"
+        )
+
+        // The person's Retry clears the busy notice; this time the answer is lost.
+        await model.send(retry: true)
+        try await waitUntil { turns.count == automaticSends + 1 && !model.isStarting }
+        XCTAssertFalse(model.isPendingSendRefusedBecauseBusy)
+        XCTAssertNotNil(model.pendingSend, "An unconfirmed send stays saved")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+        )
 
         await model.send(retry: true)
-        try await waitUntil { turns.count == automaticSends + 1 + AidenChatViewModel.maxRateLimitedSendRetries && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
-        XCTAssertEqual(Set(turns.values.map(\.key)).count, turns.count, "Every resend after a refusal carries a fresh key")
+        try await waitUntil { model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.sendRecoveryMessage)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let keys = turns.values.map(\.key)
+        XCTAssertEqual(keys.count, automaticSends + 2)
+        XCTAssertEqual(Set(keys.dropLast()).count, automaticSends + 1, "Every resend after a refusal carries a fresh key")
+        XCTAssertEqual(keys[automaticSends], keys[automaticSends + 1], "A send whose answer was lost replays its key")
         model.stopProgressObservation()
     }
 

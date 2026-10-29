@@ -1331,6 +1331,9 @@ final class AidenChatViewModel {
     }
     /// The Mac was busy and the saved send will go out again on its own.
     private(set) var isWaitingToRetryRateLimitedSend = false
+    /// The Mac kept refusing the saved send with a retryable 429 until the
+    /// automatic resends ran out. Nothing was appended, so Retry is safe.
+    private(set) var isPendingSendRefusedBecauseBusy = false
     var canRetrySend: Bool {
         pendingSend?.canRetry() == true && isConnected && coordinator.activeInstanceId == instanceId && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
     }
@@ -1339,6 +1342,9 @@ final class AidenChatViewModel {
         guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
         if isWaitingToRetryRateLimitedSend {
             return "Aiden Agent is busy. Your message will be sent again in a moment."
+        }
+        if isPendingSendRefusedBecauseBusy, pendingSend.canRetry() {
+            return "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
         }
         return pendingSend.canRetry()
             ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
@@ -1360,6 +1366,7 @@ final class AidenChatViewModel {
         rateLimitedSendRetryTask?.cancel()
         rateLimitedSendRetryTask = nil
         isWaitingToRetryRateLimitedSend = false
+        isPendingSendRefusedBecauseBusy = false
     }
 
     /// The Mac refused `attempt` with a retryable 429 before running it, and
@@ -1388,7 +1395,10 @@ final class AidenChatViewModel {
             return false
         }
         pendingSend = fresh
-        guard rateLimitedSendRetries < Self.maxRateLimitedSendRetries else { return true }
+        guard rateLimitedSendRetries < Self.maxRateLimitedSendRetries else {
+            isPendingSendRefusedBecauseBusy = true
+            return true
+        }
         let delay: Duration = error.serverRetryAfterSeconds.map { .seconds($0) }
             ?? .milliseconds(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: rateLimitedSendRetries))
         rateLimitedSendRetries += 1
@@ -2078,6 +2088,7 @@ final class AidenChatViewModel {
             let session = await draftStore.beginSession(instanceId: instanceId, chatId: chat.id)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             draftSession = session
+            isPendingSendRefusedBecauseBusy = false
             do { pendingSend = try await draftStore.loadPendingSend(session: session, deviceId: context.deviceId) }
             catch { sendRecoveryError = "The saved send could not be read. Check the conversation on your desktop before dismissing it and sending again." }
             if draft.isEmpty, pendingAttachments.isEmpty, !isPreparingAttachments, !isUploadingAttachment, !isStarting,
@@ -3112,6 +3123,7 @@ final class AidenChatViewModel {
             try await draftStore.savePendingSend(attempt, session: session)
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = attempt
+            isPendingSendRefusedBecauseBusy = false
             guard attempt.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let response = try await coordinator.remoteClient(for: context).startTurn(
                 chatId: chat.id,
@@ -3203,6 +3215,7 @@ final class AidenChatViewModel {
             }
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
             turnAttempts.reset()
             rateLimitedSendRetries = 0
             if chat.messages.contains(where: { $0.id == optimisticID }) {
@@ -3251,6 +3264,7 @@ final class AidenChatViewModel {
                [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
                 await draftStore.settlePendingSend(key: attempt.key, session: session)
                 pendingSend = nil
+                isPendingSendRefusedBecauseBusy = false
                 turnAttempts.reset()
                 rateLimitedSendRetries = 0
             }
@@ -3821,6 +3835,7 @@ final class AidenChatViewModel {
                 createdAt: Date(), attachments: [], streamId: streamID, inputMode: mode)
             try await draftStore.savePendingSend(pending, session: session)
             pendingSend = pending
+            isPendingSendRefusedBecauseBusy = false
             guard pending.canRetry(), coordinator.isCurrent(context) else { throw AidenRemoteClientError.invalidResponse }
             let result = try await coordinator.remoteClient(for: context).submitStreamInput(
                 id: streamID,
@@ -3848,6 +3863,7 @@ final class AidenChatViewModel {
             }
             guard retained, !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
+            isPendingSendRefusedBecauseBusy = false
             if lastRunInputAttempt == attempt { lastRunInputAttempt = nil }
             if AidenRunInputPresentation.consumesDraft(result) {
                 if retry { consumeRunInputDraft(text) } else { persistDraftNow() }
