@@ -667,7 +667,7 @@ test("a daemon turn that fails before its session opens still stops the MCP serv
   await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
   const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
   // A leaked server would keep the test runner alive; reap it so a regression fails instead of hanging.
-  t.after(() => { for (const pid of existsSync(join(dir, "turn.pid")) ? readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number) : []) { try { process.kill(pid, "SIGKILL"); } catch {} } });
+  t.after(() => { for (const pid of existsSync(join(dir, "turn.pid")) ? readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number) : []) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } } });
   await daemon.chatStore.create({ id: "early-failure", title: "Early failure", workspaceId: workspace.id });
   // An unreadable session journal fails the turn after the extensions connected MCP.
   mkdirSync(daemon.sessionPath("early-failure"), { recursive: true });
@@ -1067,7 +1067,7 @@ test("a subagent that hits its deadline during an unanswered approval settles an
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
   const server = createServer(async (request, response) => {
-    for await (const _chunk of request);
+    for await (const chunk of request) void chunk;
     response.writeHead(200, { "content-type": "text/event-stream" });
     response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "read-gated", type: "function", function: { name: "read_file", arguments: JSON.stringify({ path: "note.txt" }) } }] }, finish_reason: null }] })}\n\n`);
     response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\n`);
