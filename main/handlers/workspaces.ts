@@ -220,9 +220,15 @@ export function registerWorkspaceHandlers(): void {
     workspaceApplicationService.update(asString(id, "id"), patch),
   );
 
-  ipcMain.handle("workspaces:remove", async (_event, id: unknown) =>
-    workspaceApplicationService.remove(asString(id, "id")),
-  );
+  ipcMain.handle("workspaces:remove", async (_event, id: unknown) => {
+    const workspaceId = asString(id, "id");
+    try {
+      return await workspaceApplicationService.remove(workspaceId);
+    } finally {
+      // A later display read re-observes, so closing after a failed remove is harmless.
+      gitRepoWatcher.close(workspaceId);
+    }
+  });
 
   ipcMain.handle("workspaces:gitInfo", async (event, workspaceId: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
@@ -394,7 +400,11 @@ export function registerWorkspaceHandlers(): void {
         event,
         () => new Error("Workspace access requires the active renderer document."),
       );
-      return workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
+      try {
+        return await workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
+      } finally {
+        gitRepoWatcher.close(id);
+      }
     },
   );
 
