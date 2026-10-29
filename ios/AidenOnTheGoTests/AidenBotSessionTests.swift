@@ -2585,6 +2585,35 @@ final class AidenBotSessionOptimisticTests: XCTestCase {
         XCTAssertEqual(model.outgoing, [])
     }
 
+    /// A message taken on an earlier visit can have its entry beyond the window
+    /// a snapshot carries. Coming back, it never sits at the bottom as "Sent"
+    /// for the grace period; one sent on this visit still waits it out (above).
+    func testAMessageTakenOnAnEarlierVisitThatTheMacNoLongerShowsDoesNotFlashBack() async throws {
+        let key = AidenBotSessionKey(instanceId: "mac_a", deviceId: "device_1", botID: botID)
+        let cache = AidenBotSessionCache()
+        let reading = AidenBotSessionActivity(phase: "reading", startedAt: started)
+        let transport = FakeBotSessionTransport()
+        transport.queueSession(.success(try session(.running, activity: reading)))
+        let first = model(transport, key: key, cache: cache)
+        await first.load()
+        _ = await first.send("Also add a shopping list.", whenBusy: .queue)
+        XCTAssertEqual(first.outgoing.first?.status, .sent(submissionId: "17"))
+        first.release()
+
+        // Much later: its turn ran long ago, and the transcript window holds only newer entries.
+        let newer = (1...3).map { assistant("entry_\($0)", "Later reply \($0)") }
+        let second = model(transport, key: key, cache: cache)
+        XCTAssertEqual(second.outgoing.map(\.text), ["Also add a shopping list."], "it waits for the Mac's word")
+        transport.queueSession(.success(try session(.idle, seq: 30, entries: newer)))
+        await second.load()
+        XCTAssertEqual(bubbles("Also add a shopping list.", in: second), 0, "nothing on the Mac shows it: no Sent bubble")
+
+        // The Mac lists it after all: its own bubble shows it.
+        let onMac = AidenBotQueuedMessage(submissionId: "17", mode: .queue, text: "Also add a shopping list.")
+        _ = await second.apply(event(seq: 31, .queued([onMac])))
+        XCTAssertEqual(bubbles("Also add a shopping list.", in: second), 1)
+    }
+
     /// R21: a request frozen while the cached capability said Steer/Queue goes
     /// again byte for byte, even after `/server` says this Mac doesn't offer them.
     func testASendFrozenUnderTheCachedCapabilityReplaysExactly() async throws {

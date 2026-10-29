@@ -78,7 +78,12 @@ data class AidenBotOutgoingMessage(
     /** Waits for the next connection or backoff before trying again. */
     val deferred: Boolean = false,
     /** Taken, but a snapshot found nothing on the Mac showing it: it goes on the next, or after a grace period. */
-    val unheld: Boolean = false
+    val unheld: Boolean = false,
+    /**
+     * An earlier visit or launch saw the Mac take it. Its entry may sit beyond the transcript window
+     * a snapshot carries, so it never draws as its own bubble while nothing on the Mac shows it.
+     */
+    val takenBeforeVisit: Boolean = false
 ) {
     /** Whether the Mac may hold it, so its echo can stand in for it. */
     val mayHaveReachedMac: Boolean
@@ -90,7 +95,10 @@ data class AidenBotOutgoingMessage(
 
     /** As another visit or launch finds it: what that run saw is stale. */
     fun adopted(nowMs: Long): AidenBotOutgoingMessage {
-        val fresh = copy(deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null, unheld = false)
+        val fresh = copy(
+            deferred = false, echoed = false, echoEntryId = null, echoSubmissionId = null, queuedId = null, unheld = false,
+            takenBeforeVisit = submissionId != null
+        )
         return if (fresh.status == AidenBotOutgoingStatus.SENDING && fresh.isExpired(nowMs)) fresh.expired() else fresh
     }
 
