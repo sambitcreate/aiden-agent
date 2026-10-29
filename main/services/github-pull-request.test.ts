@@ -548,6 +548,28 @@ test("a timed-out gh create also stops the helpers it started", { skip: process.
   assert.throws(() => process.kill(helper, 0), { code: "ESRCH" }, "the helper must not outlive the cancelled create");
 });
 
+test("gh that exits 0 while a helper still holds its output reports the created PR, not a timeout", { skip: process.platform === "win32" }, async (t) => {
+  // The helper inherits stdout and outlives gh, so the pipe stays open past gh's exit.
+  const { binary, dir } = await fakeGitHubCli(
+    t,
+    `sleep 30 &\necho $! > "$(dirname "$0")/helper.pid"\necho https://github.com/me/app/pull/12\nexit 0`,
+  );
+  const pidFile = path.join(dir, "helper.pid");
+  t.after(async () => {
+    const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+    if (pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+  });
+  // Shorter than the drain plus the group's grace, so a timer left running would fire.
+  const { service, github } = setup({ binary, createTimeoutMs: 1_200 });
+  github.pullRequests.push(pr({ number: 12, repository: "me/app" }));
+
+  const result = await service.createPullRequest("/tmp", { title: "T", repository: "github.com/me/app" });
+
+  assert.equal(result.kind, "created", result.kind === "unknown" ? result.message : undefined);
+  const helper = Number(await readFile(pidFile, "utf8"));
+  assert.throws(() => process.kill(helper, 0), { code: "ESRCH" }, "the helper holding the pipe is stopped with gh's group");
+});
+
 test("gh exit failures keep their stderr for classification", { skip: process.platform === "win32" }, async (t) => {
   const unauthenticated = await fakeGitHubCli(t, `echo "To get started with GitHub CLI, please run:  gh auth login" >&2\nexit 4`);
   const result = await setup({ binary: unauthenticated.binary }).service.createPullRequest("/tmp", { title: "T" });

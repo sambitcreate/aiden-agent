@@ -77,7 +77,8 @@ export function createProcessGroupTerminator(
         }, POLL_MS);
         const kill = setTimeout(() => {
           clearInterval(poll);
-          // Checked first so a long-gone group's recycled ID is never signalled.
+          // Checked first so a group that already ended is not signalled. A new
+          // group could still reuse the ID in the moment between check and kill.
           if (alive()) signalProcessGroup(child, "SIGKILL");
           resolve();
         }, options.killGraceMs);

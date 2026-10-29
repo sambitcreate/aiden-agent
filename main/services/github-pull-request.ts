@@ -58,6 +58,7 @@ export { githubCliEnvironment } from "./github/github-credentials.js";
 const DEFAULT_CREATE_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
 const KILL_GRACE_MS = 1_000;
+const PIPE_DRAIN_MS = 1_000;
 const RATE_LIMITED_MESSAGE = "GitHub's API rate limit was reached. Pull request status will refresh after it resets.";
 
 interface CommandResult {
@@ -169,12 +170,15 @@ async function defaultRunner(cwd: string, args: string[], options: CommandOption
     () => stop(Object.assign(new Error(command), { killed: true, signal: "SIGTERM" })),
     options.timeoutMs,
   );
+  // Once `gh` itself has exited, its own result stands: a helper still holding
+  // a pipe is stopped by the drain below, not reported as a timeout.
+  child.once("exit", () => clearTimeout(timer));
   const onAbort = () =>
     stop(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" }));
   options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    // A helper still holding a pipe after `gh` exits is bounded by the timeout.
-    const exit = await waitForChildExit(child, { drainMs: options.timeoutMs });
+    // A helper still holding a pipe a second after `gh` exits is stopped with its group.
+    const exit = await waitForChildExit(child, { drainMs: PIPE_DRAIN_MS, onPipesHeld: () => terminator.terminate() });
     const stdout = Buffer.concat(output.stdout).toString("utf8");
     const stderr = Buffer.concat(output.stderr).toString("utf8");
     if (stopped) throw Object.assign(stopped, { stdout, stderr });
