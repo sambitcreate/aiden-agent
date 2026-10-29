@@ -80,6 +80,8 @@ import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
+import { workspaceFolderMissingMessage } from "../shared/workspace-folder-presence";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -309,6 +311,22 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
   effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
+  // A moved or deleted folder is named above the composer, and a send is
+  // refused before it reaches the agent (main refuses it again at start).
+  const folderWorkspaceId = effectiveWorkspace?.folderPath ? effectiveWorkspace.id : undefined;
+  const folderPresenceQuery = useQuery({
+    queryKey: queryKeys.workspaceFolderPresence(folderWorkspaceId ?? ""),
+    queryFn: () => workspacesApi.folderPresence(folderWorkspaceId!),
+    enabled: folderWorkspaceId !== undefined,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const missingWorkspaceFolder =
+    folderWorkspaceId !== undefined && folderPresenceQuery.data?.presence === "missing"
+      ? { name: effectiveWorkspace!.name, folder: folderPresenceQuery.data.folder }
+      : undefined;
+  const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
+  folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
   const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
     chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
@@ -1857,6 +1875,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (getChatDraft(chatId) && draftGitPendingRef.current) {
         throw new Error("Reading Git status… Send again in a moment.");
+      }
+      const folderWorkspace = folderWorkspaceRef.current;
+      if (folderWorkspace) {
+        const presence = await qc.fetchQuery({
+          queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+          queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+          staleTime: 0,
+        });
+        if (presence.presence === "missing") {
+          throw new Error(workspaceFolderMissingMessage(folderWorkspace.name, presence.folder));
+        }
       }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
@@ -3429,6 +3458,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
               <AskUserQuestionCountdown
                 key={`countdown:${questionnaire.promptId}`}
                 expiresAt={questionnaire.expiresAt}
+              />
+            ) : null}
+            {missingWorkspaceFolder && !questionnaire ? (
+              <WorkspaceFolderMissingNotice
+                workspaceName={missingWorkspaceFolder.name}
+                folder={missingWorkspaceFolder.folder}
+                checking={folderPresenceQuery.isFetching}
+                onCheckAgain={() => void folderPresenceQuery.refetch()}
               />
             ) : null}
             {questionnaire ? (
