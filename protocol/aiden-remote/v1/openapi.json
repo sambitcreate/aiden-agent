@@ -6690,6 +6690,70 @@
           }
         }
       }
+    },
+    "/chats/{chatId}/recordings/{recordingId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "recordingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "description": "The id a recording recap on one of this chat's timelines names."
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatBrowserRecording",
+        "description": "Contract revision 46: the video a browser_recording_stop step in this chat saved. Announced by `chat-browser-recordings-v1`. Only a recording the chat's own timelines name can be read; 404 not_found when it is no longer on the Mac or on a host without the in-app browser.",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-browser-recordings-v1",
+        "responses": {
+          "200": {
+            "description": "Authenticated browser recording",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              },
+              "video/webm": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8922,6 +8986,9 @@
           },
           "extraction": {
             "$ref": "#/components/schemas/WebExtractRecap"
+          },
+          "recording": {
+            "$ref": "#/components/schemas/BrowserRecordingRecap"
           }
         },
         "allOf": [
@@ -9007,6 +9074,27 @@
                 },
                 "toolName": {
                   "const": "web_fetch"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "recording"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "browser_recording_stop"
                 }
               }
             }
@@ -17770,6 +17858,39 @@
             "maxLength": 500
           }
         }
+      },
+      "BrowserRecordingRecap": {
+        "type": "object",
+        "description": "Contract revision 46: the video a completed browser_recording_stop step saved. Display-only; the bytes are read from GET /chats/{chatId}/recordings/{recordingId}.",
+        "required": [
+          "id",
+          "mimeType",
+          "durationMs",
+          "sizeBytes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mimeType": {
+            "enum": [
+              "video/mp4",
+              "video/webm"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 360000
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 134217728
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

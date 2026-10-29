@@ -138,6 +138,10 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
+    /// Contract revision 46: a completed `browser_recording_stop` step's video
+    /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
+    /// step's `recording` recap is additive; the token alone gates Play.
+    static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -319,6 +323,11 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// the snapshot's image viewer.
     var supportsChatVisualViewer: Bool {
         features.contains(Self.chatVisualViewerFeature)
+    }
+
+    /// The Mac serves the agent's browser recordings (revision 46).
+    var supportsChatBrowserRecordings: Bool {
+        features.contains(Self.chatBrowserRecordingsFeature)
     }
 
     /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
@@ -1573,6 +1582,43 @@ final class AidenRemoteClient: @unchecked Sendable {
               let html = String(data: data, encoding: .utf8)
         else { try rejectContractResponse() }
         return html
+    }
+
+    /// Revision 46 (`chat-browser-recordings-v1`): the video a completed
+    /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
+    /// most the recorder's 128 MiB limit, with the no-store and nosniff
+    /// headers, is accepted.
+    func browserRecording(chatId: String, recordingId: String) async throws -> AidenBrowserRecordingContent {
+        try validateRemoteIdentifier(chatId)
+        guard AidenBrowserRecordingRecap.isRecordingID(recordingId) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var request = try makeRequest(
+            method: "GET",
+            path: ["chats", chatId, "recordings", recordingId],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("video/mp4, video/webm", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenBrowserRecordingRecap.maxSizeBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              let mimeType = AidenBrowserRecordingRecap.MimeType(rawValue: contentType),
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              !data.isEmpty else {
+            try rejectContractResponse()
+        }
+        return AidenBrowserRecordingContent(data: data, mimeType: mimeType)
     }
 
     func moveChat(
