@@ -49,5 +49,8 @@
   "license": "MIT",
   "optionalDependencies": {
     "sherpa-onnx-node": "1.13.8"
+  },
+  "overrides": {
+    "undici": "8.12.3"
   }
 }
