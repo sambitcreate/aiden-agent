@@ -26,6 +26,7 @@ import { runToolCall } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { advanceAttendedToolErrorState } from "./assistant/tool-loop-guard.js";
+import { processRunning } from "../shared/process-liveness-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1756,9 +1757,7 @@ test("run_command returns when a background job keeps the shell's output pipe op
     const detached = await runCommand.execute("detached", { command: "echo plain" });
     assert.doesNotMatch(detached.content[0].type === "text" ? detached.content[0].text : "", /were stopped/u);
     background = Number(await fs.readFile(path.join(root, "job.pid"), "utf8"));
-    let alive = true;
-    try { process.kill(background, 0); } catch { alive = false; }
-    assert.equal(alive, false, "the job holding the pipe is stopped with the command's group");
+    assert.equal(processRunning(background), false, "the job holding the pipe is stopped with the command's group");
   } finally {
     if (background > 0) {
       try { process.kill(background, "SIGKILL"); } catch { /* Already exited. */ }

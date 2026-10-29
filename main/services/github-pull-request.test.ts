@@ -18,6 +18,7 @@ import {
   parseGitHubPullRequest,
   rollupGitHubChecksState,
 } from "./github-pull-request.js";
+import { processRunning } from "../shared/process-liveness-test-support.js";
 
 test("normalizes GitHub status checks and conclusions", () => {
   assert.equal(
@@ -545,7 +546,7 @@ test("a timed-out gh create also stops the helpers it started", { skip: process.
   assert.match(result.kind === "unknown" ? result.message : "", /did not answer within 1 seconds/u);
   const helper = Number(await readFile(pidFile, "utf8"));
   assert.ok(helper > 0);
-  assert.throws(() => process.kill(helper, 0), { code: "ESRCH" }, "the helper must not outlive the cancelled create");
+  assert.equal(processRunning(helper), false, "the helper must not outlive the cancelled create");
 });
 
 test("gh that exits 0 while a helper still holds its output reports the created PR, not a timeout", { skip: process.platform === "win32" }, async (t) => {
@@ -567,7 +568,7 @@ test("gh that exits 0 while a helper still holds its output reports the created 
 
   assert.equal(result.kind, "created", result.kind === "unknown" ? result.message : undefined);
   const helper = Number(await readFile(pidFile, "utf8"));
-  assert.throws(() => process.kill(helper, 0), { code: "ESRCH" }, "the helper holding the pipe is stopped with gh's group");
+  assert.equal(processRunning(helper), false, "the helper holding the pipe is stopped with gh's group");
 });
 
 test("gh exit failures keep their stderr for classification", { skip: process.platform === "win32" }, async (t) => {

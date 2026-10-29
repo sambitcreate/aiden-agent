@@ -9,9 +9,9 @@ import test from "node:test";
 import {
   createProcessGroupTerminator,
   decodeCappedUtf8,
-  processGroupExists,
   waitForChildExit,
 } from "./process-group.js";
+import { processGroupRunning, processRunning } from "./process-liveness-test-support.js";
 
 const posix = process.platform !== "win32";
 
@@ -26,15 +26,6 @@ async function firstLine(child: ChildProcess): Promise<string> {
     if (text.includes("\n")) return text.split("\n")[0]!;
   }
   return text;
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function eventually(check: () => boolean, timeoutMs = 2_000): Promise<boolean> {
@@ -62,10 +53,10 @@ test("termination keeps escalating after the leader closes until a SIGTERM-ignor
   const closed = once(child, "close");
   terminator.terminate();
   await closed;
-  assert.equal(alive(descendant), true, "the descendant must outlive SIGTERM for this test to mean anything");
+  assert.equal(processRunning(descendant), true, "the descendant must outlive SIGTERM for this test to mean anything");
   await terminator.finished();
-  assert.equal(await eventually(() => !alive(descendant)), true, "SIGKILL must still reach the group after the leader closed");
-  assert.equal(processGroupExists(child.pid), false);
+  assert.equal(await eventually(() => !processRunning(descendant)), true, "SIGKILL must still reach the group after the leader closed");
+  assert.equal(processGroupRunning(child.pid), false);
 });
 
 test("termination finishes as soon as the group exits instead of waiting out the grace period", { skip: !posix }, async () => {
@@ -98,7 +89,7 @@ test("a leader whose background job keeps stdout open settles after the drain wi
   assert.deepEqual(completion, { code: 3, signal: null, pipesHeld: true });
   assert.ok(Date.now() - started < 5_000, "settling must not wait for the 30 s background job");
   await terminator.finished();
-  assert.equal(await eventually(() => !alive(background)), true, "the job holding the pipe is stopped with its group");
+  assert.equal(await eventually(() => !processRunning(background)), true, "the job holding the pipe is stopped with its group");
 });
 
 test("a spawn failure rejects the exit wait", async () => {

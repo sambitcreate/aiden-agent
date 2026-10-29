@@ -21,6 +21,7 @@ import {
   type GitCloneRequest,
   type WorkspaceIntakeDependencies,
 } from "./workspace-intake.js";
+import { processRunning } from "../shared/process-liveness-test-support.js";
 
 const FIXTURE_URL = "https://example.invalid/acme/widget.git";
 
@@ -687,7 +688,8 @@ test("a cancelled clone settles only after Git helpers that ignore SIGTERM are g
   assert.equal(outcome.ok === false && outcome.reason, "cancelled");
   let helperAlive = true;
   for (let attempt = 0; attempt < 25 && helperAlive; attempt += 1) {
-    try { process.kill(helperPid, 0); await new Promise((resolve) => setTimeout(resolve, 20)); } catch { helperAlive = false; }
+    helperAlive = processRunning(helperPid);
+    if (helperAlive) await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(helperAlive, false, "the helper is stopped with Git's process group");
 });
