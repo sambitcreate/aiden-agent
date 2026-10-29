@@ -1609,6 +1609,30 @@ test("run_command cancellation kills the shell process group", async () => {
   }
 });
 
+test("run_command returns when a background job keeps the shell's output pipe open", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-held-pipe-"));
+  let background = 0;
+  try {
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+    const startedAt = Date.now();
+    // The job inherits stdout, so the pipe stays open after the shell exits.
+    const result = await runCommand.execute("held", { command: "sleep 30 &\necho $! > job.pid\necho done" });
+    assert.ok(Date.now() - startedAt < 10_000, "the command must not wait for the 30 s job");
+    assert.notEqual(result.isError, true);
+    assert.match(result.content[0].type === "text" ? result.content[0].text : "", /done/u);
+    background = Number(await fs.readFile(path.join(root, "job.pid"), "utf8"));
+    let alive = true;
+    try { process.kill(background, 0); } catch { alive = false; }
+    assert.equal(alive, false, "the job holding the pipe is stopped with the command's group");
+  } finally {
+    if (background > 0) {
+      try { process.kill(background, "SIGKILL"); } catch { /* Already exited. */ }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("run_command waits for resistant process-group cleanup after cancellation, timeout, and output overflow", async () => {
   if (process.platform === "win32") return;
   for (const trigger of ["cancel", "timeout", "output", "foreground"] as const) {
