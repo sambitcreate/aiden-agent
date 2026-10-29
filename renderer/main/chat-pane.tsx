@@ -25,6 +25,7 @@ import {
   activeWorktreeSend,
   continueWorktreeSendInView,
   isWorktreeSendCancelled,
+  WorktreeSendCancelledError,
   registerWorktreeSendContinuation,
   startWorktreeFirstSend,
   subscribeActiveWorktreeSends,
@@ -1924,6 +1925,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       const folderWorkspace = folderWorkspaceRef.current;
       if (folderWorkspace) {
+        const folderCheckVisit = chatVisitRef.current;
         // A failed check is no reason to refuse; main checks again at start.
         const presence = await qc
           .fetchQuery({
@@ -1932,6 +1934,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
             staleTime: 0,
           })
           .catch(() => undefined);
+        // The user left this chat during the check: send nothing from a pane
+        // that now shows another chat. The composer's saved draft keeps the text.
+        if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
+          throw new WorktreeSendCancelledError();
+        }
         // The notice above the composer names the folder; the toast stays short.
         if (presence?.presence === "missing") {
           throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
