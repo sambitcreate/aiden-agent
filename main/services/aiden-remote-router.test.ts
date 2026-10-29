@@ -266,6 +266,7 @@ async function fixture(options: {
               capability !== "bot:cards" &&
               capability !== "bot:handoffs" &&
               capability !== "bot:handoff-notes" &&
+              capability !== "bot:images" &&
               capability !== "bot:issues" &&
               capability !== "schedule:cards",
           )
@@ -6235,6 +6236,77 @@ test("a paired desktop's host feed carries paused Bot rows only when it holds bo
     } finally {
       await mac.close();
     }
+  }
+});
+
+test("bot:images is offered and negotiable while shared images are served, and only a holder reads an image's bytes", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ accepts: ["bot:images"] }) };
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  const sessions = (wired: boolean, seen: string[]) => ({
+    ...recordingHandoffSessions([], false),
+    supportsSharedImages: wired,
+    session: async (botId: string, options: { images?: boolean } = {}) => {
+      seen.push(`session:${options.images === true ? "images" : "plain"}`);
+      return { botId, epoch: "epoch_1", seq: 0, state: "idle", interrupted: false, entries: [], hasOlder: false, question: null, approval: null };
+    },
+    sharedImage: async (_botId: string, entryId: string) => {
+      if (entryId !== "entry_2") throw new AidenRemoteServiceError("not_found", "This image is no longer in the Bot's chat.", 404);
+      return { bytes: png, mimeType: "image/png" as const };
+    },
+  });
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "bot:read", "chat:read"],
+      acceptsBotCapabilities: true,
+      deviceType: "android",
+      botSessions: sessions(wired, []) as never,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("bot:images"), wired);
+      assert.equal(server.capabilities.includes("bot:images"), false, "offered, not yet granted");
+      const response = await fetch(`${app.base}/device/capabilities`, negotiate);
+      assert.equal(response.status, wired ? 200 : 404);
+      const image = await fetch(`${app.base}/bots/bot_1/session/images/entry_2`, { headers });
+      // Unwired hosts have no route; a wired host refuses a device that does not hold the opt-in.
+      assert.equal(image.status, wired ? 403 : 404);
+    } finally {
+      await app.close();
+    }
+  }
+
+  const seen: string[] = [];
+  const holder = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read", "bot:images"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions(true, seen) as never,
+  });
+  const plain = await fixture({
+    capabilities: ["server:read", "bot:read", "chat:read"],
+    acceptsBotCapabilities: true,
+    deviceType: "iphone",
+    botSessions: sessions(true, seen) as never,
+  });
+  try {
+    const image = await fetch(`${holder.base}/bots/bot_1/session/images/entry_2`, { headers });
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get("content-type"), "image/png");
+    assert.equal(image.headers.get("cache-control"), "no-store");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), png);
+    const gone = await fetch(`${holder.base}/bots/bot_1/session/images/entry_9`, { headers });
+    assert.equal(gone.status, 404);
+    assert.equal((await gone.json()).error.code, "not_found");
+    const refused = await fetch(`${plain.base}/bots/bot_1/session/images/entry_2`, { headers });
+    assert.equal(refused.status, 403);
+    assert.equal((await refused.json()).error.code, "capability_denied");
+    await fetch(`${holder.base}/bots/bot_1/session`, { headers });
+    await fetch(`${plain.base}/bots/bot_1/session`, { headers });
+    assert.deepEqual(seen, ["session:images", "session:plain"]);
+  } finally {
+    await holder.close();
+    await plain.close();
   }
 });
 

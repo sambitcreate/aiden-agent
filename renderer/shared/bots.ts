@@ -188,6 +188,8 @@ export interface BotDefinition {
   chatActivity?: BotChatActivity;
   /** Absent: the defaults (quiet hours 22:00–07:00, 5 a day). */
   interruptions?: BotInterruptions;
+  /** `false`: the person turned off "Let <Bot> set its own wake-ups". Absent: on (main never stores `true`). */
+  selfWakeUps?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -212,6 +214,8 @@ export interface BotUpdateInput extends BotCreateInput {
   chatActivity?: BotChatActivity;
   /** Absent keeps the stored setting. */
   interruptions?: BotInterruptions;
+  /** Absent keeps the stored setting. */
+  selfWakeUps?: boolean;
 }
 
 export interface TelegramBotBindingView {

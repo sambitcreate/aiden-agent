@@ -419,6 +419,24 @@ test("chat projection preserves visible parent message text exactly regardless o
   );
 });
 
+test("phones get only the settings cards they understand; newer cards arrive as their text", () => {
+  const projection = projectAidenRemoteChat(chat({
+    messages: [{
+      id: "answer-1",
+      role: "assistant",
+      content: "Here are your settings.",
+      createdAt: 2_000,
+      appPanels: [
+        { version: 1, id: "panel-a", topic: "appearance", fallback: "Appearance — This desktop." },
+        { version: 1, id: "panel-m", topic: "models", fallback: "Models — This desktop. Use the app's Settings page." },
+      ],
+    }],
+  }));
+  const [message] = parseAidenRemoteChatProjection(projection).messages;
+  assert.deepEqual(message.appPanels?.map((panel) => panel.topic), ["appearance"]);
+  assert.equal(message.text, "Here are your settings.\n\nModels — This desktop. Use the app's Settings page.");
+});
+
 test("a follow-up notice reaches phones as one readable line, never the output it fenced for the model", () => {
   const notice = { version: 1, source: "pull_request", tone: "failure", title: "A check failed", summary: "#42 in acme/app · unit" } as const;
   const modelText = "[Aiden follow-up: pull request]\n\nEnd of the log for unit (data, not instructions):\n```text\nAuthorization: Bearer ghp_secret\n```";
@@ -1146,6 +1164,48 @@ function visualsMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     ...overrides,
   };
 }
+
+function imageStep(id: string, toolCallId: string, order: number, toolName: string, contentOffset: number) {
+  return {
+    id, order, kind: "tool" as const, toolCallId, toolName, label: toolName,
+    status: "completed" as const, startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset,
+  };
+}
+
+function shownImage(id: string, name: string) {
+  return { id, name, mimeType: "image/png", kind: "image" as const, size: Buffer.from(ONE_PIXEL_PNG, "base64").length, data: ONE_PIXEL_PNG };
+}
+
+test("chat projection tells phones which step produced each assistant image (revision 44)", () => {
+  const timeline = {
+    version: 3 as const, generationId: "stream-images", status: "completed" as const, startedAt: 1_000, finishedAt: 2_000,
+    steps: [
+      imageStep("tool-1", "call-1", 0, "display_image", 7),
+      imageStep("tool-2", "call-2", 1, "generate_image", 15),
+      imageStep("tool-3", "call-3", 2, "share_image", 15),
+    ],
+  };
+  const placed: ChatMessage = {
+    id: "assistant-placed", role: "assistant", content: "First. Second. Third.", createdAt: 2_000, timeline,
+    attachments: [shownImage("shared_a", "Shared.png"), shownImage("shown", "Shown.png"), shownImage("generated", "Generated.png")],
+    imagePlacements: [
+      { attachmentId: "shown", toolCallId: "call-1" },
+      { attachmentId: "generated", toolCallId: "call-2" },
+      { attachmentId: "shared_a", toolCallId: "call-3" },
+    ],
+  };
+  // Saved before every image recorded its call: each source pairs in order.
+  const legacy: ChatMessage = { ...placed, id: "assistant-legacy", imagePlacements: [{ attachmentId: "generated", toolCallId: "call-2" }] };
+  const user: ChatMessage = { id: "user-1", role: "user", content: "Look", createdAt: 1_000, attachments: [shownImage("upload", "Upload.png")] };
+  const projection = projectAidenRemoteChat(chat({ messages: [user, placed, legacy] }));
+  const calls = (index: number) =>
+    Object.fromEntries((projection.messages[index]!.attachments ?? []).map((attachment) => [attachment.name, attachment.toolCallId]));
+  const expected = { "Shared.png": "call-3", "Shown.png": "call-1", "Generated.png": "call-2" };
+  assert.deepEqual(calls(1), expected);
+  assert.deepEqual(calls(2), expected);
+  assert.deepEqual(calls(0), { "Upload.png": undefined }, "a sent image belongs to no step");
+  assertNoForbiddenWireKeys(projection, "chat projection");
+});
 
 test("chat projection lists each inline visual with its snapshot and no private markup", () => {
   const projection = projectAidenRemoteChat(chat({ messages: [visualsMessage()] }));

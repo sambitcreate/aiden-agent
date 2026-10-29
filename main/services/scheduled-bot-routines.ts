@@ -91,6 +91,24 @@ export function botRoutinePromptOf(text: string): string {
     : prompt;
 }
 
+/** "3:10 PM" in `zone`, for what a wake-up says when it fires. */
+function wakeUpClock(timestamp: number, zone: string): string {
+  const options: Intl.DateTimeFormatOptions = { hour: "numeric", minute: "2-digit" };
+  try {
+    return new Intl.DateTimeFormat("en-US", { ...options, timeZone: zone }).format(new Date(timestamp));
+  } catch {
+    return new Intl.DateTimeFormat("en-US", options).format(new Date(timestamp));
+  }
+}
+
+/**
+ * What a wake-up sends when it fires: the Bot's own note, framed so the Bot
+ * knows it set this itself (and when), not that the person asked just now.
+ */
+export function botWakeUpPrompt(setAt: number, note: string, zone: string): string {
+  return `You set this wake-up at ${wakeUpClock(setAt, zone)}: ${note.trim()}`;
+}
+
 export function isSilentBotRoutineReply(text: string): boolean {
   return text.trim() === BOT_ROUTINE_SILENT_TOKEN;
 }
@@ -255,8 +273,10 @@ export function createBotRoutineExecutor(dependencies: BotRoutineExecutorDepende
     recovering: boolean,
     existingSubmissionId?: string,
   ): Promise<BotRoutineOutcome> {
-    const prompt = task.prompt?.trim();
-    if (!prompt) throw new Error("This routine has no message.");
+    const note = task.prompt?.trim();
+    if (!note) throw new Error("This routine has no message.");
+    // A wake-up is the Bot's own note to itself, never the person's words.
+    const prompt = task.wakeUp ? botWakeUpPrompt(task.wakeUp.setAt, note, task.timezone) : note;
     if (signal.aborted) throw new Error("Routine was cancelled.");
     const state = await abortable(ports.state(task.botId), signal);
     // A new fire cannot start while the person has paused the whole Bot.
@@ -570,6 +590,8 @@ export interface BotRoutine {
   pendingFireCount: number;
   /** The next scheduled fire is late enough to indicate a stopped scheduler. */
   overdueSince?: number;
+  /** The Bot set this one-time routine for itself (`wake_up`); the person can only cancel it. */
+  wakeUp?: { setAt: number };
   updatedAt: number;
 }
 
@@ -584,6 +606,8 @@ export interface BotRoutineCreateInput {
    * accepted. Creating twice with the same id returns the first routine.
    */
   sourceProposalId?: string;
+  /** Main-only (never parsed from IPC or Remote): the Bot's own wake-up (`wake_up`). */
+  wakeUp?: { setAt: number };
 }
 
 export interface BotRoutineUpdateInput {
@@ -786,8 +810,22 @@ export function projectBotRoutine(task: ScheduledTask & { botId: string }, now: 
     ...(task.enabled && task.nextRunAt !== undefined && task.nextRunAt < now - 15 * 60_000
       ? { overdueSince: task.nextRunAt }
       : {}),
+    ...(task.wakeUp ? { wakeUp: { setAt: task.wakeUp.setAt } } : {}),
     updatedAt: task.updatedAt,
   };
+}
+
+/**
+ * A wake-up that already fired (or was skipped) and has nothing left to
+ * settle. It is kept for the 7-day catch-up window but left out of lists.
+ */
+export function isSpentBotWakeUp(task: ScheduledTask): boolean {
+  return (
+    task.wakeUp !== undefined &&
+    !task.enabled &&
+    task.lastRunAt !== undefined &&
+    (task.pendingRoutineFires?.length ?? 0) === 0
+  );
 }
 
 function isBotRoutine(task: ScheduledTask | undefined): task is ScheduledTask & { botId: string } {
@@ -819,7 +857,7 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
     async list(botId: string): Promise<BotRoutine[]> {
       const at = now();
       return (await dependencies.store.list())
-        .filter((task): task is ScheduledTask & { botId: string } => task.botId === botId)
+        .filter((task): task is ScheduledTask & { botId: string } => task.botId === botId && !isSpentBotWakeUp(task))
         .sort((a, b) => a.createdAt - b.createdAt)
         .map((task) => projectBotRoutine(task, at));
     },
@@ -843,6 +881,7 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
         botId: input.botId,
         routineSchedule: input.schedule,
         ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
+        ...(input.wakeUp !== undefined ? { wakeUp: { setAt: input.wakeUp.setAt } } : {}),
         notify: true,
       });
       dependencies.notifyChanged({ botId: input.botId, routineId: task.id });
@@ -924,12 +963,20 @@ export function createBotRoutineService(dependencies: BotRoutineServiceDependenc
       return { runId };
     },
 
-    async delete(input: BotRoutineDeleteInput): Promise<void> {
+    /**
+     * `cleanup: "background"` (main-only) returns once the routine is gone and
+     * lets what belonged to it settle afterwards. A Bot's own tool needs it:
+     * that settlement appends to the Bot's chat, which waits for the tool's
+     * turn to end, so awaiting it inside the tool could never finish.
+     */
+    async delete(input: BotRoutineDeleteInput, options: { cleanup?: "await" | "background" } = {}): Promise<void> {
       const existing = await owned(input.botId, input.id);
       await dependencies.service.remove(existing.id, {
         expectedUpdatedAt: input.expectedUpdatedAt ?? existing.updatedAt,
       });
-      await dependencies.routineDeleted?.(input.botId, existing.id);
+      const cleanup = dependencies.routineDeleted?.(input.botId, existing.id);
+      if (options.cleanup === "background") void cleanup?.catch(() => undefined);
+      else await cleanup;
       dependencies.notifyChanged({ botId: input.botId, routineId: existing.id, removed: true });
     },
 

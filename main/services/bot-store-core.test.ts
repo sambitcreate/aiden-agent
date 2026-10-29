@@ -413,3 +413,24 @@ test("a Bot's interruption setting round-trips, keeps its place after chat activ
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a Bot's own-wake-ups switch is on by default, stays off once turned off, and an edit that leaves it out keeps it", async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
+    assert.notEqual(created.selfWakeUps, false, "on unless the person turns it off");
+    const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
+    const off = await store.update({ ...base, expectedRevision: created.revision, selfWakeUps: false });
+    assert.equal(off.selfWakeUps, false);
+    const renamed = await store.update({ ...base, expectedRevision: off.revision, name: "Dinner planner" });
+    assert.equal(renamed.selfWakeUps, false, "an edit that leaves it out keeps it");
+    const reopened = await createBotStore({ root: () => root, now: () => 900 }).get(created.id);
+    assert.equal(reopened?.selfWakeUps, false);
+    assert.equal(reopened?.revision, renamed.revision);
+    const on = await store.update({ ...base, expectedRevision: renamed.revision, selfWakeUps: true });
+    assert.notEqual(on.selfWakeUps, false);
+    assert.notEqual(on.revision, renamed.revision);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

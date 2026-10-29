@@ -575,6 +575,15 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val SCHEDULE_CARDS = AidenRemoteCapability("schedule:cards")
         /**
+         * Contract revision 45: this phone receives `shared_image` Bot session entries (an image
+         * the Bot shared, without its bytes) and may read them from
+         * `GET /bots/{botId}/session/images/{entryId}`. It grants no other authority. There is no
+         * `/server` feature token: the Mac offers it only in `serverCapabilities`, and it is
+         * asked for in a call of its own.
+         */
+        val BOT_IMAGES = AidenRemoteCapability("bot:images")
+
+        /**
          * Contract revision 42: this phone receives the Bot session `issues` list and frame, the
          * summary `issueCount` and issue items in the routine notification feed, and may answer a
          * card through `POST /bots/{botId}/issues/{issueId}/act` (which also needs `bot:write`).
@@ -612,16 +621,19 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 39: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_SCHEDULE_CARDS = listOf(SCHEDULE_CARDS)
 
+        /** Revision 45: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_BOT_IMAGES = listOf(BOT_IMAGES)
+
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
     }
 }
 

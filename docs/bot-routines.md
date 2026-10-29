@@ -12,6 +12,23 @@ The Bot chat and routine run history keep completed answers. Desktop banners are
 
 The desktop app must be running and the computer awake for a routine to run on time. If the Bot has an interrupted turn, a routine never resumes that turn itself; Aiden records the missed fire and can catch up after the person resumes the turn. This includes a one-time routine whose scheduled fire has already switched it off; that exact missed fire can still run once within the seven-day catch-up window. If the person pauses the whole Bot, new fires are skipped without automatic catch-up. A fire already admitted to Pi remains pending until the Bot resumes so Aiden can observe its answer without resubmission. Ordinary scheduled tasks are separate from Bot routines and use their own chats and approval settings.
 
+## Wake-ups a Bot sets for itself
+
+A Bot can also come back to its chat on its own, for example "I'll check whether the flight got rebooked in two hours". It uses the `wake_up` tool, which needs no approval card:
+
+- `set` takes either `in_minutes` (1 to 1440) or a local `at` time (`HH:MM`, its next occurrence within 24 hours in this Mac's timezone), plus a note of at most 500 characters saying what to do.
+- A Bot can have at most 3 wake-ups waiting. A fourth is refused with the three that are pending, so the Bot can cancel one or fold the work into an existing one.
+- `list` shows the pending wake-ups, and `cancel` removes one by id.
+- A delay that lands in the hour a daylight-saving change repeats (for example the second 1:30 AM on the night clocks fall back) is refused, because the routine would fire at the first one; the Bot picks a time after it.
+
+The tool is offered only in turns the person started: from the desktop chat, the paired phone or a bound Telegram chat. A routine run, an event routine, a catch-up or a wake-up itself cannot set another wake-up, so a Bot cannot keep itself awake in a loop. Repeated checking belongs in a routine the person accepts.
+
+A wake-up is saved as a one-time routine named **Wake-up**. It fires through the same claim, recovery, catch-up and delivery path as any other one-time routine, so pause, quiet hours, the daily interruption limit and `[SILENT]` all apply. The Bot receives "You set this wake-up at 3:10 PM: <note>" in the same chat and answers with its current model; the tool cannot pick a model. Once it has fired, the wake-up no longer appears in the list; Aiden keeps its record for the seven-day catch-up window, and the next wake-up the Bot sets after that removes it.
+
+The chat shows each wake-up as one line, **Wake-up at 3:10 PM · Cancel**, and the Bot's profile lists it among its routines with the note and a **Cancel** button. Cancel deletes the wake-up. The paired phone sees it as an ordinary one-time routine named Wake-up; no Remote contract changed.
+
+Each Bot has **Let <Bot> set its own wake-ups** in **Advanced → Chat**, on by default. Turning it off stops offering the tool and removes every wake-up the Bot set, including one that came due while the Bot was paused and would otherwise catch up on Resume, so nothing the Bot set fires after the person said no. The person's own routines stay. Turning it back on does not restore the cancelled wake-ups.
+
 ## When a routine fails
 
 Desktop Bots heal their own routines (spec: `docs/superpowers/specs/2026-10-27-bot-autonomy-design.md` §5).

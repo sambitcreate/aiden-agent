@@ -16,6 +16,10 @@ enum AidenBotSessionWire {
     static let maxReasonLength = 280
     static let maxEpochLength = 64
     static let maxSubmissionIDLength = 64
+    /// Revision 45: a shared image's name and its largest size (the Mac's inline image limit).
+    static let maxSharedImageNameLength = 255
+    static let maxSharedImageBytes = 8 * 1_048_576
+    static let sharedImageMIMETypes: Set<String> = ["image/png", "image/jpeg"]
 
     static func validateEntryID(_ value: String, field: String) throws {
         try AidenBotWire.validateIdentifier(value, field: field, maxLength: AidenRemoteProtocol.maxIdentifierLength)
@@ -230,6 +234,21 @@ struct AidenBotRoutineProposalCard: Equatable, Sendable {
     }
 }
 
+/// Contract revision 45 (`bot:images`): an image the Bot shared. The bytes are
+/// read from `GET /bots/{botId}/session/images/{id}`, never sent in the session.
+struct AidenBotSharedImage: Equatable, Sendable {
+    let id: String
+    let name: String
+    /// `image/png` or `image/jpeg`.
+    let mimeType: String
+    let size: Int
+
+    /// The image as the shared attachment viewer reads it.
+    var attachment: AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: name, mimeType: mimeType, kind: .image, size: size)
+    }
+}
+
 enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case message(AidenBotSessionMessage)
     case connectCard(AidenBotConnectCard)
@@ -239,11 +258,14 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
     case memoryUpdate(id: String, createdAt: AidenRemoteTimestamp?)
     /// Revision 27 (`bot:cards`): a routine the Bot suggested.
     case routineProposal(AidenBotRoutineProposalCard)
+    /// Revision 45 (`bot:images`): an image the Bot shared.
+    case sharedImage(AidenBotSharedImage)
 
     /// The entry types this client renders. A revision-27 client skips any
     /// other type instead of failing the whole session.
     static let knownTypes: Set<String> = [
         "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
+        "shared_image",
     ]
 
     var id: String {
@@ -254,6 +276,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case let .failedTurn(turn): turn.id
         case let .memoryUpdate(id, _): id
         case let .routineProposal(card): card.id
+        case let .sharedImage(image): image.id
         }
     }
 
@@ -377,6 +400,26 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
                 routineId: routineId,
                 createdAt: try AidenBotWire.optional(AidenRemoteTimestamp.self, from: values, forKey: .createdAt)
             ))
+        case "shared_image":
+            try AidenBotWire.requireOnlyKeys(decoder, allowed: ["type", "id", "name", "mimeType", "size"])
+            let mimeType = try values.decode(String.self, forKey: .mimeType)
+            guard AidenBotSessionWire.sharedImageMIMETypes.contains(mimeType) else {
+                throw AidenBotContractError.invalidField("mimeType")
+            }
+            let size = try values.decode(Int.self, forKey: .size)
+            guard (1...AidenBotSessionWire.maxSharedImageBytes).contains(size) else {
+                throw AidenBotContractError.invalidField("size")
+            }
+            self = .sharedImage(AidenBotSharedImage(
+                id: id,
+                name: try AidenBotWire.requiredString(
+                    values,
+                    forKey: .name,
+                    maxLength: AidenBotSessionWire.maxSharedImageNameLength
+                ),
+                mimeType: mimeType,
+                size: size
+            ))
         default:
             throw AidenBotContractError.invalidField("entry.type")
         }
@@ -425,6 +468,12 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
             try values.encode(card.status, forKey: .status)
             try values.encodeIfPresent(card.routineId, forKey: .routineId)
             try values.encodeIfPresent(card.createdAt, forKey: .createdAt)
+        case let .sharedImage(image):
+            try values.encode("shared_image", forKey: .type)
+            try values.encode(image.id, forKey: .id)
+            try values.encode(image.name, forKey: .name)
+            try values.encode(image.mimeType, forKey: .mimeType)
+            try values.encode(image.size, forKey: .size)
         }
     }
 
@@ -432,6 +481,7 @@ enum AidenBotSessionEntry: Codable, Equatable, Identifiable, Sendable {
         case type, id, role, text, createdAt, label, interrupted, submissionId
         case pluginId, name, iconId, reason, status, notice, retryText
         case proposalId, prompt, routineId
+        case mimeType, size
     }
 }
 

@@ -7,9 +7,11 @@ import { readAidenHelp } from "./aiden-app-knowledge.js";
 import type { AppControlsService, AppControlContext } from "./app-controls-core.js";
 import {
   APP_CONTROL_TOPICS,
+  REMOTE_APP_CONTROL_TOPICS,
   parseAppControlOperation,
   isAppControlTopic,
   type AppControlPanel,
+  type AppControlTopic,
 } from "../../renderer/shared/app-controls.js";
 
 export function createAidenAppTools(options: {
@@ -67,11 +69,19 @@ export function createAidenAppTools(options: {
         description:
           "Show real interactive settings in chat. Use when users ask to see settings or how to configure a feature. Displaying a panel changes nothing.",
         parameters: Type.Object({
-          topic: Type.Union(APP_CONTROL_TOPICS.map((topic) => Type.Literal(topic))),
+          // A phone chat can show only the cards phones understand.
+          topic: Type.Union(
+            (options.liveState === false
+              ? APP_CONTROL_TOPICS.filter((topic) => REMOTE_APP_CONTROL_TOPICS.has(topic))
+              : APP_CONTROL_TOPICS
+            ).map((topic) => Type.Literal(topic)),
+          ),
         }),
         execute: async (_id, p, signal) => {
           if (
             !isAppControlTopic((p as Record<string, unknown>).topic) ||
+            (options.liveState === false &&
+              !REMOTE_APP_CONTROL_TOPICS.has((p as Record<string, unknown>).topic as AppControlTopic)) ||
             signal?.aborted ||
             !options.context.isCurrent()
           )
