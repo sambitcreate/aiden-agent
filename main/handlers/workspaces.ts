@@ -148,6 +148,11 @@ const gitRepoWatcher = new GitRepoWatcher({
   notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
 });
 
+/** Closes every Git metadata watcher; called once at quit. */
+export function disposeWorkspaceGitWatchers(): void {
+  gitRepoWatcher.dispose();
+}
+
 function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefined): void {
   if (!resolved) return;
   void gitRepoWatcher.observe(resolved.workspace.id, resolved.folderPath);
