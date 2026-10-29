@@ -18,6 +18,11 @@ export interface BoundedShellCommandResult {
   timedOut: boolean;
   outputLimitExceeded: boolean;
   aborted: boolean;
+  /**
+   * True when the shell exited but something it started still held the output
+   * pipe after the drain window, so that process group was stopped.
+   */
+  backgroundStopped: boolean;
 }
 
 // SIGTERM first; anything still in the group a second later gets SIGKILL.
@@ -39,7 +44,7 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
   const { signal } = options;
   if (signal?.aborted) {
     // Cancelled before it started: nothing runs.
-    return { stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true };
+    return { stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true, backgroundStopped: false };
   }
   const child = spawn(options.command, {
     cwd: options.cwd,
@@ -80,7 +85,7 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
   timeout.unref?.();
 
   try {
-    const { code } = await waitForChildExit(child, {
+    const { code, pipesHeld } = await waitForChildExit(child, {
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
@@ -91,6 +96,9 @@ export async function runBoundedShellCommand(options: BoundedShellCommandOptions
       timedOut,
       outputLimitExceeded,
       aborted,
+      // Only a group stopped because of the drain counts; a timeout, the cap or
+      // an abort already explains itself.
+      backgroundStopped: pipesHeld && !timedOut && !outputLimitExceeded && !aborted,
     };
   } finally {
     clearTimeout(timeout);

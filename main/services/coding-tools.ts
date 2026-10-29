@@ -37,6 +37,10 @@ const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
 const MAX_COMMAND_OUTPUT_BYTES = 10 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 120_000;
+// run_command stops anything that still holds its output a second after the
+// shell exits; say so, so the model does not assume a server is running.
+const BACKGROUND_STOPPED_NOTE =
+  "Note: background processes still holding the output were stopped 1 s after the command exited. Use background_job to keep something running, or redirect its output (`> file 2>&1 &`).";
 const MAX_LIST_ENTRIES = 500;
 const MAX_LIST_SCAN_ENTRIES = 10_000;
 const MAX_GLOB_MATCHES = 500;
@@ -2081,7 +2085,8 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
-      const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const combined = result.backgroundStopped ? [output, BACKGROUND_STOPPED_NOTE].filter(Boolean).join("\n\n") : output;
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

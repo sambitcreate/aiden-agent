@@ -1693,7 +1693,12 @@ test("run_command returns when a background job keeps the shell's output pipe op
     const result = await runCommand.execute("held", { command: "sleep 30 &\necho $! > job.pid\necho done" });
     assert.ok(Date.now() - startedAt < 10_000, "the command must not wait for the 30 s job");
     assert.notEqual(result.isError, true);
-    assert.match(result.content[0].type === "text" ? result.content[0].text : "", /done/u);
+    const text = result.content[0].type === "text" ? result.content[0].text : "";
+    assert.match(text, /done/u);
+    assert.match(text, /background processes still holding the output were stopped/u, "the model must learn the job was stopped");
+    // A command with nothing left in the background gets no note.
+    const detached = await runCommand.execute("detached", { command: "echo plain" });
+    assert.doesNotMatch(detached.content[0].type === "text" ? detached.content[0].text : "", /were stopped/u);
     background = Number(await fs.readFile(path.join(root, "job.pid"), "utf8"));
     let alive = true;
     try { process.kill(background, 0); } catch { alive = false; }

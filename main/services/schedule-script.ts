@@ -38,6 +38,11 @@ export interface ScriptProcessResult {
   timedOut: boolean;
   outputLimitExceeded: boolean;
   aborted: boolean;
+  /**
+   * True when the script exited but something it started still held its output
+   * a second later, so that process group was stopped.
+   */
+  backgroundStopped: boolean;
 }
 
 async function existingScriptInRoot(root: string, script: string): Promise<string | null> {
@@ -139,6 +144,7 @@ export async function runScheduledScript(
       timedOut: false,
       outputLimitExceeded: false,
       aborted: true,
+      backgroundStopped: false,
     };
   }
   const child = spawn(command, args, {
@@ -180,7 +186,7 @@ export async function runScheduledScript(
   timeout.unref?.();
 
   try {
-    const { code, signal } = await waitForChildExit(child, {
+    const { code, signal, pipesHeld } = await waitForChildExit(child, {
       drainMs: PIPE_DRAIN_MS,
       onPipesHeld: () => terminator.terminate(),
     });
@@ -192,6 +198,7 @@ export async function runScheduledScript(
       timedOut,
       outputLimitExceeded,
       aborted,
+      backgroundStopped: pipesHeld && !timedOut && !outputLimitExceeded && !aborted,
     };
   } finally {
     clearTimeout(timeout);

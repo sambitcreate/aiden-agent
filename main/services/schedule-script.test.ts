@@ -87,6 +87,7 @@ test("script runner maps stdout, nonzero exit, timeout, output bounds, and cance
     const success = await runScheduledScript(ok, { cwd: files.root });
     assert.equal(success.stdout, "hello");
     assert.equal(success.exitCode, 0);
+    assert.equal(success.backgroundStopped, false);
     const failure = await runScheduledScript(fail, { cwd: files.root });
     assert.equal(failure.exitCode, 7);
     assert.equal(failure.stderr, "bad");
@@ -141,6 +142,7 @@ test("a script that leaves a background job on its output still finishes", async
     assert.equal(result.exitCode, 0);
     assert.equal(result.timedOut, false);
     assert.equal(result.stdout.trim(), "started");
+    assert.equal(result.backgroundStopped, true, "the caller learns the background job was stopped");
   } finally {
     await files.cleanup();
   }
