@@ -70,11 +70,14 @@ export function bytesToBase64(bytes: Uint8Array): string {
  * Continuous linear resampler that emits exact 100 ms PCM16 LE chunks. Output
  * samples are written into one preallocated chunk, and only the last input
  * sample is carried between pushes, so steady capture does not grow arrays.
+ * Positions are counted in integer ticks (one input sample is
+ * TARGET_SAMPLE_RATE ticks, one output step is `sourceRate` ticks), so a
+ * 44.1 kHz source does not drift the way a summed float step would.
  */
 export class Pcm16ChunkEncoder {
   /** The last input sample of the previous push, or null before any audio. */
   private carry: number | null = null;
-  /** Position of the next output sample, relative to `carry` (index 0). */
+  /** Position of the next output sample, in ticks, relative to `carry` (index 0). */
   private position = 0;
   private readonly pending = new Float32Array(TARGET_CHUNK_SAMPLES);
   private filled = 0;
@@ -92,27 +95,28 @@ export class Pcm16ChunkEncoder {
     const offset = this.carry === null ? 0 : 1;
     const length = samples.length + offset;
     const at = (index: number) => (index < offset ? (this.carry as number) : samples[index - offset]);
-    const step = this.sourceRate / TARGET_SAMPLE_RATE;
-    while (this.position + 1 < length) {
-      const left = Math.floor(this.position);
-      const fraction = this.position - left;
+    const tick = TARGET_SAMPLE_RATE;
+    const lastTick = (length - 1) * tick;
+    while (this.position < lastTick) {
+      const left = Math.floor(this.position / tick);
+      const fraction = (this.position - left * tick) / tick;
       this.pending[this.filled] = at(left) * (1 - fraction) + at(left + 1) * fraction;
       this.filled += 1;
       if (this.filled === TARGET_CHUNK_SAMPLES) {
         chunks.push(pcm16Bytes(this.pending));
         this.filled = 0;
       }
-      this.position += step;
+      this.position += this.sourceRate;
     }
     // Keep only the last sample; the next output always lies at or after it.
-    this.position -= length - 1;
+    this.position -= lastTick;
     this.carry = samples[samples.length - 1];
     return chunks;
   }
 
   flush(): Uint8Array[] {
     // The carried sample is the final input; emit it unless the next output already lies past it.
-    if (this.carry !== null && this.position < 1) this.pending[this.filled++] = this.carry;
+    if (this.carry !== null && this.position < TARGET_SAMPLE_RATE) this.pending[this.filled++] = this.carry;
     this.carry = null;
     this.position = 0;
     const chunks: Uint8Array[] = [];

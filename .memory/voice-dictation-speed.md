@@ -99,7 +99,8 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   injectable), then one more bounded wait. `acquire` forks only after all retirements settle, so two native models
   are never resident. Model delete runs release + file removal inside the speech lane (a queued warm-up can't reload
   mid-delete) and retires a worker whose load failed part-way. An engine status probe that forked a worker only for
-  itself retires it afterwards. `shutDown()` stays synchronous (no change to main/index.ts sequencing).
+  itself retires it afterwards. `shutDown()` stays synchronous (no change to main/index.ts sequencing). A launch
+  whose generation was retired while it waited for an old worker to exit throws before `fork()` (review follow-up).
 - Downloads (093c9ea5c): the stall timer pauses while the write stream drains (slow/full disk no longer reads as a
   network stall; cancel ends the wait); tar failures map to the disk message (ENOSPC, quota) or plain retry advice.
   Linux GlobalShortcuts portal ignores unknown informational event types; fails only on error/close or a known event
@@ -118,6 +119,8 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
 - Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
   while the live transcript or a hint hides the bars (scaleY/clip-path were rejected: they squash the rounded caps).
   The capture worklet and the PCM16 encoder fill preallocated chunks; the encoder keeps its fractional offset across
-  pushes, so output no longer depends on how input was split.
+  pushes, so output no longer depends on how input was split. Positions are integer ticks (input sample =
+  16000 ticks, step = sourceRate ticks): the float step drifted at 44.1 kHz (30 s emitted 480001 samples).
+  The disk-wait in the download loop (stall timer paused during `drain`) still has no upper bound; noted in the PR.
 - Skipped: one shared AudioContext for pcm-recorder, analyser and live-pcm-capture (shared Live code, high risk for a
   LOW item); the CLI speech host's dispose is left to its owner.

@@ -193,3 +193,21 @@ test("PCM encoder output does not depend on how the input was split", () => {
   // Every chunk before the last is exactly 100 ms.
   assert.ok(pieces.slice(0, -1).every((chunk) => chunk.byteLength === 3_200));
 });
+
+test("PCM encoder lands exactly on shared 44.1 kHz instants for the whole of a long capture", () => {
+  // 441 input samples span exactly 160 output samples, so every 160th output is
+  // an input sample itself, however long the capture runs and however it is split.
+  const seconds = 30;
+  const input = Float32Array.from({ length: 44_100 * seconds }, (_, index) => Math.sin(index / 7) * 0.9);
+  const encoder = new Pcm16ChunkEncoder(44_100);
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < input.length; offset += 4_410) chunks.push(...encoder.push(input.subarray(offset, offset + 4_410)));
+  chunks.push(...encoder.flush());
+  const values = chunks.flatMap(decode);
+
+  assert.equal(values.length, 16_000 * seconds);
+  for (let output = 0, source = 0; output < values.length; output += 160, source += 441) {
+    const sample = input[source];
+    assert.equal(values[output], sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7fff), `output ${output}`);
+  }
+});
