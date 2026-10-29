@@ -6,6 +6,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { rememberRoute } from "../../lib/bot-routes";
+import { useCommandSystem } from "../../lib/command-system";
+import type { CommandId } from "../../shared/keybindings";
 import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
@@ -769,4 +771,57 @@ test("opening another Bot redraws only the two rows whose selection changed", as
   await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
   await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(rowRenders() - before, 2, "Planner and Scout, not every row");
+});
+
+test("the chat keys work for Bots too: ⌘1–9 open the Bot on that row, ⇧⌘[ and ⇧⌘] the one above or below", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
+    "bot-1": summary("bot-1", { updatedAt: 100 }),
+    "bot-2": summary("bot-2", { updatedAt: 300 }),
+    "bot-3": summary("bot-3", { updatedAt: 200 }),
+  });
+  let run: (commandId: CommandId) => boolean = () => false;
+  function Commands() {
+    run = useCommandSystem().execute;
+    return null;
+  }
+  const { router } = await mountWithBotRouter(null, {
+    initialPath: "/bots",
+    sidebar: (
+      <>
+        <Commands />
+        <BotSidebar />
+      </>
+    ),
+  });
+  await waitFor(() => assert.deepEqual(rowOrder(), ["Inbox Helper", "Scout", "Planner"]));
+  const at = () => router.state.location.pathname;
+
+  act(() => void run("chat.jump.3"));
+  // The third row is Planner.
+  await waitFor(() => assert.equal(at(), "/bots/bot-1/chat"));
+  act(() => void run("chat.previous"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-3/chat"));
+  act(() => void run("chat.previous"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-2/chat"));
+  act(() => void run("chat.next"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-3/chat"));
+  assert.equal(run("chat.jump.4"), false, "no fourth Bot, so nothing to open");
+});
+
+test("the Bot list is one Tab stop on the open Bot, and ↓ and Home move between rows", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
+    "bot-1": summary("bot-1", { updatedAt: 100 }),
+    "bot-2": summary("bot-2", { updatedAt: 300 }),
+    "bot-3": summary("bot-3", { updatedAt: 200 }),
+  });
+  await mountSidebar("/bots/bot-3/chat");
+  await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
+  const stops = () =>
+    ["Inbox Helper", "Scout", "Planner"].filter((name) => rowButton(name).getAttribute("tabindex") !== "-1");
+  await waitFor(() => assert.deepEqual(stops(), ["Scout"]));
+  rowButton("Scout").focus();
+  fireEvent.keyDown(rowButton("Scout"), { key: "ArrowDown" });
+  assert.equal(document.activeElement, rowButton("Planner"));
+  fireEvent.keyDown(rowButton("Planner"), { key: "Home" });
+  assert.equal(document.activeElement, rowButton("Inbox Helper"));
 });

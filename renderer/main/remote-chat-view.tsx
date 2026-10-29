@@ -83,6 +83,7 @@ import {
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { isToolStep } from "../shared/generation-timeline";
+import { useChatFind } from "../components/chat-find-bar";
 
 /**
  * `/host/$hostId/chat/$chatId`: a chat that lives on a paired host, read,
@@ -368,6 +369,7 @@ export function RemoteChatPane({
   const approvals = live && run ? run.approvals : [];
   const questions = live && run ? run.questions : [];
   const runId = live ? (run?.runId ?? null) : null;
+  const findBar = useChatFind(snapshot ? `${snapshot.hostId}/${snapshot.chatId}` : `${host.id}/pending`);
 
   const control = chat?.control ?? null;
   const state: ChatSessionSnapshot | null = chat?.snapshot ?? null;
@@ -680,6 +682,8 @@ export function RemoteChatPane({
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={

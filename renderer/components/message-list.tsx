@@ -542,7 +542,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     [messageAttachments, messageTimeline, storedImagePlacements],
   );
   const row = (
-    <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
+    <div data-transcript-reply={assistant ? "" : undefined} className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
       ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
       {live ? (
         <AssistantResponse {...live} streaming />

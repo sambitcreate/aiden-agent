@@ -32,6 +32,16 @@ import { BotRowMenus, useBotMenuActions, type BotMenuAction } from "./bot-menu";
 import { botRowLine, matchesBotSearch, useBotRows, type BotSidebarRow } from "./bot-sidebar-rows";
 import { useBotSidebarPreferences } from "./use-bot-sidebar-preferences";
 import { pauseWhenUnseen } from "../../lib/offscreen-pause";
+import { useCommandSystem } from "../../lib/command-system";
+import { useRovingRows } from "../../lib/roving-rows";
+import {
+  COMMAND_CHAT_SHORTCUT_LIMIT,
+  COMMAND_CHAT_SHORTCUT_REVEAL_MS,
+  chatShortcutRevealModifierSets,
+  sidebarChatNavigationTargets,
+} from "../../lib/sidebar-chat-shortcuts";
+import { useHeldModifierReveal } from "../../lib/use-held-modifier-reveal";
+import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../../shared/keybindings";
 
 const ROW_FOCUS =
   "outline-none focus-visible:bg-list-selection focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring";
@@ -48,6 +58,10 @@ interface RowProps {
   selected: boolean;
   unread: boolean;
   pinned: boolean;
+  /** This row's ⌘1–9 key, if it has one. */
+  shortcut: string | null;
+  /** Show the key on the row, while ⌘ is held. */
+  shortcutShown: boolean;
   onOpen(bot: BotDefinition): void;
   onAction(bot: BotDefinition, action: BotMenuAction, returnFocus?: HTMLElement | null): void;
 }
@@ -64,6 +78,8 @@ function sameRowProps(previous: RowProps, next: RowProps): boolean {
     previous.selected === next.selected &&
     previous.unread === next.unread &&
     previous.pinned === next.pinned &&
+    previous.shortcut === next.shortcut &&
+    previous.shortcutShown === next.shortcutShown &&
     previous.onOpen === next.onOpen &&
     previous.onAction === next.onAction
   );
@@ -76,32 +92,59 @@ function UnreadDot() {
   );
 }
 
+/** The row's ⌘ number while ⌘ is held, where its ••• button sits. */
+function ShortcutHint({ binding, className }: { binding: string; className: string }) {
+  return (
+    <kbd
+      aria-hidden="true"
+      data-chat-shortcut-hint="true"
+      className={cn(
+        "pointer-events-none absolute inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary",
+        className,
+      )}
+    >
+      {prettyAccelerator(binding)}
+    </kbd>
+  );
+}
+
 const NeedsYouBadge = () => (
   <Badge color="warning" className="h-5 shrink-0 px-1.5 text-mini">
     Needs you
   </Badge>
 );
 
-const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpen, onAction }: RowProps) {
+const BotRow = React.memo(function BotRow({
+  row,
+  selected,
+  unread,
+  pinned,
+  shortcut,
+  shortcutShown,
+  onOpen,
+  onAction,
+}: RowProps) {
   const line = botRowLine(row);
   const lineId = React.useId();
   const rowRef = React.useRef<HTMLButtonElement>(null);
   return (
-    <li className="group relative">
+    <li data-roving-row className="group relative">
       <BotRowMenus
         bot={row.bot}
         pinned={pinned}
         paused={row.state?.kind === "paused"}
         rowRef={rowRef}
-        moreClassName="right-1.5 top-1/2 -translate-y-1/2"
+        moreClassName={cn("right-1.5 top-1/2 -translate-y-1/2", shortcutShown && shortcut && "invisible")}
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
       >
         <button
           ref={rowRef}
           type="button"
           data-bot-row={row.bot.id}
+          data-roving-item
           aria-current={selected ? "page" : undefined}
           aria-describedby={line ? lineId : undefined}
+          aria-keyshortcuts={ariaKeyShortcut(shortcut)}
           className={cn(
             "flex w-full min-w-0 items-center gap-2.5 rounded-control py-1.5 pl-2 pr-9 text-left transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover motion-reduce:transition-none",
             ROW_FOCUS,
@@ -149,11 +192,22 @@ const BotRow = React.memo(function BotRow({ row, selected, unread, pinned, onOpe
           </span>
         </button>
       </BotRowMenus>
+      {shortcutShown && shortcut ? (
+        <ShortcutHint binding={shortcut} className="right-1.5 top-1/2 -translate-y-1/2" />
+      ) : null}
     </li>
   );
 }, sameRowProps);
 
-const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen, onAction }: RowProps) {
+const PinnedBot = React.memo(function PinnedBot({
+  row,
+  selected,
+  unread,
+  shortcut,
+  shortcutShown,
+  onOpen,
+  onAction,
+}: RowProps) {
   const rowRef = React.useRef<HTMLButtonElement>(null);
   const lineId = React.useId();
   // The hero shows no preview; like the rows, it says when the Bot is working
@@ -161,21 +215,23 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
   const line = botRowLine(row);
   const description = line && (line.kind === "working" || line.kind === "status") ? line.text : null;
   return (
-    <section aria-label="Pinned Bot" className="group relative mb-2">
+    <section aria-label="Pinned Bot" data-roving-row className="group relative mb-2">
       <BotRowMenus
         bot={row.bot}
         pinned
         paused={row.state?.kind === "paused"}
         rowRef={rowRef}
-        moreClassName="right-1.5 top-1.5"
+        moreClassName={cn("right-1.5 top-1.5", shortcutShown && shortcut && "invisible")}
         onAction={(action, returnFocus) => onAction(row.bot, action, returnFocus)}
       >
         <button
           ref={rowRef}
           type="button"
           data-bot-row={row.bot.id}
+          data-roving-item
           aria-current={selected ? "page" : undefined}
           aria-describedby={description ? lineId : undefined}
+          aria-keyshortcuts={ariaKeyShortcut(shortcut)}
           className={cn(
             "flex w-full min-w-0 flex-col items-center gap-2 rounded-card px-3 py-3 transition-[background-color] duration-(--motion-duration) ease-standard hover:bg-list-hover motion-reduce:transition-none",
             ROW_FOCUS,
@@ -209,6 +265,7 @@ const PinnedBot = React.memo(function PinnedBot({ row, selected, unread, onOpen,
           ) : null}
         </button>
       </BotRowMenus>
+      {shortcutShown && shortcut ? <ShortcutHint binding={shortcut} className="right-1.5 top-2" /> : null}
     </section>
   );
 }, sameRowProps);
@@ -258,6 +315,8 @@ export function BotSidebar() {
   const searchButtonRef = React.useRef<HTMLButtonElement>(null);
   const newBotRef = React.useRef<HTMLButtonElement>(null);
   const navRef = React.useRef<HTMLElement>(null);
+  // The Bot list takes one Tab stop; arrow keys move between its rows.
+  useRovingRows(navRef);
   const [creating, setCreating] = React.useState(false);
   const [deleting, setDeleting] = React.useState<{ bot: BotDefinition; neighbours: string[] } | null>(null);
   // The rows in the order they are on screen: the pinned Bot first, then the list.
@@ -289,6 +348,34 @@ export function BotSidebar() {
   visibleIdsRef.current = [...(pinnedRow ? [pinnedRow.bot.id] : []), ...visible.map((row) => row.bot.id)];
   const remoteShown = remoteBotGroupsMatching(remote.groups, query);
   const openChat = React.useCallback((bot: BotDefinition) => void navigate(botChatPath(bot.id)), [navigate]);
+  // ⌘1–9 and ⇧⌘[ / ⇧⌘] follow the rows on screen, as in the chat sidebar;
+  // Bots on a paired Mac have no number, like chats there.
+  const orderedBots = [...(pinnedRow ? [pinnedRow] : []), ...visible].map((row) => row.bot);
+  // Rows are rebuilt on every render; only which Bots are listed, in what order, re-registers the keys.
+  const orderKey = orderedBots.map((bot) => bot.id).join("\n");
+  const orderedBotsRef = React.useRef(orderedBots);
+  orderedBotsRef.current = orderedBots;
+  const { binding: commandBinding, register: registerCommand } = useCommandSystem();
+  const jumpBindings = Array.from({ length: COMMAND_CHAT_SHORTCUT_LIMIT }, (_, index) =>
+    commandBinding(`chat.jump.${index + 1}` as CommandId),
+  );
+  const shortcutsShown = useHeldModifierReveal(
+    chatShortcutRevealModifierSets(jumpBindings),
+    COMMAND_CHAT_SHORTCUT_REVEAL_MS,
+  );
+  const shortcutByBotId = new Map(
+    orderedBots.slice(0, COMMAND_CHAT_SHORTCUT_LIMIT).map((bot, index) => [bot.id, jumpBindings[index] ?? null]),
+  );
+  React.useEffect(() => {
+    const ordered = orderedBotsRef.current;
+    const unregister = ordered
+      .slice(0, COMMAND_CHAT_SHORTCUT_LIMIT)
+      .map((bot, index) => registerCommand(`chat.jump.${index + 1}` as CommandId, () => openChat(bot)));
+    const { previous, next } = sidebarChatNavigationTargets(ordered, currentBotId ?? undefined);
+    if (previous) unregister.push(registerCommand("chat.previous", () => openChat(previous)));
+    if (next) unregister.push(registerCommand("chat.next", () => openChat(next)));
+    return () => unregister.forEach((dispose) => dispose());
+  }, [currentBotId, openChat, orderKey, registerCommand]);
   const closeSearch = () => {
     setQuery("");
     setSearchOpen(false);
@@ -312,6 +399,8 @@ export function BotSidebar() {
     selected: row.bot.id === currentBotId,
     unread: row.bot.id !== currentBotId && isBotUnread(preferences, row.bot.id, row.lastReplyAt),
     pinned: row.bot.id === pinnedBotId,
+    shortcut: shortcutByBotId.get(row.bot.id) ?? null,
+    shortcutShown: shortcutsShown,
     onOpen: openChat,
     onAction: act,
   });
