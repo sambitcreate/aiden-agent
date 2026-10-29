@@ -140,7 +140,13 @@ test("a workspace that can't have a worktree is refused before anything is made"
 });
 
 test("a chat's finished setup is only the worktree New worktree made for that chat", async () => {
-  const managedWorktree = { repositoryPath: "/r", worktreePath: "/w", branch: "aiden/fix", createdFromHead: "abc" };
+  const managedWorktree = {
+    repositoryPath: "/r",
+    worktreePath: "/w",
+    branch: "aiden/fix",
+    createdFromHead: "abc",
+    ownershipToken: "token",
+  };
   const inWorktree = { workspace: { ...site, id: "site-worktree", managedWorktree } };
   const made = { [phoneChatWorktreeKey("chat-1")]: { state: "ready" as const, workspaceId: "site-worktree" } };
   assert.equal(await harness({ ...inWorktree, records: made }).service.worktreeBranch("chat-1", "site-worktree"), "aiden/fix");
@@ -153,8 +159,22 @@ test("a chat's finished setup is only the worktree New worktree made for that ch
   assert.equal(
     await harness({ ...inWorktree, records: { [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" } } })
       .service.worktreeBranch("chat-1", "site-worktree"),
+    "aiden/fix",
+    "saved, though its last ledger write failed",
+  );
+  assert.equal(
+    await harness({
+      workspace: { ...site, id: "site-worktree", managedWorktree: { ...managedWorktree, ownershipToken: "another" } },
+      records: { [phoneChatWorktreeKey("chat-1")]: { state: "pending", workspaceId: "site-worktree" } },
+    }).service.worktreeBranch("chat-1", "site-worktree"),
     undefined,
-    "an attempt that never finished",
+    "a worktree at that id that this attempt did not save",
+  );
+  assert.equal(
+    await harness({ ...inWorktree, records: { [phoneChatWorktreeKey("chat-1")]: { state: "failed", workspaceId: "site-worktree" } } })
+      .service.worktreeBranch("chat-1", "site-worktree"),
+    undefined,
+    "a failed attempt",
   );
   assert.equal(
     await harness({ records: made }).service.worktreeBranch("chat-1", "site"),

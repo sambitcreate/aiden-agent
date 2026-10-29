@@ -62,13 +62,19 @@ export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktr
   return {
     /**
      * The branch of the worktree an earlier New worktree made for this chat,
-     * when the chat's workspace is that worktree. Any other worktree, even a
+     * when the chat's workspace is that worktree: the coordinator's record
+     * names it and the saved workspace carries the same branch and ownership
+     * token. A record still `pending` counts once its workspace was saved (the
+     * last ledger write can fail after the save). Any other worktree, even a
      * managed one, is not this chat's setup.
      */
     async worktreeBranch(chatId: string, workspaceId: string): Promise<string | undefined> {
       const record = await dependencies.record(phoneChatWorktreeKey(chatId));
-      if (record?.state !== "ready" || record.workspaceId !== workspaceId) return undefined;
-      return (await dependencies.getWorkspace(workspaceId))?.managedWorktree?.branch;
+      if (!record || record.state === "failed" || record.workspaceId !== workspaceId) return undefined;
+      const managed = (await dependencies.getWorkspace(workspaceId))?.managedWorktree;
+      return managed && managed.branch === record.branch && managed.ownershipToken === record.ownershipToken
+        ? managed.branch
+        : undefined;
     },
     async create(
       deviceId: string,
