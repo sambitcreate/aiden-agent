@@ -1,5 +1,9 @@
 // Installs happy-dom and the fake IPC bridge; must stay the first import.
-import { emitBotTestNotification, installBotTestIpc, type BotTestIpcCall } from "../main/bots/test-dom";
+import {
+  emitBotTestNotification,
+  installBotTestIpc,
+  type BotTestIpcCall,
+} from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import * as React from "react";
@@ -14,10 +18,19 @@ import { applyKeybindingMutation, effectiveBindings, type CommandId } from "../s
 
 let calls: BotTestIpcCall[] = [];
 
-function install(overrides = applyKeybindingMutation(undefined, { commandId: "chat.find", binding: "Command+Shift+G" })) {
+function install(
+  overrides = applyKeybindingMutation(undefined, {
+    commandId: "chat.find",
+    binding: "Command+Shift+G",
+  }),
+) {
   calls = installBotTestIpc({
     "shortcut:get": () => ({ overrides, effective: effectiveBindings(overrides), global: [] }),
-    "shortcut:setRecording": () => ({ overrides, effective: effectiveBindings(overrides), global: [] }),
+    "shortcut:setRecording": () => ({
+      overrides,
+      effective: effectiveBindings(overrides),
+      global: [],
+    }),
     "app:setMenuCommands": () => true,
   });
 }
@@ -76,8 +89,12 @@ test("Esc closes the list and gives focus back to the message box", async () => 
   message.focus();
   await waitFor(() => assert.equal(run("shortcuts.show"), true));
   const dialog = await screen.findByRole("dialog", { name: "Keyboard shortcuts" });
-  fireEvent.keyDown(within(dialog).getByRole("searchbox", { name: "Search keyboard shortcuts" }), { key: "Escape" });
-  await waitFor(() => assert.ok(!screen.queryByRole("dialog", { name: "Keyboard shortcuts" }), "closed"));
+  fireEvent.keyDown(within(dialog).getByRole("searchbox", { name: "Search keyboard shortcuts" }), {
+    key: "Escape",
+  });
+  await waitFor(() =>
+    assert.ok(!screen.queryByRole("dialog", { name: "Keyboard shortcuts" }), "closed"),
+  );
   assert.ok(document.activeElement === message, `focus is on ${document.activeElement?.tagName}`);
 });
 
@@ -116,7 +133,11 @@ test("Settings lists the built-in keys below the ones you can change, and its se
   fireEvent.change(screen.getByRole("searchbox", { name: "Search keyboard shortcuts" }), {
     target: { value: "approval" },
   });
-  assert.ok(within(screen.getByRole("heading", { name: "Built-in keys" }).closest("section")!).getByText("Allow once"));
+  assert.ok(
+    within(screen.getByRole("heading", { name: "Built-in keys" }).closest("section")!).getByText(
+      "Allow once",
+    ),
+  );
   assert.equal(screen.queryByText("Next / previous area"), null);
   queryClient.clear();
 });
@@ -146,7 +167,10 @@ test("the menu bar learns which commands can run now, and a menu key the page sa
   const { rerender } = render(app(true));
   await waitFor(() => assert.ok(menuCommandsSent()?.includes("chat.find")));
   rerender(app(false));
-  await waitFor(() => assert.equal(menuCommandsSent()?.includes("chat.find"), false), "greyed out once no chat can run it");
+  await waitFor(
+    () => assert.equal(menuCommandsSent()?.includes("chat.find"), false),
+    "greyed out once no chat can run it",
+  );
   rerender(app(true));
   await waitFor(() => assert.ok(menuCommandsSent()?.includes("chat.find")));
 

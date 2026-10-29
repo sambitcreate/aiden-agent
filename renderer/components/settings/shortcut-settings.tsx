@@ -401,7 +401,7 @@ export function ShortcutSettings() {
 
       {builtIn.length > 0 ? (
         <FieldSet title="Built-in keys">
-          <Text as="p" variant="small" color="secondary" className="px-4 pt-3.5">
+          <Text as="p" variant="small" color="secondary" className="px-4 pb-1 pt-3.5">
             These can’t be changed.
             {sheetBinding ? ` ${prettyAccelerator(sheetBinding)} lists every key at once.` : null}
           </Text>

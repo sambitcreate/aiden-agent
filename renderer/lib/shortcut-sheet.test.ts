@@ -19,7 +19,12 @@ test("the list groups keys as set, with ⌘1–⌘9 as one row and the built-in 
     sections.map((section) => section.title),
     ["General", "Moving around", "In a chat", "Workspace"],
   );
-  assert.deepEqual(row(sections, "Find in chat"), { section: "In a chat", id: "chat.find", title: "Find in chat", keys: ["Command+F"] });
+  assert.deepEqual(row(sections, "Find in chat"), {
+    section: "In a chat",
+    id: "chat.find",
+    title: "Find in chat",
+    keys: ["Command+F"],
+  });
   const jump = row(sections, "Open a chat by its number");
   assert.equal(jump?.range, true);
   assert.deepEqual(jump?.keys, ["Command+1", "Command+9"]);
@@ -31,8 +36,14 @@ test("the list groups keys as set, with ⌘1–⌘9 as one row and the built-in 
 });
 
 test("a changed key shows as changed, and a custom key for a number breaks the run into rows", () => {
-  let overrides = applyKeybindingMutation(undefined, { commandId: "chat.find", binding: "Command+Shift+G" });
-  overrides = applyKeybindingMutation(overrides, { commandId: "chat.jump.2", binding: "Command+Alt+2" });
+  let overrides = applyKeybindingMutation(undefined, {
+    commandId: "chat.find",
+    binding: "Command+Shift+G",
+  });
+  overrides = applyKeybindingMutation(overrides, {
+    commandId: "chat.jump.2",
+    binding: "Command+Alt+2",
+  });
   overrides = applyKeybindingMutation(overrides, { commandId: "chat.stop", disabled: true });
   const sections = shortcutSheet(effectiveBindings(overrides), { platform: "darwin" });
   assert.deepEqual(row(sections, "Find in chat")?.keys, ["Command+Shift+G"]);
@@ -48,22 +59,29 @@ test("a changed key shows as changed, and a custom key for a number breaks the r
 });
 
 test("a key given to a Studio command shows only while that Studio is on", () => {
-  const bindings = { ...defaults(), "design.open": "Command+Alt+D" } as Record<CommandId, string | null>;
+  const bindings = { ...defaults(), "design.open": "Command+Alt+D" } as Record<
+    CommandId,
+    string | null
+  >;
   assert.equal(row(shortcutSheet(bindings, { platform: "darwin" }), "Open Design Studio"), null);
   assert.equal(
-    row(shortcutSheet(bindings, { platform: "darwin", capabilities: { designStudio: true } }), "Open Design Studio")
-      ?.section,
+    row(
+      shortcutSheet(bindings, { platform: "darwin", capabilities: { designStudio: true } }),
+      "Open Design Studio",
+    )?.section,
     "Moving around",
   );
 });
 
 test("searching matches titles, conditions and the keys as shown on this computer", () => {
   const titles = (query: string, platform: "darwin" | "linux" = "darwin") =>
-    shortcutSheet(defaults(), { platform, query }).flatMap((section) => section.rows.map((entry) => entry.title));
+    shortcutSheet(defaults(), { platform, query }).flatMap((section) =>
+      section.rows.map((entry) => entry.title),
+    );
   assert.deepEqual(titles("F6"), ["Next / previous area"]);
   assert.ok(titles("⌘F").includes("Find in chat"));
   assert.ok(titles("ctrl+f", "linux").includes("Find in chat"));
-  assert.ok(titles("approval").includes("Allow once"), "words from when a key applies");
+  assert.deepEqual(titles("approval"), ["Allow once", "Deny"], "words from when a key applies");
   assert.ok(titles("⌘G").includes("Next / previous match"), "the other way to do it");
   assert.deepEqual(shortcutSheet(defaults(), { platform: "darwin", query: "zzz" }), []);
 });

@@ -5,6 +5,7 @@ import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { Dialog, Input, Text } from "./ui";
+import { cn } from "../lib/ui-utils";
 import { Kbd } from "./ui-primitives";
 import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -52,13 +53,15 @@ export function KeyCombo({
 export function KeyboardShortcutsDialog() {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const headingId = React.useId();
   const navigate = useNavigate();
   const { binding } = useCommandSystem();
   const capabilities = useAppCapabilities();
   // Esc gives focus back to where ⌘/ was pressed, such as the message box.
   const returnTo = React.useRef<HTMLElement | null>(null);
   useCommandHandler("shortcuts.show", () => {
-    returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnTo.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setOpen(true);
   });
@@ -66,7 +69,10 @@ export function KeyboardShortcutsDialog() {
   const platform = detectedKeyboardPlatform();
   const sections = React.useMemo(() => {
     if (!open) return [];
-    const bindings = Object.fromEntries(COMMAND_IDS.map((id) => [id, binding(id)])) as Record<CommandId, string | null>;
+    const bindings = Object.fromEntries(COMMAND_IDS.map((id) => [id, binding(id)])) as Record<
+      CommandId,
+      string | null
+    >;
     return shortcutSheet(bindings, { capabilities, platform, query });
   }, [binding, capabilities, open, platform, query]);
 
@@ -96,42 +102,54 @@ export function KeyboardShortcutsDialog() {
           className="h-full border-0 bg-transparent px-0 hover:border-0 focus:border-0 focus:bg-transparent"
         />
       </label>
-      {sections.length === 0 ? (
-        <Text as="p" role="status" color="secondary" className="py-8 text-center">
-          No keys match “{query.trim()}”.
-        </Text>
-      ) : (
-        <div className="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-          {sections.map((section) => (
-            <section key={section.title} aria-labelledby={`shortcut-sheet-${section.title}`} className="min-w-0">
-              <Text
-                as="h3"
-                id={`shortcut-sheet-${section.title}`}
-                variant="small-strong"
-                color="secondary"
-                className="mb-1.5 block"
+      {/* A steady height, so the dialog doesn't jump while the search narrows it. */}
+      <div className="min-h-[min(52vh,26rem)]">
+        {sections.length === 0 ? (
+          <Text as="p" role="status" color="secondary" className="py-8 text-center">
+            No keys match “{query.trim()}”.
+          </Text>
+        ) : (
+          <div className={cn("grid gap-x-8 gap-y-5", sections.length > 1 && "sm:grid-cols-2")}>
+            {sections.map((section, index) => (
+              <section
+                key={section.title}
+                aria-labelledby={`${headingId}-${index}`}
+                className="min-w-0"
               >
-                {section.title}
-              </Text>
-              <ul className="flex flex-col">
-                {section.rows.map((row) => (
-                  <li key={row.id} className="flex items-start justify-between gap-3 py-1.5">
-                    <div className="min-w-0">
-                      <Text as="p" variant="small">
-                        {row.title}
-                      </Text>
-                      {row.description ? (
-                        <p className="text-mini text-tertiary">{row.description}</p>
-                      ) : null}
-                    </div>
-                    <KeyCombo keys={row.keys} alsoKeys={row.alsoKeys} range={row.range} platform={platform} />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
+                <Text
+                  as="h3"
+                  id={`${headingId}-${index}`}
+                  variant="small-strong"
+                  color="secondary"
+                  className="mb-1.5 block"
+                >
+                  {section.title}
+                </Text>
+                <ul className="flex flex-col">
+                  {section.rows.map((row) => (
+                    <li key={row.id} className="flex items-start justify-between gap-3 py-1.5">
+                      <div className="min-w-0">
+                        <Text as="p" variant="small">
+                          {row.title}
+                        </Text>
+                        {row.description ? (
+                          <p className="text-mini text-tertiary">{row.description}</p>
+                        ) : null}
+                      </div>
+                      <KeyCombo
+                        keys={row.keys}
+                        alsoKeys={row.alsoKeys}
+                        range={row.range}
+                        platform={platform}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        )}
+      </div>
     </Dialog>
   );
 }

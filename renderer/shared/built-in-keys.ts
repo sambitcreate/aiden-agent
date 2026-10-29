@@ -98,7 +98,7 @@ export const BUILT_IN_KEYS: readonly BuiltInKey[] = [
   {
     id: "deny",
     title: "Deny",
-    description: "Under the same conditions as Allow once.",
+    description: "Turn down the waiting approval, under the same conditions as Allow once.",
     keys: ["Command+Backspace"],
     section: "In a chat",
   },

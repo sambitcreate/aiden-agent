@@ -52,7 +52,8 @@ const COMMAND_SECTION: Partial<Record<CommandId, SheetSectionTitle>> = {
 };
 
 const sectionOf = (id: CommandId, category: CommandCategory) =>
-  COMMAND_SECTION[id] ?? (id.startsWith("chat.jump.") ? "Moving around" : CATEGORY_SECTION[category]);
+  COMMAND_SECTION[id] ??
+  (id.startsWith("chat.jump.") ? "Moving around" : CATEGORY_SECTION[category]);
 
 const BUILT_IN_SECTION: Record<BuiltInKeySection, SheetSectionTitle> = {
   "Moving around": "Moving around",
@@ -73,14 +74,25 @@ export function shortcutSheet(
     query?: string;
   },
 ): ShortcutSheetSection[] {
-  const rows = new Map<SheetSectionTitle, ShortcutSheetRow[]>(SECTION_ORDER.map((title) => [title, []]));
+  const rows = new Map<SheetSectionTitle, ShortcutSheetRow[]>(
+    SECTION_ORDER.map((title) => [title, []]),
+  );
   const searchable = new Map<ShortcutSheetRow, string>();
-  const add = (section: SheetSectionTitle, row: ShortcutSheetRow, words: readonly string[] = []) => {
+  const add = (
+    section: SheetSectionTitle,
+    row: ShortcutSheetRow,
+    words: readonly string[] = [],
+  ) => {
     rows.get(section)!.push(row);
     const keys = [...row.keys, ...(row.alsoKeys ?? [])];
     searchable.set(
       row,
-      [row.title, row.description, ...words, ...keys.map((key) => prettyAcceleratorForPlatform(key, platform))]
+      [
+        row.title,
+        row.description,
+        ...words,
+        ...keys.map((key) => prettyAcceleratorForPlatform(key, platform)),
+      ]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase(),
@@ -97,12 +109,21 @@ export function shortcutSheet(
       if (command.id !== "chat.jump.1") continue;
       add(
         sectionOf(command.id, command.category),
-        { id: "chat.jump", title: "Open a chat by its number", keys: ["Command+1", "Command+9"], range: true },
+        {
+          id: "chat.jump",
+          title: "Open a chat by its number",
+          keys: ["Command+1", "Command+9"],
+          range: true,
+        },
         ["jump", "number", "chat", "bot"],
       );
       continue;
     }
-    add(sectionOf(command.id, command.category), { id: command.id, title: command.title, keys: [binding] }, command.keywords);
+    add(
+      sectionOf(command.id, command.category),
+      { id: command.id, title: command.title, keys: [binding] },
+      command.keywords,
+    );
   }
   for (const key of BUILT_IN_KEYS) {
     add(BUILT_IN_SECTION[key.section], {
