@@ -137,7 +137,14 @@ export function startBotHealth(): void {
   });
 }
 
-/** Resolves once the delivery flush and event routines it started have stopped too. */
+/** How long a stop waits for a flush or a cancelled run to be recorded. */
+const STOP_DEADLINE_MS = 3_000;
+
+/**
+ * Resolves once the delivery flush and event routines it started have stopped
+ * too: a flush still sending and every cancelled run recorded, or after
+ * {@link STOP_DEADLINE_MS} at most, so quitting never hangs on them.
+ */
 export async function stopBotHealth(): Promise<void> {
   preflight?.dispose();
   preflight = undefined;
@@ -147,11 +154,22 @@ export async function stopBotHealth(): Promise<void> {
   onResume = undefined;
   setBotRoutineAfterPersonFailure(undefined);
   // Awaited, so shutdown closes the stores only after nothing can still flush or rearm.
-  const stopped = await Promise.allSettled([
+  const stopped = Promise.allSettled([
     import("../bot-delivery/funnel-main.js").then(({ stopBotDeliveryFlush }) => stopBotDeliveryFlush()),
     import("../bot-routine-events/sources-main.js").then(({ stopBotEventRoutines }) => stopBotEventRoutines()),
   ]);
-  for (const result of stopped) {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timed_out">((resolve) => {
+    deadline = setTimeout(() => resolve("timed_out"), STOP_DEADLINE_MS);
+    deadline.unref?.();
+  });
+  const outcome = await Promise.race([stopped, timedOut]);
+  if (deadline) clearTimeout(deadline);
+  if (outcome === "timed_out") {
+    logger.warn("bots", "Bot background services were still stopping at the deadline; continuing shutdown.");
+    return;
+  }
+  for (const result of outcome) {
     if (result.status === "rejected") logger.warn("bots", "A Bot background service did not stop cleanly.", result.reason);
   }
 }

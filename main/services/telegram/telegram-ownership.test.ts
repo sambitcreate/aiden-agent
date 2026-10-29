@@ -40,6 +40,31 @@ test("a dead stale owner is quarantined and recovered", async () => {
   lease.release();
 });
 
+test("a lease left before the computer restarted is recovered even when its pid is reused", async () => {
+  const root = await tempRoot();
+  const directory = path.join(root, "telegram-owners");
+  await mkdir(directory, { recursive: true });
+  const BOOT = 1_000_000_000;
+  // This test's own pid is alive: the old owner's pid was reused after the restart.
+  await writeFile(path.join(directory, "work.json"), JSON.stringify({
+    pid: process.pid,
+    generation: "before-restart",
+    acquiredAt: BOOT - 86_400_000,
+    heartbeatAt: BOOT - 86_400_000 + 60_000,
+    bootAt: BOOT - 86_400_000,
+  }));
+  const lease = createTelegramOwnershipLease({ root: () => root, profile: "work", now: () => BOOT + 120_000, bootAt: () => BOOT, staleMs: 1_000 });
+  assert.deepEqual(lease.acquire(), { acquired: true, recovered: true });
+
+  // A live owner from this boot keeps its lease while it heartbeats.
+  const rival = createTelegramOwnershipLease({ root: () => root, profile: "work", now: () => BOOT + 120_500, bootAt: () => BOOT + 3_000, staleMs: 1_000 });
+  assert.equal(rival.acquire().acquired, false);
+  // Even with a late heartbeat, a live pid from this boot is not taken over.
+  const late = createTelegramOwnershipLease({ root: () => root, profile: "work", now: () => BOOT + 600_000, bootAt: () => BOOT + 3_000, staleMs: 1_000 });
+  assert.equal(late.acquire().acquired, false);
+  lease.release();
+});
+
 async function tempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-telegram-owner-"));
   roots.push(root);

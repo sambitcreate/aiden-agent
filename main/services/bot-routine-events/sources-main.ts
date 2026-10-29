@@ -4,15 +4,17 @@
 // webhook handler. Started once Bots are open, never during onboarding; at
 // start, watches only arm timers for their persisted next-check times.
 
-import { watch as fsWatch } from "node:fs";
+import { promises as fsPromises, watch as fsWatch } from "node:fs";
 import { BOT_WATCH_LIMITS } from "../../../renderer/shared/bot-routine-trigger.js";
 import { app, ipcMain, logger } from "../../platform.js";
-import { botRoutineRequestId, createBotRoutineExecutor } from "../scheduled-bot-routines.js";
+import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import { scheduleStore } from "../schedule-store.js";
 import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
-import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
+import { botOwnWrites } from "./own-writes.js";
+import { createBotEventRunner, eventRoutineRunStore } from "./runner.js";
+import { createBotEventRoutineStore } from "./store.js";
 import { createBotWatches } from "./watch.js";
 import { checkBotWatchSource } from "./watch-sources.js";
 import { createBotWebhookHandler } from "./webhook.js";
@@ -41,29 +43,11 @@ export function botEventRoutinesChanged(botId: string): void {
   ipcMain.broadcast("bots:eventRoutines:changed", { botId });
 }
 
-/** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
-export function eventRoutineTask(routine: BotEventRoutine): ScheduledTask {
-  return {
-    id: routine.id,
-    name: routine.name,
-    enabled: routine.enabled,
-    mode: "llm",
-    cron: "",
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    prompt: routine.prompt,
-    permission: "read-only",
-    notify: true,
-    botId: routine.botId,
-    createdAt: routine.createdAt,
-    updatedAt: routine.updatedAt,
-  } as ScheduledTask;
-}
-
 /** Event runs whose result didn't reach the delivery log yet: their receipt stays for replay. */
 const undelivered = new Set<string>();
 
 const executor = createBotRoutineExecutor({
-  store: scheduleStore,
+  store: eventRoutineRunStore(scheduleStore),
   ports: async () => (await import("../scheduled-bot-routines-main.js")).botRoutinePorts(),
   deliver: async (input) => {
     try {
@@ -143,36 +127,17 @@ export async function forgetBotEventRoutines(botId: string): Promise<void> {
  * cancels them; a cancelled event run is recorded as uncertain, so the event
  * is replayed on the next start instead of being lost.
  */
-const inFlight = new Set<AbortController>();
-/** Event routines whose own run is in progress; their folder changes are the Bot's own writes. */
-const runningRoutines = new Set<string>();
+const runner = createBotEventRunner({
+  executor,
+  undelivered: (requestId) => undelivered.has(requestId),
+  // The folder watch holds a routine's folder changes while it runs.
+  runStarted: (routine) => folders.runStarted(routine),
+  runEnded: (routine) => folders.runEnded(routine),
+});
 
 const dispatcher = createBotRoutineEventDispatcher({
   store: botEventRoutines,
-  run: async (routine, event) => {
-    const trigger = { kind: "event" as const, eventId: event.eventId, source: event.source, payload: event.payload };
-    // The event's own request id as the run id: a replay after a restart
-    // reads the recorded run or the admitted turn instead of sending again.
-    const requestId = botRoutineRequestId(routine.id, trigger);
-    const controller = new AbortController();
-    inFlight.add(controller);
-    runningRoutines.add(routine.id);
-    let run: ScheduledRun;
-    try {
-      run = await executor.run(eventRoutineTask(routine), {
-        trigger,
-        runId: requestId,
-        signal: controller.signal,
-      });
-    } finally {
-      inFlight.delete(controller);
-      runningRoutines.delete(routine.id);
-    }
-    // Only a run recorded under the event's own id, and handed to the
-    // delivery log, is settled; anything else is replayed on next start
-    // (the replay reads the saved run and only retries its delivery).
-    return { settled: run.id === requestId && !undelivered.has(requestId) };
-  },
+  run: (routine, event) => runner.run(routine, event),
   isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
   now: Date.now,
   timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -202,7 +167,11 @@ const folders = createBotFolderWatches({
     return { close: () => handle.close() };
   },
   dispatcher,
-  ownRun: (routine) => runningRoutines.has(routine.id),
+  wroteSince: (routine, absolutePath, since) => botOwnWrites.wroteSince(routine.botId, absolutePath, since),
+  stat: async (absolutePath) => {
+    const stats = await fsPromises.stat(absolutePath).catch(() => undefined);
+    return stats ? { mtimeMs: stats.mtimeMs, size: stats.size } : undefined;
+  },
   refused: (routine) => {
     if (refusedOnce.has(routine.id)) return;
     refusedOnce.add(routine.id);
@@ -297,15 +266,20 @@ export function startBotEventRoutines(): void {
   interval.unref?.();
 }
 
-export function stopBotEventRoutines(): void {
+/**
+ * Stops every trigger and cancels the runs in flight. Resolves once each
+ * cancelled run is recorded (as uncertain, so its event is replayed on the
+ * next start) and its receipt is written; the caller bounds the wait.
+ */
+export async function stopBotEventRoutines(): Promise<void> {
   started = false;
   if (interval) clearInterval(interval);
   interval = undefined;
   folders.dispose();
   watches.dispose();
   dispatcher.dispose();
-  for (const controller of inFlight) controller.abort();
-  inFlight.clear();
+  runner.abortAll();
+  await Promise.allSettled([dispatcher.idle(), folders.idle()]);
 }
 
 /** `POST /hooks/bot-routines/{token}`; only while Bots are open. */

@@ -533,6 +533,8 @@ interface HarnessOptions {
   assertBotBindingStoreHealthy?: import("./telegram-service-core.js").TelegramServiceDeps["assertBotBindingStoreHealthy"];
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
+  ensureThreadTargets?: (chatId: number) => Promise<void>;
+  forgetThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
   applyModelSelection?: (
     choice: import("./telegram-controls.js").TelegramModelChoice,
@@ -614,6 +616,8 @@ function harness(o: HarnessOptions = {}) {
     admitRunInput: o.admitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
+    ensureThreadTargets: o.ensureThreadTargets,
+    forgetThreadTargets: o.forgetThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
@@ -789,6 +793,42 @@ test("a new bot token polls from the new bot's updates, not the old bot's offset
   assert.equal(await runtime.getOffset(), undefined);
   assert.equal(service.getStatus().botUsername, "other_bot");
   assert.equal(service.getStatus().status, "polling");
+  service.stop();
+});
+
+test("a bot switch forgets the old bot's threads and provisions new ones, keeping the pairing", async (t) => {
+  const runtime = await runtimeConfig(t);
+  await runtime.adoptBot(BOT.id);
+  // The thread map as the old bot left it: topic 5 routes to the workspace.
+  const threads = new Map<number, string>([[5, "w1"]]);
+  let nextTopic = 100;
+  const { service, api, config } = harness({
+    enabled: true,
+    autoStop: false,
+    allowedUserId: 42,
+    telegramThreadedMode: true,
+    me: { ...BOT, has_topics_enabled: true },
+    workspaces: [{ id: "w1", name: "Work", folderPath: "/work" }],
+    ensureThreadTargets: async () => {
+      if (![...threads.values()].includes("w1")) threads.set(nextTopic++, "w1");
+    },
+    forgetThreadTargets: async () => threads.clear(),
+  });
+  config.adoptBot = runtime.adoptBot;
+  const offsets: Array<number | undefined> = [];
+  let me: TelegramUser = { ...BOT, has_topics_enabled: true };
+  api.getMe = async () => me;
+  api.getUpdates = recordingGetUpdates(offsets);
+
+  await service.start();
+  await waitFor(() => offsets.length === 1);
+  assert.deepEqual([...threads], [[5, "w1"]], "the same bot keeps its threads");
+
+  me = { ...BOT, id: 2, username: "other_bot", has_topics_enabled: true };
+  await service.restart();
+  await waitFor(() => offsets.length === 2);
+  assert.deepEqual([...threads], [[100, "w1"]], "the old topic no longer routes; a new one does");
+  assert.equal((await config.snapshot()).allowedUserId, 42, "the pairing stays");
   service.stop();
 });
 

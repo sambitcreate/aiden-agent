@@ -4,9 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test, { after } from "node:test";
 import { formatBotRoutineTriggerLabel, parseBotRoutineTrigger } from "../../../renderer/shared/bot-routine-trigger.js";
-import { botRoutineEventBlock, botRoutineMessage } from "../scheduled-bot-routines.js";
+import { botRoutineEventBlock, botRoutineMessage, botRoutineRequestId, createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../scheduled-bot-routines.js";
+import { createScheduleStore } from "../schedule-store.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches, folderEventPayload } from "./folder-watch.js";
+import { createBotOwnWrites } from "./own-writes.js";
+import { createBotEventRunner, eventRoutineRunStore } from "./runner.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
 import { createBotWebhookHandler } from "./webhook.js";
 
@@ -191,8 +194,10 @@ function folderHarness(routines: BotEventRoutine[], options: {
   missing?: Set<string>;
   /** Folders whose watch throws when opened (deleted in between, or EMFILE). */
   unwatchable?: Set<string>;
-  /** Routines whose own run is in progress. */
-  running?: Set<string>;
+  /** Absolute paths the Bot wrote with its file tools. */
+  wrote?: Set<string>;
+  /** Each file's size and time, as the folder watch reads them. */
+  stats?: Map<string, { mtimeMs: number; size: number }>;
   /** Holds `routines()` open until released, to land a dispose mid-rearm. */
   gate?: Promise<void>;
 }) {
@@ -215,7 +220,8 @@ function folderHarness(routines: BotEventRoutine[], options: {
       return { close: () => listeners.delete(folder) };
     },
     dispatcher: { emit: async (_botId, routineId, event) => { emitted.push({ routineId, ...event }); return "queued"; } },
-    ownRun: (routine) => options.running?.has(routine.id) === true,
+    wroteSince: (_routine, absolutePath) => options.wrote?.has(absolutePath) === true,
+    stat: async (absolutePath) => options.stats?.get(absolutePath),
     refused: (routine) => refused.push(routine.id),
     accepted: (routine) => accepted.push(routine.id),
     now: () => 1,
@@ -286,19 +292,193 @@ test("a folder whose watch can't be opened is reported, and the routines after i
   assert.equal(h.emitted.length, 1);
 });
 
-test("a routine's own run writing into its watched folder does not fire it again", async () => {
-  const running = new Set(["r1"]);
-  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", running });
+test("a routine's own files don't fire it again, but a file dropped in during its run fires once it ends", async () => {
+  const inbox = path.join("/home/bot", "Inbox");
+  const summary = path.join(inbox, "summary.md");
+  const stats = new Map([[summary, { mtimeMs: 10, size: 120 }]]);
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", wrote: new Set([summary]), stats });
   await h.watches.rearm();
-  const listener = h.listeners.get(path.join("/home/bot", "Inbox"))!;
-  listener("summary.md");
-  h.fireTimers();
-  assert.equal(h.emitted.length, 0, "the Bot's own report is not a new event");
+  const listener = h.listeners.get(inbox)!;
+  const routine = routineOf("r1", "Inbox");
 
-  running.clear();
+  h.watches.runStarted(routine);
+  listener("summary.md");
   listener("dropped-in.pdf");
   h.fireTimers();
-  assert.deepEqual(h.emitted.map((event) => event.payload), ["dropped-in.pdf"]);
+  assert.equal(h.emitted.length, 0, "nothing fires while the run is going");
+
+  h.watches.runEnded(routine);
+  // A notice the OS delivers just after the run ended is still held.
+  listener("summary.md");
+  h.fireTimers();
+  await h.watches.idle();
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["dropped-in.pdf"], "the person's file is not lost");
+
+  // A late notice for the Bot's file, still exactly as it left it, is dropped.
+  listener("summary.md");
+  await h.watches.idle();
+  h.fireTimers();
+  assert.equal(h.emitted.length, 1);
+  // Once the person edits it, it is a change like any other.
+  stats.set(summary, { mtimeMs: 20, size: 140 });
+  listener("summary.md");
+  await h.watches.idle();
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["dropped-in.pdf", "summary.md"]);
+});
+
+test("with two runs of a routine going, changes stay held until the last one ends", async () => {
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot" });
+  await h.watches.rearm();
+  const listener = h.listeners.get(path.join("/home/bot", "Inbox"))!;
+  const routine = routineOf("r1", "Inbox");
+  h.watches.runStarted(routine);
+  h.watches.runStarted(routine);
+  h.watches.runEnded(routine);
+  listener("late.pdf");
+  h.fireTimers();
+  await h.watches.idle();
+  h.fireTimers();
+  assert.equal(h.emitted.length, 0, "the first run ending does not release the second run's changes");
+  h.watches.runEnded(routine);
+  h.fireTimers();
+  await h.watches.idle();
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["late.pdf"]);
+});
+
+test("the own-writes journal only counts a Bot's own writes made since the run began", () => {
+  let at = 1_000;
+  const journal = createBotOwnWrites(() => at);
+  journal.record("bot-a", "/home/bot/Inbox/summary.md");
+  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 1_000), true);
+  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 1_001), false, "written before the run began");
+  assert.equal(journal.wroteSince("bot-b", "/home/bot/Inbox/summary.md", 0), false, "another Bot's write");
+  at += 2 * 60 * MIN;
+  journal.record("bot-a", "/home/bot/Inbox/other.md");
+  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 0), false, "old entries are pruned");
+});
+
+class MemoryPersistence<T> {
+  constructor(private data: T) {}
+  async load(): Promise<T> {
+    return structuredClone(this.data);
+  }
+  async update<R>(mutation: (draft: T) => R | Promise<R>): Promise<R> {
+    const draft = structuredClone(this.data);
+    const result = await mutation(draft);
+    this.data = draft;
+    return result;
+  }
+}
+
+test("a finished event run is recorded under the event's id, delivered, and settles its receipt", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  // The real schedule store: an event routine is not one of its tasks.
+  const schedule = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
+  const delivered: string[] = [];
+  const replying: BotRoutineExecutorPorts = {
+    state: async () => ({ kind: "idle" }),
+    submissionForRequest: async () => undefined,
+    send: async () => ({ submissionId: "sub-1", deduped: false }),
+    awaitReply: async () => ({ kind: "completed", text: "Handled it." }),
+    markSilent: async () => undefined,
+  };
+  const executor = createBotRoutineExecutor({
+    store: eventRoutineRunStore(schedule),
+    ports: () => replying,
+    deliver: async (input) => {
+      delivered.push(input.body);
+      return "sent";
+    },
+    broadcast: () => undefined,
+  });
+  const runner = createBotEventRunner({ executor, undelivered: () => false });
+  const dispatcher = createBotRoutineEventDispatcher({
+    store,
+    run: (r, event) => runner.run(r, event),
+    isPaused: async () => false,
+    now: Date.now,
+    timeZone: () => "UTC",
+    setTimer: () => ({ cancel: () => undefined }),
+  });
+  assert.equal(await dispatcher.emit("bot-a", routine.id, { eventId: "w1", payload: "{}" }), "queued");
+  await dispatcher.idle();
+  const requestId = botRoutineRequestId(routine.id, { kind: "event", eventId: "w1", source: "webhook", payload: "{}" });
+  assert.equal((await schedule.runById(routine.id, requestId))?.result, "success");
+  assert.deepEqual(delivered, ["Handled it."]);
+  assert.equal((await store.list("bot-a"))[0]?.running, undefined, "no receipt is left to replay");
+});
+
+test("stopping a running event routine records it as uncertain once idle, keeps its receipt, and the next start replays it", async () => {
+  const store = createBotEventRoutineStore({ profileDir: fixedProfile() });
+  const { routine } = await store.create("bot-a", { name: "Hook", prompt: "React.", trigger: { kind: "webhook" } });
+  const schedule = createScheduleStore(new MemoryPersistence<unknown[]>([]), new MemoryPersistence<unknown[]>([]));
+  const recorded: Array<{ id: string; result: string }> = [];
+  const runsStore = eventRoutineRunStore({
+    ...schedule,
+    // A slow disk: the cancelled run lands well after the abort.
+    recordRun: async (run) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const saved = await schedule.recordRun(run).catch(async (error: unknown) => {
+        const written = run.id ? await schedule.runById(run.taskId, run.id) : undefined;
+        if (written) recorded.push({ id: written.id, result: written.result });
+        throw error;
+      });
+      recorded.push({ id: saved.id, result: saved.result });
+      return saved;
+    },
+  });
+  const sent: string[] = [];
+  const hanging: BotRoutineExecutorPorts = {
+    state: async () => ({ kind: "idle" }),
+    submissionForRequest: async () => undefined,
+    send: async (_botId, input) => {
+      sent.push(input.requestId);
+      return { submissionId: `sub-${sent.length}`, deduped: false };
+    },
+    awaitReply: () => new Promise(() => undefined),
+    markSilent: async () => undefined,
+  };
+  const executor = createBotRoutineExecutor({ store: runsStore, ports: () => hanging, deliver: async () => "sent", broadcast: () => undefined });
+  const start = (run: (routine: BotEventRoutine, event: { eventId: string; source: "webhook"; payload: string }) => Promise<{ settled: boolean }>) =>
+    createBotRoutineEventDispatcher({
+      store,
+      run: (r, event) => run(r, event as { eventId: string; source: "webhook"; payload: string }),
+      isPaused: async () => false,
+      now: Date.now,
+      timeZone: () => "UTC",
+      setTimer: (fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        timer.unref?.();
+        return { cancel: () => clearTimeout(timer) };
+      },
+    });
+  const runner = createBotEventRunner({ executor, undelivered: () => false });
+  const dispatcher = start((r, event) => runner.run(r, event));
+  assert.equal(await dispatcher.emit("bot-a", routine.id, { eventId: "w1", payload: "{}" }), "queued");
+  for (let attempt = 0; attempt < 200 && sent.length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+  // Quit: stop the triggers, cancel the run, and wait for it to be recorded.
+  dispatcher.dispose();
+  runner.abortAll();
+  await dispatcher.idle();
+  const requestId = botRoutineRequestId(routine.id, { kind: "event", eventId: "w1", source: "webhook", payload: "{}" });
+  assert.equal(recorded.length, 1, "idle() waits until the cancelled run is written");
+  assert.equal(recorded[0]!.result, "blocked");
+  assert.notEqual(recorded[0]!.id, requestId, "a cancelled run is not recorded as the event's outcome");
+  assert.deepEqual((await store.list("bot-a"))[0]?.running?.map((entry) => entry.eventId), ["w1"], "the receipt stays");
+
+  const replayed: string[] = [];
+  const restarted = start(async (_r, event) => {
+    replayed.push(event.eventId);
+    return { settled: true };
+  });
+  await restarted.rearm(await store.list("bot-a"));
+  await restarted.idle();
+  assert.deepEqual(replayed, ["w1"]);
 });
 
 test("a rearm still loading when event routines stop leaves no watch open", async () => {

@@ -30,6 +30,14 @@ function dayKey(at: number, timeZone: string): string {
 
 export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDispatcherDependencies) {
   const heldTimers = new Map<string, { cancel(): void }>();
+  /** Runs started and not yet settled in the store, for `idle()`. */
+  const pending = new Set<Promise<void>>();
+  let disposed = false;
+
+  function track(work: Promise<void>): void {
+    const tracked = work.catch((error: unknown) => dependencies.onError?.(error)).finally(() => pending.delete(tracked));
+    pending.add(tracked);
+  }
 
   /** The receipt list with this event added. Callers admit only below the bound, so none is dropped. */
   function withRunning(routine: BotEventRoutine, event: { eventId: string; payload: string }, at: number) {
@@ -62,7 +70,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     heldTimers.get(key)?.cancel();
     heldTimers.set(key, dependencies.setTimer(() => {
       heldTimers.delete(key);
-      void releaseHeld(botId, routineId).catch((error: unknown) => dependencies.onError?.(error));
+      if (!disposed) track(releaseHeld(botId, routineId));
     }, Math.max(0, at - dependencies.now())));
   }
 
@@ -135,7 +143,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
         return "held";
       }
       if (decision.kind === "queued") {
-        void start(decision.routine, { eventId: event.eventId, payload }).catch((error: unknown) => dependencies.onError?.(error));
+        track(start(decision.routine, { eventId: event.eventId, payload }));
         return "queued";
       }
       return decision.kind;
@@ -145,7 +153,7 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     async rearm(routines: readonly BotEventRoutine[]): Promise<void> {
       for (const routine of routines) {
         for (const event of routine.running ?? []) {
-          void start(routine, event).catch((error: unknown) => dependencies.onError?.(error));
+          track(start(routine, event));
         }
         if (!routine.held) continue;
         armHeld(routine.botId, routine.id, (routine.lastRunAt ?? 0) + BOT_ROUTINE_EVENT_LIMITS.minGapMs);
@@ -153,8 +161,14 @@ export function createBotRoutineEventDispatcher(dependencies: BotRoutineEventDis
     },
 
     dispose(): void {
+      disposed = true;
       for (const timer of heldTimers.values()) timer.cancel();
       heldTimers.clear();
+    },
+
+    /** Resolves once every run started so far is recorded and its receipt settled (or kept). */
+    async idle(): Promise<void> {
+      while (pending.size) await Promise.allSettled([...pending]);
     },
   };
 }

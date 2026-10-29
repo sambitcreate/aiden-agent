@@ -493,6 +493,15 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
       );
       return operation;
     },
+    forgetThreadTargets: () => {
+      // Serialized with provisioning, so a provision in flight can't re-add old ids.
+      const operation = threadProvisioning.then(() => threadStore.clear());
+      threadProvisioning = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
     clearThreadTargets: async () => {
       const targets = await threadStore.list();
       for (const target of targets) {
@@ -1028,11 +1037,21 @@ export function createTelegramProfileManager() {
         return;
       }
       const previous = await secrets.getKey(key);
-      await secrets.setKey(key, token);
+      if (previous === token) {
+        await secrets.setKey(key, token);
+        return;
+      }
       // A running transport keeps the old bot's identity and offset until it
       // re-runs getMe, so a new token must restart it (or revive one stopped
-      // by a revoked token).
-      if (previous !== token) await services.get(profile)?.restart();
+      // by a revoked token). It stops before the key changes, so no poll of
+      // the old bot runs on the new token, and starts again either way.
+      const service = services.get(profile);
+      service?.stop();
+      try {
+        await secrets.setKey(key, token);
+      } finally {
+        await service?.restart();
+      }
     },
     async setEnabled(enabled: boolean): Promise<void> {
       await setProfileSettings(activeProfile, { telegramEnabled: enabled });

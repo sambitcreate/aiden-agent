@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOT_RUN_STALL_MS, createBotRunWatchdog, createBotRunStalls } from "./bot-run-watchdog.js";
+import { BOT_RUN_STALL_MS, BOT_RUN_WATCHDOG_INTERVAL_MS, createBotRunWatchdog, createBotRunStalls } from "./bot-run-watchdog.js";
 
 function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}) {
   let now = 0;
@@ -24,6 +24,14 @@ function setup(kind: "routine" | "attended", options: { waiting?: boolean } = {}
     watchdog, stopped, raised,
     wakeFromSleep: () => watchdog.resume(),
     at: (value: number) => { now = value; },
+    /** Lets the clock run to `value` with the interval checking every minute on the way. */
+    advance: async (value: number) => {
+      while (now + BOT_RUN_WATCHDOG_INTERVAL_MS < value) {
+        now += BOT_RUN_WATCHDOG_INTERVAL_MS;
+        await watchdog.check();
+      }
+      now = value;
+    },
     progressAt: (value: number) => { progress = value; },
     setWaiting: (value: boolean) => { waiting = value; },
     setLimited: (value: boolean) => { limited = value; },
@@ -62,7 +70,7 @@ test("a run waiting out a usage limit is neither stopped nor flagged, and gets a
       await run.watchdog.check();
     }
     run.setLimited(false);
-    run.at(30 * 60_000 + BOT_RUN_STALL_MS - 1);
+    await run.advance(30 * 60_000 + BOT_RUN_STALL_MS - 1);
     await run.watchdog.check();
   }
   assert.deepEqual([...h.stopped, ...h.raised, ...attended.stopped, ...attended.raised], []);
@@ -87,7 +95,7 @@ test("keep waiting snoozes for another 10 minutes", async () => {
   await h.watchdog.check();
   h.at(BOT_RUN_STALL_MS + 1_000);
   h.watchdog.snooze("bot-1");
-  h.at(2 * BOT_RUN_STALL_MS);
+  await h.advance(2 * BOT_RUN_STALL_MS);
   await h.watchdog.check();
   assert.equal(h.raised.length, 1);
   h.at(2 * BOT_RUN_STALL_MS + 1_000);
@@ -123,7 +131,32 @@ test("time asleep is not a stall: a run gets a fresh window when the computer wa
 
   // Still no progress a full window after waking: now it is a real stall.
   for (const run of [routine, attended]) {
-    run.at(15 * 60_000 + BOT_RUN_STALL_MS);
+    await run.advance(15 * 60_000 + BOT_RUN_STALL_MS);
+    await run.watchdog.check();
+  }
+  assert.deepEqual(routine.stopped, ["bot-1"]);
+  assert.deepEqual(attended.raised, ["bot-1"]);
+});
+
+test("a long gap between checks counts as sleep even when the system reports no wake", async () => {
+  const routine = setup("routine");
+  const attended = setup("attended");
+  for (const run of [routine, attended]) {
+    // Checked every minute, then the timer goes quiet for 15 minutes.
+    await run.advance(3 * 60_000);
+    await run.watchdog.check();
+    run.at(18 * 60_000);
+    await run.watchdog.check();
+  }
+  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the first check after the gap does not fire");
+
+  for (const run of [routine, attended]) {
+    await run.advance(18 * 60_000 + BOT_RUN_STALL_MS - 1);
+    await run.watchdog.check();
+  }
+  assert.deepEqual([...routine.stopped, ...attended.raised], [], "the window restarts at the wake");
+  for (const run of [routine, attended]) {
+    run.at(18 * 60_000 + BOT_RUN_STALL_MS);
     await run.watchdog.check();
   }
   assert.deepEqual(routine.stopped, ["bot-1"]);

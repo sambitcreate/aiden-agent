@@ -24,6 +24,15 @@ interface OwnershipRecord {
   generation: string;
   acquiredAt: number;
   heartbeatAt: number;
+  /** When the computer started, so a lease left before a restart is never kept by a reused pid. */
+  bootAt?: number;
+}
+
+/** Boot times read through uptime drift by a few seconds; a restart moves them by far more. */
+const BOOT_TOLERANCE_MS = 2 * 60_000;
+
+function currentBootAt(): number {
+  return Date.now() - os.uptime() * 1_000;
 }
 
 function readRecord(file: string): OwnershipRecord | undefined {
@@ -50,8 +59,11 @@ export function createTelegramOwnershipLease(options: {
   profile: string;
   now?: () => number;
   staleMs?: number;
+  /** When this computer booted (ms); injectable for tests. */
+  bootAt?: () => number;
 }) {
   const now = options.now ?? Date.now;
+  const bootAt = options.bootAt ?? currentBootAt;
   const generation = randomUUID();
   const directory = path.join(options.root(), "telegram-owners");
   const file = path.join(directory, `${options.profile}.json`);
@@ -108,13 +120,16 @@ export function createTelegramOwnershipLease(options: {
       let recovered = false;
       if (existsSync(file)) {
         const current = readRecord(file);
-        const stale = !current || (now() - current.heartbeatAt > staleMs && !processAlive(current.pid));
+        // A lease from before the computer restarted is stale even when its
+        // pid now belongs to some other live process.
+        const otherBoot = current?.bootAt !== undefined && Math.abs(current.bootAt - bootAt()) > BOOT_TOLERANCE_MS;
+        const stale = !current || (now() - current.heartbeatAt > staleMs && (otherBoot || !processAlive(current.pid)));
         if (!stale) return { acquired: false, recovered: false, ownerPid: current?.pid };
         renameSync(file, path.join(directory, `${options.profile}.recovered-${now()}-${randomUUID()}.json`));
         recovered = true;
       }
       const timestamp = now();
-      claim({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp });
+      claim({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp, bootAt: bootAt() });
       epoch += 1;
       heartbeat = setInterval(() => void refresh(), Math.max(1_000, Math.floor(staleMs / 4)));
       heartbeat.unref?.();

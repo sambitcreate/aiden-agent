@@ -109,6 +109,8 @@ export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDepen
   const running = new Map<string, Promise<void>>();
   const controller = new AbortController();
   let disposed = false;
+  /** Bumped per rearm: only the latest one's routine list arms timers. */
+  let rearms = 0;
 
   function remember(fireKey: string): void {
     checked.add(fireKey);
@@ -137,10 +139,12 @@ export function createBotRoutinePreflight(dependencies: BotRoutinePreflightDepen
   return {
     async rearm() {
       if (disposed) return;
+      const rearm = ++rearms;
       const routines = await dependencies.routines();
       // From here on everything is synchronous, so overlapping rearms (the
-      // interval and a wake from sleep) can't leave a timer nothing cancels.
-      if (disposed) return;
+      // interval and a wake from sleep) can't leave a timer nothing cancels,
+      // and an older rearm whose read finishes last can't re-arm stale times.
+      if (disposed || rearm !== rearms) return;
       const now = dependencies.now();
       // Re-timed on every rearm: a timer armed before sleep may be hours off.
       for (const { timer } of timers.values()) timer.cancel();

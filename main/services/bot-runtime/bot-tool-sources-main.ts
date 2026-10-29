@@ -78,6 +78,7 @@ import { botComputerAction } from "./bot-computer-approval.js";
 import { botComputerCandidates, botHasComputer as hasOwnComputer } from "./bot-computer-candidates.js";
 import { createBotComputerToolState, type BotComputerToolState } from "../bot-computers/computer-tool.js";
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
+import { botOwnWrites } from "../bot-routine-events/own-writes.js";
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -414,7 +415,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
 
       const locations = await botFileLocations(admission);
       if (locations.length > 0) {
-        for (const tool of buildBotFileTools({ defaultLocation: locations[0]!, additionalLocations: locations.slice(1) })) {
+        for (const tool of buildBotFileTools({
+          defaultLocation: locations[0]!,
+          additionalLocations: locations.slice(1),
+          // A routine's own files must not fire its folder trigger again.
+          ...(routineRun ? { onWrite: (written: string) => botOwnWrites.record(botId, written) } : {}),
+        })) {
           tools.push({ tool });
         }
       }

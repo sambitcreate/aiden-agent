@@ -193,6 +193,12 @@ export interface TelegramServiceDeps {
   ensureThreadTargets?(chatId: number): Promise<void>;
   clearThreadTargets?(): Promise<void>;
   /**
+   * Drops the thread map without deleting any topic: after a bot switch the
+   * old bot's topics can't be reached with the new token, so fresh ones are
+   * provisioned. The pairing stays.
+   */
+  forgetThreadTargets?(): Promise<void>;
+  /**
    * Claims the transport before polling. `scope: "bot"` means another process
    * (a desktop app or `aiden serve`) already polls this bot token.
    */
@@ -597,6 +603,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         // Update ids are per bot: a new token's bot starts from its own offset.
         if (await deps.config.adoptBot(me.id)) {
           recordDiagnostic("info", "A different Telegram bot is connected; its pending messages will be read.");
+          // The old bot's thread ids mean nothing to this one: threads are
+          // provisioned afresh below, and the pairing stays.
+          await deps.forgetThreadTargets?.().catch((cause) => {
+            deps.warn(`Telegram threads of the previous bot could not be forgotten: ${cause instanceof Error ? cause.message : String(cause)}`);
+          });
         }
         if (signal.aborted) return;
         botUsername = me.username;
@@ -646,6 +657,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
 
       processingUpdates = true;
       for (const update of updates) {
+        // A stopped loop leaves the rest of the batch unconfirmed: the next
+        // owner's poll gets it again from the persisted offset.
+        if (signal.aborted || !started) break;
         if (offset !== undefined && update.update_id < offset) continue;
         let handled = false;
         try {
