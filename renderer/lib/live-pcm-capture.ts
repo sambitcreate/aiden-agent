@@ -47,14 +47,14 @@ export class OrderedPcmSendQueue {
   }
 }
 
-function pcm16Bytes(samples: readonly number[]): Uint8Array {
-  const bytes = new Uint8Array(samples.length * 2);
+function pcm16Bytes(samples: ArrayLike<number>, length = samples.length): Uint8Array {
+  const bytes = new Uint8Array(length * 2);
   const view = new DataView(bytes.buffer);
-  samples.forEach((sample, index) => {
-    const clamped = Math.max(-1, Math.min(1, sample));
+  for (let index = 0; index < length; index += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[index]));
     const value = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
     view.setInt16(index * 2, value, true);
-  });
+  }
   return bytes;
 }
 
@@ -66,11 +66,18 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** Continuous linear resampler that emits exact 100 ms PCM16 LE chunks. */
+/**
+ * Continuous linear resampler that emits exact 100 ms PCM16 LE chunks. Output
+ * samples are written into one preallocated chunk, and only the last input
+ * sample is carried between pushes, so steady capture does not grow arrays.
+ */
 export class Pcm16ChunkEncoder {
-  private source = new Float32Array(0);
+  /** The last input sample of the previous push, or null before any audio. */
+  private carry: number | null = null;
+  /** Position of the next output sample, relative to `carry` (index 0). */
   private position = 0;
-  private readonly pending: number[] = [];
+  private readonly pending = new Float32Array(TARGET_CHUNK_SAMPLES);
+  private filled = 0;
 
   constructor(private readonly sourceRate: number) {
     if (!Number.isFinite(sourceRate) || sourceRate <= 0) {
@@ -80,36 +87,41 @@ export class Pcm16ChunkEncoder {
 
   push(samples: Float32Array): Uint8Array[] {
     if (samples.length === 0) return [];
-    const combined = new Float32Array(this.source.length + samples.length);
-    combined.set(this.source);
-    combined.set(samples, this.source.length);
+    const chunks: Uint8Array[] = [];
+    // Input index 0 is the carried sample when there is one, then `samples`.
+    const offset = this.carry === null ? 0 : 1;
+    const length = samples.length + offset;
+    const at = (index: number) => (index < offset ? (this.carry as number) : samples[index - offset]);
     const step = this.sourceRate / TARGET_SAMPLE_RATE;
-    while (this.position + 1 < combined.length) {
+    while (this.position + 1 < length) {
       const left = Math.floor(this.position);
       const fraction = this.position - left;
-      this.pending.push(combined[left] * (1 - fraction) + combined[left + 1] * fraction);
+      this.pending[this.filled] = at(left) * (1 - fraction) + at(left + 1) * fraction;
+      this.filled += 1;
+      if (this.filled === TARGET_CHUNK_SAMPLES) {
+        chunks.push(pcm16Bytes(this.pending));
+        this.filled = 0;
+      }
       this.position += step;
     }
-    const consumed = Math.floor(this.position);
-    this.source = combined.slice(consumed);
-    this.position -= consumed;
-    return this.takeWholeChunks();
-  }
-
-  flush(): Uint8Array[] {
-    if (this.source.length > 0) this.pending.push(this.source[0]);
-    this.source = new Float32Array(0);
-    this.position = 0;
-    const chunks = this.takeWholeChunks();
-    if (this.pending.length > 0) chunks.push(pcm16Bytes(this.pending.splice(0)));
+    // Keep only the last sample; the next output always lies at or after it.
+    this.position -= length - 1;
+    this.carry = samples[samples.length - 1];
     return chunks;
   }
 
-  private takeWholeChunks(): Uint8Array[] {
+  flush(): Uint8Array[] {
+    // The carried sample is the final input; emit it unless the next output already lies past it.
+    if (this.carry !== null && this.position < 1) this.pending[this.filled++] = this.carry;
+    this.carry = null;
+    this.position = 0;
     const chunks: Uint8Array[] = [];
-    while (this.pending.length >= TARGET_CHUNK_SAMPLES) {
-      chunks.push(pcm16Bytes(this.pending.splice(0, TARGET_CHUNK_SAMPLES)));
+    if (this.filled === TARGET_CHUNK_SAMPLES) {
+      chunks.push(pcm16Bytes(this.pending));
+      this.filled = 0;
     }
+    if (this.filled > 0) chunks.push(pcm16Bytes(this.pending, this.filled));
+    this.filled = 0;
     return chunks;
   }
 }

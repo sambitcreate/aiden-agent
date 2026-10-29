@@ -54,6 +54,7 @@ type Phase =
   | "error";
 
 const WAVEFORM_BARS = 9;
+const WAVEFORM_MIN_PX = 4;
 
 interface ActiveRecording {
   operationId: string;
@@ -158,12 +159,18 @@ export function PillApp() {
   const startWaveform = React.useCallback((analyser: AnalyserNode) => {
     const bins = new Uint8Array(analyser.frequencyBinCount);
     const timeDomain = new Uint8Array(analyser.fftSize);
+    // Height is still what moves the bars (a transform or clip would squash or
+    // soften the rounded caps), so it is written only when a bar's rounded
+    // height actually changes; an unchanged frame costs no layout.
     const paint = () => {
-      analyser.getByteFrequencyData(bins);
+      rafRef.current = requestAnimationFrame(paint);
       if (silenceStopRef.current) {
         analyser.getByteTimeDomainData(timeDomain);
         silenceDetectorRef.current?.sample(analyserRms(timeDomain));
       }
+      // The live transcript or a hint replaces the bars; then there is nothing to draw.
+      if (!barRefs.current.some(Boolean)) return;
+      analyser.getByteFrequencyData(bins);
       // Skip the DC/lowest bins and bucket the useful range into the bar count.
       const usable = Math.floor(bins.length * 0.7);
       for (let i = 0; i < WAVEFORM_BARS; i += 1) {
@@ -172,10 +179,11 @@ export function PillApp() {
         let sum = 0;
         for (let b = start; b < end; b += 1) sum += bins[b];
         const level = sum / Math.max(1, end - start) / 255;
+        const height = Math.round(WAVEFORM_MIN_PX + level * 18);
         const bar = barRefs.current[i];
-        if (bar) bar.style.height = `${Math.round(4 + level * 18)}px`;
+        const next = `${height}px`;
+        if (bar && bar.style.height !== next) bar.style.height = next;
       }
-      rafRef.current = requestAnimationFrame(paint);
     };
     rafRef.current = requestAnimationFrame(paint);
   }, []);
@@ -605,7 +613,7 @@ export function PillApp() {
                         barRefs.current[i] = el;
                       }}
                       className="w-[3px] rounded-full bg-accent"
-                      style={{ height: 4 }}
+                      style={{ height: WAVEFORM_MIN_PX }}
                     />
                   ))}
                 </div>
