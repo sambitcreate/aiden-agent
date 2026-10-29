@@ -132,6 +132,10 @@ export function createDaemonChats(agentDir: string) {
       const produced: AssistantMessage[] = [];
       let content = "", separator = false, persisted = false;
       const timeline = new GenerationTimelineProjector(streamId, (value) => send("chat:timeline", { streamId, timeline: value }));
+      // Extensions open their resources (MCP pool, memory store) before the session exists; a turn that
+      // fails before then still runs their shutdown handlers and closers.
+      const shutdownHandlers: ((event: { type: "session_shutdown"; reason: "quit" }) => unknown)[] = [];
+      const closers: (() => Promise<void>)[] = [];
       try {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
@@ -165,15 +169,17 @@ export function createDaemonChats(agentDir: string) {
         const registeredTools: { readonly name: string; readonly label?: string }[] = [];
         // Activity shows MCP tools by their server label, not the generated name.
         timeline.setToolLabels((toolName) => mcpToolActivityLabel([...botTools, ...registeredTools], toolName));
-        const extensions: InlineExtension[] = botAdmission || !workspace.folderPath ? [] : [
-          // A corrupt settings file or wedged shared DB must degrade to
-          // no-memory, never brick the generation (desktop parity: llm-client
-          // warns and continues without memory).
-          await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
-            .catch((error: unknown) => {
-              process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
-              return { name: "aiden-memory", factory: () => undefined };
-            }),
+        // A corrupt settings file or wedged shared DB must degrade to
+        // no-memory, never brick the generation (desktop parity: llm-client
+        // warns and continues without memory).
+        const memory = botAdmission || !workspace.folderPath ? undefined : await createMemoryInlineExtension({ agentDir, workspaceRoot: cwd, readOnly: unattended })
+          .catch((error: unknown) => {
+            process.stderr.write(`[daemon-chats] memory unavailable: ${error instanceof Error ? error.message : error}\n`);
+            return { name: "aiden-memory", factory: () => undefined };
+          });
+        if (memory && "close" in memory && memory.close) closers.push(memory.close);
+        const extensions: InlineExtension[] = !memory ? [] : [
+          memory,
           createTodoInlineExtension({ latestContext: () => undefined }),
           createMcpExtension(agentDir),
           createAdvisorInlineExtension({ agentDir, latestContext: () => undefined }),
@@ -188,6 +194,10 @@ export function createDaemonChats(agentDir: string) {
           factory: (pi) => (typeof extension === "function" ? extension : extension.factory)(new Proxy(pi, { get(target, key, receiver) {
             if (key === "registerTool") return (tool: Parameters<typeof pi.registerTool>[0]) => {
               additionalNames.push(tool.name); registeredTools.push(tool); target.registerTool(tool);
+            };
+            if (key === "on") return (event: string, handler: (event: { type: "session_shutdown"; reason: "quit" }) => unknown) => {
+              if (event === "session_shutdown") shutdownHandlers.push(handler);
+              return (target.on as (event: string, handler: unknown) => void)(event, handler);
             };
             return Reflect.get(target, key, receiver);
           } })),
@@ -284,7 +294,10 @@ export function createDaemonChats(agentDir: string) {
         if (entry.session) {
           try { await entry.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
           finally { entry.session.dispose(); }
+        } else {
+          for (const handler of shutdownHandlers) await Promise.resolve().then(() => handler({ type: "session_shutdown", reason: "quit" })).catch(() => {});
         }
+        await Promise.allSettled(closers.map((close) => close()));
         for (const message of produced) await recordUsage(agentDir, options.usageSource, message).catch(() => {});
       }
   }

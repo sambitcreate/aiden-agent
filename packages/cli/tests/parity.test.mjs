@@ -621,6 +621,34 @@ test("daemon chat generation persists context and denies revoked workspace autho
   await daemon.stop(); assert.deepEqual(daemon.activity.snapshot().activeChatIds, []);
 });
 
+test("a daemon turn that fails before its session opens still stops the MCP servers it started", async (t) => {
+  const dir = temporary(t);
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  api.atomicJson(join(dir, "aiden-mcp.json"), [fixtureServer(dir, "turn")]);
+  const workspace = await api.workspaceCommand(dir, ["add", dir]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const daemon = api.createDaemonChats(dir); t.after(() => daemon.stop());
+  // A leaked server would keep the test runner alive; reap it so a regression fails instead of hanging.
+  t.after(() => { for (const pid of existsSync(join(dir, "turn.pid")) ? readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number) : []) { try { process.kill(pid, "SIGKILL"); } catch {} } });
+  await daemon.chatStore.create({ id: "early-failure", title: "Early failure", workspaceId: workspace.id });
+  // An unreadable session journal fails the turn after the extensions connected MCP.
+  mkdirSync(daemon.sessionPath("early-failure"), { recursive: true });
+  const events = [];
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  const admission = daemon.llmClient.beginChatTurn("early-failure", "stream", "test"); assert.ok(admission);
+  try {
+    await daemon.chatStore.appendMessage("early-failure", { role: "user", content: "Hello" });
+    admission.settleAsyncWork();
+    assert.equal(await daemon.llmClient.start("stream", { chatId: "early-failure", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Hello" }] }, owner, { usageSource: "telegram" }), true);
+    await daemon.llmClient.waitForChatIdle("early-failure");
+  } finally { admission.release(); }
+  assert.equal(events.at(-1).channel, "chat:error");
+  assert.match(events.at(-1).value.message, /EISDIR/);
+  const pids = readFileSync(join(dir, "turn.pid"), "utf8").trim().split("\n").map(Number);
+  assert.equal(pids.length, 1);
+  assert.throws(() => process.kill(pids[0], 0), /ESRCH/, "the turn's stdio MCP server exited");
+});
+
 test("built CLI creates and safely removes its own managed worktree", (t) => {
   const dir = temporary(t), repo = join(dir, "repo"), agentDir = join(dir, "agent");
   function git(args) { const result = spawnSync("git", args, { encoding: "utf8" }); assert.equal(result.status, 0, result.stderr); }
