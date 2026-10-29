@@ -7,7 +7,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { McpProviderExecutionScope } from "./mcp-provider-auth-core.js";
 import type { McpLateDiscovery } from "./mcp-tool-discovery-core.js";
-import { buildCodingTools } from "./coding-tools.js";
+import { buildCodingTools, type RunCommandLeftovers } from "./coding-tools.js";
 import type { Attachment, ScheduledMcpServerBinding, WorkspacePermission } from "./types.js";
 import type { SkillRegistrySnapshot } from "./skill-registry.js";
 import { buildSkillTools } from "./skill-tools.js";
@@ -47,6 +47,8 @@ export interface ToolContext {
   deviceTools?: readonly AgentTool[];
   /** Directory prepended to `run_command`'s PATH, e.g. the pinned `agent-device` shim. A getter is read per command. */
   shellPathPrefix?: string | (() => string | null | undefined);
+  /** Hands processes a `run_command` call leaves running to the chat's background jobs. */
+  shellLeftovers?: RunCommandLeftovers;
   /** Background scheduled runs disable this to prevent recursive task creation. */
   allowScheduling?: boolean;
   /** Read-only background runs withhold MCP tools because their mutation semantics are unknown. */
@@ -192,7 +194,10 @@ export async function assembleAgentTools(
   // Withheld entirely when permission is "none" or no folder is bound.
   if (ctx.includeCodingTools !== false && ctx.workspaceRoot && ctx.permission !== "none") {
     tools.push(
-      ...buildCodingTools(ctx.workspaceRoot, undefined, ctx.shellPathPrefix ? { pathPrefix: ctx.shellPathPrefix } : {}),
+      ...buildCodingTools(ctx.workspaceRoot, undefined, {
+        ...(ctx.shellPathPrefix ? { pathPrefix: ctx.shellPathPrefix } : {}),
+        ...(ctx.shellLeftovers ? { leftovers: ctx.shellLeftovers } : {}),
+      }),
     );
     if (ctx.shareImage) {
       tools.push(createShareImageTool({ workspaceRoot: ctx.workspaceRoot, share: ctx.shareImage }));

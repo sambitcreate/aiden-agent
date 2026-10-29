@@ -11,7 +11,7 @@ import { chatsApi } from "../lib/ipc";
 import { queryKeys, useChatFollowThrough } from "../lib/queries";
 import { useLinkOpener } from "../lib/link-opener";
 import { cn } from "../lib/ui-utils";
-import { backgroundJobLabel, type BackgroundJobView } from "../shared/background-jobs";
+import { backgroundJobLabel, backgroundJobPortUrl, type BackgroundJobView } from "../shared/background-jobs";
 import {
   MAX_DONE_WHEN_CHECKS,
   MAX_PULL_REQUEST_FOLLOW_NOTICES,
@@ -33,6 +33,7 @@ export function backgroundJobStatus(job: BackgroundJobView, now: number): string
   if (job.state === "stopped") {
     return job.endReason === "output-limit" ? "Stopped: too much output" : "Stopped";
   }
+  if (job.origin === "command") return "Ended";
   if (job.signal) return `Ended by ${job.signal}`;
   return job.exitCode === 0 ? "Finished" : `Failed with code ${job.exitCode ?? "unknown"}`;
 }
@@ -144,6 +145,8 @@ function JobOutput({ chatId, jobId }: { chatId: string; jobId: string }) {
 function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJobView; now: number; onStop: (job: BackgroundJobView) => void }) {
   const [showOutput, setShowOutput] = React.useState(false);
   const outputId = React.useId();
+  const { openLink } = useLinkOpener();
+  const ports = job.state === "running" ? (job.ports ?? []) : [];
   return (
     <li className="flex flex-col">
       <div className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5">
@@ -161,6 +164,23 @@ function JobRow({ chatId, job, now, onStop }: { chatId: string; job: BackgroundJ
           <Text as="p" variant="small" color="tertiary" className="truncate">
             {backgroundJobStatus(job, now)}
           </Text>
+          {ports.length ? (
+            <div className="-ml-1.5 mt-0.5 flex flex-wrap gap-1">
+              {ports.map((port) => (
+                <Button
+                  key={port}
+                  variant="transparent"
+                  size="small"
+                  className="h-6 gap-1 px-1.5 font-mono text-mini text-accent-text"
+                  aria-label={`Open localhost:${port}`}
+                  onClick={() => openLink(backgroundJobPortUrl(port), { workspaceId: job.workspaceId })}
+                >
+                  localhost:{port}
+                  <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
+                </Button>
+              ))}
+            </div>
+          ) : null}
         </div>
         <Button
           variant="transparent"

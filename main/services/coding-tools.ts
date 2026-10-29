@@ -9,6 +9,7 @@ import { markHostCommandObservation } from "./pi-host-command-observation.js";
 import { isImageAspectRatio } from "../../renderer/shared/image-generation/aspect-ratio.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import type { Readable } from "node:stream";
 import { ForegroundReadOperations, ForegroundReadCleanupError, closeForegroundResource } from "./foreground-read-scope.js";
 import { StringDecoder } from "node:string_decoder";
 import { CodingToolMatchTimeout, withCodingToolGlob, withCodingToolMatcher } from "./coding-tool-matcher.js";
@@ -1959,6 +1960,30 @@ export interface CodingToolOptions {
   commandTimeoutMs?: number;
   /** Trusted native helper from the application installation, if packaged outside Electron. */
   fileMutatorBinary?: string;
+  /** Tracks what a command leaves running; without it, leftovers run untracked as before. */
+  leftovers?: RunCommandLeftovers;
+}
+
+/**
+ * Lets `run_command` hand processes a command left running (a server started
+ * with a trailing `&`) to the chat's background jobs.
+ */
+export interface RunCommandLeftovers {
+  /** Called before each command: `env` marks its processes, `adopt` runs when the shell exits leaving some. */
+  begin(): {
+    env: Record<string, string>;
+    /**
+     * Returns a line for the tool result when they were taken over. `output`
+     * is what they still write to when they kept the command's output open;
+     * an adopter reads it, and it is drained otherwise.
+     */
+    adopt(
+      processGroup: number,
+      command: string,
+      description?: string,
+      output?: { stdout: Readable; stderr: Readable },
+    ): Promise<string | undefined>;
+  };
 }
 
 export function runCommandEnv(
@@ -1970,6 +1995,9 @@ export function runCommandEnv(
   const current = environment.PATH;
   return { ...environment, PATH: current ? `${prefix}${path.delimiter}${current}` : prefix };
 }
+
+/** How long after the shell exits a command whose leftovers hold its output returns. */
+const LEFTOVER_RELEASE_MS = 1_500;
 
 function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool {
   const root = workspace.lexical;
@@ -1990,23 +2018,36 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       ),
     }),
     execute: async (_id, params, signal): Promise<AgentToolResult<null>> => {
-      const { command } = params as { command: string };
+      const { command, description } = params as { command: string; description?: string };
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
       await verifyWorkspaceRoot(workspace, signal);
+      const leftovers = options.leftovers?.begin();
       const result = await runBoundedShellCommand({
         command,
         cwd: root,
-        env: runCommandEnv(options, agentShellCommandEnvironment()),
+        env: { ...runCommandEnv(options, agentShellCommandEnvironment()), ...leftovers?.env },
         timeoutMs: options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS,
         maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
         signal,
+        ...(leftovers ? { releaseLeftoversAfterMs: LEFTOVER_RELEASE_MS } : {}),
       });
       if (result.aborted) {
         throw signal?.reason instanceof Error ? signal.reason : new Error("Command cancelled.");
       }
-      const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+      const adopted =
+        leftovers && result.leftoverProcessGroup !== undefined
+          ? await leftovers
+              .adopt(result.leftoverProcessGroup, command, description, result.leftoverOutput)
+              .catch(() => undefined)
+          : undefined;
+      if (!adopted && result.leftoverOutput) {
+        // Not tracked: keep their output flowing so a full pipe never stalls them.
+        result.leftoverOutput.stdout.resume();
+        result.leftoverOutput.stderr.resume();
+      }
+      const combined = [result.stdout, result.stderr, adopted].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

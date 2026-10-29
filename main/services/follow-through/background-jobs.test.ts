@@ -7,7 +7,14 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { BackgroundJobs, defaultProcessStartTime, describeJobEnd, type BackgroundJobEnded } from "./background-jobs.js";
+import {
+  BackgroundJobs,
+  defaultProcessStartTime,
+  describeJobEnd,
+  newBackgroundJobId,
+  type BackgroundJobEnded,
+} from "./background-jobs.js";
+import { runBoundedShellCommand } from "../bounded-shell-command.js";
 
 const skip = process.platform === "win32" ? "background jobs run on macOS and Linux" : false;
 
@@ -353,4 +360,121 @@ test("a job whose marked processes outlive cleanup stays in the record for the n
   const job = start("sleep 30");
   await eventually(async () => (await record()).jobs.some((entry) => entry.id === job.id), "the new job in the record");
   assert.deepEqual((await record()).jobs.map((entry) => entry.id), ["job_0000dddd", job.id], "saving this launch's jobs keeps it");
+});
+
+// ── What run_command leaves running ──────────────────────────────────────────
+
+async function leaveServerRunning(dir: string, marker: string, script: string) {
+  const file = path.join(dir, `${marker}.cjs`);
+  await fs.writeFile(file, script);
+  const quote = (value: string) => "'" + value.replace(/'/gu, () => "'\\''") + "'";
+  const result = await runBoundedShellCommand({
+    command: `${quote(process.execPath)} ${quote(file)} > /dev/null 2>&1 &`,
+    cwd: dir,
+    env: { ...process.env, AIDEN_BACKGROUND_JOB: marker },
+    timeoutMs: 10_000,
+    maxOutputBytes: 10_000,
+  });
+  assert.equal(result.exitCode, 0);
+  return result;
+}
+
+const server = (portFile: string) => `
+const { writeFileSync } = require("node:fs");
+const listener = require("node:net").createServer().listen(0, "127.0.0.1", () => {
+  writeFileSync(${JSON.stringify(portFile)}, String(listener.address().port));
+});
+`;
+
+test("a server a command left running becomes a job of the chat that shows its port and stops with Stop", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, ended } = harness(dir, { listeningPorts: undefined });
+  t.after(() => cleanUp(jobs, dir));
+  const id = newBackgroundJobId();
+  const portFile = path.join(dir, "port");
+  const result = await leaveServerRunning(dir, id, server(portFile));
+  assert.ok(result.leftoverProcessGroup, "the shell exited and left its server in the group");
+  await eventually(async () => (await fs.readFile(portFile, "utf8").catch(() => "")).length > 0, "the server to listen");
+  const port = Number(await fs.readFile(portFile, "utf8"));
+
+  const adopted = await jobs.adopt({
+    id,
+    chatId: "chat-1",
+    workspaceId: "ws-1",
+    cwd: dir,
+    command: "node server.cjs &",
+    description: "Start the API",
+    processGroup: result.leftoverProcessGroup!,
+  });
+  assert.equal(adopted?.origin, "command");
+  assert.equal(jobs.runningCount("chat-1"), 1);
+  assert.match(jobs.read("chat-1", id).output, /does not see its output/u);
+
+  if (process.platform === "linux" || process.platform === "darwin") {
+    await eventually(async () => {
+      await jobs.scanPorts();
+      return jobs.get("chat-1", id)?.ports?.includes(port) === true;
+    }, "the server's port to be listed");
+  }
+
+  const stopped = await jobs.stop("chat-1", id, "person");
+  assert.equal(stopped.state, "stopped");
+  assert.equal(stopped.ports, undefined, "a stopped job lists no address");
+  assert.equal(describeJobEnd(stopped), "stopped");
+  await eventually(async () => {
+    try {
+      process.kill(-result.leftoverProcessGroup!, 0);
+      return false;
+    } catch {
+      return true;
+    }
+  }, "the server's group to end");
+  assert.equal(ended.length, 0, "a stop someone asked for is not announced");
+});
+
+test("a command's leftovers are adopted only under the marker that command carried", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir, { listeningPorts: null });
+  const result = await leaveServerRunning(dir, "job_0000cccc", "setInterval(() => {}, 1_000);\n");
+  t.after(async () => {
+    try {
+      process.kill(-result.leftoverProcessGroup!, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+    await cleanUp(jobs, dir);
+  });
+  const adopted = await jobs.adopt({
+    id: "job_0000dddd",
+    chatId: "chat-1",
+    workspaceId: "ws-1",
+    cwd: dir,
+    command: "sleep &",
+    processGroup: result.leftoverProcessGroup!,
+  });
+  assert.equal(adopted, undefined);
+  assert.deepEqual(jobs.list("chat-1"), []);
+});
+
+test("an adopted job that ends by itself reads as ended, and the chat is not told", { skip }, async (t) => {
+  const dir = await tempDir();
+  const { jobs, ended } = harness(dir, { listeningPorts: null, adoptedPollMs: 50 });
+  t.after(() => cleanUp(jobs, dir));
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setTimeout(() => {}, 1_000);\n");
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  await eventually(() => jobs.get("chat-1", id)?.state === "exited", "the adopted job to end");
+  assert.equal(describeJobEnd(jobs.get("chat-1", id)!), "ended");
+  assert.equal(ended.length, 0);
+});
+
+test("quitting stops what commands left running, like any job", { skip }, async () => {
+  const dir = await tempDir();
+  const { jobs } = harness(dir, { listeningPorts: null });
+  const id = newBackgroundJobId();
+  const result = await leaveServerRunning(dir, id, "setInterval(() => {}, 1_000);\n");
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  await cleanUp(jobs, dir);
+  assert.equal(jobs.get("chat-1", id)?.state, "stopped");
+  assert.equal(jobs.get("chat-1", id)?.endReason, "app-quit");
 });

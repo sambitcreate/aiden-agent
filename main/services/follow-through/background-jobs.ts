@@ -10,13 +10,17 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import type {
-  BackgroundJobEndReason,
-  BackgroundJobState,
-  BackgroundJobView,
+import {
+  isBackgroundJobId,
+  MAX_BACKGROUND_JOB_PORTS,
+  type BackgroundJobEndReason,
+  type BackgroundJobState,
+  type BackgroundJobView,
 } from "../../../renderer/shared/background-jobs.js";
 import { tailText } from "../../../renderer/shared/agent-notices.js";
+import { defaultListeningPorts } from "./listening-ports.js";
 
 export const MAX_RUNNING_JOBS_PER_CHAT = 10;
 export const MAX_RUNNING_JOBS = 20;
@@ -28,6 +32,17 @@ export const JOB_STOP_GRACE_MS = 4_000;
 export const MAX_FINISHED_JOBS_PER_CHAT = 10;
 export const MAX_JOB_COMMAND_CHARS = 4_000;
 export const MAX_JOB_DESCRIPTION_CHARS = 120;
+/** How often ports are looked up while jobs run; a job past its first minute is looked at less often. */
+export const JOB_PORT_SCAN_MS = 3_000;
+export const JOB_SETTLED_PORT_SCAN_MS = 30_000;
+const JOB_PORT_SETTLE_AGE_MS = 60_000;
+/** How often an adopted job's process group is checked for having ended. */
+export const ADOPTED_JOB_POLL_MS = 1_000;
+/** The environment entry that marks a job's processes, so cleanup never touches anything else. */
+export const BACKGROUND_JOB_MARKER = "AIDEN_BACKGROUND_JOB";
+const ADOPTED_JOB_NOTE =
+  "[A command left this running. Aiden can stop it, but it does not see its output or exit code.]\n";
+const ADOPTED_JOB_OUTPUT_NOTE = "[A command left this running. Its output from here on is below; it has no exit code.]\n";
 
 export interface BackgroundJobEnded {
   job: BackgroundJobView;
@@ -53,7 +68,25 @@ export interface BackgroundJobsOptions {
   processGroupMembers?: (pgid: number) => Promise<number[]>;
   /** Whether a process was started with this `NAME=value` in its environment. */
   processHasEnvironment?: (pid: number, entry: string) => Promise<boolean>;
+  /** TCP ports the given processes listen on; null turns port lookups off. */
+  listeningPorts?: ((pids: readonly number[]) => Promise<number[]>) | null;
+  portScanMs?: number;
+  adoptedPollMs?: number;
   log?: (message: string, error?: unknown) => void;
+}
+
+/** Processes a `run_command` call left running in its process group. */
+export interface AdoptBackgroundJobInput {
+  /** The id whose marker the command's processes carry (see `newBackgroundJobId`). */
+  id: string;
+  chatId: string;
+  workspaceId: string;
+  cwd: string;
+  command: string;
+  description?: string;
+  processGroup: number;
+  /** What the leftovers still write to, when they kept the command's output open. */
+  output?: { stdout: Readable; stderr: Readable };
 }
 
 export interface StartBackgroundJobInput {
@@ -80,6 +113,13 @@ interface JobRecord {
   processStart?: string;
   /** Someone is waiting on this job right now and reports its end themselves. */
   watched?: boolean;
+  /** An adopted job: the process group a command left running, with no child handle. */
+  adoptedGroup?: number;
+  adoptedTimer?: ReturnType<typeof setInterval>;
+  adoptedStop?: Promise<void>;
+  adoptedOutput?: { stdout: Readable; stderr: Readable };
+  settleExited?: () => void;
+  nextPortScanAt?: number;
 }
 
 /** Durable note of running jobs, so a launch after a crash can stop what was left. */
@@ -93,7 +133,7 @@ const RECORD_FILE = "running.json";
 const FORCED_REAP_ROUNDS = 3;
 const FORCED_REAP_WAIT_MS = 1_000;
 
-function newJobId(): string {
+export function newBackgroundJobId(): string {
   return `job_${randomBytes(4).toString("hex")}`;
 }
 
@@ -189,6 +229,11 @@ export class BackgroundJobs {
   private readonly processStartTime: (pid: number) => Promise<string | undefined>;
   private readonly processGroupMembers: (pgid: number) => Promise<number[]>;
   private readonly processHasEnvironment: (pid: number, entry: string) => Promise<boolean>;
+  private readonly listeningPorts: ((pids: readonly number[]) => Promise<number[]>) | null;
+  private readonly portScanMs: number;
+  private readonly adoptedPollMs: number;
+  private portTimer?: ReturnType<typeof setInterval>;
+  private portScanRunning = false;
   private recordWrite: Promise<void> = Promise.resolve();
   /** Last launch's jobs whose marked processes outlived cleanup; kept in the record so the next launch tries again. */
   private carriedOver: RunningRecordFile["jobs"] = [];
@@ -203,6 +248,9 @@ export class BackgroundJobs {
     this.processStartTime = options.processStartTime ?? defaultProcessStartTime;
     this.processGroupMembers = options.processGroupMembers ?? defaultProcessGroupMembers;
     this.processHasEnvironment = options.processHasEnvironment ?? defaultProcessHasEnvironment;
+    this.listeningPorts = options.listeningPorts === undefined ? defaultListeningPorts : options.listeningPorts;
+    this.portScanMs = options.portScanMs ?? JOB_PORT_SCAN_MS;
+    this.adoptedPollMs = options.adoptedPollMs ?? ADOPTED_JOB_POLL_MS;
   }
 
   start(input: StartBackgroundJobInput): BackgroundJobView {
@@ -221,7 +269,7 @@ export class BackgroundJobs {
       throw new Error(`Aiden already has ${this.maxRunning} background jobs running. Stop one before starting another.`);
     }
     fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
-    const id = newJobId();
+    const id = newBackgroundJobId();
     const logPath = path.join(this.options.logDir, `${id}.log`);
     const log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
     log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
@@ -254,7 +302,7 @@ export class BackgroundJobs {
       child = spawn(command, {
         cwd: input.cwd,
         detached: true,
-        env: { ...input.env, AIDEN_BACKGROUND_JOB: id },
+        env: { ...input.env, [BACKGROUND_JOB_MARKER]: id },
         shell: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -289,6 +337,69 @@ export class BackgroundJobs {
     }
     this.writeRecord();
     this.options.onChange?.(input.chatId);
+    this.schedulePortScans();
+    return { ...view };
+  }
+
+  /**
+   * Track what a `run_command` call left running (a server started with a
+   * trailing `&`) as a job of the chat, so it is listed, can be stopped, and
+   * ends with the chat or with Aiden. Only processes in that group carrying
+   * the command's marker count; nothing is adopted without one. Adopted jobs
+   * have no output or exit code, and their end is not announced to the chat.
+   */
+  async adopt(input: AdoptBackgroundJobInput): Promise<BackgroundJobView | undefined> {
+    if (this.closed || process.platform === "win32") return undefined;
+    const group = input.processGroup;
+    if (!isBackgroundJobId(input.id) || this.jobs.has(input.id)) return undefined;
+    if (!Number.isSafeInteger(group) || group <= 1 || !groupExists(group)) return undefined;
+    if (!(await this.markedMembers(group, input.id)).length) return undefined;
+    const command = oneLine(input.command, MAX_JOB_COMMAND_CHARS);
+    const description = input.description ? oneLine(input.description, MAX_JOB_DESCRIPTION_CHARS) : "";
+    const view: BackgroundJobView = {
+      id: input.id,
+      chatId: input.chatId,
+      workspaceId: input.workspaceId,
+      command,
+      ...(description ? { description } : {}),
+      state: "running",
+      startedAt: this.now(),
+      pid: group,
+      outputBytes: 0,
+      origin: "command",
+    };
+    let settleExited!: () => void;
+    const exited = new Promise<void>((resolve) => {
+      settleExited = resolve;
+    });
+    const logPath = path.join(this.options.logDir, `${input.id}.log`);
+    const record: JobRecord = {
+      view,
+      cwd: input.cwd,
+      logPath,
+      tail: input.output ? ADOPTED_JOB_OUTPUT_NOTE : ADOPTED_JOB_NOTE,
+      decoder: new StringDecoder("utf8"),
+      exited,
+      adoptedGroup: group,
+      settleExited,
+    };
+    if (input.output) {
+      fs.mkdirSync(this.options.logDir, { recursive: true, mode: 0o700 });
+      record.log = fs.createWriteStream(logPath, { flags: "w", mode: 0o600 });
+      record.log.on("error", (error) => this.options.log?.("A background job log could not be written.", error));
+      record.adoptedOutput = input.output;
+      const capture = (chunk: Buffer) => this.capture(record, chunk);
+      input.output.stdout.on("data", capture);
+      input.output.stderr.on("data", capture);
+    }
+    this.jobs.set(input.id, record);
+    record.adoptedTimer = setInterval(() => {
+      if (!groupExists(group)) this.finishAdopted(record);
+    }, this.adoptedPollMs);
+    record.adoptedTimer.unref?.();
+    this.writeRecord();
+    this.options.onChange?.(input.chatId);
+    this.schedulePortScans();
     return { ...view };
   }
 
@@ -366,6 +477,8 @@ export class BackgroundJobs {
   /** Stop everything for quit; no new jobs start afterwards. */
   async shutdown(): Promise<void> {
     this.closed = true;
+    if (this.portTimer) clearInterval(this.portTimer);
+    this.portTimer = undefined;
     await Promise.all([...this.jobs.values()].map((job) => this.stopRecord(job, "app-quit")));
     await this.recordWrite;
   }
@@ -401,14 +514,7 @@ export class BackgroundJobs {
         continue;
       }
       if (typeof entry.id !== "string" || !/^job_[0-9a-f]{8}$/u.test(entry.id)) continue;
-      const marker = `AIDEN_BACKGROUND_JOB=${entry.id}`;
-      const marked = async () => {
-        const found: number[] = [];
-        for (const pid of await this.processGroupMembers(entry.pid)) {
-          if (await this.processHasEnvironment(pid, marker)) found.push(pid);
-        }
-        return found;
-      };
+      const marked = () => this.markedMembers(entry.pid, entry.id);
       let left = await marked();
       if (!left.length) continue;
       signalEach(left, "SIGTERM");
@@ -437,6 +543,16 @@ export class BackgroundJobs {
       await this.recordWrite;
     }
     return stopped;
+  }
+
+  /** Processes in the group that carry this job's marker. */
+  private async markedMembers(group: number, jobId: string): Promise<number[]> {
+    const marker = `${BACKGROUND_JOB_MARKER}=${jobId}`;
+    const found: number[] = [];
+    for (const pid of await this.processGroupMembers(group)) {
+      if (await this.processHasEnvironment(pid, marker)) found.push(pid);
+    }
+    return found;
   }
 
   private async waitUntil(done: () => boolean, withinMs = this.stopGraceMs): Promise<void> {
@@ -469,6 +585,10 @@ export class BackgroundJobs {
   private stopRecord(job: JobRecord, reason: BackgroundJobEndReason): Promise<void> {
     if (job.view.state !== "running") return job.exited;
     job.stopRequested ??= reason;
+    if (job.adoptedGroup !== undefined) {
+      job.adoptedStop ??= this.stopAdopted(job, job.adoptedGroup);
+      return job.exited;
+    }
     const pid = job.child?.pid;
     if (!pid) return job.exited;
     if (!job.forceTimer) {
@@ -485,6 +605,86 @@ export class BackgroundJobs {
       job.forceTimer.unref?.();
     }
     return job.exited;
+  }
+
+  /** Polite, then forced, and only ever to processes carrying the job's marker. */
+  private async stopAdopted(job: JobRecord, group: number): Promise<void> {
+    let left = await this.markedMembers(group, job.view.id);
+    signalEach(left, "SIGTERM");
+    const asked = left;
+    await this.waitUntil(() => asked.every((pid) => !processExists(pid)));
+    for (let round = 0; (left = await this.markedMembers(group, job.view.id)).length && round < FORCED_REAP_ROUNDS; round += 1) {
+      const forced = left;
+      signalEach(forced, "SIGKILL");
+      await this.waitUntil(() => forced.every((pid) => !processExists(pid)), FORCED_REAP_WAIT_MS);
+    }
+    this.finishAdopted(job);
+  }
+
+  private finishAdopted(job: JobRecord): void {
+    if (job.view.state !== "running") return;
+    if (job.adoptedTimer) clearInterval(job.adoptedTimer);
+    // A process that left the group can still hold the output open.
+    job.adoptedOutput?.stdout.destroy();
+    job.adoptedOutput?.stderr.destroy();
+    if (job.log) {
+      this.appendTail(job, job.decoder.end());
+      job.log.end();
+      job.log = undefined;
+    }
+    const reason = job.stopRequested;
+    job.view.state = reason ? "stopped" : "exited";
+    job.view.endedAt = this.now();
+    delete job.view.ports;
+    if (reason) job.view.endReason = reason;
+    this.forgetOldFinished(job.view.chatId);
+    this.writeRecord();
+    this.options.onChange?.(job.view.chatId);
+    job.settleExited?.();
+  }
+
+  private schedulePortScans(): void {
+    if (this.portTimer || !this.listeningPorts || this.closed) return;
+    this.portTimer = setInterval(() => void this.scanPorts(), this.portScanMs);
+    this.portTimer.unref?.();
+  }
+
+  /**
+   * Look up the ports each running job listens on: every few seconds for a
+   * new job (a dev server takes a moment to bind), less often after its first
+   * minute, and not at all once nothing runs.
+   */
+  async scanPorts(): Promise<void> {
+    const lookUp = this.listeningPorts;
+    if (!lookUp || this.portScanRunning) return;
+    this.portScanRunning = true;
+    try {
+      const running = [...this.jobs.values()].filter((job) => job.view.state === "running");
+      if (!running.length) {
+        if (this.portTimer) clearInterval(this.portTimer);
+        this.portTimer = undefined;
+        return;
+      }
+      for (const job of running) {
+        const now = this.now();
+        if ((job.nextPortScanAt ?? 0) > now) continue;
+        job.nextPortScanAt =
+          now + (now - job.view.startedAt < JOB_PORT_SETTLE_AGE_MS ? 0 : JOB_SETTLED_PORT_SCAN_MS);
+        const group = job.adoptedGroup ?? job.child?.pid;
+        if (!group) continue;
+        const ports = (await lookUp(await this.processGroupMembers(group))).slice(0, MAX_BACKGROUND_JOB_PORTS);
+        if (job.view.state !== "running") continue;
+        const before = job.view.ports ?? [];
+        if (ports.length === before.length && ports.every((port, index) => port === before[index])) continue;
+        if (ports.length) job.view.ports = ports;
+        else delete job.view.ports;
+        this.options.onChange?.(job.view.chatId);
+      }
+    } catch (error) {
+      this.options.log?.("Background job ports could not be read.", error);
+    } finally {
+      this.portScanRunning = false;
+    }
   }
 
   private capture(job: JobRecord, chunk: Buffer): void {
@@ -526,6 +726,7 @@ export class BackgroundJobs {
     const state: BackgroundJobState = reason ? "stopped" : code === 0 ? "exited" : "failed";
     job.view.state = state;
     job.view.endedAt = this.now();
+    delete job.view.ports;
     job.view.exitCode = code;
     if (signal) job.view.signal = signal;
     if (reason) job.view.endReason = reason;
@@ -574,6 +775,7 @@ export function describeJobEnd(job: BackgroundJobView): string {
   if (job.state === "running") return "still running";
   if (job.endReason === "output-limit") return "stopped: its output passed the size limit";
   if (job.endReason) return "stopped";
+  if (job.origin === "command") return "ended";
   if (job.signal) return `ended by signal ${job.signal}`;
   return `exited with code ${job.exitCode ?? "unknown"}`;
 }

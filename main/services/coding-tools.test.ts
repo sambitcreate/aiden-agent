@@ -3040,3 +3040,65 @@ test("foreground glob worker preserves Windows drive and UNC roots in expanded a
     assert.deepEqual(matches, [expected], pattern);
   }
 });
+
+test("run_command hands what a command leaves running to the chat, whether or not it kept the output open", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-leftovers-"));
+  const groups: number[] = [];
+  try {
+    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => console.log("still up"), 200);');
+    const adoptions: Array<{ group: number; marker: string; hasOutput: boolean; firstOutput?: string }> = [];
+    let marker = "";
+    const runCommand = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          marker = `job_${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}`;
+          const current = marker;
+          return {
+            env: { AIDEN_BACKGROUND_JOB: current },
+            adopt: async (group, _command, _description, output) => {
+              groups.push(group);
+              const firstOutput = output
+                ? await new Promise<string>((resolve) => output.stdout.once("data", (chunk: Buffer) => resolve(String(chunk))))
+                : undefined;
+              adoptions.push({ group, marker: current, hasOutput: Boolean(output), ...(firstOutput ? { firstOutput } : {}) });
+              return `adopted ${current}`;
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const text = (result: Awaited<ReturnType<typeof runCommand.execute>>) =>
+      result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    // A plain command leaves nothing behind and is never handed over.
+    assert.equal(text(await runCommand.execute("plain", { command: "echo done" })), "done");
+    assert.equal(adoptions.length, 0);
+
+    // Output sent to a file: the shell returns at once.
+    const redirected = await runCommand.execute("redirected", { command: "node server.cjs > server.log 2>&1 &" });
+    assert.match(text(redirected), /adopted job_/u);
+    assert.equal(adoptions[0]?.hasOutput, false);
+
+    // Output left on the command's pipe: it returns soon after the shell exits instead of
+    // waiting out the 2-minute limit, and the server's output keeps flowing to the adopter.
+    const startedAt = Date.now();
+    const inherited = await runCommand.execute("inherited", { command: "node server.cjs &" });
+    assert.ok(Date.now() - startedAt < 10_000, "the command returned without waiting for its deadline");
+    assert.equal(inherited.isError, undefined);
+    assert.equal(adoptions[1]?.hasOutput, true);
+    assert.match(text(inherited), /server up/u, "what it printed before returning is in the result");
+    assert.match(adoptions[1]?.firstOutput ?? "", /still up/u, "what it prints later reaches the adopter");
+    // Each command carried its own marker.
+    assert.notEqual(adoptions[0]?.marker, adoptions[1]?.marker);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

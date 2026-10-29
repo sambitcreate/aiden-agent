@@ -1691,6 +1691,28 @@ async function prepareGeneration(
   })
     ? { onLate: (late: McpLateDiscovery) => { lateMcpDiscovery = late; } }
     : undefined;
+  // Background jobs and pull request follows: workspace chats with folder
+  // access, on the Mac and Linux desktop. Their news reaches the chat later.
+  const followThroughAvailable =
+    !botContext &&
+    !assistantMode &&
+    Boolean(params.chatId) &&
+    Boolean(workspace) &&
+    Boolean(folderPath) &&
+    permission !== "none" &&
+    permission !== "read-only" &&
+    options.usageSource === "chat" &&
+    options.interactionSurface !== "telegram" &&
+    hostPlatformCapabilities().backgroundJobs;
+  // What a run_command call leaves running becomes one of the chat's background jobs.
+  const shellLeftovers =
+    followThroughAvailable && params.chatId && workspace && folderPath
+      ? (await import("./follow-through/follow-through-main.js")).runCommandLeftovers({
+          chatId: params.chatId,
+          workspaceId: workspace.id,
+          cwd: folderPath,
+        })
+      : undefined;
   let tools = (
     await buildAgentTools({
       mcpDeferral,
@@ -1712,6 +1734,7 @@ async function prepareGeneration(
       browserTools: browserDiscovery ? [browserDiscovery.tool] : [],
       deviceTools,
       ...(deviceShimDir ? { shellPathPrefix: deviceShimDir } : {}),
+      ...(shellLeftovers ? { shellLeftovers } : {}),
       allowScheduling: schedulingAllowed,
       allowMcpTools: botContext
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
@@ -1777,20 +1800,7 @@ async function prepareGeneration(
     const webFetchTool = await webFetchService.toolForGeneration();
     if (webFetchTool) tools.push(webFetchTool);
   }
-  // Background jobs and pull request follows: workspace chats with folder
-  // access, on the Mac and Linux desktop. Their news reaches the chat later.
-  if (
-    !botContext &&
-    !assistantMode &&
-    params.chatId &&
-    workspace &&
-    folderPath &&
-    permission !== "none" &&
-    permission !== "read-only" &&
-    options.usageSource === "chat" &&
-    options.interactionSurface !== "telegram" &&
-    hostPlatformCapabilities().backgroundJobs
-  ) {
+  if (followThroughAvailable && params.chatId && workspace && folderPath) {
     const { createFollowThroughTools } = await import("./follow-through/follow-through-tools-main.js");
     tools.push(
       ...createFollowThroughTools({

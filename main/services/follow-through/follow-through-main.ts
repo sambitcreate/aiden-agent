@@ -23,7 +23,15 @@ import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import type { HostRunSummary } from "../host-run-registry.js";
 import { llmClient } from "../llm-client.js";
-import { BackgroundJobs, describeJobEnd, formatDuration, type BackgroundJobEnded } from "./background-jobs.js";
+import {
+  BACKGROUND_JOB_MARKER,
+  BackgroundJobs,
+  describeJobEnd,
+  formatDuration,
+  newBackgroundJobId,
+  type BackgroundJobEnded,
+} from "./background-jobs.js";
+import type { RunCommandLeftovers } from "../coding-tools.js";
 import { DoneWhenChecks, DONE_WHEN_TIMEOUT_MS, type DoneWhenRecord } from "./done-when.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
 import type { PullRequestFollowRecord } from "./pull-request-follow.js";
@@ -210,6 +218,40 @@ export const pullRequestFollows = new PullRequestFollows({
   now: Date.now,
   log: (message, error) => logger.warn("follow-through", message, error),
 });
+
+/**
+ * `run_command` in a workspace chat: each command's processes carry a fresh
+ * job marker, and whatever the command leaves running becomes one of the
+ * chat's background jobs.
+ */
+export function runCommandLeftovers(input: { chatId: string; workspaceId: string; cwd: string }): RunCommandLeftovers {
+  return {
+    begin() {
+      const id = newBackgroundJobId();
+      return {
+        env: { [BACKGROUND_JOB_MARKER]: id },
+        adopt: async (processGroup, command, description, output) => {
+          const job = await backgroundJobs.adopt({
+            id,
+            ...input,
+            command,
+            ...(description ? { description } : {}),
+            processGroup,
+            ...(output ? { output } : {}),
+          });
+          if (!job) return undefined;
+          return [
+            `[Aiden: this command left processes running. They are now background job ${job.id}: the person sees it beside the chat with a Stop button, and it stops when the chat is deleted or Aiden quits.`,
+            output
+              ? `Read its output with background_job action "read".`
+              : "Its output went elsewhere, so Aiden does not capture it.",
+            "Next time, start servers and watchers with the background_job tool.]",
+          ].join(" ");
+        },
+      };
+    },
+  };
+}
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────
 

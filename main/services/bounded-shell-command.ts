@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 
 export interface BoundedShellCommandOptions {
   command: string;
@@ -8,6 +9,13 @@ export interface BoundedShellCommandOptions {
   /** Combined stdout and stderr bytes kept; more stops the command. */
   maxOutputBytes: number;
   signal?: AbortSignal;
+  /**
+   * When the shell has exited but processes it started still hold its output
+   * open (`npm run dev &`), return this long after the exit with
+   * `leftoverProcessGroup` and the open streams instead of waiting for the
+   * deadline. Without it the command waits, and the deadline stops the group.
+   */
+  releaseLeftoversAfterMs?: number;
 }
 
 export interface BoundedShellCommandResult {
@@ -17,6 +25,17 @@ export interface BoundedShellCommandResult {
   timedOut: boolean;
   outputLimitExceeded: boolean;
   aborted: boolean;
+  /**
+   * The shell exited on its own but processes it started are still in its
+   * process group (a server started with a trailing `&`). Nothing stops them;
+   * the caller decides whether to track them.
+   */
+  leftoverProcessGroup?: number;
+  /**
+   * With `releaseLeftoversAfterMs`: the output the leftovers still write to.
+   * The caller must keep reading (or resume) both, or the leftovers block.
+   */
+  leftoverOutput?: { stdout: Readable; stderr: Readable };
 }
 
 /**
@@ -102,8 +121,35 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
         terminate();
       }
     };
-    child.stdout.on("data", capture(stdout));
-    child.stderr.on("data", capture(stderr));
+    const captureStdout = capture(stdout);
+    const captureStderr = capture(stderr);
+    child.stdout.on("data", captureStdout);
+    child.stderr.on("data", captureStderr);
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    if (options.releaseLeftoversAfterMs !== undefined && process.platform !== "win32") {
+      const releaseAfter = options.releaseLeftoversAfterMs;
+      child.once("exit", (exitCode) => {
+        releaseTimer = setTimeout(() => {
+          if (settled || terminationRequested || !child.pid || !processGroupExists()) return;
+          settled = true;
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", abort);
+          child.stdout.off("data", captureStdout);
+          child.stderr.off("data", captureStderr);
+          resolve({
+            stdout: Buffer.concat(stdout).toString("utf-8"),
+            stderr: Buffer.concat(stderr).toString("utf-8"),
+            exitCode,
+            timedOut,
+            outputLimitExceeded,
+            aborted,
+            leftoverProcessGroup: child.pid,
+            leftoverOutput: { stdout: child.stdout, stderr: child.stderr },
+          });
+        }, releaseAfter);
+        releaseTimer.unref?.();
+      });
+    }
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
@@ -115,6 +161,7 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
       })();
     });
     child.once("close", (exitCode) => {
+      if (releaseTimer) clearTimeout(releaseTimer);
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
@@ -124,9 +171,11 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
         finishTermination();
         finishTermination = undefined;
       }
+      const leftoverProcessGroup = !terminationRequested && child.pid && processGroupExists() ? child.pid : undefined;
       void (async () => {
         await terminationCleanup;
         resolve({
+          ...(leftoverProcessGroup !== undefined ? { leftoverProcessGroup } : {}),
           stdout: Buffer.concat(stdout).toString("utf-8"),
           stderr: Buffer.concat(stderr).toString("utf-8"),
           exitCode,
