@@ -227,6 +227,8 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   const events: string[] = [];
   const application = fixture({
     toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
+    // Agent scratch state is removed only after the chat is durably gone.
+    forgetDeletedChat: async (chatId) => { events.push(`scratch:${chatId}`); },
     // Queued snapshots of the chat's visuals stop before anything is removed.
     visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
     subagentRunStore: {
@@ -258,7 +260,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete", "scratch:chat-1"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
@@ -281,6 +283,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
     } as ChatApplicationDependencies["subagentRunStore"],
     piRuntimeEffectStore: { deleteChat: async () => { events.push("effects-delete"); } },
     piCompactionSessionStore: { deleteChat: async () => { events.push("compaction-delete"); } },
+    forgetDeletedChat: async () => { events.push("scratch"); },
   });
 
   await assert.rejects(application.service.remove("chat-1"), /disk failed/u);

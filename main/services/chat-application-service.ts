@@ -91,6 +91,8 @@ export interface ChatApplicationDependencies {
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
+  /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
+  forgetDeletedChat?: (chatId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -372,6 +374,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
+        await deps.forgetDeletedChat?.(chatId).catch(() => undefined);
       } finally {
         if (!releaseAdmission) {
           try {

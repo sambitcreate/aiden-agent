@@ -38,6 +38,7 @@ export const chatApplicationService = createChatApplicationService({
     forgetChatContextProfile(chatId);
     void spending.forgetChat(chatId).catch(() => undefined);
   },
+  forgetDeletedChat: (chatId) => llmClient.forgetDeletedChat(chatId),
   attachments: remoteAttachmentStore,
   toolOutputStore,
   logError: (area, message, error) => logger.error(area, message, error),
