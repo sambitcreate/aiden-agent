@@ -1,5 +1,6 @@
 // Workspace CRUD + folder helpers (git status, reveal in Finder).
 
+import * as fs from "node:fs/promises";
 import type { IpcMainInvokeEvent, OpenDialogOptions } from "electron";
 import { BrowserWindow, dialog, ipcMain, shell } from "../platform.js";
 import { listExternalEditors, openFolderInExternalEditor } from "../services/external-editors.js";
@@ -14,6 +15,7 @@ import {
   gitDiff,
   gitInfo,
   gitManagedWorktreeBranchHead,
+  gitManagedWorktreeDeletionPending,
   gitPush,
   gitPushCapability,
   gitReview,
@@ -443,6 +445,17 @@ export function registerWorkspaceHandlers(): void {
         ? await missingWorktreeOptions(workspace, await workspaceApplicationService.list(), {
             branchHead: gitManagedWorktreeBranchHead,
             worktrees: (repositoryPath) => gitWorktrees(repositoryPath),
+            deletionPending: (managed) =>
+              managed.worktreeGitDir && managed.ownershipToken
+                ? gitManagedWorktreeDeletionPending(managed.worktreePath, managed.worktreeGitDir, managed.ownershipToken)
+                : Promise.resolve(false),
+            folderExists: async (folder) => {
+              try {
+                return (await fs.lstat(folder)).isDirectory();
+              } catch {
+                return false;
+              }
+            },
           })
         : undefined;
     return {

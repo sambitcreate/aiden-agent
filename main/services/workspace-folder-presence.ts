@@ -8,7 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Workspace } from "./types.js";
+import type { ManagedWorktree, Workspace } from "./types.js";
 import {
   type MissingWorktreeOptions,
   MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL,
@@ -54,11 +54,12 @@ export function checkedWorkspaceFolder(workspace: Pick<Workspace, "folderPath" |
 }
 
 export function workspaceFolderMissingText(workspace: Pick<Workspace, "name" | "folderPath" | "managedWorktree">): string {
-  const folder = checkedWorkspaceFolder(workspace);
-  const shown = folder ? displayWorkspaceFolder(folder) : undefined;
-  return workspace.managedWorktree
-    ? managedWorktreeMissingMessage(workspace.name, shown)
-    : workspaceFolderMissingMessage(workspace.name, shown);
+  // Aiden chose a worktree's folder, so its path tells the person nothing.
+  if (workspace.managedWorktree) return managedWorktreeMissingMessage(workspace.name, undefined);
+  return workspaceFolderMissingMessage(
+    workspace.name,
+    workspace.folderPath ? displayWorkspaceFolder(workspace.folderPath) : undefined,
+  );
 }
 
 export class WorkspaceFolderMissingError extends Error {
@@ -97,17 +98,34 @@ export interface MissingWorktreeGit {
   /** The commit the branch points at, or undefined when it no longer exists. */
   branchHead(repositoryPath: string, branch: string): Promise<string | undefined>;
   worktrees(repositoryPath: string): Promise<ReadonlyArray<{ path: string; branch?: string }>>;
+  /** True while an Aiden Remove of this worktree has not finished. */
+  deletionPending(managed: ManagedWorktree): Promise<boolean>;
+  /** Whether a folder exists (the checkout's parent, which Restore needs). */
+  folderExists(folder: string): Promise<boolean>;
+}
+
+/** The same folder, however it was spelled (a symlink, or letter case on macOS). */
+async function sameFolder(left: string, right: string): Promise<boolean> {
+  if (path.resolve(left) === path.resolve(right)) return true;
+  try {
+    const [a, b] = await Promise.all([fs.realpath(left), fs.realpath(right)]);
+    return a === b;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * What the notice for a deleted managed worktree can offer: Restore when its
- * branch still exists and no other worktree has it checked out, and a new
- * chat in the workspace for the repository's main checkout (the same nested
- * folder the worktree was made from when there is one, else the repository
- * root). A Git error only takes Restore away; it never hides the notice.
+ * branch still exists, no other worktree has it checked out, Aiden was not
+ * in the middle of removing it, and the folder it lives in is still there;
+ * and a new chat in the workspace for the repository's main checkout (the
+ * same nested folder the worktree was made from when there is one, else the
+ * repository root). A Git error only takes Restore away; it never hides the
+ * notice.
  */
 export async function missingWorktreeOptions(
-  workspace: Pick<Workspace, "folderPath" | "managedWorktree">,
+  workspace: Pick<Workspace, "folderPath" | "managedWorktree" | "permission">,
   workspaces: readonly Workspace[],
   git: MissingWorktreeGit,
 ): Promise<MissingWorktreeOptions | undefined> {
@@ -115,7 +133,14 @@ export async function missingWorktreeOptions(
   if (!managed) return undefined;
   let restorable = false;
   try {
-    if ((await git.branchHead(managed.repositoryPath, managed.branch)) !== undefined) {
+    if (
+      managed.worktreeGitDir &&
+      managed.ownershipToken &&
+      workspace.permission !== "none" &&
+      (await git.folderExists(path.dirname(path.resolve(managed.worktreePath)))) &&
+      !(await git.deletionPending(managed)) &&
+      (await git.branchHead(managed.repositoryPath, managed.branch)) !== undefined
+    ) {
       const checkout = path.resolve(managed.worktreePath);
       restorable = !(await git.worktrees(managed.repositoryPath)).some(
         (worktree) => worktree.branch === managed.branch && path.resolve(worktree.path) !== checkout,
@@ -125,19 +150,23 @@ export async function missingWorktreeOptions(
     restorable = false;
   }
   const subpath = workspace.folderPath ? path.relative(managed.worktreePath, workspace.folderPath) : "";
-  const candidates = [path.resolve(managed.repositoryPath, subpath), path.resolve(managed.repositoryPath)];
-  const main = candidates
-    .map((folder) =>
-      workspaces.find(
-        (candidate) =>
-          !candidate.managedWorktree &&
-          !candidate.scratch &&
-          candidate.permission !== "none" &&
-          candidate.folderPath !== undefined &&
-          path.resolve(candidate.folderPath) === folder,
-      ),
-    )
-    .find((candidate) => candidate !== undefined);
+  const eligible = workspaces.filter(
+    (candidate) =>
+      !candidate.managedWorktree &&
+      !candidate.scratch &&
+      candidate.permission !== "none" &&
+      candidate.folderPath !== undefined,
+  );
+  let main: Workspace | undefined;
+  for (const folder of [path.resolve(managed.repositoryPath, subpath), path.resolve(managed.repositoryPath)]) {
+    for (const candidate of eligible) {
+      if (await sameFolder(candidate.folderPath!, folder)) {
+        main = candidate;
+        break;
+      }
+    }
+    if (main) break;
+  }
   return {
     branch: managed.branch,
     restorable,

@@ -43,7 +43,8 @@ test("a chat whose worktree folder was deleted waits, then restores the worktree
 
   const notice = page.getByRole("status", { name: "Worktree folder missing" });
   await expect(notice).toBeVisible({ timeout: 15_000 });
-  await expect(notice).toContainText("aiden/fix-the-login-bug is still there");
+  await expect(notice).toContainText("restore it from its branch aiden/fix-the-login-bug");
+  await expect(notice.getByRole("button", { name: "Check again" })).toBeVisible();
   await expect(composer).toHaveValue(next);
   await expect(page.getByText(E2E_ASSISTANT_RESPONSE)).toHaveCount(1);
 

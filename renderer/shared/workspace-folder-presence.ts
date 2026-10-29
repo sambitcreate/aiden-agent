@@ -11,7 +11,10 @@ export interface WorkspaceFolderPresenceResult {
 
 export interface MissingWorktreeOptions {
   branch: string;
-  /** The branch still exists and no other worktree has it, so the checkout can be put back. */
+  /**
+   * The branch still exists, no other worktree has it, and Aiden was not in
+   * the middle of removing it, so the checkout can be put back.
+   */
   restorable: boolean;
   /** The workspace for the repository's main checkout, for a new chat there. */
   mainWorkspaceId?: string;
@@ -38,7 +41,7 @@ export function managedWorktreeMissingMessage(
   if (!options.restorable) {
     return `The worktree folder for “${name}” is missing${where}, and its branch ${options.branch} can't be checked out again (it was deleted, or another worktree has it). ${capitalize(elsewhere)}.`;
   }
-  return `The worktree folder for “${name}” is missing${where}. Its branch ${options.branch} is still there, so you can restore the worktree, or ${elsewhere}. Changes that weren't committed went with the folder.`;
+  return `The worktree folder for “${name}” is missing${where}. If it's in the Trash, put it back to keep uncommitted changes, then check again. Or restore it from its branch ${options.branch}, or ${elsewhere}.`;
 }
 
 function capitalize(text: string): string {

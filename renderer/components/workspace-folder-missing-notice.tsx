@@ -9,8 +9,8 @@ import {
 /**
  * Above the composer while the chat's workspace folder is gone. Sends are
  * refused until the folder is back, so the draft stays in the composer. For a
- * deleted Aiden-managed worktree it offers Restore worktree and a new chat in
- * the main checkout that takes the unsent message along.
+ * deleted Aiden-managed worktree it also offers Restore worktree and a new
+ * chat in the main checkout that takes the unsent message along.
  */
 export function WorkspaceFolderMissingNotice({
   workspaceName,
@@ -45,11 +45,10 @@ export function WorkspaceFolderMissingNotice({
           <span>{message}</span>
         </p>
         <div className="mt-1 flex flex-wrap justify-end gap-1.5">
-          {canRestore || canStartInMain ? null : (
-            <Button variant="transparent" size="small" disabled={checking} onClick={onCheckAgain}>
-              {checking ? "Checking…" : "Check again"}
-            </Button>
-          )}
+          {/* Putting the folder back from the Trash keeps uncommitted work, so Check again stays. */}
+          <Button variant="transparent" size="small" disabled={checking || restoring} onClick={onCheckAgain}>
+            {checking ? "Checking…" : "Check again"}
+          </Button>
           {canStartInMain ? (
             <Button
               variant={canRestore ? "transparent" : "accent"}

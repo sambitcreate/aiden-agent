@@ -108,7 +108,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     gitDeleteManagedWorktreeSnapshotRef(repositoryPath, snapshotId, expectedCommit),
   restoreManagedCheckout: gitRestoreManagedWorktreeCheckout,
   resumeManagedCheckout: gitResumeManagedWorktreeCheckout,
-  restoreDeletedCheckout: (managed, root, workspaceSubpath, signal) => gitRestoreDeletedManagedWorktreeCheckout(
+  restoreDeletedCheckout: (managed, root, workspaceSubpath, commit, signal) => gitRestoreDeletedManagedWorktreeCheckout(
     managed.repositoryPath,
     root,
     managed.worktreePath,
@@ -116,6 +116,7 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
     managed.worktreeGitDir!,
     managed.ownershipToken!,
     workspaceSubpath,
+    commit,
     signal,
   ),
   applyWorktreeSnapshot: (worktreePath, snapshotCommit, signal) =>

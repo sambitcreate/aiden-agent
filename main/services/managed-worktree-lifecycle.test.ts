@@ -956,9 +956,28 @@ test("a managed worktree deleted outside Aiden comes back on its branch, with co
     false,
   );
 
+  // Saving the restored record fails: the new checkout is taken away again
+  // and the branch is untouched, so Restore can simply be tried again.
+  await assert.rejects(
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken, "",
+      async () => { throw new Error("disk full"); },
+    ),
+    /disk full/u,
+  );
+  await assert.rejects(fs.lstat(created.path), { code: "ENOENT" });
+  assert.equal(await git(repository, ["rev-parse", "aiden/fix"]), branchHead, "the branch is kept");
+  assert.ok(
+    !(await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${created.path}`),
+    "the rolled-back checkout is not registered",
+  );
+
+  let recorded: string | undefined;
   const restored = await service.restoreDeletedManagedWorktreeCheckout(
     repository, root, created.path, "aiden/fix", created.worktreeGitDir, created.ownershipToken, "",
+    async (worktree) => { recorded = worktree.ownershipToken; },
   );
+  assert.equal(recorded, restored.ownershipToken, "the new identity is recorded before it returns");
   assert.equal(restored.path, created.path, "it is back in the same place");
   assert.equal(await fs.readFile(path.join(restored.path, "fix.txt"), "utf8"), "fixed\n", "with the branch's commits");
   assert.equal(await git(restored.path, ["rev-parse", "HEAD"]), branchHead);
@@ -982,7 +1001,9 @@ test("a deleted worktree is not restored when its branch is gone, taken, or the 
   const root = await temporaryDirectory(t);
   const service = new GitService({ cacheTtlMs: 0 });
   const restore = (created: Awaited<ReturnType<GitService["createWorktree"]>>, branch: string, token = created.ownershipToken) =>
-    service.restoreDeletedManagedWorktreeCheckout(repository, root, created.path, branch, created.worktreeGitDir, token, "");
+    service.restoreDeletedManagedWorktreeCheckout(
+      repository, root, created.path, branch, created.worktreeGitDir, token, "", async () => undefined,
+    );
 
   // The folder is still there.
   const present = await service.createWorktree(repository, root, "aiden/present");
@@ -1007,7 +1028,7 @@ test("a deleted worktree is not restored when its branch is gone, taken, or the 
   // Git's record of the folder carries another owner's marker: it is left alone.
   const foreign = await service.createWorktree(repository, root, "aiden/foreign");
   await fs.rm(foreign.path, { recursive: true, force: true });
-  await assert.rejects(restore(foreign, "aiden/foreign", randomUUID()));
+  await assert.rejects(restore(foreign, "aiden/foreign", randomUUID()), /ownership could not be verified/u);
   assert.ok(
     (await git(repository, ["worktree", "list", "--porcelain"])).includes(`worktree ${foreign.path}`),
     "the registration it could not verify is kept",
