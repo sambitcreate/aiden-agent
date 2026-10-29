@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import {
   captureDetachedLifecycleChat,
   clearInactiveDetachedLifecycleChat,
@@ -7,6 +7,7 @@ import {
   detachedLifecycleChatProjection,
   detachedTextStreamingRemaining,
   fallbackDetachedLifecycleStream,
+  MAX_RECONCILIATION_ATTEMPTS,
   isDetachedLifecycleChatDraining,
   parseChatReadResponse,
   parseChatSettlementNotification,
@@ -882,4 +883,196 @@ test("a saved reply hides an own run, but a mirrored run only by its own reply",
   assert.equal(visibleDetachedLifecycleProjection(mirrored, [reply("run-old"), reply("run-new")]), null);
 
   assert.equal(visibleDetachedLifecycleProjection(null, [reply("run-new")]), null);
+});
+
+function fakeStreamChannels() {
+  const listeners = new Map<string, Set<(payload: unknown) => void>>();
+  return {
+    subscribe: (channel: string, handler: (payload: unknown) => void) => {
+      const handlers = listeners.get(channel) ?? new Set();
+      handlers.add(handler);
+      listeners.set(channel, handlers);
+      return () => handlers.delete(handler);
+    },
+    emit: (channel: string, payload: unknown) => {
+      for (const handler of listeners.get(channel) ?? []) handler(payload);
+    },
+  };
+}
+
+const nextFrame = () => new Promise<void>((resolve) => setTimeout(resolve, 40));
+
+test("a detached stream's tokens notify subscribers once a frame, structural changes at once", async () => {
+  const channels = fakeStreamChannels();
+  const unsubscribeChannels = subscribeDetachedTerminalChats(channels.subscribe, () => undefined);
+  const owner = detached("frame-batched", "chat-frame", "workspace-1");
+  rememberDetachedLifecycleStream(owner);
+  let notifications = 0;
+  const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
+  try {
+    for (const delta of ["Hel", "lo", " world"]) {
+      channels.emit("chat:delta", { streamId: owner.streamId, delta });
+    }
+    channels.emit("chat:reasoning-delta", { streamId: owner.streamId, delta: "Thinking" });
+    // The projection is current for any render, but nobody was told per token.
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "Hello world");
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.reasoning, "Thinking");
+    assert.equal(notifications, 0);
+    await nextFrame();
+    assert.equal(notifications, 1);
+
+    // A structural change (a new timeline) notifies at once and carries the pending text with it.
+    channels.emit("chat:delta", { streamId: owner.streamId, delta: "!" });
+    channels.emit("chat:timeline", {
+      streamId: owner.streamId,
+      timeline: { version: 3, generationId: owner.streamId, status: "running", startedAt: 1, steps: [] },
+    });
+    assert.equal(notifications, 2);
+    await nextFrame();
+    assert.equal(notifications, 2);
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "Hello world!");
+
+    // A reset clears the reply now rather than a frame later.
+    channels.emit("chat:delta", { streamId: owner.streamId, reset: true });
+    assert.equal(notifications, 3);
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "");
+  } finally {
+    unsubscribe();
+    unsubscribeChannels();
+    channels.emit("chat:done", { streamId: owner.streamId, chat: chat(owner.chatId, "done") });
+  }
+});
+
+test("a mirrored run's growing text notifies once a frame; its end notifies at once", async () => {
+  const owner = detached("mirrored-frame", "chat-mirrored-frame", "workspace-1");
+  let notifications = 0;
+  const unsubscribe = subscribeDetachedLifecycleStreams(() => notifications++);
+  try {
+    publishObservedRunProjection(owner, { text: "A", reasoning: "", timeline: null, textStreaming: true }, 1);
+    // A new run is structural.
+    assert.equal(notifications, 1);
+    publishObservedRunProjection(owner, { text: "AB", reasoning: "", timeline: null, textStreaming: true }, 2);
+    publishObservedRunProjection(owner, { text: "ABC", reasoning: "", timeline: null, textStreaming: true }, 3);
+    assert.equal(notifications, 1);
+    assert.equal(detachedLifecycleChatProjection(owner.chatId, owner.workspaceId)?.content, "ABC");
+    await nextFrame();
+    assert.equal(notifications, 2);
+    publishObservedRunProjection(
+      owner,
+      { text: "ABC", reasoning: "", timeline: null, textStreaming: false, finished: true },
+      4,
+    );
+    assert.equal(notifications, 3);
+  } finally {
+    clearObservedRunProjection(owner.chatId, owner.workspaceId);
+    unsubscribe();
+  }
+});
+
+test("a chat read that keeps failing backs off and gives up instead of polling every 100 ms", async () => {
+  const pauses: number[] = [];
+  let reads = 0;
+  const result = await reconcileChatReadUntilAuthoritative({
+    isDeleted: () => false,
+    waitUntilIdle: async () => true,
+    refreshChat: async () => {
+      reads += 1;
+      throw new Error("chat file unreadable");
+    },
+    refreshChatList: async () => undefined,
+    pause: async (delayMs) => {
+      pauses.push(delayMs);
+    },
+  });
+  assert.equal(result, "failed");
+  assert.equal(reads, MAX_RECONCILIATION_ATTEMPTS);
+  assert.equal(pauses.length, MAX_RECONCILIATION_ATTEMPTS - 1);
+  assert.equal(pauses[0], 100);
+  for (let index = 1; index < pauses.length; index += 1) {
+    assert.ok(pauses[index]! >= pauses[index - 1]!, "pauses never shrink");
+  }
+  assert.equal(Math.max(...pauses), 5_000);
+});
+
+test("settlement waits keep waiting while main reports busy but give up when the wait keeps failing", async () => {
+  // Busy is main's bounded grace running out on a long run: keep waiting.
+  const outcomes = [false, false, false, false, false, false, false, false, false, false, false, true];
+  assert.equal(
+    await waitForDetachedLifecycleSettlement(
+      async () => outcomes.shift() ?? true,
+      async () => undefined,
+    ),
+    true,
+  );
+
+  let waits = 0;
+  const unavailable = await reconcileChatReadUntilAuthoritative({
+    isDeleted: () => false,
+    waitUntilIdle: async () => {
+      waits += 1;
+      throw new Error("IPC unavailable");
+    },
+    refreshChat: async () => assert.fail("never read before main settles"),
+    refreshChatList: async () => undefined,
+    pause: async () => undefined,
+  });
+  assert.equal(unavailable, "failed");
+  assert.equal(waits, MAX_RECONCILIATION_ATTEMPTS);
+
+  // Deletion still stops a wait at once.
+  let deleted = false;
+  assert.equal(
+    await reconcileChatReadUntilAuthoritative({
+      isDeleted: () => deleted,
+      waitUntilIdle: async () => {
+        deleted = true;
+        throw new Error("gone");
+      },
+      refreshChat: async () => undefined,
+      refreshChatList: async () => undefined,
+      pause: async () => undefined,
+    }),
+    "deleted",
+  );
+});
+
+test("a fallback handoff that keeps failing stops retrying and releases the draining chat", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  const channels = fakeStreamChannels();
+  let attempts = 0;
+  const unsubscribe = subscribeDetachedTerminalChats(
+    channels.subscribe,
+    () => undefined,
+    () => {
+      attempts += 1;
+      return Promise.reject(new Error("cache unavailable"));
+    },
+  );
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  try {
+    const owner = detached("fallback-gives-up", "chat-gives-up", "workspace-1");
+    rememberDetachedLifecycleStream(owner);
+    assert.equal(fallbackDetachedLifecycleStream(owner.streamId), true);
+    await settle();
+    assert.equal(attempts, 1);
+    // The first retry waits the base delay, not less.
+    mock.timers.tick(99);
+    await settle();
+    assert.equal(attempts, 1);
+    mock.timers.tick(1);
+    await settle();
+    assert.equal(attempts, 2);
+    for (let tick = 0; tick < 40 && attempts < MAX_RECONCILIATION_ATTEMPTS; tick += 1) {
+      mock.timers.tick(5_000);
+      await settle();
+    }
+    assert.equal(attempts, MAX_RECONCILIATION_ATTEMPTS);
+    assert.equal(isDetachedLifecycleChatDraining(owner.chatId, owner.workspaceId), false);
+    mock.timers.tick(60_000);
+    await settle();
+    assert.equal(attempts, MAX_RECONCILIATION_ATTEMPTS);
+  } finally {
+    unsubscribe();
+    mock.timers.reset();
+  }
 });

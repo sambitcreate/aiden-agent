@@ -21,6 +21,14 @@ const MAX_DETACHED_CONTENT_CHARS = 1_000_000;
 const MAX_DETACHED_REASONING_CHARS = 250_000;
 const MAX_DETACHED_ARTIFACTS = 8;
 const FALLBACK_RETRY_DELAY_MS = 100;
+/** Retry pauses double from 100 ms and stop growing here. */
+const MAX_RETRY_DELAY_MS = 5_000;
+/**
+ * Failed attempts a reconciliation makes before it gives up and leaves the
+ * chat to its own read (about 20 s of backoff), so a chat whose read keeps
+ * failing is not polled forever and does not stay draining until a reload.
+ */
+export const MAX_RECONCILIATION_ATTEMPTS = 10;
 const detachedLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
 const fallbackLifecycleStreams = new Map<string, DetachedLifecycleStreamOwner>();
 const detachedLifecycleProjections = new Map<string, DetachedLifecycleProjection>();
@@ -38,6 +46,9 @@ const terminalSettlementInFlight = new Set<string>();
 const chatReadReconciliations = new Map<string, ChatReadReconciliation>();
 const chatReadReconciliationInFlight = new Set<string>();
 const registryListeners = new Set<() => void>();
+/** Failed fallback / read-reconciliation settlements per retained owner key. */
+const fallbackRetryAttempts = new Map<string, number>();
+const chatReadReconciliationRetryAttempts = new Map<string, number>();
 const fallbackListeners = new Set<(owner: DetachedLifecycleStreamOwner) => void | Promise<void>>();
 const chatReadReconciliationListeners = new Set<
   (owner: ChatReadReconciliation) => void | Promise<void>
@@ -127,8 +138,43 @@ type SettlementSubscribe = (
   handler: (payload: unknown) => void,
 ) => () => void;
 
+/** The backoff before retry `attempt` (1-based): 100 ms doubling, capped at 5 s. */
+export function reconciliationRetryDelayMs(attempt: number): number {
+  const exponent = Math.max(0, Math.min(16, Math.floor(attempt) - 1));
+  return Math.min(MAX_RETRY_DELAY_MS, FALLBACK_RETRY_DELAY_MS * 2 ** exponent);
+}
+
+type FrameHandle = { cancel: () => void };
+let pendingRegistryFrame: FrameHandle | null = null;
+
+function scheduleFrame(callback: () => void): FrameHandle {
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    const id = globalThis.requestAnimationFrame(() => callback());
+    return { cancel: () => globalThis.cancelAnimationFrame(id) };
+  }
+  const id = globalThis.setTimeout(callback, 16);
+  return { cancel: () => globalThis.clearTimeout(id) };
+}
+
 function emitRegistryChange(): void {
+  // A structural change notifies now and carries any streamed text with it.
+  pendingRegistryFrame?.cancel();
+  pendingRegistryFrame = null;
   for (const listener of registryListeners) listener();
+}
+
+/**
+ * Streamed text and reasoning change the projection on every delta. The
+ * projection itself updates at once (a render for any other reason reads it),
+ * but subscribers hear about it at most once a frame, like an owned stream's
+ * flush, so a detached or mirrored run does not re-render the pane per token.
+ */
+function scheduleRegistryChange(): void {
+  if (pendingRegistryFrame !== null) return;
+  pendingRegistryFrame = scheduleFrame(() => {
+    pendingRegistryFrame = null;
+    for (const listener of registryListeners) listener();
+  });
 }
 
 function deleteDetachedProjection(streamId: string): void {
@@ -162,11 +208,15 @@ export function detachedTextStreamingRemaining(
 function updateDetachedProjection(
   streamId: string,
   update: (current: DetachedLifecycleProjection) => DetachedLifecycleProjection,
+  notify: "now" | "frame" = "now",
 ): void {
   const current = detachedLifecycleProjections.get(streamId);
   if (!current || !detachedLifecycleStreams.has(streamId)) return;
-  detachedLifecycleProjections.set(streamId, update(current));
-  emitRegistryChange();
+  const next = update(current);
+  if (next === current) return;
+  detachedLifecycleProjections.set(streamId, next);
+  if (notify === "frame") scheduleRegistryChange();
+  else emitRegistryChange();
 }
 
 function chatReadReconciliationKey(owner: ChatReadReconciliation): string {
@@ -198,13 +248,23 @@ function requestFallback(owner: DetachedLifecycleStreamOwner): void {
     fallbackSettlementInFlight.delete(owner.streamId);
     if (results.some((result) => result.status === "rejected")) {
       // A rejected renderer/cache handoff is not settlement. Retain the drain
-      // marker and retry while this exact owner is still pending.
-      if (fallbackLifecycleStreams.get(owner.streamId) === owner) {
-        globalThis.setTimeout(() => requestFallback(owner), FALLBACK_RETRY_DELAY_MS);
+      // marker and retry, backing off, while this exact owner is still pending.
+      if (fallbackLifecycleStreams.get(owner.streamId) !== owner) {
+        fallbackRetryAttempts.delete(owner.streamId);
+        emitRegistryChange();
+        return;
       }
-      emitRegistryChange();
-      return;
+      const attempt = (fallbackRetryAttempts.get(owner.streamId) ?? 0) + 1;
+      if (attempt < MAX_RECONCILIATION_ATTEMPTS) {
+        fallbackRetryAttempts.set(owner.streamId, attempt);
+        globalThis.setTimeout(() => requestFallback(owner), reconciliationRetryDelayMs(attempt));
+        emitRegistryChange();
+        return;
+      }
+      // Out of attempts: release the drain marker so the composer recovers;
+      // the chat's own read (and its error state) takes over.
     }
+    fallbackRetryAttempts.delete(owner.streamId);
     fallbackLifecycleStreams.delete(owner.streamId);
     deleteDetachedProjection(owner.streamId);
     emitRegistryChange();
@@ -514,7 +574,14 @@ export function publishObservedRunProjection(
     return false;
   }
   observedRunProjections.set(key, next);
-  emitRegistryChange();
+  // Only the streamed text and reasoning grew: tell subscribers once a frame.
+  const textOnly =
+    sameRun &&
+    previous.timeline === next.timeline &&
+    previous.doneMessageId === next.doneMessageId &&
+    previous.finished === next.finished;
+  if (textOnly) scheduleRegistryChange();
+  else emitRegistryChange();
   return true;
 }
 
@@ -706,10 +773,19 @@ function requestChatReadReconciliation(owner: ChatReadReconciliation): void {
       results.some((result) => result.status === "rejected") &&
       chatReadReconciliations.get(key) === owner
     ) {
-      globalThis.setTimeout(() => requestChatReadReconciliation(owner), FALLBACK_RETRY_DELAY_MS);
-      emitRegistryChange();
-      return;
+      const attempt = (chatReadReconciliationRetryAttempts.get(key) ?? 0) + 1;
+      if (attempt < MAX_RECONCILIATION_ATTEMPTS) {
+        chatReadReconciliationRetryAttempts.set(key, attempt);
+        globalThis.setTimeout(
+          () => requestChatReadReconciliation(owner),
+          reconciliationRetryDelayMs(attempt),
+        );
+        emitRegistryChange();
+        return;
+      }
+      // Out of attempts: drop the marker rather than keep the chat draining.
     }
+    chatReadReconciliationRetryAttempts.delete(key);
     if (chatReadReconciliations.get(key) === owner) {
       chatReadReconciliations.delete(key);
       emitRegistryChange();
@@ -764,41 +840,66 @@ export function preferLatestTerminalChat(current: Chat | null | undefined, incom
   return incoming;
 }
 
-/** Retry bounded main-process waits until ownership has actually settled. */
+/** Waits between reconciliation attempts; `delayMs` is the backoff for this one. */
+export type ReconciliationPause = (delayMs: number) => Promise<void>;
+
+const defaultReconciliationPause: ReconciliationPause = (delayMs) =>
+  new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs));
+
+/**
+ * Retry bounded main-process waits until ownership has actually settled.
+ * `false` means main waited out its own bounded grace while the chat stayed
+ * busy (a long run), so that keeps waiting. A thrown wait (IPC unavailable)
+ * backs off, and after `MAX_RECONCILIATION_ATTEMPTS` consecutive failures
+ * this resolves `false` so the caller can give up instead of polling forever.
+ */
 export async function waitForDetachedLifecycleSettlement(
   waitUntilIdle: () => Promise<boolean>,
-  pause: () => Promise<void> = () =>
-    new Promise<void>((resolve) => window.setTimeout(resolve, 100)),
-): Promise<void> {
+  pause: ReconciliationPause = defaultReconciliationPause,
+  isCancelled: () => boolean = () => false,
+): Promise<boolean> {
+  let failures = 0;
   for (;;) {
+    if (isCancelled()) return false;
     try {
-      if (await waitUntilIdle()) return;
+      if (await waitUntilIdle()) return true;
+      failures = 0;
+      await pause(FALLBACK_RETRY_DELAY_MS);
     } catch {
-      // Renderer/main reconnects and bounded wait timeouts are retryable. The
-      // fallback drain marker stays installed until an authoritative success.
+      // Renderer/main reconnects are retryable, with backoff. The fallback
+      // drain marker stays installed until success or the attempts run out.
+      failures += 1;
+      if (failures >= MAX_RECONCILIATION_ATTEMPTS) return false;
+      await pause(reconciliationRetryDelayMs(failures));
     }
-    await pause();
   }
 }
 
 /**
  * Reconcile a provisional transcript without trusting one-shot notifications.
  * Individual ownership waits stay bounded in main; this retained renderer task
- * retries until the exact transcript and its list metadata are both refreshed.
+ * retries, backing off, until the exact transcript and its list metadata are
+ * both refreshed. A read that keeps failing ends as `"failed"` after
+ * `MAX_RECONCILIATION_ATTEMPTS`, so the caller can surface the chat's own
+ * load error instead of leaving it draining.
  */
 export async function reconcileChatReadUntilAuthoritative(options: {
   isDeleted: () => boolean;
   waitUntilIdle: () => Promise<boolean>;
   refreshChat: () => Promise<void>;
   refreshChatList: () => Promise<void>;
-  pause?: () => Promise<void>;
-}): Promise<"deleted" | "reconciled"> {
-  const pause =
-    options.pause ?? (() => new Promise<void>((resolve) => window.setTimeout(resolve, 100)));
+  pause?: ReconciliationPause;
+}): Promise<"deleted" | "reconciled" | "failed"> {
+  const pause = options.pause ?? defaultReconciliationPause;
   if (options.isDeleted()) return "deleted";
-  await waitForDetachedLifecycleSettlement(options.waitUntilIdle, pause);
+  const settled = await waitForDetachedLifecycleSettlement(
+    options.waitUntilIdle,
+    pause,
+    options.isDeleted,
+  );
   if (options.isDeleted()) return "deleted";
-  for (;;) {
+  if (!settled) return "failed";
+  for (let attempt = 1; ; attempt += 1) {
     try {
       await options.refreshChat();
       if (options.isDeleted()) return "deleted";
@@ -806,7 +907,8 @@ export async function reconcileChatReadUntilAuthoritative(options: {
       return options.isDeleted() ? "deleted" : "reconciled";
     } catch {
       if (options.isDeleted()) return "deleted";
-      await pause();
+      if (attempt >= MAX_RECONCILIATION_ATTEMPTS) return "failed";
+      await pause(reconciliationRetryDelayMs(attempt));
     }
   }
 }
@@ -853,7 +955,7 @@ export function subscribeDetachedTerminalChats(
       reasoning: reset ? "" : current.reasoning,
       lastTextDeltaAt:
         reset ? null : (delta as string).length > 0 ? Date.now() : current.lastTextDeltaAt,
-    }));
+    }), reset ? "now" : "frame");
   });
   const unsubscribeReasoning = subscribe("chat:reasoning-delta", (payload) => {
     const parsed = streamPayload(payload);
@@ -865,7 +967,7 @@ export function subscribeDetachedTerminalChats(
         parsed.payload.delta as string,
         MAX_DETACHED_REASONING_CHARS,
       ),
-    }));
+    }), "frame");
   });
   const unsubscribeTimeline = subscribe("chat:timeline", (payload) => {
     const parsed = streamPayload(payload);
