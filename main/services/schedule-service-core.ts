@@ -765,7 +765,13 @@ export function createScheduleServiceCore(
         if (options.signal?.aborted) {
           return rollbackCancellation(task.updatedAt);
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          // Cancellation can refuse the scheduling write after the save committed.
+          if (!options.signal?.aborted) throw error;
+          return rollbackCancellation((await store.get(task.id))?.updatedAt ?? task.updatedAt);
+        }
         const latest = (await store.get(task.id)) ?? task;
         if (options.signal?.aborted) {
           return rollbackCancellation(latest.updatedAt);
@@ -859,7 +865,11 @@ export function createScheduleServiceCore(
           await restore();
           throwIfAborted(options.signal, "resume");
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          if (!options.signal?.aborted) throw error;
+        }
         if (options.signal?.aborted) {
           stopJob(id);
           await restore();

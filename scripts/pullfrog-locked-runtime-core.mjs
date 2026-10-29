@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 export const PULLFROG_SOURCE_SHA = "0657d542f2e34565c6254d5c84581313e631cd90";
 const INSTALLER_SHA256 = "c21f552d791c65cbab4ebbda979ab21ab24addfbe167a20a60abb9858e947388";
+const SKILLS_SHA256 = "6749108d484db7425645f3dd980ec98974db907ba412453c9925401eda33e67b";
 const VERSIONS = { "opencode-ai": "1.18.5", "@anthropic-ai/claude-code": "2.1.150" };
 const INSTALLERS = ["installFromNpmTarball", "installFromGithub", "installFromGithubTarball", "installFromDirectTarball", "installFromCurl"];
 
@@ -54,4 +55,16 @@ export function rewritePullfrogInstaller(source, helperUrl) {
       ? `export async function ${name}(params) { return lockedNpmExecutable(params, import.meta.url); }`
       : `export async function ${name}() { throw new Error("Pullfrog runtime downloads are disabled; use the frozen executable packages."); }`,
   ).join("\n");
+}
+
+/**
+ * The agents' automatic `addSkill` runs `npx -y skills@...`, which installs packages outside the
+ * frozen tree with the action's environment. Bundled skills still install from local files.
+ */
+export function rewritePullfrogSkills(source) {
+  if (createHash("sha256").update(source).digest("hex") !== SKILLS_SHA256) throw new Error("Pullfrog skills source changed; review the execution chain.");
+  const signature = "export function addSkill(";
+  if (source.split(signature).length !== 2) throw new Error("Unexpected Pullfrog skills exports.");
+  return `${source.replace(signature, "function unused_addSkill(")}
+export function addSkill(params) { log.warning(\`\${params.skill} skill not installed: runtime package installs are disabled.\`); }`;
 }

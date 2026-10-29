@@ -6,11 +6,11 @@ import { createHash } from "node:crypto";
 import { parse } from "yaml";
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
-import { lockedNpmExecutable, rewritePullfrogInstaller } from "./pullfrog-locked-runtime-core.mjs";
+import { lockedNpmExecutable, rewritePullfrogInstaller, rewritePullfrogSkills } from "./pullfrog-locked-runtime-core.mjs";
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "aiden-locked-pullfrog-"));
@@ -62,6 +62,27 @@ test("rewritten executable routes never call the original runtime installers", {
   assert.equal(output, realpathSync(f.executable));
 });
 
+
+test("automatic skill setup never reaches npx through the locked runtime", { skip: process.platform === "win32" }, (t) => {
+  const f = fixture(t);
+  const source = readFileSync(new URL("./fixtures/pullfrog-0.1.57-skills.ts.fixture", import.meta.url), "utf8");
+  assert.throws(() => rewritePullfrogSkills(source + "changed"), /source changed/);
+  writeFileSync(join(f.root, "utils/skills.ts"), source);
+  writeFileSync(join(f.root, "utils/cli.ts"), "export const log = { success: (m: string) => process.stdout.write(`success:${m}\\n`), warning: (m: string) => process.stdout.write(`warning:${m}\\n`) };\n");
+  writeFileSync(join(f.root, "utils/version.ts"), 'export const getDevDependencyVersion = (_name: string) => "1.4.9";\n');
+  // A stand-in npx records any call; the original addSkill would spawn it.
+  const bin = join(f.root, "bin"); mkdirSync(bin);
+  const marker = join(f.root, "npx-ran");
+  writeFileSync(join(bin, "npx"), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o700 });
+  const call = `const m = await import(${JSON.stringify(pathToFileURL(join(f.root, "utils/skills.ts")).href)}); m.addSkill({ ref: "vercel-labs/agent-browser@v1", skill: "agent-browser", env: {}, agent: "claude-code" });`;
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_ACTION_REPOSITORY: "pullfrog/pullfrog", GITHUB_ACTION_REF: "0657d542f2e34565c6254d5c84581313e631cd90" };
+  const output = execFileSync(process.execPath, ["--import", new URL("./pullfrog-locked-runtime.mjs", import.meta.url).href, "--input-type=module", "-e", call], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
+  assert.match(output, /agent-browser skill not installed/);
+  assert.equal(existsSync(marker), false, "the locked runtime never ran npx");
+  // Positive control: without the hook the same call does run npx.
+  execFileSync(process.execPath, ["--input-type=module", "-e", call], { encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] });
+  assert.equal(existsSync(marker), true);
+});
 
 test("immutable bootstrap blob is integrity checked and survives a hostile review checkout", { skip: process.platform === "win32" }, async (t) => {
   const f = fixture(t);

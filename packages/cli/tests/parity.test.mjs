@@ -538,6 +538,34 @@ test("an approved schedule mutation rechecks authority at publication, after asy
   assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
 });
 
+test("a receipt cancelled after the first write leaves a running scheduler's paused task paused", async (t) => {
+  for (const action of ["resume", "save"]) {
+    await t.test(action, async (t) => {
+      const { dir, tool, input, context } = await scheduleToolFixture(t);
+      await tool.execute("create", input, undefined, undefined, context);
+      const [created] = await api.scheduleCommand(dir, ["list"]);
+      api.atomicJson(join(dir, "schedules.json"), (await api.scheduleCommand(dir, ["list"])).map((task) => ({ ...task, enabled: false })));
+      const [task] = await api.scheduleCommand(dir, ["list"]);
+      const scheduler = api.createCliScheduler(dir);
+      await scheduler.service.start();
+      t.after(() => scheduler.service.stopAndSettle());
+      const approved = { cwd: dir, action, input: action === "save" ? { id: task.id, workspaceId: task.workspaceId } : { id: task.id }, expiresAt: Date.now() + 60_000, approvalFile: join(dir, "receipt.json") };
+      approved.snapshot = api.scheduleApprovalSnapshot(dir, approved);
+      api.atomicJson(approved.approvalFile, approved.snapshot);
+      const inputFile = join(dir, "save-input.json");
+      api.atomicJson(inputFile, { id: task.id, name: "Renamed review", cron: task.cron, timezone: task.timezone, prompt: task.prompt, permission: task.permission, mode: task.mode, enabled: true, workspaceId: task.workspaceId, providerId: created.providerId, model: created.model });
+      // The person cancels while the enabled task is being armed: after the
+      // first durable write, before the scheduler records its next run.
+      const updateRuntime = scheduler.store.updateRuntime;
+      scheduler.store.updateRuntime = (...args) => { rmSync(approved.approvalFile, { force: true }); return updateRuntime(...args); };
+      await assert.rejects(scheduler.command([action, action === "save" ? inputFile : task.id, JSON.stringify(approved)]), /cancelled/);
+      const [after] = await api.scheduleCommand(dir, ["list"]);
+      assert.equal(after.enabled, false, "the refused change did not leave the task switched on");
+      assert.equal(after.name, task.name);
+    });
+  }
+});
+
 test("a codemode script in a Full workspace still needs consent to save a scheduled task", async (t) => {
   const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
   const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
