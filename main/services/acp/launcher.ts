@@ -6,13 +6,14 @@
  * a pid-ledger entry for crash recovery, and a `BROWSER` hook that captures
  * sign-in URLs instead of letting the agent open windows on its own.
  */
+import { randomBytes } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { AcpHarnessDefinition, AcpLaunchPurpose } from "./harness.js";
 import type { AcpRuntimeInstaller } from "./installer.js";
-import { AcpPidLedger } from "./pid-ledger.js";
+import { ACP_RUN_MARKER_ENV, AcpPidLedger } from "./pid-ledger.js";
 import { AcpProcess } from "./process.js";
 import type { AcpLaunchedProcess, AcpProcessLauncher } from "./runtime.js";
 
@@ -72,14 +73,17 @@ export class AcpRuntimeLauncher implements AcpProcessLauncher {
         ...(browserHook ? { browserHook } : {}),
       });
       const ledger = this.options.ledger;
+      // Inherited by the agent's tools, so a crash sweep can still recognise
+      // its process group after the agent itself is gone.
+      const marker = randomBytes(16).toString("hex");
       const child = new AcpProcess({
         command: spec.command,
         args: spec.args,
         cwd,
-        env: spec.env,
+        env: { ...spec.env, [ACP_RUN_MARKER_ENV]: marker },
         ...(observers.onStderrLine ? { onStderrLine: observers.onStderrLine } : {}),
         onStdoutNoise: (line) => this.options.definition.observeStdoutNoise?.(line),
-        onSpawn: (pid) => ledger.record(pid, spec.command),
+        onSpawn: (pid) => ledger.record(pid, spec.command, marker),
         onExit: (pid) => ledger.release(pid),
       });
       const directory = tmpDir;
