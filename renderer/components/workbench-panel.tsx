@@ -282,6 +282,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
       ref={surfaceRef}
       id={id}
       data-environment-surface={surface}
+      data-focus-region="panel"
       data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
       data-state={open ? (presented ? "open" : "covered") : "closed"}
       inert={!presented ? true : undefined}
