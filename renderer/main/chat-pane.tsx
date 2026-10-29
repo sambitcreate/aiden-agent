@@ -3353,6 +3353,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                   cardRef={approvalCardRef}
                   denyRef={approvalDenyRef}
                   pendingCount={approvals.length}
+                  keyboardShortcuts
                 />
               ) : null}
             </EventPresence>
