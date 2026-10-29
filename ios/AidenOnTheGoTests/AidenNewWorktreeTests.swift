@@ -116,4 +116,36 @@ final class AidenNewWorktreeTests: XCTestCase {
         )), false)
         XCTAssertNil(AidenNewWorktreeAvailability.hasCommits(try result(#"{"operationId":"op_3","status":"failed"}"#)))
     }
+
+    /// The Mac counts code points, so a long first message is cut there: a
+    /// letter with a combining accent is one character on the phone but two
+    /// code points on the Mac.
+    func testALongFirstMessageNamesTheBranchFromItsFirst4000CodePoints() {
+        XCTAssertEqual(AidenChatNewWorktree.branchSeed(from: "  Fix the login bug \n"), "Fix the login bug")
+        let accented = String(repeating: "e\u{301}", count: 3_000)
+        XCTAssertEqual(accented.count, 3_000)
+        let seed = AidenChatNewWorktree.branchSeed(from: "Fix " + accented)
+        XCTAssertEqual(seed.unicodeScalars.count, AidenChatNewWorktree.maxTextLength)
+        XCTAssertTrue(seed.hasPrefix("Fix e\u{301}"))
+        let fits = String(repeating: "a", count: AidenChatNewWorktree.maxTextLength)
+        XCTAssertEqual(AidenChatNewWorktree.branchSeed(from: fits), fits)
+    }
+
+    /// The Mac keeps every answer under its key, refusals included, so only a
+    /// request that got no answer may be retried with the same key.
+    func testOnlyARequestTheMacNeverAnsweredKeepsItsKey() throws {
+        func refusal(_ status: Int, _ code: String) throws -> AidenRemoteClientError {
+            let body = try AidenRemoteJSONDecoder.decode(
+                AidenRemoteErrorEnvelope.Body.self,
+                from: Data(#"{"code":"\#(code)","message":"Refused.","requestId":"req_test_1","retryable":false}"#.utf8)
+            )
+            return .server(statusCode: status, body: body)
+        }
+        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(409, "git_capability_denied")))
+        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(try refusal(500, "internal_error")))
+        XCTAssertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientError.unexpectedStatus(502)))
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(try refusal(409, "idempotency_in_flight")), "the Mac is still on it")
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(URLError(.timedOut)))
+        XCTAssertFalse(AidenNewWorktreeRetry.spendsKey(CancellationError()))
+    }
 }

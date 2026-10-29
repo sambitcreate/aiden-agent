@@ -57,6 +57,9 @@ function remoteFailure(error: unknown, baseRef: string): AidenRemoteServiceError
 
 export function createAidenRemoteNewWorktrees(dependencies: AidenRemoteNewWorktreeDependencies) {
   return {
+    async worktreeBranch(workspaceId: string): Promise<string | undefined> {
+      return (await dependencies.getWorkspace(workspaceId))?.managedWorktree?.branch;
+    },
     async create(
       deviceId: string,
       sourceWorkspaceId: string,

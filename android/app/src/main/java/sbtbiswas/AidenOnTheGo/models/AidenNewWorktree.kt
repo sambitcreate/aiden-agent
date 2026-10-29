@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 
 /**
  * Contract revision 48 (`chat:new-worktree`): the first message of an empty Workspace chat can
@@ -15,6 +16,23 @@ object AidenNewWorktreeCopy {
     const val TOGGLE = "New worktree"
     const val SETTING_UP = "Setting up worktree…"
     const val HINT = "Your first message starts this chat in its own worktree on your Mac."
+    const val NO_LONGER_OFFERED = "New worktree isn’t available for this chat any more, so your message wasn’t sent. Send it again to use the chat’s own folder."
+}
+
+/** Which key the next New worktree request carries. */
+object AidenNewWorktreeRetry {
+    /**
+     * The Mac keeps each answer under its key for a day, refusals included, so a request it
+     * answered needs a new key next time. One that got no answer (no connection, a timeout,
+     * Cancel) or that the Mac is still working on keeps its key, so the retry gets what the Mac
+     * did with it.
+     */
+    fun spendsKey(error: Throwable): Boolean = when (error) {
+        is AidenRemoteClientException.Server -> error.body.code != AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT
+        is AidenRemoteClientException.UnexpectedStatus,
+        is AidenRemoteClientException.IdempotencyConflict -> true
+        else -> false
+    }
 }
 
 /** The empty chat, now in its new worktree's workspace, and the worktree's branch. */
@@ -23,6 +41,17 @@ data class AidenChatNewWorktree(val chat: AidenChat, val branch: String) {
         /** The server's `AIDEN_REMOTE_MAX_NEW_WORKTREE_TEXT`. */
         const val MAX_TEXT_LENGTH = 4_000
         const val MAX_BRANCH_LENGTH = 200
+
+        /**
+         * What the Mac names the branch from: the message without its outer whitespace, cut to
+         * [MAX_TEXT_LENGTH] code points (the Mac counts code points). Only its first words make
+         * the name.
+         */
+        fun branchSeed(text: String): String {
+            val trimmed = text.trim()
+            if (trimmed.codePointCount(0, trimmed.length) <= MAX_TEXT_LENGTH) return trimmed
+            return trimmed.substring(0, trimmed.offsetByCodePoints(0, MAX_TEXT_LENGTH))
+        }
 
         private val json = Json {
             ignoreUnknownKeys = true

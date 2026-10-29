@@ -1521,6 +1521,14 @@ class AidenChatViewModel(
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
+        // The chat stopped qualifying while the chip was on: keep the message rather than send it
+        // to the main checkout.
+        if (retryAttempt == null && _startsInNewWorktree.value && !offersNewWorktree) {
+            _startsInNewWorktree.value = false
+            _presentedError.value = AidenNewWorktreeCopy.NO_LONGER_OFFERED
+            return
+        }
+
         val text = retryAttempt?.request?.text ?: _draft.value.trim()
         val submittedAttachments = retryAttempt?.attachments ?: _pendingAttachments.value
         val turnModel = AidenChatModelAuthority.turnSelection(
@@ -1578,6 +1586,8 @@ class AidenChatViewModel(
         val requestToken = chatCache.reserveChatWrite()
         val pairingCreatedAt = pairingCreatedAt()
 
+        // The chat as sent: in the new worktree's workspace once the Mac has moved it.
+        var sentChat = updatedChat
         viewModelScope.launch {
             try {
                 if (makesWorktree) {
@@ -1595,12 +1605,16 @@ class AidenChatViewModel(
                         setup.await()
                     } catch (cancelled: CancellationException) {
                         if (setup.isCancelled && isActive) throw AidenNewWorktreeCanceled() else throw cancelled
+                    } catch (e: Exception) {
+                        if (AidenNewWorktreeRetry.spendsKey(e)) worktreeAttempt = null
+                        throw e
                     } finally {
                         _isSettingUpWorktree.value = false
                         worktreeSetup = null
                     }
                     if (activeClient() !== client) throw AidenNewWorktreeCanceled()
                     _chat.value = _chat.value?.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
+                    sentChat = sentChat.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
                     _startsInNewWorktree.value = false
                     worktreeAttempt = null
                     coordinator.refreshWorkspaces()
@@ -1635,7 +1649,7 @@ class AidenChatViewModel(
                     return@launch
                 }
                 withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
-                val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
+                val candidate = sentChat.copy(messages = sentChat.messages.filter { it.id != optimisticId })
                 val accepted = withContext(ioDispatcher) {
                     chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
                 }

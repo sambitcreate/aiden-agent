@@ -685,6 +685,17 @@ struct AidenChatNewWorktree: Decodable, Equatable, Sendable {
         self.branch = branch
     }
 
+    /// What the Mac names the branch from: the message without its outer
+    /// whitespace, cut to the server's limit in Unicode scalars (the Mac
+    /// counts code points). Only its first words make the name.
+    static func branchSeed(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.unicodeScalars.count > maxTextLength else { return trimmed }
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: trimmed.unicodeScalars.prefix(maxTextLength))
+        return String(scalars)
+    }
+
     init(from decoder: Decoder) throws {
         try AidenBotWire.requireOnlyKeys(decoder, allowed: Set(CodingKeys.allCases.map(\.stringValue)))
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -1790,21 +1801,19 @@ final class AidenRemoteClient: @unchecked Sendable {
     /// Revision 48 (`chat:new-worktree`, with `git:write`): the Mac makes a
     /// worktree named from `text`, the chat's first message, and moves the
     /// still-empty chat into it. It sends nothing; the turn follows as usual.
-    /// The same key and chat find the worktree an earlier attempt made.
+    /// A long message sends only its first 4,000 characters for the name.
     func moveChatToNewWorktree(
         id: String,
         revision: String,
         text: String,
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenChatNewWorktree {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, text.count <= AidenChatNewWorktree.maxTextLength else {
-            throw AidenRemoteClientError.invalidResponse
-        }
+        let seed = AidenChatNewWorktree.branchSeed(from: text)
+        guard !seed.isEmpty else { throw AidenRemoteClientError.invalidResponse }
         let moved: AidenChatNewWorktree = try await send(
             method: "POST",
             path: ["chats", id, "worktree"],
-            body: ChatNewWorktreeRequest(text: text),
+            body: ChatNewWorktreeRequest(text: seed),
             headers: [
                 "If-Match": revision,
                 "Idempotency-Key": idempotencyKey.uuidString.lowercased(),

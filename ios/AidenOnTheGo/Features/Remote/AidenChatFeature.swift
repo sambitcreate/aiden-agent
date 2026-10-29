@@ -3003,6 +3003,13 @@ final class AidenChatViewModel {
             presentedError = String(localized: "The selected model can’t read images. Choose an image-capable model, then try again.")
             return
         }
+        // The chat stopped qualifying while the chip was on: keep the message
+        // rather than send it to the main checkout.
+        if retryAttempt == nil, startsInNewWorktree, !offersNewWorktree {
+            startsInNewWorktree = false
+            presentedError = AidenNewWorktreeCopy.noLongerOffered
+            return
+        }
         guard let context = try? coordinator.requestContext(for: instanceId) else { return }
         let submittedAttachments = retryAttempt?.attachments ?? pendingAttachments
         let submittedSkill = selectedSkill
@@ -3079,10 +3086,16 @@ final class AidenChatViewModel {
                     isSettingUpWorktree = false
                     worktreeSetupTask = nil
                 }
-                let moved = try await withTaskCancellationHandler {
-                    try await setup.value
-                } onCancel: {
-                    setup.cancel()
+                let moved: AidenChatNewWorktree
+                do {
+                    moved = try await withTaskCancellationHandler {
+                        try await setup.value
+                    } onCancel: {
+                        setup.cancel()
+                    }
+                } catch {
+                    if AidenNewWorktreeRetry.spendsKey(error) { worktreeAttempt = nil }
+                    throw error
                 }
                 guard !isRemoved, coordinator.isCurrent(context) else { return }
                 chat.workspaceId = moved.chat.workspaceId

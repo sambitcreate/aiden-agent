@@ -964,15 +964,15 @@ class AidenRemoteClient(
         idempotencyKey: UUID = UUID.randomUUID()
     ): AidenChatNewWorktree {
         AidenBotWire.validateIdentifier(id, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
-        if (text.isBlank() || text.length > AidenChatNewWorktree.MAX_TEXT_LENGTH) {
-            throw AidenRemoteClientException.InvalidResponse()
-        }
+        // A long message sends only its first 4,000 characters for the name.
+        val seed = AidenChatNewWorktree.branchSeed(text)
+        if (seed.isEmpty()) throw AidenRemoteClientException.InvalidResponse()
         return executeRequest(
             "/chats/$id/worktree",
             method = "POST",
             ifMatchRevision = revision,
             idempotencyKey = idempotencyKey,
-            bodyJson = json.encodeToString(ChatNewWorktreeRequest(text = text)),
+            bodyJson = json.encodeToString(ChatNewWorktreeRequest(text = seed)),
             // Fetching the base branch and checking it out can take a while.
             requestTimeoutSeconds = 120
         ) { bytes -> AidenChatNewWorktree.decode(String(bytes, Charsets.UTF_8), id) }

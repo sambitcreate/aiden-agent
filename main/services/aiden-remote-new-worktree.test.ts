@@ -122,6 +122,13 @@ test("a workspace that can't have a worktree is refused before anything is made"
   }
 });
 
+test("a workspace reports its worktree's branch only when it is a managed worktree", async () => {
+  const managedWorktree = { repositoryPath: "/r", worktreePath: "/w", branch: "aiden/fix", createdFromHead: "abc" };
+  assert.equal(await harness({ workspace: { ...site, managedWorktree } }).service.worktreeBranch("site"), "aiden/fix");
+  assert.equal(await harness().service.worktreeBranch("site"), undefined);
+  assert.equal(await harness({ workspace: undefined }).service.worktreeBranch("site"), undefined);
+});
+
 test("Git failures reach the phone as fixed sentences, never Git's own words", async () => {
   const fail = (error: Error) => harness({ ensure: async () => Promise.reject(error) }).service.create("phone-1", "site", "Fix", "chat-1");
   await assert.rejects(

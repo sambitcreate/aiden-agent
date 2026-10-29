@@ -919,6 +919,8 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
       made.push(`${deviceId}:${sourceWorkspaceId}:${text}:${chatId}`);
       return { workspaceId: "workspace-worktree", branch: "aiden/fix-the-login-bug" };
     },
+    worktreeBranch: async (workspaceId: string) =>
+      workspaceId === "workspace-worktree" ? "aiden/fix-the-login-bug" : undefined,
   };
   const app = fixture(chat({ messages: [] }), { newWorktrees });
   assert.equal(app.service.supportsNewWorktrees, true);
@@ -943,6 +945,11 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   const replay = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0003", { text: "Fix the login bug" });
   assert.deepEqual(replay, moved, "the same key answers again without making another");
   assert.equal(made.length, 1);
+  // The phone stopped waiting before that answer, so it still holds the old
+  // revision, and its retry carries a new key and the message as edited.
+  const late = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0006", { text: "Fix the login bug on Safari" });
+  assert.deepEqual(late, moved, "an empty chat already in a worktree answers with it");
+  assert.equal(made.length, 1, "and nothing more is made");
 
   const busy = fixture(chat({ messages: [{ id: "user-1", role: "user", content: "Hello", createdAt: 1_000 }] }), { newWorktrees });
   await assert.rejects(
@@ -960,6 +967,21 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
       (error as { code?: string }).code === "git_capability_denied" && !(error as Error).message.includes("/Users/"),
   );
   assert.equal(failing.current()?.workspaceId, "workspace-1");
+
+  // Someone moves the empty chat while its worktree is still being made: that
+  // move stands and the late worktree request is refused.
+  failure = undefined;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const racing = fixture(chat({ messages: [] }), {
+    newWorktrees: { ...newWorktrees, create: async (...args: Parameters<typeof newWorktrees.create>) => { await held; return newWorktrees.create(...args); } },
+  });
+  const before = projectAidenRemoteChat(racing.current()!).revision;
+  const pending = racing.service.moveToNewWorktree("device-1", "chat-1", before, "new-worktree-0007", { text: "Fix" });
+  await racing.service.move("device-2", "chat-1", before, "move-other-device-0001", { workspaceId: "workspace-2", confirmedForeground: true });
+  release();
+  await assert.rejects(pending, (error: unknown) => (error as { code?: string }).code === "revision_conflict");
+  assert.equal(racing.current()?.workspaceId, "workspace-2");
 });
 
 test("ordinary chat deletion cannot remove a Bot's persistent chat", async () => {

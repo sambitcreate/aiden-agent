@@ -27,6 +27,8 @@ import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -179,6 +181,28 @@ class AidenNewWorktreeTest {
             runBlocking { client.moveChatToNewWorktree("chat_fixture_new_worktree", "r", "  \n ") }
         }
         assertEquals("a blank message never reaches the Mac", sent, server.requestCount)
+
+        // The Mac counts code points: a long first message is cut there, not refused on the phone.
+        server.enqueue(reply(200, moved))
+        val emoji = "\uD83D\uDE80"
+        client.moveChatToNewWorktree("chat_fixture_new_worktree", "chat_revision_new_worktree_1", "Fix " + emoji.repeat(5_000))
+        val longText = Json.parseToJsonElement(server.takeRequest(5, TimeUnit.SECONDS)!!.body.readUtf8())
+            .jsonObject.getValue("text").jsonPrimitive.content
+        assertEquals(AidenChatNewWorktree.MAX_TEXT_LENGTH, longText.codePointCount(0, longText.length))
+        assertTrue(longText.startsWith("Fix $emoji"))
+        assertTrue("never cut inside a character", longText.endsWith(emoji))
+    }
+
+    @Test
+    fun onlyARequestTheMacNeverAnsweredKeepsItsKey() {
+        fun refusal(status: Int, code: AidenRemoteErrorCode) =
+            AidenRemoteClientException.Server(status, AidenRemoteErrorEnvelope.Body(code, "Refused.", "req_1", false))
+        assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode("git_capability_denied"))))
+        assertTrue(AidenNewWorktreeRetry.spendsKey(refusal(500, AidenRemoteErrorCode.INTERNAL_ERROR)))
+        assertTrue(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.UnexpectedStatus(502)))
+        assertFalse("the Mac is still on it", AidenNewWorktreeRetry.spendsKey(refusal(409, AidenRemoteErrorCode.IDEMPOTENCY_IN_FLIGHT)))
+        assertFalse(AidenNewWorktreeRetry.spendsKey(java.net.SocketTimeoutException()))
+        assertFalse(AidenNewWorktreeRetry.spendsKey(AidenRemoteClientException.Disconnected()))
     }
 
     @Test
