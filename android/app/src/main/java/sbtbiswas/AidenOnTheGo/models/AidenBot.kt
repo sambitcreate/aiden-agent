@@ -262,6 +262,16 @@ internal fun aidenValidateBotPaused(sessionState: AidenBotSessionState?, paused:
     }
 }
 
+/** Revision 42: the most open "Needs you" cards a Bot keeps. */
+internal const val AIDEN_BOT_MAX_ISSUE_COUNT = 8
+
+/** Revision 42: `issueCount` is sent only above zero, and never above the host's own limit. */
+internal fun aidenValidateBotIssueCount(issueCount: Int?, field: String) {
+    if (issueCount != null && issueCount !in 1..AIDEN_BOT_MAX_ISSUE_COUNT) {
+        throw AidenBotContractException.InvalidField("$field issueCount")
+    }
+}
+
 @Serializable
 data class AidenBotSummary(
     val id: String,
@@ -279,6 +289,13 @@ data class AidenBotSummary(
     @OptIn(ExperimentalSerializationApi::class)
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
+    /**
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Present only above zero; a Mac or phone without the grant never sends it.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val issueCount: Int? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String
@@ -292,6 +309,7 @@ data class AidenBotSummary(
             throw AidenBotContractException.InvalidCombination("bot timestamps")
         }
         aidenValidateBotPaused(sessionState, paused, "bot summary")
+        aidenValidateBotIssueCount(issueCount, "bot summary")
     }
 }
 
@@ -402,6 +420,13 @@ data class AidenBotDetail(
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
+    /**
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Present only above zero; a Mac or phone without the grant never sends it.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val issueCount: Int? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String
@@ -419,6 +444,7 @@ data class AidenBotDetail(
             throw AidenBotContractException.InvalidCombination("bot timestamps")
         }
         aidenValidateBotPaused(sessionState, paused, "bot detail")
+        aidenValidateBotIssueCount(issueCount, "bot detail")
     }
 }
 

@@ -37,7 +37,7 @@ export interface BotFileToolRouterOptions {
    * Absolute directories no write may land in, whatever location is used.
    * Defaults to the process-wide roots (`setBotFileToolProtectedRoots`).
    */
-  readonly protectedRoots?: () => readonly string[];
+  readonly protectedRoots?: () => readonly BotFileToolProtectedRoot[];
   /** Installation-owned native helper used for edit_file. */
   readonly fileMutatorBinary?: string;
 }
@@ -45,14 +45,22 @@ export interface BotFileToolRouterOptions {
 /** File tools that change a file; only these are fenced from protected roots. */
 const WRITING_TOOLS = new Set<string>(["write_file", "edit_file"]);
 
-let processProtectedRoots: () => readonly string[] = () => [];
+/**
+ * A directory or file no write may land in; a directory may leave out
+ * subdirectories that stay writable (a Bot's own home inside Aiden's Bot storage).
+ */
+export type BotFileToolProtectedRoot = string | { readonly root: string; readonly except: readonly string[] };
+
+let processProtectedRoots: () => readonly BotFileToolProtectedRoot[] = () => [];
 
 /**
- * Directories no Bot file tool may write under, resolved at each call. Main
- * registers `<profile>/bots/`, which holds every Bot's session database and
- * memory files: those are written only by Aiden itself (spec 2026-10-09 §13).
+ * Directories (or single files) no Bot file tool may write, resolved at each
+ * call. Main registers `<profile>/bots/`, which holds every Bot's session
+ * database and memory files (spec 2026-10-09 §13), and Aiden's own settings
+ * files, so a Bot cannot change app settings or its own access by editing
+ * them (owner decision 2026-10-27).
  */
-export function setBotFileToolProtectedRoots(roots: () => readonly string[]): void {
+export function setBotFileToolProtectedRoots(roots: () => readonly BotFileToolProtectedRoot[]): void {
   processProtectedRoots = roots;
 }
 
@@ -82,14 +90,35 @@ function isWithin(child: string, root: string): boolean {
 async function writesIntoProtectedRoot(
   locationRoot: string,
   params: Record<string, unknown>,
-  roots: readonly string[],
+  roots: readonly BotFileToolProtectedRoot[],
 ): Promise<boolean> {
   if (roots.length === 0 || typeof params.path !== "string") return false;
   const target = await realTarget(path.resolve(locationRoot, params.path));
-  for (const root of roots) {
-    if (isWithin(target, await realTarget(root))) return true;
+  for (const entry of roots) {
+    const { root, except } = typeof entry === "string" ? { root: entry, except: [] } : entry;
+    if (!isWithin(target, await realTarget(root))) continue;
+    let excepted = false;
+    for (const open of except) {
+      if (isWithin(target, await realTarget(open))) excepted = true;
+    }
+    if (!excepted) return true;
   }
   return false;
+}
+
+/** Skill folders the skill loaders read: `.aiden/skill(s)`, `.claude/skills`, `.agents`. */
+// Case-insensitive: macOS volumes are, so `.claude/Skills` is `.claude/skills`.
+const SKILL_DIRECTORY = /(?:^|[\\/])(?:\.aiden[\\/]skills?|\.claude[\\/]skills|\.agents)(?:[\\/]|$)/iu;
+
+/**
+ * Whether a write lands in a folder the skill loaders read. A Bot never
+ * writes skills itself: it proposes one (`propose_skill`) and the person
+ * approves it, or a hand-written file waits for approval.
+ */
+export async function writesIntoSkillDirectory(locationRoot: string, params: Record<string, unknown>): Promise<boolean> {
+  if (typeof params.path !== "string") return false;
+  const target = await realTarget(path.resolve(locationRoot, params.path));
+  return SKILL_DIRECTORY.test(target) || SKILL_DIRECTORY.test(path.resolve(locationRoot, params.path));
 }
 
 type ToolParameterObject = TSchema & {
@@ -285,7 +314,12 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
           WRITING_TOOLS.has(name) &&
           (await writesIntoProtectedRoot(selected.root, underlyingParams, (options.protectedRoots ?? processProtectedRoots)()))
         ) {
-          throw new Error("Aiden manages this Bot's own session and memory files; file tools cannot change them.");
+          throw new Error(
+            "Aiden manages Bot session and memory files and its own settings files; file tools cannot change them. Settings change only in Aiden's Settings.",
+          );
+        }
+        if (WRITING_TOOLS.has(name) && (await writesIntoSkillDirectory(selected.root, underlyingParams))) {
+          throw new Error("Skills need the person's OK. Use propose_skill instead.");
         }
         try {
           return await underlying.execute(toolCallId, underlyingParams, signal, onUpdate);

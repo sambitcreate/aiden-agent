@@ -637,6 +637,7 @@ async function legacyChatHost() {
     "./subagents/child-agent-runtime.js": {
       subagentRuntimeRegistry: {
         setHealthMetrics() {},
+        setLimits() {},
         setRuntimeFaultReporter() {},
         abortGeneration() {},
         abortChat: (chatId: string) => void subagentsStopped.push(chatId),
@@ -646,6 +647,7 @@ async function legacyChatHost() {
     },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream() {} } },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
+    "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
   };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("../llm-client.ts", import.meta.url))],

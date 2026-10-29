@@ -5,7 +5,7 @@
 import * as React from "react";
 import { ChevronLeft, File, Folder, RotateCcw } from "lucide-react";
 import { Button, Callout, EmptyState, Text } from "../../components/ui";
-import { botsApi } from "../../lib/ipc";
+import { botsApi, onNotification } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import type { WorkspaceFileDocument, WorkspaceFileIndex } from "../../lib/types";
 import type { BotPanelFileRequest } from "./bot-panel-context";
@@ -82,6 +82,17 @@ export function BotPanelFiles({
     handledRequestKeys.set(botId, pendingKey);
     setPath(pendingPath);
   }, [botId, pendingKey, pendingPath]);
+
+  // The Bot's session state changes as each turn starts and ends; re-read then
+  // so a file it just wrote shows without pressing Refresh.
+  React.useEffect(() => {
+    if (!active) return;
+    return onNotification<{ botId?: unknown; session?: unknown }>("bots:changed", (payload) => {
+      if (payload?.botId !== botId || !("session" in payload)) return;
+      setListAttempt((value) => value + 1);
+      setDocumentAttempt((value) => value + 1);
+    });
+  }, [active, botId]);
 
   React.useEffect(() => {
     if (!active) return;

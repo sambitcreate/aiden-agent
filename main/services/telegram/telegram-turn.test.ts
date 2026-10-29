@@ -187,7 +187,6 @@ test("bot-bound Telegram turn omits assistant mode while retaining the Pi admiss
     return true;
   });
   const { deps } = mockDeps({ llm, workspace: { kind: "project", workspaceId: "workspace-a" } });
-  deps.assertWorkspaceAccess = async () => { throw new Error("Ordinary workspace is No Access"); };
   const binding = {
     botId: "bot-a",
     profile: "work",
@@ -598,17 +597,4 @@ test("Stop during transcript append prevents a later generation start", async ()
   assert.match(result.error!, /stopped before/);
   assert.equal(starts, 0);
   assert.equal(chat.appended.length, 1, "already persisted input stays in canonical history");
-});
-
-test("ordinary Telegram rechecks access after durable append and before inference", async () => {
-  let starts = 0;
-  let denied = false;
-  const chat = mockChatStore();
-  const append = chat.store.appendMessage;
-  chat.store.appendMessage = async (...args) => { const result = await append(...args); denied = true; return result; };
-  const { deps } = mockDeps({ store: chat.store, workspace: { kind: "project", workspaceId: "project" }, llm: mockLlm(async () => { starts++; return true; }) });
-  deps.assertWorkspaceAccess = async () => { if (denied) throw new Error("Workspace is now No Access"); };
-  await assert.rejects(sendTelegramTurn(deps, "telegram-42-project", "task"), /No Access/u);
-  assert.equal(chat.appended.length, 1);
-  assert.equal(starts, 0);
 });

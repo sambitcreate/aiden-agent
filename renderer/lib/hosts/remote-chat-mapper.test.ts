@@ -188,3 +188,37 @@ test("a newest window that no longer overlaps replaces the transcript", () => {
   transcript = mergeNewestWindow(transcript, served([], { limit: 10 }));
   assert.deepEqual(transcript.messages, []);
 });
+
+test("another computer's browser recording shows as its activity line without a card this Mac cannot play", () => {
+  const recording = {
+    id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678",
+    mimeType: "video/mp4",
+    durationMs: 12_400,
+    sizeBytes: 1_048_576,
+  };
+  const stop = {
+    id: "tool-2",
+    order: 0,
+    kind: "tool" as const,
+    toolCallId: "call-2",
+    toolName: "browser_recording_stop",
+    label: "Stop browser recording",
+    status: "completed" as const,
+    startedAt: 1_500,
+    updatedAt: 1_600,
+    finishedAt: 1_600,
+    contentOffset: 0,
+    recording,
+  };
+  const message = mapRemoteMessage({
+    id: "m-rec",
+    role: "assistant",
+    text: "Recorded it.",
+    createdAt: "2026-10-27T10:00:00.000Z",
+    timeline: { ...timeline, steps: [stop] },
+  });
+  const [step] = message?.timeline?.steps ?? [];
+  assert.ok(step?.kind === "tool");
+  assert.equal(step.toolName, "browser_recording_stop");
+  assert.equal(step && "recording" in step, false);
+});

@@ -1,5 +1,6 @@
 import type { McpExposure } from "../../renderer/shared/mcp-exposure.js";
 import type { ChatOwnerV1 } from "../../renderer/shared/chat-visibility.js";
+import type { BotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import type { BotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import type { CustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import type { CompactionEngine, CompactionModelOverrides } from "../../renderer/shared/compaction.js";
@@ -341,7 +342,7 @@ export interface ChatMessage {
   htmlArtifacts?: ChatHtmlArtifactV1[];
   /** Producing tool call per HTML artifact, so it renders at that point in the reply. */
   htmlArtifactPlacements?: HtmlArtifactPlacementV1[];
-  /** Producing generate_image call per generated image attachment. */
+  /** Producing call (generate_image, display_image or share_image) per image attachment. */
   imagePlacements?: ChatImagePlacementV1[];
   /** Native (render_ui) visuals, drawn from Aiden's component catalog. */
   uiVisuals?: ChatUiVisualV1[];
@@ -527,7 +528,14 @@ export interface ScheduledTask {
     requestId: string;
     prompt: string;
     name: string;
+    /**
+     * Set when this entry is a delayed retry of a failed fire rather than a
+     * scheduled fire. `fireTime` is when the retry becomes due.
+     */
+    retry?: { failedRunId: string; attempt: 1 | 2 };
   }>;
+  /** When a Bot routine was last turned back on; failure streaks count only runs after it. */
+  enabledAt?: number;
   lastRunAt?: number;
   workspaceId?: string;
   providerId?: string;
@@ -560,6 +568,8 @@ export interface ScheduledTask {
   routineSchedule?: BotRoutineSchedule;
   /** The Bot proposal an accepted routine came from; accepting it again returns this task. */
   sourceProposalId?: string;
+  /** Main-owned: a one-time routine the Bot set for itself with `wake_up`, not one the person made. Set once. */
+  wakeUp?: BotWakeUpMarker;
   notify: boolean;
   lastResult?: ScheduledRunResult;
   lastError?: string;
@@ -577,6 +587,12 @@ export interface ScheduledRun {
   reason?: ScheduledRunSkipReason;
   output: string;
   error?: string;
+  /** Why an otherwise indistinguishable failure happened. Bot routines only. */
+  failure?: BotRoutineFailure;
+  /** The reply claimed a step worked that failed (spec §5 S5). Names only, bounded. */
+  claimCheck?: { stepIds: string[]; toolNames: string[] };
+  /** The Bot's behavior fingerprint when the run was sent (spec §4.4). */
+  fingerprint?: string;
   chatId?: string;
 }
 
@@ -609,7 +625,14 @@ export interface ScheduledTaskInput {
   routineSchedule?: BotRoutineSchedule;
   /** Main-owned: the Bot proposal this routine was accepted from. Set once, at creation. */
   sourceProposalId?: string;
+  /** Main-owned: the Bot set this one-time routine for itself (`wake_up`). Set once, at creation. */
+  wakeUp?: BotWakeUpMarker;
   notify?: boolean;
+}
+
+/** A Bot's own wake-up: when the Bot set it, for the "You set this wake-up at …" framing. */
+export interface BotWakeUpMarker {
+  setAt: number;
 }
 
 export interface ScheduledTaskSettings {
@@ -758,6 +781,10 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   /** Presentation-only chat models hidden from Mac and paired mobile selection UI. */

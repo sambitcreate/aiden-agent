@@ -35,7 +35,7 @@ interface Frontmatter {
  * the document to JS: unrelated metadata and aliases must not be expanded or
  * allowed to overwrite the skill's identity. Invalid files are skipped alone.
  */
-function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
+export function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
   const raw = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input; // strip BOM if present
   const opening = raw.match(/^---[\t ]*\r?\n/);
   if (!opening) return { frontmatter: {}, body: raw.trim() };
