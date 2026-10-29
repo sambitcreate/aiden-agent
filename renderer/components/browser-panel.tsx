@@ -273,12 +273,14 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     const keyboard = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       const key = event.key.toLowerCase();
-      if (key === "." && !bot) { event.preventDefault(); event.stopPropagation(); void annotate(); }
+      // ⌘. marks up the page only from inside the browser; elsewhere it stops a reply.
+      // Window capture runs before the app's command keys, so focus here wins.
+      if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void annotate(); }
       else if (key === "l" && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); addressRef.current?.focus(); }
       else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) { event.preventDefault(); void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey }); }
     };
-    document.addEventListener("keydown", keyboard);
-    return () => document.removeEventListener("keydown", keyboard);
+    window.addEventListener("keydown", keyboard, true);
+    return () => window.removeEventListener("keydown", keyboard, true);
   }, [surfaceActive, annotate, tab, run]);
 
   const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>

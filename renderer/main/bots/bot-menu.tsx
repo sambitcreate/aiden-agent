@@ -28,6 +28,7 @@ import { cn } from "../../lib/ui-utils";
 import type { BotDefinition } from "../../shared/bots";
 import { useBotPanelActions } from "./bot-panel-context";
 import { botSidebarPreferenceActions } from "./use-bot-sidebar-preferences";
+import { openContextMenuFromKeyboard } from "../../lib/keyboard-context-menu";
 
 export type BotMenuAction =
   | "profile"
@@ -165,19 +166,6 @@ export function BotMenuItems({
         Delete Bot
       </Item>
     </>
-  );
-}
-
-/**
- * Shift+F10 and the Menu key open a row's right-click menu where the platform
- * doesn't (macOS sends no contextmenu for them), anchored under the row.
- */
-function openContextMenuFromKeyboard(event: React.KeyboardEvent<HTMLElement>): void {
-  if (!((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")) return;
-  event.preventDefault();
-  const rect = event.currentTarget.getBoundingClientRect();
-  event.currentTarget.dispatchEvent(
-    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 16, clientY: rect.bottom }),
   );
 }
 
