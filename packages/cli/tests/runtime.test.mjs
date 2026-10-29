@@ -60,6 +60,20 @@ test("--version answers before the runtime loads and agrees with pi's own answer
 	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
 });
 
+test("an Aiden command whose reader has already closed exits quietly", async () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-epipe-"));
+	try {
+		const child = spawn(process.execPath, [cli, "help"], { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+		// Like `aiden help | true`: the reader is gone before the command writes.
+		child.stdout.destroy();
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		const code = await new Promise((resolve) => child.once("exit", resolve));
+		assert.equal(code, 0, stderr);
+		assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error' event/u);
+	} finally { rmSync(agentDir, { recursive: true, force: true }); }
+});
+
 test("aiden help lists the Aiden commands", () => {
 	const result = runCli(["help"]);
 	assert.equal(result.status, 0, result.stderr);

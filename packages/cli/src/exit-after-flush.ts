@@ -16,3 +16,14 @@ function flush(stream: NodeJS.WriteStream): Promise<void> {
     stream.write("", () => resolve());
   });
 }
+
+/**
+ * A reader that closes early (`aiden schedule list | head -1`) makes the next
+ * stdout write fail with EPIPE. Aiden's own commands end quietly then, as a
+ * Unix tool stopped by SIGPIPE does, instead of printing an unhandled 'error'
+ * stack. Pi's modes keep their own stdout handling, so the CLI releases this
+ * before handing over to them.
+ */
+const closedStdout = (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") throw error; process.exit(0); };
+export function exitQuietlyOnClosedStdout(): void { if (!process.stdout.listeners("error").includes(closedStdout)) process.stdout.on("error", closedStdout); }
+export function releaseClosedStdoutHandler(): void { process.stdout.removeListener("error", closedStdout); }

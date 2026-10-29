@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { main, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createAidenInlineExtensions } from "./extensions/index.ts";
 import { dispatchCommand } from "./commands.ts";
-import { exitAfterFlush } from "./exit-after-flush.ts";
+import { exitAfterFlush, releaseClosedStdoutHandler } from "./exit-after-flush.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
@@ -78,6 +78,7 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			process.stderr.write(`aiden: MCP migration deferred (${error instanceof Error ? error.message : String(error)})\n`);
 		}
 		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
+		releaseClosedStdoutHandler();
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
 	}

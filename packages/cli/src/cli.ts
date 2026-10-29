@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { suppressSqliteExperimentalWarning } from "./sqlite-warning.ts";
+import { exitQuietlyOnClosedStdout } from "./exit-after-flush.ts";
 
 // Aiden CLI carries its own release cadence; pi.dev's version feed would
 // compare Aiden's version numbers against pi's forever. Allow an explicit
@@ -61,6 +62,7 @@ if (invokedAsCli) {
 	const argv = process.argv.slice(2);
 	const appDir = dirname(entry);
 	process.env.AIDEN_CLI_ENTRY = entry;
+	exitQuietlyOnClosedStdout();
 	const answer = staticAnswer(argv, appDir);
 	if (answer !== undefined) {
 		process.stdout.write(answer);
