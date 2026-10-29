@@ -9,6 +9,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { extractFile, listPackage, statFile } from "@electron/asar";
+import { verifyPackagedRendererCsp } from "./verify-renderer-csp.mjs";
 import {
   AIDEN_APP_BUNDLE_ID,
   AIDEN_COMPUTER_USE_BUNDLE_ID,
@@ -1007,6 +1008,7 @@ export async function verifyMacPackage(appPath) {
   ]) {
     await assertRegularFile(file);
   }
+  verifyPackagedRendererCsp(appAsar);
   await verifyPackagedModelCatalogResources(appAsar);
   await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);

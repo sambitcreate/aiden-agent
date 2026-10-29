@@ -6,3 +6,7 @@ A first real install of v0.52.0 on Ubuntu 26.04 failed with `unknown command "at
 - Real gh treats `--cert-identity`, `--cert-identity-regex`, `--signer-repo`, and `--signer-workflow` as mutually exclusive, so the previous command could not pass on any gh version. The installer and `docs/releasing.md` keep only the exact `--cert-identity` SAN (`release.yml@refs/heads/main`), which is stricter than the two dropped flags.
 
 The fake `gh` in `scripts/install.test.mjs` never enforced either rule, which is why CI stayed green. It now models an outdated gh (`ghVersion: "2.46.0"`) and rejects combined identity flags. Accepted against the real v0.52.0 amd64 `.deb` with gh 2.102.0: verification passes, and a wrong `--expected-commit` is rejected.
+
+## AppImage updater (2026-10-29)
+
+An in-app gh attestation check for AppImage updates was built in PR #614 and dropped by the owner (most AppImage users lack gh and would stop updating). In-app AppImage updates keep the feed SHA-512 check; publisher verification stays in install.sh and the manual command. See docs/distribution-hardening.md.
