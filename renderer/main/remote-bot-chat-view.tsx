@@ -567,6 +567,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
               name={name}
               prompt={{ botId, waitId: approval.waitId, toolCallId: approval.toolCallId, toolName: approval.toolName, summary: approval.summary }}
               {...(approval.canAllow ? {} : { allowElsewhere: hostName })}
+              keyboardShortcuts
               onAnswer={(decision) => {
                 setSettledApproval(approval);
                 void call(

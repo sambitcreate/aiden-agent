@@ -29,6 +29,8 @@ export interface BotEventRoutine {
   updatedAt: number;
   /** sha256 hex of the webhook token; only for webhook routines. Never shown again. */
   tokenHash?: string;
+  /** The Bot's suggestion the person accepted to add this routine. */
+  sourceProposalId?: string;
   /** Dispatcher bookkeeping. */
   seenEventIds: string[];
   lastRunAt?: number;
@@ -106,6 +108,7 @@ function parseRoutine(value: unknown, botId: string): BotEventRoutine | undefine
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     ...(trigger.kind === "webhook" ? { tokenHash: record.tokenHash as string } : {}),
+    ...(typeof record.sourceProposalId === "string" ? { sourceProposalId: record.sourceProposalId } : {}),
     seenEventIds: seen,
     ...(typeof record.lastRunAt === "number" ? { lastRunAt: record.lastRunAt } : {}),
     ...(day && typeof day.key === "string" && typeof day.count === "number" ? { day: { key: day.key, count: day.count } } : {}),
@@ -121,6 +124,11 @@ export interface BotEventRoutineInput {
   prompt: string;
   trigger: unknown;
   enabled?: boolean;
+}
+
+/** Only the Bot's accepted suggestion sets where a routine came from; the profile never does. */
+export interface BotEventRoutineCreateInput extends BotEventRoutineInput {
+  sourceProposalId?: string;
 }
 
 function cleanInput(input: BotEventRoutineInput): { name: string; prompt: string; trigger: BotRoutineTrigger } {
@@ -173,11 +181,19 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
       return routines;
     },
 
-    /** Creates a routine. A webhook routine's token is returned once and only its hash is stored. */
-    create(botId: string, input: BotEventRoutineInput): Promise<{ routine: BotEventRoutine; token?: string }> {
+    /**
+     * Creates a routine. A webhook routine's token is returned once and only
+     * its hash is stored. Creating from a suggestion that already made one
+     * returns that routine, with no new token.
+     */
+    create(botId: string, input: BotEventRoutineCreateInput): Promise<{ routine: BotEventRoutine; token?: string }> {
       return serial(botId, async () => {
         const clean = cleanInput(input);
         const routines = await load(botId);
+        const existing = input.sourceProposalId !== undefined
+          ? routines.find((routine) => routine.sourceProposalId === input.sourceProposalId)
+          : undefined;
+        if (existing) return { routine: existing };
         if (routines.length >= BOT_EVENT_ROUTINES_MAX) throw new Error("This Bot has as many event routines as it can keep.");
         const at = now();
         const minted = clean.trigger.kind === "webhook" ? mintBotWebhookToken() : undefined;
@@ -189,11 +205,17 @@ export function createBotEventRoutineStore(options: { profileDir(): string; now?
           createdAt: at,
           updatedAt: at,
           ...(minted ? { tokenHash: minted.tokenHash } : {}),
+          ...(input.sourceProposalId !== undefined ? { sourceProposalId: input.sourceProposalId } : {}),
           seenEventIds: [],
         };
         await save(botId, [...routines, routine]);
         return { routine, ...(minted ? { token: minted.token } : {}) };
       });
+    },
+
+    /** The routine an accepted suggestion added, if any. */
+    async findBySourceProposal(botId: string, proposalId: string): Promise<BotEventRoutine | undefined> {
+      return (await load(botId)).find((routine) => routine.sourceProposalId === proposalId);
     },
 
     update(botId: string, id: string, input: Partial<BotEventRoutineInput>): Promise<BotEventRoutine> {

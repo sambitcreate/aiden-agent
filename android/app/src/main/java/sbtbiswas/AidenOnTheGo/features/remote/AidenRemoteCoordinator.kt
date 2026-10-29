@@ -117,6 +117,13 @@ internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: 
     aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
 
 /**
+ * Revision 45: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
+ * of its own after `schedule:cards`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotImages(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
+
+/**
  * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
  * in a call of its own after every other negotiation, unless [installation] already holds it.
  */
@@ -163,6 +170,23 @@ internal suspend fun aidenRequestScheduleCards(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestScheduleCards(server, installation)) listOf(AidenRemoteCapability.SCHEDULE_CARDS) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 45: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
+ * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its Bots'
+ * shared images then read as a line that says to open the chat on the Mac.
+ */
+internal suspend fun aidenRequestBotImages(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotImages(server, installation)) listOf(AidenRemoteCapability.BOT_IMAGES) else emptyList(),
         client,
         stillCurrent
     )
@@ -504,12 +528,20 @@ class AidenRemoteCoordinator(
                 )
                 // Revision 39: `schedule:cards` likewise goes alone, last. A Mac that refuses it
                 // leaves every other grant in place; its approvals show the plain summary card.
-                val schedulesServer = negotiateSoloCapability(
+                val scheduleCardsServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = handoffsServer,
                     request = ::aidenRequestScheduleCards
+                )
+                // Revision 45: `bot:images` goes alone too, after the schedule card.
+                val imagesServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = scheduleCardsServer,
+                    request = ::aidenRequestBotImages
                 )
                 // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
                 // name never costs this phone its other grants.
@@ -517,7 +549,7 @@ class AidenRemoteCoordinator(
                     generation = generation,
                     installation = installation,
                     client = newClient,
-                    server = schedulesServer,
+                    server = imagesServer,
                     request = ::aidenRequestBotIssues
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
@@ -602,7 +634,7 @@ class AidenRemoteCoordinator(
 
     /**
      * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
-     * `schedule:cards`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
+     * `schedule:cards`, revision 45 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
      * only that the Mac can't grant it; the pairing carries on with what it has.
      */
     private suspend fun negotiateSoloCapability(

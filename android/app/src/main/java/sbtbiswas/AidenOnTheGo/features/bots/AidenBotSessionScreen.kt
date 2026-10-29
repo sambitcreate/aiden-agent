@@ -47,6 +47,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.chat.AidenMessageImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.AidenMessageMediaEdge
 import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
@@ -452,6 +454,11 @@ private fun AidenBotSessionContent(
                             phase = ui.proposalResponses[entry.proposalId],
                             onAnswer = { decision -> scope.launch { controller.respondToProposal(entry.proposalId, decision) } }
                         )
+                        // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+                        is AidenBotSessionEntry.SharedImage -> AidenMessageImageAttachments(
+                            attachments = listOf(controller.sharedImageAttachment(entry)),
+                            edge = AidenMessageMediaEdge.LEADING
+                        ) { controller.sharedImageData(entry.id) }
                     }
                 }
                 if (!partial.isNullOrEmpty()) {

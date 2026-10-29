@@ -17,6 +17,13 @@ import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
+import { detectedKeyboardPlatform } from "../../shared/keybindings";
+import {
+  approvalAriaKeyShortcut,
+  approvalShortcutLabel,
+  useApprovalShortcuts,
+  type ApprovalShortcut,
+} from "../../lib/approval-shortcuts";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
@@ -46,7 +53,7 @@ import {
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
 import type { BotRoutineProposalDecision,
-  BotRoutineProposalDeclineReason, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+  BotRoutineProposalDeclineReason, BotRoutineProposalRespondResult } from "../../shared/bot-routine-proposals";
 import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
@@ -160,40 +167,69 @@ export function BotApprovalCard({
   prompt,
   onAnswer,
   allowElsewhere,
+  keyboardShortcuts = false,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
   onAnswer(decision: "allow" | "deny"): void;
   /** Set when this device may only deny: where the person can allow it instead. */
   allowElsewhere?: string;
+  /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
+  keyboardShortcuts?: boolean;
 }) {
+  const platform = detectedKeyboardPlatform();
+  useApprovalShortcuts({ enabled: keyboardShortcuts, canAllow: !allowElsewhere, onShortcut: onAnswer });
+  const hint = (shortcut: ApprovalShortcut) =>
+    keyboardShortcuts ? (
+      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
+        {approvalShortcutLabel(shortcut, platform)}
+      </span>
+    ) : null;
   return (
-    <BotNoticeCard
-      label={`${name} needs approval`}
-      elevated
-      icon={<ShieldQuestion />}
-      iconTone="warning"
-      title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-      actions={
-        <>
-          <Button variant="transparent" size="small" onClick={() => onAnswer("deny")}>
-            Deny
-          </Button>
-          {allowElsewhere ? null : (
-            <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
-              Allow
-            </Button>
-          )}
-        </>
-      }
-    >
-      {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
-      {prompt.summary ? (
-        <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
-          {prompt.summary}
-        </p>
+    <>
+      {/* The first card says it arrived, as the workspace approval card does. */}
+      {keyboardShortcuts ? (
+        <p className="sr-only" role="status">{`${name} needs approval to use ${toolLabel(prompt.toolName)}`}</p>
       ) : null}
-    </BotNoticeCard>
+      <BotNoticeCard
+        label={`${name} needs approval`}
+        elevated
+        icon={<ShieldQuestion />}
+        iconTone="warning"
+        title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
+        actions={
+          <>
+            <Button
+              variant="transparent"
+              size="small"
+              aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
+              onClick={() => onAnswer("deny")}
+            >
+              Deny
+              {hint("deny")}
+            </Button>
+            {allowElsewhere ? null : (
+              <Button
+                variant="accent"
+                size="small"
+                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
+                onClick={() => onAnswer("allow")}
+              >
+                Allow
+                {hint("allow")}
+              </Button>
+            )}
+          </>
+        }
+      >
+        {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
+        {prompt.summary ? (
+          <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
+            {prompt.summary}
+          </p>
+        ) : null}
+      </BotNoticeCard>
+    </>
   );
 }
 
@@ -620,6 +656,7 @@ export function TranscriptEntries({
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onNewRoutineLink,
   onRespondToSkill,
   onRespondToLesson,
   onUndoLearning,
@@ -650,7 +687,9 @@ export function TranscriptEntries({
     proposalId: string,
     decision: BotRoutineProposalDecision,
     reason?: BotRoutineProposalDeclineReason,
-  ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+  ): Promise<BotRoutineProposalRespondResult | null>;
+  /** A new link for a link routine a card added; the old one stops working. */
+  onNewRoutineLink?(routineId: string): Promise<string | null>;
   /** One action on a "Needs you" issue card. */
   onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
   /** Keep or decline a lesson from a routine's runs. */
@@ -777,7 +816,10 @@ export function TranscriptEntries({
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
+                {...(row.routineId ? { routineId: row.routineId } : {})}
+                {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
                 onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
+                {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
               />
             ) : null;
           case "lesson_proposal":
@@ -1278,6 +1320,14 @@ export function BotChatPane({ botId }: { botId: string }) {
       throw error;
     }
   };
+  const newRoutineLink = async (routineId: string) => {
+    try {
+      return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link."));
+      throw error;
+    }
+  };
   const respondToProposal = async (
     proposalId: string,
     decision: BotRoutineProposalDecision,
@@ -1288,7 +1338,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
       });
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
-      return result.status;
+      return result;
     } catch (error) {
       toast.error(
         userFacingErrorMessage(
@@ -1364,11 +1414,12 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
             />
           ) : null}
-          {approvals.prompts.map((prompt) => (
+          {approvals.prompts.map((prompt, index) => (
             <BotApprovalCard
               key={prompt.waitId}
               name={current.name}
               prompt={prompt}
+              keyboardShortcuts={index === 0}
               onAnswer={(decision) => {
                 approvals.remove(prompt.waitId);
                 void botsApi.approve(prompt.waitId, decision).catch((error) => {
@@ -1486,6 +1537,7 @@ export function BotChatPane({ botId }: { botId: string }) {
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
           onRespondToProposal={respondToProposal}
+          onNewRoutineLink={newRoutineLink}
           onRespondToSkill={respondToSkill}
           onRespondToLesson={async (lessonId, decision) => {
             try {

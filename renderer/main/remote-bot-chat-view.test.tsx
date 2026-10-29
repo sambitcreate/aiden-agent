@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { createBotTestQueryClient, mountWithBotRouter } from "./bots/test-providers";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { detectedKeyboardPlatform } from "../shared/keybindings";
 import type { PeerHostView } from "../shared/peer-host";
 import type { PeerOperation } from "../shared/peer-operation";
 import { RemoteBotChatView } from "./remote-bot-chat-view";
@@ -147,7 +148,7 @@ test("Retry on a failed reply from another Mac resends the person's words there,
   assert.deepEqual(sent.body, { text: "Move the dentist" });
 });
 
-test("live frames from the host stream into the chat, and a deny-only approval answers by wait id", async () => {
+test("live frames from the host stream into the chat, and a deny-only approval answers by wait id from the keyboard", async () => {
   // The streaming reveal holds an unfinished line for a second, as long as findByText waits; Reduce Motion shows it at once.
   document.documentElement.dataset.reduceMotion = "true";
   const { peerCalls } = await mount();
@@ -165,7 +166,11 @@ test("live frames from the host stream into the chat, and a deny-only approval a
   assert.ok(await screen.findByText("Looking at your calendar"));
   assert.ok(screen.getByText("Allow it on Studio."));
   assert.equal(screen.queryByRole("button", { name: "Allow" }), null);
-  fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+  // ⌘↩ cannot allow from a device that may only deny; ⌘⌫ still denies (Ctrl off a Mac).
+  const mac = detectedKeyboardPlatform() === "darwin";
+  const allowKey = fireEvent.keyDown(document.body, { key: "Enter", metaKey: mac, ctrlKey: !mac });
+  assert.equal(allowKey, true, "the allow key is left alone");
+  fireEvent.keyDown(document.body, { key: "Backspace", metaKey: mac, ctrlKey: !mac });
   await waitFor(() => {
     const answer = peerCalls().find((call) => call.operation === "respondApproval");
     assert.equal(answer?.resourceId, "w1");

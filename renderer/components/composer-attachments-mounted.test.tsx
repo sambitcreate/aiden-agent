@@ -40,7 +40,7 @@ async function loadComposer() {
     "../lib/queries":
       "export const useSettings=()=>({}); export const useDiscoveredSkills=(scope)=>{ (globalThis.__composerSkillScopes ??= []).push(scope ?? null); return {}; };",
     "../lib/command-system":
-      "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false});",
+      "export const useCommandSystem=()=>({canExecute:()=>false,execute:()=>false,binding:()=>null}); export const useCommandHandler=()=>{};",
     "../lib/ipc":
       "export const attachmentsApi=globalThis.__composerAttachmentFixture.api; export const browserApi={onEvent: callback => { globalThis.__composerAttachmentFixture.browserEvent=callback; return ()=>{}; }}; export const chatsApi={setDoneWhenCheck: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['until', ...args]); }, followPullRequest: async (...args) => { (globalThis.__composerFollowThrough ??= []).push(['follow', ...args]); }};",
     "./git-branch-picker": "export const GitBranchPicker=()=>null;",

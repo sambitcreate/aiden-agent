@@ -183,8 +183,9 @@ class AidenImageGenerationPlaceholderTest {
         )
     }
 
-    private fun image(id: String) =
-        AidenMessageAttachment(id = id, name = "$id.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10)
+    private fun image(id: String, call: String? = null) = AidenMessageAttachment(
+        id = id, name = "$id.png", mimeType = "image/png", kind = AidenAttachmentKind.IMAGE, size = 10, toolCallId = call
+    )
 
     private fun settledMessage(
         steps: List<AidenAgentStep>,
@@ -231,6 +232,30 @@ class AidenImageGenerationPlaceholderTest {
         assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(displayOnly))
         val failed = settledMessage(listOf(imageStep(AidenAgentStepStatus.FAILED)), listOf(image("other")))
         assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(failed))
+    }
+
+    @Test
+    fun imagesThatNameTheirStepRevealOnlyTheGeneratedOne() {
+        // Revision 44: each image names its call, so the generated image is found even
+        // after a shared image and beside a displayed one.
+        val placed = settledMessage(
+            steps = listOf(
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 1, toolName = "share_image"),
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 2),
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 3, toolName = "display_image")
+            ),
+            attachments = listOf(image("shared_a", "call-1"), image("generated", "call-2"), image("shown", "call-3"))
+        )
+        assertEquals("generated", AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(placed))
+        // A placed reply whose generated image never arrived reveals nothing.
+        val missing = settledMessage(
+            steps = listOf(
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 1, toolName = "share_image"),
+                imageStep(AidenAgentStepStatus.COMPLETED, index = 2)
+            ),
+            attachments = listOf(image("shared_a", "call-1"))
+        )
+        assertNull(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(missing))
     }
 
     @Test
