@@ -13,7 +13,11 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   independent stores in parallel. A step that times out is logged and skipped.
 - Each budget is at least the service's own internal grace: bot ingress 5.5 s
   (`stopAndSettle` waits 5 s), Computer Use status 5.5 s (5 s grace), devices
-  8 s (recordings 2 s + SSH 5 s; local host stop is unbounded).
+  8 s (recordings 2 s + SSH 5 s + local `daemon stop` 10 s exceed it). When the
+  devices step times out, `terminateDeviceHelperCommands()` SIGTERMs every
+  helper command `runChildCommand` still has running (the same fallback their
+  own timeouts apply), so none outlives quit. Raising the budget instead would
+  push the hard ceiling past ~54.5 s.
 - Parent generations share 8 s between the 6 s generation grace and Gemini
   context-cache deletes (8 s request timeout each). A slow delete reports the
   step unsettled, which skips the soak receipt; cache entries expire on their
@@ -31,6 +35,12 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   renderer does not answer, window close and app quit show "Aiden isn't
   responding" with Keep Aiden Open / Close Anyway (Quit Anyway); the force
   path calls `window.destroy()`. Reload and onboarding reset never force.
+- executeJavaScript cannot be cancelled, so unload arming goes through the
+  renderer's `window.__aidenArmUnloadApproval(revision, armBy, expiresAt)`
+  (`renderer/lib/lifecycle-guard.ts`): an arm call running after `armBy`
+  (deadline minus 1 s) installs nothing, an approval expires 2 s after the
+  deadline, and an action that ends declined or unresponsive sends
+  `__aidenClearUnloadApproval()`, which runs after any late arm call.
 - `createLifecycleCheck` (application-lifecycle-core) gates close, reload,
   quit and onboarding reset. `destroy()` fires window-all-closed and
   before-quit synchronously, and before-quit drops a quit while a check is in

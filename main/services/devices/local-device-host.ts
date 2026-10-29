@@ -687,6 +687,20 @@ export function defaultLocalDeviceHostDeps(
 
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 
+/** Commands still running, so quit can end them when its deadline arrives before their own timeouts. */
+const runningCommands = new Set<ReturnType<typeof nodeSpawn>>();
+
+/**
+ * Sends SIGTERM to every helper command still running, the same fallback each
+ * command's own timeout applies. Quit calls it when the Devices budget runs out
+ * first, so a held `daemon stop` never outlives the app. Returns how many were signalled.
+ */
+export function terminateRunningDeviceCommands(): number {
+  const children = [...runningCommands];
+  for (const child of children) child.kill("SIGTERM");
+  return children.length;
+}
+
 export function runChildCommand(
   command: string,
   args: readonly string[],
@@ -700,12 +714,14 @@ export function runChildCommand(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      runningCommands.delete(child);
       resolve({ stdout, stderr, code });
     };
     const child = nodeSpawn(command, [...args], {
       env: options.env,
       stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     });
+    runningCommands.add(child);
     const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
     child.stdout?.setEncoding("utf8");
     child.stderr?.setEncoding("utf8");

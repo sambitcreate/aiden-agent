@@ -23,6 +23,8 @@ import {
   findAndroidSdk,
   findAndroidStudioJava,
   findDeviceHostHelpers,
+  runChildCommand,
+  terminateRunningDeviceCommands,
   nextHubRestartDelay,
   xcodeUnavailableReason,
   type HostChildProcess,
@@ -952,4 +954,21 @@ test("missing Node after relaunch cannot block revocation or removal of leftover
       }
     });
   }
+});
+
+test("quit ends a helper command still running before its own timeout, and only running ones", async () => {
+  const finished = await runChildCommand(process.execPath, ["-e", ""], { env: process.env, timeoutMs: 60_000 });
+  assert.equal(finished.code, 0);
+  const startedAt = Date.now();
+  const held = runChildCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    env: process.env,
+    timeoutMs: 60_000,
+  });
+  // Give the child a moment to spawn so the signal reaches a live process.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(terminateRunningDeviceCommands(), 1);
+  const result = await held;
+  assert.notEqual(result.code, 0);
+  assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
+  assert.equal(terminateRunningDeviceCommands(), 0);
 });

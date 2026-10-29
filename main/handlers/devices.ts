@@ -27,6 +27,7 @@ import {
   createLocalDeviceHost,
   defaultLocalDeviceHostDeps,
   reservePort,
+  terminateRunningDeviceCommands,
 } from "../services/devices/local-device-host.js";
 import {
   createSshDeviceHost,
@@ -164,6 +165,15 @@ export async function shutdownDevices(): Promise<void> {
   for (const timer of timers) clearTimeout(timer);
   // The service bounds its own helpers' stop, and always runs so they never outlive the app.
   await deviceService?.stop();
+}
+
+/**
+ * Quit's Devices budget is shorter than the recordings, SSH and `daemon stop`
+ * timeouts added together. When it runs out first, this applies the helpers'
+ * own timeout fallback (SIGTERM) at once, so none is left running after quit.
+ */
+export function terminateDeviceHelperCommands(): void {
+  terminateRunningDeviceCommands();
 }
 
 export function registerDeviceHandlers(): void {
