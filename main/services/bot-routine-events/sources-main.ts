@@ -1,9 +1,11 @@
 // Production wiring of Bot event routines: the per-Bot store, the dispatcher's
 // limits, a dedicated routine executor (runs recorded in schedule-runs.json
-// under the event routine's id), folder watches and the webhook handler.
-// Started once Bots are open, never during onboarding.
+// under the event routine's id), folder watches, watch checks and the
+// webhook handler. Started once Bots are open, never during onboarding; at
+// start, watches only arm timers for their persisted next-check times.
 
 import { watch as fsWatch } from "node:fs";
+import { BOT_WATCH_LIMITS } from "../../../renderer/shared/bot-routine-trigger.js";
 import { app, ipcMain, logger } from "../../platform.js";
 import { botRoutineRequestId, createBotRoutineExecutor } from "../scheduled-bot-routines.js";
 import { scheduleStore } from "../schedule-store.js";
@@ -11,6 +13,8 @@ import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotRoutineEventDispatcher } from "./dispatcher.js";
 import { createBotFolderWatches } from "./folder-watch.js";
 import { createBotEventRoutineStore, type BotEventRoutine } from "./store.js";
+import { createBotWatches } from "./watch.js";
+import { checkBotWatchSource } from "./watch-sources.js";
 import { createBotWebhookHandler } from "./webhook.js";
 
 const REARM_INTERVAL_MS = 5 * 60_000;
@@ -34,6 +38,7 @@ export async function botRoutineWebhookLink(token: string): Promise<string | nul
 export function botEventRoutinesChanged(botId: string): void {
   void rearmBotEventRoutines();
   ipcMain.broadcast("bots:changed", { botId });
+  ipcMain.broadcast("bots:eventRoutines:changed", { botId });
 }
 
 /** An event routine as the executor's task: read-only, notify, never scheduled by cron. */
@@ -207,6 +212,51 @@ const folders = createBotFolderWatches({
   },
 });
 
+const timer = (fn: () => void, ms: number) => {
+  const handle = setTimeout(fn, ms);
+  handle.unref?.();
+  return { cancel: () => clearTimeout(handle) };
+};
+
+const watches = createBotWatches({
+  routines: () => botEventRoutines.all(),
+  store: botEventRoutines,
+  check: (routine) => {
+    if (routine.trigger.kind !== "watch") return Promise.resolve({ ok: false as const, error: "Not a watch." });
+    return checkBotWatchSource(routine.trigger.source, async () => {
+      const { botManagedWorkspace } = await import("../bot-capability-services-main.js");
+      return (await botManagedWorkspace.resolve(routine.botId)).homePath;
+    }, {
+      // A script runs only under the Bot's current Shell access.
+      authorize: async () => (await import("../bot-runtime/bot-session-main.js")).admitBotShellWork(routine.botId),
+    });
+  },
+  dispatcher,
+  isPaused: async (botId) => (await import("../bot-pause-main.js")).isBotPaused(botId),
+  paused: async (routine, error) => {
+    const { botIssues } = await import("../bot-issues/service-main.js");
+    await botIssues.raise({
+      botId: routine.botId,
+      kind: "routine_paused",
+      dedupeKey: `watch_failed:${routine.id}`,
+      title: `Turned off ${routine.name}`,
+      body: `Its check failed ${BOT_WATCH_LIMITS.failuresBeforePause} times in a row${error ? `: ${error}` : "."} Turn it back on in the Bot's profile when it's fixed.`,
+      routineId: routine.id,
+      actions: [],
+    });
+    ipcMain.broadcast("bots:changed", { botId: routine.botId });
+  },
+  recovered: async (routine) => {
+    const { botIssues } = await import("../bot-issues/service-main.js");
+    await botIssues.resolve(routine.botId, `watch_failed:${routine.id}`, "fixed");
+  },
+  now: Date.now,
+  setTimer: timer,
+  onError: (error) => logger.warn("bots", "A Bot watch check did not finish.", error),
+  // The profile's rows show when a watch last checked and whether it's on.
+  checked: (routine) => ipcMain.broadcast("bots:eventRoutines:changed", { botId: routine.botId }),
+});
+
 const webhook = createBotWebhookHandler({ store: botEventRoutines, dispatcher, now: Date.now });
 
 let started = false;
@@ -216,6 +266,7 @@ let interval: ReturnType<typeof setInterval> | undefined;
 export function rearmBotEventRoutines(): void {
   if (!started) return;
   void folders.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot folder watches.", error));
+  void watches.rearm().catch((error: unknown) => logger.warn("bots", "Could not arm Bot watch checks.", error));
 }
 
 export function startBotEventRoutines(): void {
@@ -232,6 +283,7 @@ export function stopBotEventRoutines(): void {
   if (interval) clearInterval(interval);
   interval = undefined;
   folders.dispose();
+  watches.dispose();
   dispatcher.dispose();
 }
 

@@ -1757,11 +1757,16 @@ export const botsApi = {
     list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
     create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
-    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string }) =>
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
       invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
     remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
     rotateLink: (input: { botId: string; id: string }) =>
       invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+    /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
   },
   /** What a Bot learned: the page's overview, Undo, and lesson answers. */
   learning: {
