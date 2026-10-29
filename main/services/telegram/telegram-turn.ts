@@ -100,7 +100,6 @@ export interface TelegramTurnDeps {
   }): void;
   /** Resolve the selection captured when the Telegram prompt was accepted. */
   resolveWorkspace(workspaceId?: string): Promise<TelegramWorkspaceResolution>;
-  assertWorkspaceAccess?(workspaceId: string | undefined): Promise<void>;
   preflightBotTurnAuthority?(input: {
     audienceId: string;
     botId: string;
@@ -264,7 +263,6 @@ export async function sendTelegramTurn(
   }
   const workspaceId =
     resolvedWorkspace.kind === "project" ? resolvedWorkspace.workspaceId : undefined;
-  if (!options?.binding) await deps.assertWorkspaceAccess?.(workspaceId);
   const authoritativeBotChat = options?.binding
     ? await deps.chatStore.get(chatId)
     : undefined;
@@ -338,8 +336,6 @@ export async function sendTelegramTurn(
       turn.settleAsyncWork();
     }
 
-    if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
-    if (!options?.binding) await deps.assertWorkspaceAccess?.(workspaceId);
     if (options?.signal?.aborted) return { content: "", error: "The Telegram turn was stopped before it started.", ok: false };
     const started = await deps.llmClient.start(
       streamId,

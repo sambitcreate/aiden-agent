@@ -479,7 +479,7 @@ test("subagent chips are accessible buttons with live or frozen activity marks",
     />,
   );
 
-  assert.equal((markup.match(/<button/gu) ?? []).length, 2);
+  assert.equal((markup.match(/data-subagent-chip-run-id=/gu) ?? []).length, 2);
   assert.match(markup, /aria-label="Open Active scout\. Status: Reading component boundaries\."/u);
   assert.match(markup, /aria-label="Open Finished reviewer\. Status: Finished\."/u);
   assert.match(markup, /data-subagent-chip-run-id="active"/u);

@@ -2,15 +2,10 @@ name: CI
 
 on:
   pull_request:
-  # Started by model-catalog-main-baseline.yml after a catalog merge, which
-  # (made with the job token) produces no push event of its own.
   workflow_dispatch:
   push:
     branches:
       - main
-      # The model catalog bot pushes here with its deploy key; a pull request it
-      # opens with the job token would not start CI on its own.
-      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -75,7 +70,7 @@ jobs:
     outputs:
       artifact-name: ${{ steps.bundle.outputs.name }}
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -108,8 +103,6 @@ jobs:
     name: Electron E2E (${{ matrix.shard }}/3)
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    # Stays hosted: the Studio's two runners share one macOS login, so parallel
-    # shards would share the system clipboard and window focus.
     runs-on: macos-26
     timeout-minutes: 20
     strategy:
@@ -173,7 +166,7 @@ jobs:
     name: Desktop build and diagnostics
     needs: [changes, build]
     if: ${{ needs.changes.outputs.desktop == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - name: Check out source
@@ -227,7 +220,7 @@ jobs:
     needs: changes
     # Catalog refreshes run these too: the runtime takes model limits from it.
     if: ${{ needs.changes.outputs.desktop == 'true' || needs.changes.outputs.catalog == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    runs-on: macos-26
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -260,7 +253,7 @@ jobs:
     name: Apple Foundation Models tests
     needs: changes
     if: ${{ needs.changes.outputs.apple == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    runs-on: macos-26
     timeout-minutes: 15
     steps:
       - name: Check out source
@@ -282,7 +275,7 @@ jobs:
     name: iOS build and simulator tests
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' }}
-    runs-on: ${{ vars.AIDEN_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","aiden-studio"]') || 'macos-26' }}
+    runs-on: macos-26
     timeout-minutes: 50
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer

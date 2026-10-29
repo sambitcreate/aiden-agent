@@ -33,6 +33,7 @@ import org.junit.Test
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.diagnostics.*
 import sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors
+import sbtbiswas.AidenOnTheGo.networking.AidenHostQuery
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteRunEvent
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
@@ -131,6 +132,21 @@ class AidenRemoteClientTest {
     @After
     fun teardown() {
         server.shutdown()
+    }
+
+    @Test
+    fun botSearchQueryReachesTheMacAsTypedAndPlainWordsStayLiteral() {
+        // The Mac decodes a query value as URLSearchParams does: `+` is a space, then escapes.
+        for (search in listOf("plan week", "release notes & more", "café ☕ 100% done+", "it's #1 = best", "a/b:c@d")) {
+            val encoded = AidenHostQuery.value(search)
+            assertEquals(search, java.net.URLDecoder.decode(encoded, Charsets.UTF_8.name()))
+            assertFalse(search, encoded.contains("&") || encoded.contains("#") || encoded.contains(" "))
+        }
+        // Macs before revision 41 refuse any `%`; spaces and the separators ids, dates and cursors use never need one.
+        for (value in listOf("plan week", "team: ops/weekly", "2026-10-27T12:00:00.000Z", "cur_abc==")) {
+            assertFalse(value, AidenHostQuery.value(value).contains("%"))
+        }
+        assertEquals("caf%C3%A9+%26+bar", AidenHostQuery.value("café & bar"))
     }
 
     @Test

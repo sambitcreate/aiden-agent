@@ -7,7 +7,12 @@
 // the revision-35 view: a paused Bot reads as unavailable, and a waiting
 // hand-off reads as one assistant line asking the person to go to the Mac.
 
-import { isBotHandoffOpenUrl, normalizeBotHandoffAction, type BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import {
+  botHandoffTakesNote,
+  isBotHandoffOpenUrl,
+  normalizeBotHandoffAction,
+  type BotPendingHandoff,
+} from "../../renderer/shared/bot-handoffs.js";
 import {
   parseAidenRemoteBotHandoff,
   type AidenRemoteBotDetail,
@@ -47,12 +52,18 @@ function cardPage(url: string): string | undefined {
 
 /**
  * A waiting hand-off card as a `bot:handoffs` device sees it. A link that is
- * not a safe https page is left out, and so is a rule card's page: it is the
- * Bot's own tab on the Mac, and in the device's browser the step would act on
- * the person's own session.
+ * not a safe https page is left out, and so is the page of a step on the
+ * Bot's own browser or computer (a rule card's, or one the Bot said is
+ * there): it is the Bot's own screen on the Mac, and in the device's browser
+ * the step would act on the person's own session. Such a step says so
+ * instead (`onMac`, revision 43), so the device offers Finish on your Mac. A
+ * card that takes no note says so (revision 40), so the device hides its note
+ * box.
  */
 export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHandoff {
-  const url = prompt.source === "rule" || prompt.open === undefined ? undefined : cardPage(prompt.open.url);
+  const onMac = prompt.kind === "action" && prompt.target !== undefined;
+  const url =
+    prompt.source === "rule" || onMac || prompt.open === undefined ? undefined : cardPage(prompt.open.url);
   const why = prompt.why?.trim();
   return parseAidenRemoteBotHandoff({
     waitId: prompt.waitId,
@@ -60,6 +71,8 @@ export function toRemoteBotHandoff(prompt: BotPendingHandoff): AidenRemoteBotHan
     action: prompt.action,
     ...(why ? { why: prompt.why } : {}),
     ...(url !== undefined ? { open: { url } } : {}),
+    ...(botHandoffTakesNote(prompt) ? {} : { takesNote: false }),
+    ...(onMac ? { onMac: true } : {}),
   });
 }
 

@@ -1,9 +1,11 @@
 import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { randomBytes } from "node:crypto";
-import { normalizeAppearanceConfig, parseAppearanceConfig } from "../../renderer/shared/appearance.js";
+import { getPresetVariant, normalizeAppearanceConfig, parseAppearanceConfig, type ThemePresetId } from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
-import { parseAppControlOperation, type AppControlOperation } from "../../renderer/shared/app-controls.js";
+import { parseAppControlOperation, parseNewChatModelValue, type AppControlOperation } from "../../renderer/shared/app-controls.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -1050,7 +1052,21 @@ export function createConfigStore(
         if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Paired-host app controls were disabled.");
         if (!isCurrent() || appControlPolicy(state.settings) === "disabled") throw new Error("App control authority changed.");
         if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
-        if (operation.control.startsWith("appearance.")) {
+        if (operation.control === "models.newChat") {
+          const selection = parseNewChatModelValue(String(operation.value))!;
+          config.settings.lastProviderId = selection.providerId;
+          config.settings.lastModel = selection.model;
+        } else if (operation.control === "appearance.theme") {
+          const current = config.settings.appearance === undefined
+            ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
+          // The same replacement Settings → Appearance makes when a theme is picked.
+          const preset = operation.value as ThemePresetId;
+          config.settings.appearance = parseAppearanceConfig({
+            ...current,
+            light: getPresetVariant(preset, "light"),
+            dark: getPresetVariant(preset, "dark"),
+          });
+        } else if (operation.control.startsWith("appearance.")) {
           const current = config.settings.appearance === undefined
             ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
           const field = operation.control.slice("appearance.".length);
@@ -1076,6 +1092,12 @@ export function createConfigStore(
         throw new Error("Invalid compaction engine.");
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (patch.spendingLimits !== undefined) {
+        const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
+        if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
+        patch = { ...patch, spendingLimits };
+      }
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }

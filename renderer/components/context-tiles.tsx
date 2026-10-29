@@ -5,7 +5,7 @@
 import { cn } from "../lib/ui-utils";
 import {
   formatContextTokenCount,
-  type ChatContextPressureV1,
+  type ContextMeterPressure,
   type ContextCategoryId,
 } from "../shared/context-pressure";
 
@@ -51,7 +51,7 @@ export interface ContextSegment {
 }
 
 /** Used context by category, largest first; zero-token categories are dropped. */
-export function contextSegments(pressure: ChatContextPressureV1): ContextSegment[] {
+export function contextSegments(pressure: ContextMeterPressure): ContextSegment[] {
   const statics: ContextSegment[] = pressure.breakdown
     ? pressure.breakdown.categories.map((category) => ({
         key: category.id,
@@ -77,7 +77,7 @@ export function contextSegments(pressure: ChatContextPressureV1): ContextSegment
     .sort((left, right) => right.tokens - left.tokens);
 }
 
-export function freeContextTokens(pressure: ChatContextPressureV1): number {
+export function freeContextTokens(pressure: ContextMeterPressure): number {
   return Math.max(0, pressure.inputBudgetTokens - pressure.contextTokens);
 }
 
@@ -92,7 +92,7 @@ export type ContextTile =
  * Any used context or reserve shows at least one tile; an over-budget
  * projection takes tiles from the reserve once free space runs out.
  */
-export function contextTiles(pressure: ChatContextPressureV1): ContextTile[] {
+export function contextTiles(pressure: ContextMeterPressure): ContextTile[] {
   const window = pressure.contextWindow;
   if (window <= 0) return Array.from({ length: CONTEXT_TILE_COUNT }, () => ({ kind: "free" }) as const);
   const segments = contextSegments(pressure);
@@ -124,7 +124,7 @@ export function contextTiles(pressure: ChatContextPressureV1): ContextTile[] {
 }
 
 /** "Messages 46.3K, …, Free space 818.2K, Reserved for response 66.4K" for the grid's image label. */
-export function contextTilesLabel(pressure: ChatContextPressureV1): string {
+export function contextTilesLabel(pressure: ContextMeterPressure): string {
   return [
     ...contextSegments(pressure).map((segment) => `${segment.label} ${formatContextTokenCount(segment.tokens)}`),
     `Free space ${formatContextTokenCount(freeContextTokens(pressure))}`,
@@ -137,7 +137,7 @@ export function ContextTiles({
   columns,
   className,
 }: {
-  pressure: ChatContextPressureV1;
+  pressure: ContextMeterPressure;
   /** 20 lays the grid out as a wide strip; 10 as a square. */
   columns: 10 | 20;
   className?: string;

@@ -1,4 +1,5 @@
 import AVFoundation
+import AVKit
 import Accessibility
 import CryptoKit
 import ImageIO
@@ -3531,6 +3532,46 @@ final class AidenChatViewModel {
         }
     }
 
+    // MARK: - Browser recordings (contract revision 46)
+
+    /// The paired Mac announces `chat-browser-recordings-v1`, so an MP4
+    /// browser recording can be read and played on the phone.
+    var supportsBrowserRecordings: Bool {
+        guard !isReadOnlyFixture, !isRemoved,
+              coordinator.activeInstanceId == instanceId,
+              let server = coordinator.server else { return false }
+        return server.supportsChatBrowserRecordings
+    }
+
+    /// Reads one recording this chat's timeline names from the Mac and saves
+    /// it to a temporary file for the player. Only an MP4 whose served type
+    /// matches its recap is played.
+    func browserRecording(_ recording: AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad {
+        guard supportsBrowserRecordings, recording.playsOnPhone,
+              let context = try? coordinator.requestContext(for: instanceId) else { return .failed }
+        do {
+            let video = try await coordinator.remoteClient(for: context).browserRecording(
+                chatId: chat.id,
+                recordingId: recording.id
+            )
+            guard !isRemoved, coordinator.isCurrent(context), video.mimeType == recording.mimeType else {
+                return .failed
+            }
+            let data = video.data
+            let file = try await Task.detached(priority: .userInitiated) {
+                try AidenBrowserRecordingFile.write(data, for: recording)
+            }.value
+            guard !isRemoved, coordinator.isCurrent(context) else {
+                AidenBrowserRecordingFile.remove(file)
+                return .failed
+            }
+            return .ready(file)
+        } catch {
+            if await coordinator.handleCredentialRevocation(error, context: context) { return .failed }
+            return AidenBrowserRecordingLoad.failure(after: error)
+        }
+    }
+
     /// Adds a follow-up the person confirmed in the viewer to the composer.
     /// It is never sent by itself.
     @discardableResult
@@ -5442,6 +5483,7 @@ struct AidenChatDetailView: View {
     @State private var simulators = AidenChatSimulatorsModel()
     @State private var simulatorViewer: AidenSimulatorViewerModel?
     @State private var simulatorRefreshEpoch = 0
+    @State private var spending = AidenSpendingNoticeModel()
     let autoStartVoice: Bool
     let allowsMutations: Bool
     /// Opens a chat this one was forked into. Nil hides the fork actions,
@@ -5542,6 +5584,9 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: spendingOwner, transport: spendingTransport)
+        }
         .task(id: chatLoadEpoch) {
             // Loads on appear and after each return from the background. A
             // newer epoch cancels an older load still in flight.
@@ -5798,7 +5843,8 @@ struct AidenChatDetailView: View {
                 visualViewerAvailable: model.supportsVisualViewer,
                 onVisualPrompt: model.isReadOnlyPresentation ? nil : { (prompt: String) -> Void in
                     _ = model.appendVisualPrompt(prompt)
-                }
+                },
+                browserRecordingsAvailable: model.supportsBrowserRecordings
             )
             .equatable()
             if model.showsLiveResponse {
@@ -5830,8 +5876,40 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
+    /// Revision 47: a Workspace chat's total, or a Bot chat's month.
+    private var spendingOwner: AidenSpendingOwner {
+        model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard let coordinator, coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    /// Re-read after each reply settles and after a send the Mac refused.
+    private var spendingRefreshKey: String {
+        [
+            model.chat.id,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.supportsSpendingLimits == true),
+            String(model.isStreaming),
+            String(model.chat.messages.count),
+            model.sendRecoveryMessage ?? "",
+        ].joined(separator: "|")
+    }
+
     private var composer: some View {
         VStack(spacing: 0) {
+            if let current = spending.spending, allowsMutations {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: nil,
+                    isAllowing: spending.isAllowing,
+                    canAllow: coordinator?.server?.capabilities.contains(model.chat.isBotChat ? .botWrite : .chatWrite) == true,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
+            }
             if let message = model.sendRecoveryMessage {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(message).font(.footnote).accessibilityAddTraits(.updatesFrequently)
@@ -6326,10 +6404,13 @@ private struct AidenSettledMessageRows: View, Equatable {
     var visualViewerAvailable = false
     /// Adds a follow-up confirmed in the visual viewer to the composer.
     var onVisualPrompt: ((String) -> Void)? = nil
+    /// The Mac announces `chat-browser-recordings-v1` (revision 46).
+    var browserRecordingsAvailable = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.onAskAbout == nil) == (rhs.onAskAbout == nil) &&
         lhs.visualViewerAvailable == rhs.visualViewerAvailable &&
+        lhs.browserRecordingsAvailable == rhs.browserRecordingsAvailable &&
         (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil) &&
         (lhs.onFork == nil) == (rhs.onFork == nil) &&
         lhs.forkAvailability == rhs.forkAvailability &&
@@ -6416,7 +6497,12 @@ private struct AidenSettledMessageRows: View, Equatable {
                     await model.visualDocument(visualId: visualID, appearance: appearance)
                 }
                 : nil,
-            onVisualPrompt: onVisualPrompt
+            onVisualPrompt: onVisualPrompt,
+            loadBrowserRecording: browserRecordingsAvailable
+                ? { (recording: AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad in
+                    await model.browserRecording(recording)
+                }
+                : nil
         )
         .equatable()
         .padding(.top, topPadding)
@@ -6444,6 +6530,8 @@ struct AidenMessageView: View, Equatable {
     /// Present while the Mac announces `chat-visual-viewer-v1` (revision 35).
     var loadVisualDocument: ((String, AidenVisualViewerAppearance) async -> AidenVisualDocumentLoad)? = nil
     var onVisualPrompt: ((String) -> Void)? = nil
+    /// Present while the Mac announces `chat-browser-recordings-v1` (revision 46).
+    var loadBrowserRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
     @State private var selectTextRequest: AidenSelectTextRequest?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -6460,7 +6548,8 @@ struct AidenMessageView: View, Equatable {
             lhs.imageArrivalRevealAttachmentID == rhs.imageArrivalRevealAttachmentID &&
             lhs.appControlsAvailable == rhs.appControlsAvailable &&
             (lhs.loadVisualDocument == nil) == (rhs.loadVisualDocument == nil) &&
-            (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil)
+            (lhs.onVisualPrompt == nil) == (rhs.onVisualPrompt == nil) &&
+            (lhs.loadBrowserRecording == nil) == (rhs.loadBrowserRecording == nil)
     }
 
     private var selectableText: String {
@@ -6577,22 +6666,40 @@ struct AidenMessageView: View, Equatable {
 
     }
 
+    /// A committed assistant reply's rows in the order they happened, with each
+    /// visual and image beneath the step that made it; nil without a usable timeline.
+    private var messageChronologicalRows: [AidenChronologicalRow]? {
+        guard message.role == .assistant, presentationStyle != .botMessages else { return nil }
+        return AidenChronologicalProjection.rows(
+            text: message.text,
+            reasoning: message.reasoning ?? "",
+            timeline: message.timeline,
+            visuals: AidenChatVisualPresentation.rowVisuals(in: message),
+            images: AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        )
+    }
+
     private var messageContent: some View {
         VStack(
             alignment: message.role == .user ? .trailing : .leading,
             spacing: 10
         ) {
-            if message.role == .assistant,
-               presentationStyle != .botMessages,
-               let rows = AidenChronologicalProjection.rows(
-                   text: message.text,
-                   reasoning: message.reasoning ?? "",
-                   timeline: message.timeline,
-                   visuals: AidenChatVisualPresentation.rowVisuals(in: message)
-               ) {
-                AidenChronologicalTranscript(rows: rows, active: false) { visual in
-                    AnyView(visualRow(visual))
-                }
+            if let rows = messageChronologicalRows {
+                AidenChronologicalTranscript(
+                    rows: rows,
+                    active: false,
+                    visualContent: { visual in AnyView(visualRow(visual)) },
+                    loadRecording: loadBrowserRecording,
+                    imageContent: { images in
+                        AnyView(AidenMessageImageAttachmentsView(
+                            attachments: images,
+                            edge: AidenMessageMediaEdge.forRole(message.role),
+                            loadData: loadAttachmentImage,
+                            revealAttachmentID: imageArrivalRevealAttachmentID,
+                            onArrivalRevealed: onImageArrivalRevealed
+                        ))
+                    }
+                )
             } else {
             if message.role == .assistant, let reasoning = message.reasoning, !reasoning.isEmpty {
                 AidenReasoningCard(text: reasoning, label: "Thought", active: false)
@@ -6618,6 +6725,11 @@ struct AidenMessageView: View, Equatable {
                         AidenWebExtractRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.recordingSteps(timeline)) { step in
+                    if let recording = step.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: loadBrowserRecording)
+                    }
+                }
             }
             if !visibleText.isEmpty {
                 messageText
@@ -6629,13 +6741,16 @@ struct AidenMessageView: View, Equatable {
                 }
             }
             }
-            // Snapshots appear once, inline at their visual, never in the strip.
+            // Snapshots appear once, inline at their visual, never in the strip,
+            // and images drawn beneath their step leave it too.
             let attachments = AidenChatVisualPresentation.stripAttachments(for: message)
             if !attachments.isEmpty {
                 let imageAttachments = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
-                if !imageAttachments.isEmpty {
+                let placedImageIDs = messageChronologicalRows.map(AidenChronologicalProjection.placedImageIDs) ?? []
+                let trailingImages = imageAttachments.filter { !placedImageIDs.contains($0.id) }
+                if !trailingImages.isEmpty {
                     AidenMessageImageAttachmentsView(
-                        attachments: imageAttachments,
+                        attachments: trailingImages,
                         edge: AidenMessageMediaEdge.forRole(message.role),
                         loadData: loadAttachmentImage,
                         revealAttachmentID: imageArrivalRevealAttachmentID,
@@ -7013,7 +7128,9 @@ private struct AidenAttachmentGallerySelection: Identifiable {
     let id: String
 }
 
-private struct AidenMessageImageAttachmentsView: View {
+/// An inline image (or a deck of them) that opens the full-screen viewer with
+/// Save to Photos. Shared by chat messages and the images a Bot shares.
+struct AidenMessageImageAttachmentsView: View {
     @Environment(AidenHapticCenter.self) private var haptics
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let attachments: [AidenMessageAttachment]
@@ -7875,6 +7992,13 @@ private struct AidenLiveResponseView: View {
     @Bindable var model: AidenChatViewModel
     let presentationStyle: AidenChatPresentationStyle
 
+    /// Plays a browser recording while the Mac serves them (revision 46).
+    private var liveRecordingLoader: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? {
+        guard model.supportsBrowserRecordings else { return nil }
+        let model = model
+        return { recording in await model.browserRecording(recording) }
+    }
+
     private var botReply: AidenBotReplyProjection? {
         guard presentationStyle == .botMessages else { return nil }
         return AidenBotReplyProjection.resolve(
@@ -7910,8 +8034,16 @@ private struct AidenLiveResponseView: View {
         return AidenChronologicalProjection.rows(
             text: model.liveText,
             reasoning: model.reasoning,
-            timeline: model.activityTimeline
+            timeline: model.activityTimeline,
+            imageSlots: imageGenerationItems.map(\.id)
         )
+    }
+
+    /// The live reply's image placeholders; each sits beneath its step when the
+    /// transcript is chronological, like the image it becomes.
+    private var imageGenerationItems: [AidenImageGenerationPlaceholderItem] {
+        guard model.isLiveReplyUnsettled else { return [] }
+        return AidenImageGenerationPlaceholderState.items(model.activityTimeline)
     }
 
     private var activity: (label: String, mark: AidenActivityMarkKind) {
@@ -8033,10 +8165,25 @@ private struct AidenLiveResponseView: View {
                         AidenWebExtractRecapView(recap: recap)
                     }
                 }
+                ForEach(AidenAgentActivityPresentation.recordingSteps(model.activityTimeline)) { step in
+                    if let recording = step.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: liveRecordingLoader)
+                    }
+                }
             }
 
             if let chronologicalRows {
-                AidenChronologicalTranscript(rows: chronologicalRows, active: model.isLiveReplyUnsettled)
+                AidenChronologicalTranscript(
+                    rows: chronologicalRows,
+                    active: model.isLiveReplyUnsettled,
+                    loadRecording: liveRecordingLoader,
+                    imageSlotContent: { call in
+                        AnyView(ForEach(imageGenerationItems.filter { $0.id == call }) { item in
+                            AidenImageGenerationPlaceholderView(item: item)
+                                .transition(.opacity)
+                        })
+                    }
+                )
                     .contextMenu {
                         if !visibleText.isEmpty {
                             Button {
@@ -8055,11 +8202,10 @@ private struct AidenLiveResponseView: View {
                     }
             }
 
-            if model.isLiveReplyUnsettled {
-                ForEach(AidenImageGenerationPlaceholderState.items(model.activityTimeline)) { item in
-                    AidenImageGenerationPlaceholderView(item: item)
-                        .transition(.opacity)
-                }
+            let placedSlots = chronologicalRows.map(AidenChronologicalProjection.placedImageSlots) ?? []
+            ForEach(imageGenerationItems.filter { !placedSlots.contains($0.id) }) { item in
+                AidenImageGenerationPlaceholderView(item: item)
+                    .transition(.opacity)
             }
 
             if let visualizingLabel,
@@ -8789,6 +8935,12 @@ private struct AidenChronologicalTranscript: View {
     let active: Bool
     /// Draws a committed message's visual rows; the live stream has none.
     var visualContent: ((AidenChatVisual) -> AnyView)? = nil
+    /// Present while the Mac serves browser recordings (revision 46).
+    var loadRecording: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
+    /// Draws a committed message's images beneath their step; the live stream has none.
+    var imageContent: (([AidenMessageAttachment]) -> AnyView)? = nil
+    /// Draws a live `generate_image` placeholder beneath its step.
+    var imageSlotContent: ((String) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -8823,8 +8975,16 @@ private struct AidenChronologicalTranscript: View {
                     if let recap = row.steps.first?.extraction {
                         AidenWebExtractRecapView(recap: recap)
                     }
+                case .recording:
+                    if let recording = row.steps.first?.recording {
+                        AidenBrowserRecordingCardView(recording: recording, load: loadRecording)
+                    }
                 case .visual(let visual):
                     visualContent?(visual)
+                case .images(let images):
+                    imageContent?(images)
+                case .imageSlot(let call):
+                    imageSlotContent?(call)
                 }
             }
         }
@@ -8986,6 +9146,156 @@ struct AidenWebExtractRecapView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
+        }
+    }
+}
+
+/// The video the agent recorded of a browser tab, under its activity line
+/// (contract revision 46). The bytes stay on the Mac until Play is pressed;
+/// a WebM fallback, or a Mac that does not serve recordings, is watched on
+/// the Mac instead.
+struct AidenBrowserRecordingCardView: View {
+    @Environment(\.aidenPalette) private var palette
+    let recording: AidenBrowserRecordingRecap
+    /// Present while the Mac announces `chat-browser-recordings-v1`.
+    var load: ((AidenBrowserRecordingRecap) async -> AidenBrowserRecordingLoad)? = nil
+    @State private var isLoading = false
+    @State private var failure: AidenBrowserRecordingLoad?
+    @State private var playback: AidenBrowserRecordingPlayback?
+    /// The saved copy the player is showing, removed when it closes.
+    @State private var lastPlayedFile: URL?
+
+    private var playsHere: Bool { load != nil && recording.playsOnPhone }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: "video")
+                    .imageScale(.small)
+                    .foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Browser recording")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(palette.foreground)
+                    Text(verbatim: "\(recording.durationLabel) \u{00B7} \(recording.sizeLabel)")
+                        .font(.footnote)
+                        .foregroundStyle(palette.secondary)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(verbatim: recording.accessibilityLabel))
+                Spacer(minLength: 8)
+                if playsHere {
+                    playButton
+                }
+            }
+            if !playsHere {
+                Text(verbatim: AidenBrowserRecordingLoad.watchOnMacMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+            } else if let failure {
+                Text(verbatim: failure == .missing
+                    ? AidenBrowserRecordingLoad.missingMessage
+                    : AidenBrowserRecordingLoad.failedMessage)
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: recording.accessibilityLabel))
+        .fullScreenCover(item: $playback, onDismiss: {
+            // The copy on the phone exists only while it plays.
+            if let file = lastPlayedFile { AidenBrowserRecordingFile.remove(file) }
+            lastPlayedFile = nil
+        }) { item in
+            AidenBrowserRecordingPlayerView(url: item.url)
+        }
+    }
+
+    private var playButton: some View {
+        Button {
+            Task { await play() }
+        } label: {
+            HStack(spacing: 6) {
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "play.fill")
+                        .imageScale(.small)
+                }
+                Text(isLoading ? "Loading\u{2026}" : "Play")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(palette.accent)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(Text(verbatim: "Play browser recording, \(recording.durationLabel)"))
+    }
+
+    @MainActor
+    private func play() async {
+        guard let load, !isLoading else { return }
+        isLoading = true
+        failure = nil
+        let result = await load(recording)
+        isLoading = false
+        switch result {
+        case .ready(let url):
+            lastPlayedFile = url
+            playback = AidenBrowserRecordingPlayback(url: url)
+        case .missing, .failed:
+            failure = result
+        }
+    }
+}
+
+/// One presentation of the player for a saved recording file.
+struct AidenBrowserRecordingPlayback: Identifiable, Equatable {
+    let url: URL
+    var id: String { url.path }
+}
+
+/// The recording full screen with the system playback controls.
+private struct AidenBrowserRecordingPlayerView: View {
+    @Environment(\.dismiss) private var dismiss
+    let url: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let player {
+                    VideoPlayer(player: player)
+                        .accessibilityLabel("Browser recording")
+                }
+            }
+            .navigationTitle("Browser recording")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear {
+            guard player == nil else { return }
+            let player = AVPlayer(url: url)
+            self.player = player
+            player.play()
+        }
+        .onDisappear {
+            player?.pause()
+            player = nil
         }
     }
 }

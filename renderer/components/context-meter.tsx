@@ -4,20 +4,20 @@
 
 import * as React from "react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "./ui";
-import { ContextStatus, compactionNote, contextWindowTooSmall } from "./context-breakdown";
+import { CONTEXT_WINDOW_TOO_SMALL_NOTE, ContextStatus, contextWindowTooSmall } from "./context-breakdown";
 import { ContextPips, ContextTiles, contextPercentLabel } from "./context-tiles";
 import { cn } from "../lib/ui-utils";
 import {
   contextPressurePercent,
   formatContextTokenCount,
-  type ChatContextPressureV1,
+  type ContextMeterPressure,
 } from "../shared/context-pressure";
 
 export type ContextMeterPhase =
   "normal" | "approaching" | "compaction-pending" | "compacting" | "compacted";
 
 export function contextMeterPhase(
-  pressure: ChatContextPressureV1,
+  pressure: ContextMeterPressure,
   compacting: boolean,
   recentlyCompacted: boolean,
 ): ContextMeterPhase {
@@ -30,7 +30,7 @@ export function contextMeterPhase(
   return "normal";
 }
 
-function tokenLabel(pressure: ChatContextPressureV1, value: number): string {
+function tokenLabel(pressure: ContextMeterPressure, value: number): string {
   return `${pressure.source === "estimated" ? "~" : ""}${formatContextTokenCount(value)}`;
 }
 
@@ -40,7 +40,7 @@ export function ContextMeter({
   recentlyCompacted = false,
   onViewDetails,
 }: {
-  pressure: ChatContextPressureV1 | null | undefined;
+  pressure: ContextMeterPressure | null | undefined;
   compacting?: boolean;
   recentlyCompacted?: boolean;
   onViewDetails?: () => void;
@@ -53,7 +53,7 @@ export function ContextMeter({
   const emphasized = phase === "compaction-pending" || phase === "compacting";
   const stateText =
     phase !== "compacting" && contextWindowTooSmall(pressure)
-      ? compactionNote(pressure, true, false)
+      ? CONTEXT_WINDOW_TOO_SMALL_NOTE
       : phase === "compaction-pending"
       ? "Aiden will compact context before the next request."
       : phase === "compacting"
@@ -111,7 +111,7 @@ export function ContextMeterDetails({
   emphasized,
   stateText,
 }: {
-  pressure: ChatContextPressureV1;
+  pressure: ContextMeterPressure;
   percent: number;
   emphasized: boolean;
   stateText: string;

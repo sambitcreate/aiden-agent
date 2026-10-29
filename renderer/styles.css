@@ -872,6 +872,26 @@ textarea {
   );
 }
 
+/* A long sent prompt folds to a few lines behind its chevron. The fade is a
+   mask, not a gradient in the bubble's colour, so it holds over any fill (a
+   queued Bot bubble mixes its own). Height eases between the folded and the
+   natural size; Reduce Motion drops the transition with every other one. */
+.user-message-fold[data-foldable="true"] {
+  overflow: clip;
+  overflow-clip-margin: 4px;
+  interpolate-size: allow-keywords;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+.user-message-fold[data-folded="true"] {
+  height: calc(var(--user-message-fold-lines) * 1lh);
+  mask-image: linear-gradient(to bottom, black calc(100% - 1.5lh), transparent);
+}
+
+.user-message-bubble {
+  scroll-margin-top: calc(var(--scroll-area-sticky-top, 0px) + 0.75rem);
+}
+
 /* Promote the same live artifact iframe into Chromium's top layer. Keeping the
    node mounted preserves interactive state while escaping transcript masks. */
 .aiden-html-artifact-popover:not(:popover-open) {
@@ -3259,10 +3279,11 @@ textarea {
    (iOS and Android use the same spec). Only transform and opacity animate; the
    dot fields are tiled gradients drawn once. Without motion (Reduce Motion, or
    before the animation class applies) the lens rests in its still pose. */
-/* The slot is exactly the requested shape: as wide as the column allows, at
-   most 42rem wide and 32rem tall. A generated image renders at the same size. */
+/* The slot is exactly the requested shape, message-sized like a photo in
+   Messages: at most 22.5rem wide and 20rem tall (IMAGE_SCAN_SPEC maxWidth and
+   maxHeight). Every assistant image in the chat renders within the same box. */
 .image-scan-slot {
-  width: min(100%, 42rem, calc(32rem * var(--image-scan-aspect, 1)));
+  width: min(100%, 22.5rem, calc(20rem * var(--image-scan-aspect, 1)));
 }
 .image-scan {
   --image-scan-period: 2.8s;

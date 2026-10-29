@@ -4,16 +4,26 @@
 
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, CircleSlash, FileText, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleAlert, CircleCheck, CircleSlash, FileText, Hourglass, LogIn, Pause, RotateCcw, ShieldQuestion, Square } from "lucide-react";
 import { AskUserQuestionComposer } from "../../components/ask-user-question-composer";
 import { Composer } from "../../components/composer";
 import { ConnectCard } from "../../components/bots/connect-card";
 import { RoutinesSkippedCard } from "../../components/bots/routines-skipped-card";
 import { RoutineProposalCard } from "../../components/bots/routine-proposal-card";
+import { SkillProposalCard } from "../../components/bots/skill-proposal-card";
+import { LearnedLine, LessonProposalCard } from "../../components/bots/lesson-cards";
+import { BotIssueCard } from "../../components/bots/bot-issue-card";
 import { HandoffCard, handoffNoNoteComposerText, handoffSignInComposerText } from "../../components/bots/handoff-card";
 import { MemoryCardIcon } from "../../components/memory-card-icon";
 import { toolLabel } from "../../components/chat-approval-card";
+import { detectedKeyboardPlatform } from "../../shared/keybindings";
+import {
+  approvalAriaKeyShortcut,
+  approvalShortcutLabel,
+  useApprovalShortcuts,
+  type ApprovalShortcut,
+} from "../../lib/approval-shortcuts";
 import { SafeMessageBubble } from "../../components/message-bubble";
 import { MessageAttachmentPreviewProvider, MessageAttachments } from "../../components/message-attachments";
 import { insertTextIntoTextarea } from "../../lib/composer-type-focus";
@@ -42,7 +52,9 @@ import {
   type BotPendingHandoff,
 } from "../../shared/bot-handoffs";
 import type { BotApprovalPrompt } from "../../../main/services/bot-runtime/bot-approvals";
-import type { BotRoutineProposalDecision, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotRoutineProposalDecision,
+  BotRoutineProposalDeclineReason, BotRoutineProposalRespondResult } from "../../shared/bot-routine-proposals";
+import type { BotIssueAction } from "../../shared/bot-issues";
 import { BotChatActions, BotChatNamePill, BotPanelToggle } from "./bot-chat-header";
 import { BOT_CHAT_COMPOSER_SURFACES } from "./bot-chat-mode";
 import { BotDeleteDialog } from "./bot-delete-dialog";
@@ -58,7 +70,13 @@ import { botSidebarPreferenceActions, useIsBotPinned } from "./use-bot-sidebar-p
 import { botTranscriptRows } from "./bot-transcript-rows";
 import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state";
 import { botRoutinesKey } from "./bot-routines";
+import { WakeUpChip } from "../../components/bots/wake-up-chip";
 import { useConnectionSetup } from "./use-connection-setup";
+import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
+import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
+import { useSpendingStatus } from "../../lib/use-spending-status";
+import { SpendingLimitNotice } from "../../components/spending/spending-limit-notice";
+import { spendingNotice } from "../../shared/spending";
 
 export const BOT_INTERRUPTED_TEXT = "I got interrupted while working on this.";
 export const BOT_ACCESS_CHANGED_TEXT = "This Bot's access changed. Review it in Advanced.";
@@ -155,40 +173,69 @@ export function BotApprovalCard({
   prompt,
   onAnswer,
   allowElsewhere,
+  keyboardShortcuts = false,
 }: {
   name: string;
   prompt: BotApprovalPrompt;
   onAnswer(decision: "allow" | "deny"): void;
   /** Set when this device may only deny: where the person can allow it instead. */
   allowElsewhere?: string;
+  /** ⌘↩ allows and ⌘⌫ denies while the message box is empty; only the first card takes them. */
+  keyboardShortcuts?: boolean;
 }) {
+  const platform = detectedKeyboardPlatform();
+  useApprovalShortcuts({ enabled: keyboardShortcuts, canAllow: !allowElsewhere, onShortcut: onAnswer });
+  const hint = (shortcut: ApprovalShortcut) =>
+    keyboardShortcuts ? (
+      <span aria-hidden="true" data-approval-shortcut={shortcut} className="ml-1.5 shrink-0 font-normal tabular-nums opacity-65">
+        {approvalShortcutLabel(shortcut, platform)}
+      </span>
+    ) : null;
   return (
-    <BotNoticeCard
-      label={`${name} needs approval`}
-      elevated
-      icon={<ShieldQuestion />}
-      iconTone="warning"
-      title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
-      actions={
-        <>
-          <Button variant="transparent" size="small" onClick={() => onAnswer("deny")}>
-            Deny
-          </Button>
-          {allowElsewhere ? null : (
-            <Button variant="accent" size="small" onClick={() => onAnswer("allow")}>
-              Allow
-            </Button>
-          )}
-        </>
-      }
-    >
-      {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
-      {prompt.summary ? (
-        <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
-          {prompt.summary}
-        </p>
+    <>
+      {/* The first card says it arrived, as the workspace approval card does. */}
+      {keyboardShortcuts ? (
+        <p className="sr-only" role="status">{`${name} needs approval to use ${toolLabel(prompt.toolName)}`}</p>
       ) : null}
-    </BotNoticeCard>
+      <BotNoticeCard
+        label={`${name} needs approval`}
+        elevated
+        icon={<ShieldQuestion />}
+        iconTone="warning"
+        title={`${name} wants to use ${toolLabel(prompt.toolName)}.`}
+        actions={
+          <>
+            <Button
+              variant="transparent"
+              size="small"
+              aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("deny", platform) : undefined}
+              onClick={() => onAnswer("deny")}
+            >
+              Deny
+              {hint("deny")}
+            </Button>
+            {allowElsewhere ? null : (
+              <Button
+                variant="accent"
+                size="small"
+                aria-keyshortcuts={keyboardShortcuts ? approvalAriaKeyShortcut("allow", platform) : undefined}
+                onClick={() => onAnswer("allow")}
+              >
+                Allow
+                {hint("allow")}
+              </Button>
+            )}
+          </>
+        }
+      >
+        {allowElsewhere ? <p>{`Allow it on ${allowElsewhere}.`}</p> : null}
+        {prompt.summary ? (
+          <p className="mt-1.5 max-h-24 select-text overflow-y-auto whitespace-pre-wrap break-words rounded-control bg-well px-3 py-2 text-primary">
+            {prompt.summary}
+          </p>
+        ) : null}
+      </BotNoticeCard>
+    </>
   );
 }
 
@@ -239,6 +286,40 @@ export function BotFailedTurnCard({
       }
     >
       {errorMessage ? <p className="whitespace-pre-wrap">{errorMessage}</p> : null}
+    </BotNoticeCard>
+  );
+}
+
+/** A reply waiting for a provider usage limit: when it tries again, and Retry now. */
+export function BotUsageLimitCard({
+  name,
+  wait,
+  now,
+  onRetryNow,
+}: {
+  name: string;
+  wait: UsageLimitWaitView;
+  now: number;
+  onRetryNow(): void;
+}) {
+  const provider = wait.providerLabel.trim() || "the provider";
+  const trying = wait.trying || wait.nextTryAt <= now;
+  return (
+    <BotNoticeCard
+      label={`${name} is waiting for a usage limit`}
+      icon={<Hourglass />}
+      title={trying ? `Trying ${provider} again…` : `Waiting for ${provider}’s usage limit`}
+      actions={
+        trying ? undefined : (
+          <Button variant="transparent" size="small" onClick={onRetryNow}>
+            Retry now
+          </Button>
+        )
+      }
+    >
+      {trying ? null : (
+        <p>{`Next try ${formatUsageLimitTime(wait.nextTryAt, now)}. ${name} keeps the same model and carries on when the limit clears.`}</p>
+      )}
     </BotNoticeCard>
   );
 }
@@ -387,7 +468,8 @@ function BotQueuedBubble({
 /**
  * A message the person just sent, shown at once while main accepts it. It
  * looks like the entry it becomes (same row, same Copy and Reply), so the
- * hand-over is invisible; "Sending…" shows only when main is slow to answer.
+ * hand-over is invisible. It never says "Sending…": the "Getting ready" line
+ * below the transcript carries a slow start.
  * A message sent while the Bot works shows as Queued straight away. It leaves
  * when the projected entry (or the queued message) with the same words
  * arrives, or when the send fails.
@@ -404,7 +486,6 @@ function BotPendingSendBubble({
   onMorphEnd(): void;
   onReply(text: string): void;
 }) {
-  const slow = useSlowSend(send);
   const rowRef = React.useRef<HTMLDivElement | null>(null);
   useSendMorph(rowRef, morphFrom, onMorphEnd);
   return (
@@ -416,7 +497,6 @@ function BotPendingSendBubble({
           <BotMessageActions text={send.text} from="You" align="end" onReply={onReply}>
             <SafeMessageBubble role="user" content={send.text} showCopy={false} />
           </BotMessageActions>
-          {slow ? <span className="self-end text-small text-tertiary">Sending…</span> : null}
         </div>
       )}
     </div>
@@ -528,28 +608,13 @@ function useSendMorph(
   }, [origin, rowRef]);
 }
 
-/** Whether a send main has not answered has waited long enough to say "Sending…". */
-function useSlowSend(send: BotPendingSend): boolean {
-  const waiting = !send.accepted;
-  const [slow, setSlow] = React.useState(() => waiting && Date.now() - send.at >= SLOW_SEND_MS);
-  React.useEffect(() => {
-    if (!waiting) {
-      setSlow(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setSlow(true), Math.max(0, send.at + SLOW_SEND_MS - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [waiting, send.at]);
-  return waiting && slow;
-}
-
 /** A send shown before main answers; `seen` names what was already on screen when it was made. */
 interface BotPendingSend {
   requestId: string;
   text: string;
   /** Entry ids and queued submission ids present when the echo was made; a new one with the same text settles it. */
   seen: ReadonlySet<string>;
-  /** When it was sent, for "Sending…" and the "Getting ready" line. */
+  /** When it was sent, for the "Getting ready" line. */
   at: number;
   /** A follow-up sent while the Bot worked: it shows as Queued, and starts no turn of its own. */
   queued: boolean;
@@ -609,9 +674,6 @@ export function settleBotPendingSends(
   return pending.filter((send) => holding.has(send.requestId) || !matches.has(send.requestId));
 }
 
-/** How long main may take to accept a send before its message says "Sending…". */
-const SLOW_SEND_MS = 2000;
-
 /** How long an acknowledged send stays as an echo when its entry never shows (a hidden input, a routine). */
 const PENDING_SEND_SETTLE_MS = 4000;
 
@@ -627,12 +689,20 @@ export function TranscriptEntries({
   onRemoveQueued,
   onConnect,
   onDismissConnection,
+  onAddConnection,
   onOpenFile,
   onReply,
   onRetry,
   onOpenMemory,
   onRunRoutine,
   onRespondToProposal,
+  onNewRoutineLink,
+  onRespondToSkill,
+  onRespondToLesson,
+  onUndoLearning,
+  onActOnIssue,
+  wakeUpPending,
+  onCancelWakeUp,
   connectLabel,
   connecting,
 }: {
@@ -647,6 +717,8 @@ export function TranscriptEntries({
   onRemoveQueued?(submissionId: string, button: HTMLButtonElement): void;
   onConnect(pluginId: string): void;
   onDismissConnection?(pluginId: string): void;
+  /** "Add to this Bot" for an app connected in Aiden but left out of the Bot's access. */
+  onAddConnection?(pluginId: string): void;
   onOpenFile?(path: string): void;
   onReply(text: string): void;
   onRetry(failedId: string, text: string): void;
@@ -656,7 +728,22 @@ export function TranscriptEntries({
   onRespondToProposal?(
     proposalId: string,
     decision: BotRoutineProposalDecision,
-  ): Promise<Exclude<BotRoutineProposalStatus, "pending"> | null>;
+    reason?: BotRoutineProposalDeclineReason,
+  ): Promise<BotRoutineProposalRespondResult | null>;
+  /** A new link for a link routine a card added; the old one stops working. */
+  onNewRoutineLink?(routineId: string): Promise<string | null>;
+  /** One action on a "Needs you" issue card. */
+  onActOnIssue?(issueId: string, action: BotIssueAction): Promise<void>;
+  /** Keep or decline a lesson from a routine's runs. */
+  onRespondToLesson?(lessonId: string, decision: "keep" | "dismiss"): Promise<"active" | "dismissed" | null>;
+  /** Undo a correction lesson or the newest memory tidy. */
+  onUndoLearning?(target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string }): Promise<void>;
+  /** Add or decline a proposed (or found) skill. */
+  onRespondToSkill?(proposalId: string, decision: "add" | "dismiss"): Promise<"added" | "dismissed" | null>;
+  /** Whether a wake-up the Bot set still waits; `undefined` while that is unknown. */
+  wakeUpPending?(wakeUpId: string): boolean | undefined;
+  /** Cancel on a wake-up chip; rejects (after saying why) when it couldn't. */
+  onCancelWakeUp?(wakeUpId: string): Promise<void>;
   /** Connect cards' button text, e.g. where the connection is finished. */
   connectLabel?: string;
   /** A connection request is being sent. */
@@ -749,6 +836,7 @@ export function TranscriptEntries({
                 card={row.card}
                 onConnect={onConnect}
                 {...(onDismissConnection ? { onDismiss: onDismissConnection } : {})}
+                {...(onAddConnection ? { onAddToBot: onAddConnection } : {})}
                 {...(connectLabel ? { connectLabel } : {})}
                 busy={connecting ?? false}
               />
@@ -774,7 +862,59 @@ export function TranscriptEntries({
                 key={row.id}
                 proposal={row.proposal}
                 status={row.status}
-                onRespond={(decision) => onRespondToProposal(row.proposal.proposalId, decision)}
+                {...(row.routineId ? { routineId: row.routineId } : {})}
+                {...(row.supersededBy ? { supersededBy: row.supersededBy } : {})}
+                onRespond={(decision, reason) => onRespondToProposal(row.proposal.proposalId, decision, reason)}
+                {...(onNewRoutineLink ? { onNewLink: onNewRoutineLink } : {})}
+              />
+            ) : null;
+          case "lesson_proposal":
+            return onRespondToLesson ? (
+              <LessonProposalCard
+                key={row.id}
+                lesson={row.lesson}
+                status={row.status}
+                onRespond={(decision) => onRespondToLesson(row.lesson.lessonId, decision)}
+              />
+            ) : null;
+          case "lesson_learned":
+            return onUndoLearning ? (
+              <LearnedLine
+                key={row.id}
+                text={`Learned: ${row.lesson.lesson}`}
+                undone={row.status === "retired"}
+                onUndo={() => onUndoLearning({ kind: "lesson", lessonId: row.lesson.lessonId })}
+              />
+            ) : null;
+          case "memory_tidy":
+            return onUndoLearning && row.changeId ? (
+              <LearnedLine key={row.id} text="Tidied memory" undone={false} onUndo={() => onUndoLearning({ kind: "change", changeId: row.changeId! })} />
+            ) : null;
+          case "wake_up":
+            return (
+              <WakeUpChip
+                key={row.id}
+                fireAt={row.fireAt}
+                pending={wakeUpPending?.(row.wakeUpId)}
+                {...(onCancelWakeUp ? { onCancel: () => onCancelWakeUp(row.wakeUpId) } : {})}
+              />
+            );
+          case "skill_proposal":
+            return onRespondToSkill ? (
+              <SkillProposalCard
+                key={row.id}
+                proposal={row.proposal}
+                status={row.status}
+                onRespond={(decision) => onRespondToSkill(row.proposal.proposalId, decision)}
+              />
+            ) : null;
+          case "issue":
+            return onActOnIssue ? (
+              <BotIssueCard
+                key={row.id}
+                issue={row.issue}
+                status={row.status}
+                onAct={(action) => onActOnIssue(row.issue.id, action)}
               />
             ) : null;
         }
@@ -856,6 +996,9 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [snapshot, morphing]);
   const state: BotSessionState | undefined = snapshot?.state;
   const running = state?.kind === "running";
+  const usageLimitWait = useUsageLimitWait("bot", botId);
+  const spending = useSpendingStatus("bot", botId);
+  const usageLimitNow = useUsageLimitNow(usageLimitWait);
   React.useEffect(() => {
     // The card hides for one interrupted turn; any other state (running, idle,
     // paused by the person, or a later interruption) clears that.
@@ -865,12 +1008,42 @@ export function BotChatPane({ botId }: { botId: string }) {
   }, [hiddenInterruptedSubmission, state]);
 
   const connectionSetup = useConnectionSetup(() => live.reload());
+  const [addingConnection, setAddingConnection] = React.useState(false);
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
+  // The Bot's routines, read only when its chat shows a wake-up chip.
+  const hasWakeUps = snapshot?.entries.some((entry) => entry.type === "wake_up") ?? false;
+  const routines = useQuery({
+    queryKey: botRoutinesKey(botId),
+    queryFn: () => botsApi.routines.list(botId),
+    enabled: hasWakeUps,
+  });
+  const wakeUpPending = (wakeUpId: string): boolean | undefined => {
+    if (!routines.data) return undefined;
+    return routines.data.some((routine) => routine.id === wakeUpId && routine.wakeUp !== undefined && routine.enabled);
+  };
+  /** Cancel on a wake-up chip: gone from the routines at once, back if main refuses. */
+  const cancelWakeUp = async (wakeUpId: string) => {
+    const key = botRoutinesKey(botId);
+    const before = qc.getQueryData<typeof routines.data>(key);
+    qc.setQueryData<typeof routines.data>(key, (rows) => rows?.filter((routine) => routine.id !== wakeUpId));
+    try {
+      await botsApi.routines.delete({ botId, id: wakeUpId });
+    } catch (error) {
+      qc.setQueryData(key, before);
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t cancel that wake-up."));
+      throw error;
+    } finally {
+      void qc.invalidateQueries({ queryKey: key });
+    }
+  };
+
   const back = () => void navigate({ to: "/bots" });
   const current = bot.data ?? null;
+  // A Bot over its spending limit sends nothing until the person allows more.
+  const spendingReached = spending.status?.state === "reached" ? spendingNotice(spending.status, current?.name)?.title : undefined;
   const openAdvanced = () => void navigate({ to: "/bots/$botId", params: { botId }, search: { page: "advanced" } });
   // Memory, Files and Routines live in the side panel beside the chat (spec §8).
   const openMemory = () => panel.show("memory");
@@ -1226,11 +1399,33 @@ export function BotChatPane({ botId }: { botId: string }) {
     }
   };
 
-  const respondToProposal = async (proposalId: string, decision: BotRoutineProposalDecision) => {
+  const respondToSkill = async (proposalId: string, decision: "add" | "dismiss") => {
     try {
-      const result = await botsApi.routineProposals.respond({ botId: current.id, proposalId, decision });
+      return (await botsApi.skillProposals.respond({ botId: current.id, proposalId, decision })).status;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, decision === "add" ? "Aiden couldn’t add that skill." : "Aiden couldn’t save that choice."));
+      throw error;
+    }
+  };
+  const newRoutineLink = async (routineId: string) => {
+    try {
+      return (await botsApi.eventRoutines.rotateLink({ botId: current.id, id: routineId })).link;
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t make a new link."));
+      throw error;
+    }
+  };
+  const respondToProposal = async (
+    proposalId: string,
+    decision: BotRoutineProposalDecision,
+    reason?: BotRoutineProposalDeclineReason,
+  ) => {
+    try {
+      const result = await botsApi.routineProposals.respond({
+        botId: current.id, proposalId, decision, ...(reason ? { reason } : {}),
+      });
       if (result.status === "accepted") void qc.invalidateQueries({ queryKey: botRoutinesKey(current.id) });
-      return result.status;
+      return result;
     } catch (error) {
       toast.error(
         userFacingErrorMessage(
@@ -1248,6 +1443,36 @@ export function BotChatPane({ botId }: { botId: string }) {
       await botsApi.routines.runNow(current.id, routineId);
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t run that routine."));
+      throw error;
+    }
+  };
+
+  /** "Add to this Bot": only this tap adds the app to the Bot's access. */
+  const addConnection = async (pluginId: string) => {
+    setAddingConnection(true);
+    try {
+      await botsApi.grantConnection(current.id, pluginId);
+      void qc.invalidateQueries({ queryKey: queryKeys.botAccess(current.id) });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t add that app to this Bot."));
+    } finally {
+      setAddingConnection(false);
+    }
+  };
+
+  /**
+   * One action on a "Needs you" issue: the service records the answer, and
+   * the live transcript settles the card. Open chat is this surface already.
+   */
+  const actOnIssue = async (issueId: string, action: BotIssueAction) => {
+    if (action.kind === "open_chat") {
+      void navigate({ to: "/bots/$botId/chat", params: { botId } });
+      return;
+    }
+    try {
+      await botsApi.issues.act({ botId: current.id, issueId, action });
+    } catch (error) {
+      toast.error(userFacingErrorMessage(error, "Aiden couldn’t do that."));
       throw error;
     }
   };
@@ -1276,11 +1501,12 @@ export function BotChatPane({ botId }: { botId: string }) {
               onAnswer={(outcome) => void handoffActions.answer(handoff, outcome)}
             />
           ) : null}
-          {approvals.prompts.map((prompt) => (
+          {approvals.prompts.map((prompt, index) => (
             <BotApprovalCard
               key={prompt.waitId}
               name={current.name}
               prompt={prompt}
+              keyboardShortcuts={index === 0}
               onAnswer={(decision) => {
                 approvals.remove(prompt.waitId);
                 void botsApi.approve(prompt.waitId, decision).catch((error) => {
@@ -1313,7 +1539,7 @@ export function BotChatPane({ botId }: { botId: string }) {
         <Composer
           key={`bot:${current.id}`}
           // A sign-in or a password-or-code card is answered on the card: a password typed here would reach the Bot.
-          ready={!noteRefused && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
+          ready={!noteRefused && !spendingReached && (!state || (state.kind !== "unavailable" && state.kind !== "paused"))}
           readinessMessage={
             state?.kind === "unavailable"
               ? BOT_UNAVAILABLE_LABEL
@@ -1323,7 +1549,7 @@ export function BotChatPane({ botId }: { botId: string }) {
                   ? handoffSignInComposerText(current.name, handoff ?? undefined)
                   : noteRefused
                     ? handoffNoNoteComposerText(current.name)
-                    : undefined
+                    : spendingReached
           }
           hasMessages={snapshot.entries.length > 0}
           chatId={`bot:${current.id}`}
@@ -1390,12 +1616,40 @@ export function BotChatPane({ botId }: { botId: string }) {
           retrying={retrying}
           onConnect={(pluginId) => void connectionSetup.open(pluginId)}
           onDismissConnection={(pluginId) => void dismissConnection(pluginId)}
+          onAddConnection={(pluginId) => void addConnection(pluginId)}
+          connecting={addingConnection}
           onOpenFile={(path) => panel.show("files", { path, botId })}
           onReply={reply}
           onRetry={(failedId, text) => void retry(failedId, text)}
           onOpenMemory={openMemory}
           onRunRoutine={runRoutine}
+          wakeUpPending={wakeUpPending}
+          onCancelWakeUp={cancelWakeUp}
           onRespondToProposal={respondToProposal}
+          onNewRoutineLink={newRoutineLink}
+          onRespondToSkill={respondToSkill}
+          onRespondToLesson={async (lessonId, decision) => {
+            try {
+              return (await botsApi.learning.respondLesson({ botId: current.id, lessonId, decision })).status;
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t save that choice."));
+              throw error;
+            }
+          }}
+          onUndoLearning={async (target) => {
+            let result: { ok: true } | { ok: false; code: string };
+            try {
+              result = await botsApi.learning.undoInChat({ botId: current.id, target });
+            } catch (error) {
+              toast.error(userFacingErrorMessage(error, "Aiden couldn’t undo that."));
+              throw error;
+            }
+            if (!result.ok) {
+              toast.error(result.code === "conflict" ? "This changed since. Edit it on the Memory page." : "Aiden couldn’t undo that.");
+              throw new Error(result.code);
+            }
+          }}
+          onActOnIssue={actOnIssue}
         />
         {shownSends.map((send) => {
           const morphFrom = sendMorphs.current.get(send.requestId);
@@ -1417,6 +1671,22 @@ export function BotChatPane({ botId }: { botId: string }) {
           wording={chatActivity.wording}
           onStop={stop}
           onLayoutChange={setStatusLayout}
+        />
+      ) : null}
+      {running && usageLimitWait ? (
+        <BotUsageLimitCard
+          name={current.name}
+          wait={usageLimitWait}
+          now={usageLimitNow}
+          onRetryNow={() => void retryUsageLimitNow("bot", botId)}
+        />
+      ) : null}
+      {spending.status ? (
+        <SpendingLimitNotice
+          status={spending.status}
+          name={current.name}
+          allowing={spending.allowing}
+          onAllowMore={() => void spending.allowMore()}
         />
       ) : null}
       {state?.kind === "paused" ? <BotPausedCard bot={current} /> : null}

@@ -32,15 +32,16 @@ function pluralMessages(count: number): string {
 }
 
 /** Aiden's own prompt and tools no longer fit, so compaction cannot help and requests will fail. */
-export function contextWindowTooSmall(pressure: ChatContextPressureV1): boolean {
+export function contextWindowTooSmall(pressure: Pick<ChatContextPressureV1, "staticTokens" | "inputBudgetTokens">): boolean {
   return pressure.staticTokens > pressure.inputBudgetTokens;
 }
 
+export const CONTEXT_WINDOW_TOO_SMALL_NOTE =
+  "This model's context window is too small for Aiden's prompt and tools. Choose a larger-context model or turn off integrations that add tools.";
+
 export function compactionNote(pressure: ChatContextPressureV1, approaching: boolean, compacting: boolean): string {
   if (compacting) return "Compacting context…";
-  if (contextWindowTooSmall(pressure)) {
-    return "This model's context window is too small for Aiden's prompt and tools. Choose a larger-context model or turn off integrations that add tools.";
-  }
+  if (contextWindowTooSmall(pressure)) return CONTEXT_WINDOW_TOO_SMALL_NOTE;
   if (pressure.shouldCompact) return "Aiden will compact context before the next request.";
   const count = pressure.compressibleHistoryMessages;
   if (count === 0) return "Healthy. No earlier messages to compact yet.";
