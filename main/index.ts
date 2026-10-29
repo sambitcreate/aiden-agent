@@ -18,7 +18,7 @@ import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
-import { shutdownDevices } from "./handlers/devices.js";
+import { shutdownDevices, terminateDeviceHelperCommands } from "./handlers/devices.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
@@ -390,8 +390,9 @@ const SHUTDOWN_BUDGET_MS = {
   studioAssets: 2_000,
   browser: 3_000,
   botComputers: 5_000,
-  // Recordings get 2 s and SSH hosts 5 s; the local simulator host stop has
-  // no bound of its own, so this deadline caps it.
+  // Recordings get 2 s, SSH hosts 5 s and the local `daemon stop` helper 10 s.
+  // This deadline caps the total; helper commands still running when it
+  // expires get their timeout's SIGTERM at once (terminateDeviceHelperCommands).
   devices: 8_000,
   mcpServers: 3_000,
   // flushSubagentRuntimeDiagnostics + flushDiagnosticJournal + flushDiagnosticHealth.
@@ -602,7 +603,10 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       const { shutdownBotComputers } = await import("./services/bot-computers/bot-computers-main.js");
       await shutdownBotComputers(4_000);
     }),
-    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () => shutdownDevices()),
+    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () => shutdownDevices()).then((outcome) => {
+      // The helpers' own stop timeouts can outlast this budget; end any still running before quit.
+      if (outcome.status === "timed-out") terminateDeviceHelperCommands();
+    }),
     // Stdio children that miss the budget are still signalled by their transports' close.
     settleShutdownStep("main", "MCP servers", SHUTDOWN_BUDGET_MS.mcpServers, () =>
       mcpManager.closeAllWithin(2_000).then((closed) => {
@@ -742,19 +746,29 @@ async function refreshCloseGuardFromRenderer(
   }
 }
 
+/**
+ * How long an armed unload approval stays valid after main stops waiting for
+ * the arm call. The unload main starts right after arming lands well inside it.
+ */
+const RENDERER_UNLOAD_APPROVAL_GRACE_MS = 2_000;
+
 async function armRendererUnload(
   window: BrowserWindow,
   revision: number,
 ): Promise<boolean> {
+  // executeJavaScript cannot be cancelled, so the renderer refuses an arm call
+  // that runs after main has given up on it (a second short of the deadline,
+  // leaving room for the answer to arrive) and lets any approval expire.
+  const startedAt = Date.now();
+  const armBy = startedAt + RENDERER_RESPONSE_DEADLINE_MS - 1_000;
+  const expiresAt = startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS;
   try {
     return (
       (await executeRendererScript(
         window,
         `(() => {
-        const root = document.documentElement;
-        if (Number(root.dataset.aidenGuardRevision || "0") !== ${revision}) return false;
-        root.dataset.aidenApprovedGuardRevision = String(${revision});
-        return true;
+        const arm = window.__aidenArmUnloadApproval;
+        return typeof arm === "function" && arm(${revision}, ${armBy}, ${expiresAt}) === true;
       })()`,
       )) === true
     );
@@ -762,6 +776,17 @@ async function armRendererUnload(
     logger.warn("main", "Could not arm the renderer unload guard", error);
     return false;
   }
+}
+
+/**
+ * Withdraws any approval an earlier arm call of this action installed. Scripts
+ * run in the order they were sent, so this lands after a late arm call too.
+ */
+function clearRendererUnloadApproval(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  window.webContents
+    .executeJavaScript(`window.__aidenClearUnloadApproval?.()`, true)
+    .catch(() => undefined);
 }
 
 /**
@@ -797,6 +822,16 @@ async function authorizeProtectedAction(
  * renderer would never answer beforeunload either.
  */
 async function authorizeProtectedActionOrForce(
+  window: BrowserWindow,
+  action: "close" | "reload",
+  force: ForceableProtectedAction | null,
+): Promise<"authorized" | "declined" | "unresponsive"> {
+  const outcome = await authorizeProtectedActionAttempts(window, action, force);
+  if (outcome !== "authorized") clearRendererUnloadApproval(window);
+  return outcome;
+}
+
+async function authorizeProtectedActionAttempts(
   window: BrowserWindow,
   action: "close" | "reload",
   force: ForceableProtectedAction | null,

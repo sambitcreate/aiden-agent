@@ -916,6 +916,7 @@
         "renderer/components/composer-context-bar.test.tsx",
         "renderer/lib/workspace-chip.test.ts",
         "renderer/lib/guarded-history.test.ts",
+        "renderer/lib/lifecycle-guard.test.ts",
         "renderer/lib/chat-row-context.test.ts",
         "renderer/lib/chat-terminal-sync.test.ts",
         "renderer/lib/chat-title-reveal.test.ts",
