@@ -59,19 +59,30 @@ async function recordWav(stopSignal: Promise<void>): Promise<Buffer> {
 			child.once("exit", () => resolve());
 			child.once("error", reject);
 		});
-		const kill = setTimeout(() => child.kill("SIGTERM"), 120_000);
+		// A recorder wedged on its audio device can ignore SIGTERM; SIGKILL it shortly after.
+		let escalate: ReturnType<typeof setTimeout> | undefined;
+		const stop = () => {
+			if (child.exitCode !== null || child.signalCode !== null || escalate) return;
+			child.kill("SIGTERM");
+			escalate = setTimeout(() => child.kill("SIGKILL"), 2_000);
+		};
+		const kill = setTimeout(stop, 120_000);
 		try {
 			await Promise.race([stopSignal, exited]);
-			if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+			stop();
 			await exited;
 		} finally {
 			clearTimeout(kill);
+			clearTimeout(escalate);
 		}
 		return await readFile(wavPath);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
 }
+
+/** A stalled transcription request must not leave /dictate stuck in "transcribing". */
+const TRANSCRIPTION_TIMEOUT_MS = 60_000;
 
 async function transcribeWithGemini(audio: Buffer, settings: AidenVoiceSettings, apiKey: string): Promise<string> {
 	const model = settings.model ?? GEMINI_DEFAULT_MODEL;
@@ -80,6 +91,7 @@ async function transcribeWithGemini(audio: Buffer, settings: AidenVoiceSettings,
 		{
 			method: "POST",
 			headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+			signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
 			body: JSON.stringify({
 				contents: [{
 					parts: [
@@ -109,6 +121,7 @@ async function transcribeWithOpenAI(audio: Buffer, settings: AidenVoiceSettings,
 		method: "POST",
 		headers: { authorization: `Bearer ${apiKey}` },
 		body: form,
+		signal: AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS),
 	});
 	if (!response.ok) throw new Error(`OpenAI transcription failed (${response.status}).`);
 	const payload = (await response.json()) as { text?: string };

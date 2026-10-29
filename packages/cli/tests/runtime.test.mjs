@@ -392,7 +392,7 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 	}
 });
 
-test("/dictate settles and clears its status when the recorder exits early or is missing", { skip: process.platform === "win32" }, () => {
+test("/dictate settles and clears its status when the recorder exits early, is missing or ignores SIGTERM", { skip: process.platform === "win32" }, () => {
 	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-dictate-"));
 	try {
 		const agentDir = path.join(root, "agent"), bin = path.join(root, "bin");
@@ -400,6 +400,8 @@ test("/dictate settles and clears its status when the recorder exits early or is
 		writeFileSync(path.join(agentDir, "aiden.json"), JSON.stringify({ voice: { provider: "gemini" } }));
 		// A recorder that exits immediately without producing audio (no microphone permission, device busy).
 		writeFileSync(path.join(bin, "rec"), "#!/bin/sh\nexit 0\n"); chmodSync(path.join(bin, "rec"), 0o755);
+		const stubborn = path.join(root, "stubborn"); mkdirSync(stubborn);
+		writeFileSync(path.join(stubborn, "rec"), "#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 0.1; done\n"); chmodSync(path.join(stubborn, "rec"), 0o755);
 		const voiceUrl = JSON.stringify(pathToFileURL(path.join(pkgDir, "src", "extensions", "voice.ts")).href);
 		const script = `
 import { createVoiceInlineExtension } from ${voiceUrl};
@@ -428,8 +430,11 @@ process.env.PATH = ${JSON.stringify(bin)} + ":/usr/bin:/bin";
 const early = await dictate();
 process.env.PATH = "/usr/bin:/bin";
 const missing = await dictate();
+// A recorder wedged on its audio device that ignores SIGTERM when the user presses Enter.
+process.env.PATH = ${JSON.stringify(stubborn)} + ":/usr/bin:/bin";
+const wedged = await dictate();
 await new Promise((resolve) => setTimeout(resolve, 50));
-console.log(JSON.stringify({ early, missing, unhandled }));
+console.log(JSON.stringify({ early, missing, wedged, unhandled }));
 `;
 		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "--no-warnings", "-e", script], {
 			encoding: "utf-8", timeout: 60_000,
@@ -443,6 +448,8 @@ console.log(JSON.stringify({ early, missing, unhandled }));
 		assert.equal(report.early.dismissed, true, "the prompt is dismissed once the recorder stops");
 		assert.ok(report.missing.notes.some((note) => note.includes("No audio recorder found")), JSON.stringify(report.missing));
 		assert.equal(report.missing.status, undefined);
+		assert.ok(report.wedged.notes.some((note) => note.startsWith("error: Dictation failed:")), JSON.stringify(report.wedged));
+		assert.equal(report.wedged.status, undefined, "a recorder that ignores SIGTERM must not leave /dictate transcribing");
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
