@@ -4,9 +4,9 @@
 // head are worked out from local git configuration. Only `gh pr create` still
 // shells out. Renderer-facing fields are bounded.
 
-import { execFile, type ExecFileException } from "child_process";
+import { spawn, type ExecFileException } from "child_process";
 import * as os from "os";
-import { promisify } from "util";
+import { createProcessGroupTerminator, waitForChildExit } from "../shared/process-group.js";
 import { redactUrlCredentials } from "../shared/redaction.js";
 import {
   normalizeGitHubHost,
@@ -55,10 +55,9 @@ export {
 } from "./github/github-pull-request-parse.js";
 export { githubCliEnvironment } from "./github/github-credentials.js";
 
-const execFileAsync = promisify(execFile);
-
 const DEFAULT_CREATE_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
+const KILL_GRACE_MS = 1_000;
 const RATE_LIMITED_MESSAGE = "GitHub's API rate limit was reached. Pull request status will refresh after it resets.";
 
 interface CommandResult {
@@ -134,16 +133,66 @@ function createFailureKind(error: unknown): "missing-tool" | "unauthenticated" |
   return "other";
 }
 
+/**
+ * Runs `gh` as the leader of its own process group, so a timeout or cancel also
+ * stops the `git` and credential helpers it started. Failures keep the shape of
+ * `execFile`'s errors (`killed` on timeout, `code`, `stdout`, `stderr`).
+ */
 async function defaultRunner(cwd: string, args: string[], options: CommandOptions): Promise<CommandResult> {
-  const result = await execFileAsync(options.binary, args, {
+  options.signal?.throwIfAborted();
+  const child = spawn(options.binary, args, {
     cwd,
-    encoding: "utf8",
     env: githubCliEnvironment(),
-    maxBuffer: options.maxBuffer,
-    signal: options.signal,
-    timeout: options.timeoutMs,
+    detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  return { stdout: String(result.stdout), stderr: String(result.stderr) };
+  const terminator = createProcessGroupTerminator(child, { killGraceMs: KILL_GRACE_MS });
+  const command = `Command failed: ${options.binary} ${args.join(" ")}`;
+  const output = { stdout: [] as Buffer[], stderr: [] as Buffer[], bytes: 0 };
+  let stopped: Error | undefined;
+  const stop = (error: Error) => {
+    stopped ??= error;
+    terminator.terminate();
+  };
+  const capture = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+    if (stopped) return;
+    output.bytes += chunk.length;
+    if (output.bytes > options.maxBuffer) {
+      stop(Object.assign(new Error(`${stream} maxBuffer length exceeded`), { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }));
+      return;
+    }
+    output[stream].push(chunk);
+  };
+  child.stdout?.on("data", capture("stdout"));
+  child.stderr?.on("data", capture("stderr"));
+  const timer = setTimeout(
+    () => stop(Object.assign(new Error(command), { killed: true, signal: "SIGTERM" })),
+    options.timeoutMs,
+  );
+  const onAbort = () =>
+    stop(Object.assign(new Error("The operation was aborted"), { name: "AbortError", code: "ABORT_ERR" }));
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    // A helper still holding a pipe after `gh` exits is bounded by the timeout.
+    const exit = await waitForChildExit(child, { drainMs: options.timeoutMs });
+    const stdout = Buffer.concat(output.stdout).toString("utf8");
+    const stderr = Buffer.concat(output.stderr).toString("utf8");
+    if (stopped) throw Object.assign(stopped, { stdout, stderr });
+    if (exit.code !== 0) {
+      throw Object.assign(new Error(stderr ? `${command}\n${stderr}` : command), {
+        code: exit.code,
+        signal: exit.signal,
+        killed: false,
+        stdout,
+        stderr,
+      });
+    }
+    return { stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onAbort);
+    await terminator.finished();
+  }
 }
 
 /** `owner/repo` on github.com, or `host/owner/repo`. */

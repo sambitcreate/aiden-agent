@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
 import { GitHubApi } from "./github/github-api.js";
 import { FakeGitHub, type FakePullRequest } from "./github/github-fake-server.js";
 import type { LocalGitHubRepository, LocalRepositoryResult } from "./github/github-local-repository.js";
@@ -310,6 +313,8 @@ function setup(options: {
   local?: Partial<LocalGitHubRepository> | LocalRepositoryResult;
   tokens?: Record<string, string>;
   runner?: ConstructorParameters<typeof GitHubPullRequestService>[0]["runner"];
+  binary?: string;
+  createTimeoutMs?: number;
 } = {}) {
   let now = T0;
   const github = new FakeGitHub({ repositories: ["acme/app", "me/app"], pullRequests: options.pullRequests ?? [], now: () => now });
@@ -339,8 +344,9 @@ function setup(options: {
   const service = new GitHubPullRequestService({
     reader: new DirectPullRequestReader(api),
     repositories: { resolve: async () => local },
-    resolveBinary: async () => "gh",
+    resolveBinary: async () => options.binary ?? "gh",
     ...(options.runner ? { runner: options.runner } : {}),
+    ...(options.createTimeoutMs ? { createTimeoutMs: options.createTimeoutMs } : {}),
   });
   return { service, github, requests: recorded.requests, advance: (ms: number) => (now += ms) };
 }
@@ -510,6 +516,45 @@ test("ambiguous create failures are unknown; missing tools are definite failures
   });
   const result = await missing.service.createPullRequest("/repo", { title: "T" });
   assert.equal(result.kind === "failed" && result.availability, "missing-tool");
+});
+
+async function fakeGitHubCli(t: TestContext, body: string): Promise<{ binary: string; dir: string }> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "aiden-fake-gh-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const binary = path.join(dir, "gh");
+  await writeFile(binary, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return { binary, dir };
+}
+
+test("a timed-out gh create also stops the helpers it started", { skip: process.platform === "win32" }, async (t) => {
+  // gh starts a helper that ignores SIGTERM, then hangs; only the group kill reaches the helper.
+  const { binary, dir } = await fakeGitHubCli(
+    t,
+    `sh -c 'trap "" TERM; echo $$ > "${"$"}{0}/helper.pid"; while :; do sleep 0.05; done' "$(dirname "$0")" >/dev/null 2>&1 &\nsleep 30`,
+  );
+  const pidFile = path.join(dir, "helper.pid");
+  t.after(async () => {
+    const pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+    if (pid) try { process.kill(pid, "SIGKILL"); } catch { /* gone */ }
+  });
+  const { service } = setup({ binary, createTimeoutMs: 500 });
+
+  const result = await service.createPullRequest("/tmp", { title: "T" });
+
+  assert.equal(result.kind, "unknown");
+  assert.match(result.kind === "unknown" ? result.message : "", /did not answer within 1 seconds/u);
+  const helper = Number(await readFile(pidFile, "utf8"));
+  assert.ok(helper > 0);
+  assert.throws(() => process.kill(helper, 0), { code: "ESRCH" }, "the helper must not outlive the cancelled create");
+});
+
+test("gh exit failures keep their stderr for classification", { skip: process.platform === "win32" }, async (t) => {
+  const unauthenticated = await fakeGitHubCli(t, `echo "To get started with GitHub CLI, please run:  gh auth login" >&2\nexit 4`);
+  const result = await setup({ binary: unauthenticated.binary }).service.createPullRequest("/tmp", { title: "T" });
+  assert.equal(result.kind === "failed" && result.availability, "unauthenticated");
+
+  const missing = await setup({ binary: "/nonexistent/aiden-gh" }).service.createPullRequest("/tmp", { title: "T" });
+  assert.equal(missing.kind === "failed" && missing.availability, "missing-tool");
 });
 
 test("create failures shown to the renderer drop credentials and workspace paths", async () => {
