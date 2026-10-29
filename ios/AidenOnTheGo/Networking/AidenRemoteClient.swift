@@ -743,6 +743,19 @@ enum AidenRemoteClientError: Error, LocalizedError {
         return body.code.rawValue == "credential_revoked"
     }
 
+    /// A 429 the server marked `retryable`. The request was refused before it
+    /// ran, so it can be sent again after `serverRetryAfterSeconds`.
+    var isRetryableRateLimit: Bool {
+        guard case .server(429, let body) = self else { return false }
+        return body.retryable
+    }
+
+    /// The server's clamped retry delay for a 429, if it named one.
+    var serverRetryAfterSeconds: Int? {
+        guard case .server(429, let body) = self else { return nil }
+        return body.retryAfterDelaySeconds
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
@@ -3471,7 +3484,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                 code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
             )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
-                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
+                var body = envelope.error
+                body.retryAfterHeaderSeconds = AidenRemoteErrorEnvelope.retryAfterHeaderSeconds(
+                    response.value(forHTTPHeaderField: "Retry-After")
+                )
+                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: body)
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }

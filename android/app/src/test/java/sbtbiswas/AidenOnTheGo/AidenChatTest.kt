@@ -4704,6 +4704,115 @@ class AidenChatTest {
         }
     }
 
+    private fun rateLimitedTurn(retryable: Boolean, message: String = "Aiden Agent is busy.", retryAfterSeconds: Int? = null) =
+        MockResponse().setResponseCode(429).setBody(
+            """{"error":{"code":"rate_limited","message":"$message","requestId":"req-busy","retryable":$retryable""" +
+                (retryAfterSeconds?.let { ""","details":{"retryAfterSeconds":$it}""" } ?: "") + "}}"
+        )
+
+    private fun acceptedTurn(n: Int) = MockResponse().setResponseCode(202).setBody(
+        """{"turnId":"turn-$n","streamId":"stream-$n","status":"queued","message":${forkWireJson.encodeToString(
+            AidenChatMessage("accepted-$n", AidenChatRole.USER, "Hello", createdAt = Instant.EPOCH.plusSeconds(10))
+        )}}"""
+    )
+
+    /** Routes the send endpoints, answering each turn POST with [answer] by its 1-based count. */
+    private fun withTurnHarness(
+        answer: (Int) -> MockResponse,
+        block: suspend CoroutineScope.(AidenChatViewModel, java.util.concurrent.LinkedBlockingQueue<RecordedRequest>, CountDownLatch) -> Unit,
+        expectedTurns: Int
+    ) {
+        val turns = java.util.concurrent.LinkedBlockingQueue<RecordedRequest>()
+        val arrived = CountDownLatch(expectedTurns)
+        val count = java.util.concurrent.atomic.AtomicInteger(0)
+        withForkHarness(emptyList(), { request ->
+            val path = request.requestUrl!!.encodedPath
+            when {
+                path == "/api/aiden/v1/chats/${forkSource.id}/turns" -> {
+                    turns.add(request)
+                    answer(count.incrementAndGet()).also { arrived.countDown() }
+                }
+                path == "/api/aiden/v1/chats/${forkSource.id}" -> MockResponse().setBody(forkWireJson.encodeToString(forkSource))
+                path.endsWith("/events") -> MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                else -> null
+            }
+        }) { harness ->
+            val model = harness.open(forkSource.id, forkSource)
+            block(model, turns, arrived)
+        }
+    }
+
+    @Test
+    fun aBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() = withTurnHarness(
+        answer = { n -> if (n == 1) rateLimitedTurn(retryable = true, retryAfterSeconds = 4) else acceptedTurn(n) },
+        expectedTurns = 2,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == "accepted-2" } == true } }
+
+            assertEquals("the resend waits the server's Retry-After", listOf(4_000L), waits)
+            val refused = turns.poll()!!
+            val resent = turns.poll()!!
+            assertNull(turns.poll())
+            // The Mac settled the refused key as rejected, so only a fresh key can carry the resend.
+            assertNotEquals(refused.getHeader("Idempotency-Key"), resent.getHeader("Idempotency-Key"))
+            assertEquals(refused.body.readUtf8(), resent.body.readUtf8())
+            assertNull("a busy Mac is not reported as a failed send", model.presentedError.value)
+            assertNull(model.pendingSend.value)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertEquals("", model.draft.value)
+        }
+    )
+
+    @Test
+    fun busyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() = withTurnHarness(
+        answer = { n -> if (n <= 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES) rateLimitedTurn(retryable = true) else acceptedTurn(n) },
+        expectedTurns = 1 + AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES,
+        block = { model, turns, arrived ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            withContext(Dispatchers.IO) { check(arrived.await(5, TimeUnit.SECONDS)) }
+            withTimeout(5_000) { model.isStarting.first { !it } }
+
+            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES, waits.size)
+            assertFalse(model.isWaitingToRetryRateLimitedSend.value)
+            assertNull(model.presentedError.value)
+            assertTrue("the send stays saved for the person's Retry", model.pendingSend.value?.canRetry() == true)
+            assertTrue(model.canRetrySend)
+
+            model.send(retry = true)
+            val acceptedId = "accepted-${AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES + 2}"
+            withTimeout(5_000) { model.chat.first { chat -> chat?.messages?.any { it.id == acceptedId } == true } }
+            val keys = turns.map { it.getHeader("Idempotency-Key") }
+            assertEquals(AidenChatViewModel.MAX_RATE_LIMITED_SEND_RETRIES + 2, keys.size)
+            assertEquals("every refused attempt was replaced by a fresh key", keys.size, keys.toSet().size)
+            assertNull(model.pendingSend.value)
+        }
+    )
+
+    @Test
+    fun aRateLimitTheMacMarksFinalStillFailsTheSend() = withTurnHarness(
+        answer = { rateLimitedTurn(retryable = false, message = "Daily limit reached", retryAfterSeconds = 5) },
+        expectedTurns = 1,
+        block = { model, turns, _ ->
+            val waits = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            model.rateLimitedSendRetryDelay = { waits += it; yield() }
+            model.updateDraft("Hello")
+            model.send()
+            assertEquals("Daily limit reached", withTimeout(5_000) { model.presentedError.first { it != null } })
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertNull(model.pendingSend.value)
+            assertTrue(waits.isEmpty())
+            assertEquals(1, turns.size)
+            assertEquals("the refused text returns to the composer", "Hello", model.draft.value)
+        }
+    )
+
     @Test
     fun aForkTheMacRejectedRetriesWithAFreshIdempotencyKey() {
         val fork = forkChat(lineage = AidenChatForkLineage(

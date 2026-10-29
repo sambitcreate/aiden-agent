@@ -186,6 +186,122 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(restored.draft.contains("Later edit"))
     }
 
+    @MainActor
+    func testBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                if turns.record(request) == 1 {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"A turn is already starting","requestId":"busy","retryable":true,"details":{"retryAfterSeconds":4}}}"#.utf8))
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let sleeper = AidenGatedSleep()
+        model.rateLimitedSendRetrySleep = { try await sleeper.sleep($0) }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+
+        // Busy is not a failure: no error, the request is kept, and its resend
+        // waits the server's delay.
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertFalse(model.canSend, "The kept request blocks a second, different send")
+        try await waitUntil { sleeper.requested == [.seconds(4)] }
+        XCTAssertEqual(turns.count, 1)
+
+        sleeper.release()
+        try await waitUntil { turns.count == 2 && model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.presentedError)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let sent = turns.values
+        XCTAssertNotEqual(sent[0].key, sent[1].key, "The Mac refuses a replay of a key it rejected, so the resend uses a new one")
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[0].body)),
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[1].body))
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testBusyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                turns.record(request)
+                return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Busy","requestId":"busy","retryable":true}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        let automaticSends = 1 + AidenChatViewModel.maxRateLimitedSendRetries
+        try await waitUntil { turns.count == automaticSends && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(turns.count, automaticSends, "Resends stop at their limit")
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.canRetrySend)
+        XCTAssertEqual(model.draft, "Hello")
+
+        await model.send(retry: true)
+        try await waitUntil { turns.count == automaticSends + 1 + AidenChatViewModel.maxRateLimitedSendRetries && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
+        XCTAssertEqual(Set(turns.values.map(\.key)).count, turns.count, "Every resend after a refusal carries a fresh key")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testRateLimitTheMacMarksFinalStillFailsTheSend() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                turns.record(request)
+                return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Daily limit reached","requestId":"limit","retryable":false,"details":{"retryAfterSeconds":5}}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in XCTFail("A final refusal is never resent") }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        XCTAssertEqual(model.presentedError, "Daily limit reached")
+        XCTAssertNil(model.pendingSend)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(turns.count, 1)
+        model.stopProgressObservation()
+    }
+
     func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -15037,5 +15153,59 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
     }
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+/// Records each turn start's Idempotency-Key and body.
+private final class AidenRecordedTurnStarts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(key: String?, body: Data?)] = []
+    var values: [(key: String?, body: Data?)] { lock.withLock { recorded } }
+    var count: Int { lock.withLock { recorded.count } }
+
+    /// Returns how many turn starts have been recorded, this one included.
+    @discardableResult
+    func record(_ request: URLRequest) -> Int {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            var data = Data()
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                if count <= 0 { break }
+                data.append(contentsOf: bytes.prefix(count))
+            }
+            body = data
+        }
+        return lock.withLock {
+            recorded.append((request.value(forHTTPHeaderField: "Idempotency-Key"), body))
+            return recorded.count
+        }
+    }
+}
+
+/// A sleep that records what it was asked to wait and returns only when released.
+private final class AidenGatedSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [Duration] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    var requested: [Duration] { lock.withLock { durations } }
+
+    func sleep(_ duration: Duration) async throws {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                durations.append(duration)
+                waiter = continuation
+            }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { waiter = nil }
+            return waiter
+        }
+        continuation?.resume()
     }
 }

@@ -207,9 +207,18 @@ class AidenChatViewModel(
     private val _sendRecoveryError = MutableStateFlow<String?>(null)
     val sendRecoveryError = _sendRecoveryError.asStateFlow()
     val canRetrySend: Boolean get() = _pendingSend.value?.canRetry() == true && isConnected && !_isStarting.value && !_isSubmittingRunInput.value && (_pendingSend.value?.streamId != null || (activeStreamId == null && (_streamState.value == null || _streamState.value!!.isTerminal)))
+    /** The Mac was busy and the saved send will go out again on its own. */
+    private val _isWaitingToRetryRateLimitedSend = MutableStateFlow(false)
+    val isWaitingToRetryRateLimitedSend: StateFlow<Boolean> = _isWaitingToRetryRateLimitedSend.asStateFlow()
+    private var rateLimitedSendRetries = 0
+    private var rateLimitedSendRetryJob: Job? = null
+    /** Waits out a retryable 429 before sending again; tests shorten it. */
+    internal var rateLimitedSendRetryDelay: suspend (Long) -> Unit = { delay(it) }
     fun discardPendingSend() {
         if (_isStarting.value || _isSubmittingRunInput.value) return
         val session = draftSession ?: return
+        cancelRateLimitedSendRetry()
+        rateLimitedSendRetries = 0
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { draftStore.savePendingSend(null, session) }
@@ -884,7 +893,13 @@ class AidenChatViewModel(
                 } else {
                     ProgressConnectionState.UNAVAILABLE
                 }
-                recovery.recoverAfterProbeFailure(onBackoff = {}, onWaiting = {})
+                // A full progress-connection pool answers 429 with a delay;
+                // reconnecting sooner would only be refused again.
+                recovery.recoverAfterProbeFailure(
+                    minimumDelayMilliseconds = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(error),
+                    onBackoff = {},
+                    onWaiting = {}
+                )
             }
         }
     }
@@ -1445,7 +1460,61 @@ class AidenChatViewModel(
         startStreaming(activeStream.copy(lastSequence = 0))
     }
 
-    fun send(retry: Boolean = false) {
+    private fun cancelRateLimitedSendRetry() {
+        rateLimitedSendRetryJob?.cancel()
+        rateLimitedSendRetryJob = null
+        _isWaitingToRetryRateLimitedSend.value = false
+    }
+
+    /**
+     * The Mac refused [attempt] with a retryable 429 before running it, and settled its
+     * Idempotency-Key as rejected, so that key cannot be sent again. The same request is
+     * saved again under a fresh key and sent once the server's delay has passed. Returns `false`
+     * when the fresh attempt could not be saved, leaving the failure terminal.
+     */
+    private suspend fun scheduleRateLimitedSendRetry(
+        attempt: AidenChatDraftStore.PendingSend,
+        error: AidenRemoteClientException.Server,
+        session: AidenChatDraftStore.Session
+    ): Boolean {
+        turnAttempts.reset()
+        val fresh = attempt.copy(key = turnAttempts.key(attempt.request).toString(), createdAtMillis = System.currentTimeMillis())
+        try {
+            withContext(ioDispatcher) {
+                draftStore.settlePendingSend(attempt.key, session)
+                draftStore.savePendingSend(fresh, session)
+            }
+        } catch (saveError: Exception) {
+            if (saveError is CancellationException) throw saveError
+            turnAttempts.reset()
+            return false
+        }
+        _pendingSend.value = fresh
+        if (rateLimitedSendRetries >= MAX_RATE_LIMITED_SEND_RETRIES) return true
+        val delayMillis = error.retryAfterSeconds?.let { it * 1_000L }
+            ?: AidenTerminalReconciliation.retryDelayMilliseconds(rateLimitedSendRetries)
+        rateLimitedSendRetries++
+        rateLimitedSendRetryJob?.cancel()
+        _isWaitingToRetryRateLimitedSend.value = true
+        val wait = rateLimitedSendRetryDelay
+        rateLimitedSendRetryJob = viewModelScope.launch {
+            wait(delayMillis)
+            if (_pendingSend.value?.key != fresh.key) return@launch
+            rateLimitedSendRetryJob = null
+            _isWaitingToRetryRateLimitedSend.value = false
+            startSend(retry = true, automatic = true)
+        }
+        return true
+    }
+
+    fun send(retry: Boolean = false) = startSend(retry, automatic = false)
+
+    private fun startSend(retry: Boolean, automatic: Boolean) {
+        if (!automatic) {
+            // A person's own send or Retry replaces a scheduled resend.
+            cancelRateLimitedSendRetry()
+            rateLimitedSendRetries = 0
+        }
         if (retry && _pendingSend.value?.inputMode != null) { submitRunInput(_pendingSend.value!!.inputMode!!, retry = true); return }
         if (if (retry) !canRetrySend else !canSend) return
         val retryAttempt = if (retry) _pendingSend.value else null
@@ -1556,6 +1625,7 @@ class AidenChatViewModel(
                 }
                 _pendingSend.value = null
                 turnAttempts.reset()
+                rateLimitedSendRetries = 0
                 if (retryAttempt == null) _selectedSkill.value = null
                 if (retryAttempt != null && (_draft.value == text || _draft.value.startsWith(text + "\n\n"))) consumeRunInputDraft(text)
                 _chat.value = accepted.chat
@@ -1576,12 +1646,19 @@ class AidenChatViewModel(
                     draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
-                    if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
-                        draftSession?.let { session -> withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) } }
-                        _pendingSend.value = null
-                        turnAttempts.reset()
+                    val session = draftSession
+                    if (e is AidenRemoteClientException.Server && e.isRetryableRateLimit && session != null &&
+                        scheduleRateLimitedSendRetry(attempt, e, session)) {
+                        // The Mac was only busy: keep the send and try it again.
+                    } else {
+                        if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
+                            session?.let { withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, it) } }
+                            _pendingSend.value = null
+                            turnAttempts.reset()
+                            rateLimitedSendRetries = 0
+                        }
+                        if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
                     }
-                    if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
                 }
             } finally {
                 _isStarting.value = false
@@ -1821,6 +1898,7 @@ class AidenChatViewModel(
                             if (reconcileMissingStream(stream)) return@launch
                         }
                         recovery.recoverAfterProbeFailure(
+                            minimumDelayMilliseconds = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(inner),
                             onBackoff = { showRecoveryWarning(inner.localizedMessage) },
                             onWaiting = onWaiting
                         )
@@ -3532,6 +3610,11 @@ class AidenChatViewModel(
 
     companion object {
         private const val MAX_AGENT_ROSTER_HISTORY = 8
+        /**
+         * A send the Mac refused with a retryable 429 is sent again on its own after the server's
+         * delay, this many times in a row before Retry is left to the person.
+         */
+        const val MAX_RATE_LIMITED_SEND_RETRIES = 3
         /** A foreign run feed is resumed at most this many times in a row. */
         private const val MAX_FOREIGN_RUN_RECONNECTS = 3
         /** Quiet period that ends the attach replay before a run is shown live. */

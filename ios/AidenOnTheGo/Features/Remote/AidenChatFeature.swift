@@ -1319,24 +1319,91 @@ final class AidenChatViewModel {
     @ObservationIgnored private var turnAttempts = AidenTurnAttemptTracker()
     private(set) var pendingSend: AidenChatDraftStore.PendingSend?
     private(set) var sendRecoveryError: String?
+    /// A send the Mac refused with a retryable 429 is sent again on its own
+    /// after the server's delay, this many times in a row before Retry is
+    /// left to the person.
+    static let maxRateLimitedSendRetries = 3
+    @ObservationIgnored private var rateLimitedSendRetries = 0
+    @ObservationIgnored private var rateLimitedSendRetryTask: Task<Void, Never>?
+    /// Waits out a retryable 429 before sending again; tests shorten it.
+    @ObservationIgnored var rateLimitedSendRetrySleep: @Sendable (Duration) async throws -> Void = {
+        try await Task.sleep(for: $0)
+    }
+    /// The Mac was busy and the saved send will go out again on its own.
+    private(set) var isWaitingToRetryRateLimitedSend = false
     var canRetrySend: Bool {
         pendingSend?.canRetry() == true && isConnected && coordinator.activeInstanceId == instanceId && !isStarting && !isSubmittingRunInput && !isRestoringStream && (pendingSend?.streamId != nil || (activeStreamID == nil && !isStreaming))
     }
     var sendRecoveryMessage: String? {
         if let sendRecoveryError { return sendRecoveryError }
         guard let pendingSend, !isStarting, !isSubmittingRunInput else { return nil }
+        if isWaitingToRetryRateLimitedSend {
+            return "Aiden Agent is busy. Your message will be sent again in a moment."
+        }
         return pendingSend.canRetry()
             ? "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
             : "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
     }
     func discardPendingSend() async {
         guard !isStarting, !isSubmittingRunInput, let session = draftSession else { return }
+        cancelRateLimitedSendRetry()
+        rateLimitedSendRetries = 0
         do {
             try await draftStore.savePendingSend(nil, session: session)
             pendingSend = nil
             sendRecoveryError = nil
             turnAttempts.reset()
         } catch { presentedError = error.localizedDescription }
+    }
+
+    private func cancelRateLimitedSendRetry() {
+        rateLimitedSendRetryTask?.cancel()
+        rateLimitedSendRetryTask = nil
+        isWaitingToRetryRateLimitedSend = false
+    }
+
+    /// The Mac refused `attempt` with a retryable 429 before running it, and
+    /// settled its Idempotency-Key as rejected, so that key cannot be sent
+    /// again. The same request is saved again under a fresh key
+    /// and sent once the server's delay has passed. Returns `false` when the
+    /// fresh attempt could not be saved, leaving the failure terminal.
+    private func scheduleRateLimitedSendRetry(
+        replacing attempt: AidenChatDraftStore.PendingSend,
+        error: AidenRemoteClientError,
+        session: AidenChatDraftStore.Session
+    ) async -> Bool {
+        await draftStore.settlePendingSend(key: attempt.key, session: session)
+        turnAttempts.reset()
+        let fresh = AidenChatDraftStore.PendingSend(
+            deviceId: attempt.deviceId,
+            request: attempt.request,
+            key: turnAttempts.key(for: attempt.request),
+            createdAt: Date(),
+            attachments: attempt.attachments
+        )
+        do {
+            try await draftStore.savePendingSend(fresh, session: session)
+        } catch {
+            turnAttempts.reset()
+            return false
+        }
+        pendingSend = fresh
+        guard rateLimitedSendRetries < Self.maxRateLimitedSendRetries else { return true }
+        let delay: Duration = error.serverRetryAfterSeconds.map { .seconds($0) }
+            ?? .milliseconds(AidenTerminalReconciliation.retryDelayMilliseconds(attempt: rateLimitedSendRetries))
+        rateLimitedSendRetries += 1
+        rateLimitedSendRetryTask?.cancel()
+        isWaitingToRetryRateLimitedSend = true
+        let sleep = rateLimitedSendRetrySleep
+        let key = fresh.key
+        rateLimitedSendRetryTask = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard let self, !Task.isCancelled, self.pendingSend?.key == key else { return }
+            self.rateLimitedSendRetryTask = nil
+            self.isWaitingToRetryRateLimitedSend = false
+            await self.send(retry: true, automatic: true)
+        }
+        return true
     }
     /// The fork request whose outcome is still unknown, replayed with the
     /// same Idempotency-Key so a lost response never yields a second fork.
@@ -2633,6 +2700,7 @@ final class AidenChatViewModel {
             }
             skipsSnapshot = false
             guard isCurrentProgressObservation(generation, context: context) else { return }
+            var serverRequestedDelay = 0
             do {
                 let events = try coordinator.remoteClient(for: context).progressEvents(
                     chatId: chat.id,
@@ -2679,9 +2747,16 @@ final class AidenChatViewModel {
                 }
                 isTaskProgressStale = taskProgress != nil
                 isAgentRosterStale = agentRoster != nil
+                // A full progress-connection pool answers 429 with a delay;
+                // reconnecting sooner would only be refused again.
+                serverRequestedDelay = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: error)
             }
             do {
-                _ = try await recovery.recoverAfterProbeFailure(onBackoff: {}, onWaiting: { _ in })
+                _ = try await recovery.recoverAfterProbeFailure(
+                    minimumDelayMilliseconds: serverRequestedDelay,
+                    onBackoff: {},
+                    onWaiting: { _ in }
+                )
             } catch {
                 return
             }
@@ -2942,6 +3017,15 @@ final class AidenChatViewModel {
     }
 
     func send(retry: Bool = false) async {
+        await send(retry: retry, automatic: false)
+    }
+
+    private func send(retry: Bool, automatic: Bool) async {
+        if !automatic {
+            // A person's own send or Retry replaces a scheduled resend.
+            cancelRateLimitedSendRetry()
+            rateLimitedSendRetries = 0
+        }
         if retry, let mode = pendingSend?.inputMode { await submitRunInput(mode, retry: true); return }
         guard !isReadOnlyPresentation else { return }
         let retryAttempt = retry ? pendingSend : nil
@@ -3120,6 +3204,7 @@ final class AidenChatViewModel {
             guard !isRemoved, coordinator.isCurrent(context) else { return }
             pendingSend = nil
             turnAttempts.reset()
+            rateLimitedSendRetries = 0
             if chat.messages.contains(where: { $0.id == optimisticID }) {
                 messageRenderIDs[response.message.id] = optimisticID
             }
@@ -3156,11 +3241,18 @@ final class AidenChatViewModel {
                 current: pendingAttachments
             )
             streamState = nil
+            if let rateLimit = error as? AidenRemoteClientError, rateLimit.isRetryableRateLimit,
+               let session = draftSession,
+               await scheduleRateLimitedSendRetry(replacing: attempt, error: rateLimit, session: session) {
+                // The Mac was only busy: keep the send and try it again.
+                return
+            }
             if case AidenRemoteClientError.server(let status, _) = error,
                [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
                 await draftStore.settlePendingSend(key: attempt.key, session: session)
                 pendingSend = nil
                 turnAttempts.reset()
+                rateLimitedSendRetries = 0
             }
             if pendingSend == nil { presentedError = error.localizedDescription }
             coordinator.haptics.play(.error, scope: hapticScope)
@@ -4419,6 +4511,7 @@ final class AidenChatViewModel {
                     let message = error.localizedDescription
                     do {
                         _ = try await recovery.recoverAfterProbeFailure(
+                            minimumDelayMilliseconds: AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(after: error),
                             onBackoff: { [weak self] in
                                 guard let self, !self.isRemoved, self.activeStreamID == streamID else { return }
                                 self.showRecoveryWarning(message)
