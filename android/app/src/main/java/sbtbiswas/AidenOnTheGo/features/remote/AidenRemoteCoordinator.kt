@@ -130,6 +130,13 @@ internal fun aidenShouldRequestBotImages(server: AidenServer, installation: Aide
 internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
     aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
 
+/**
+ * Revision 48: a Mac that offers `chat:new-worktree` in `serverCapabilities` is asked for it, in a
+ * call of its own after `bot:issues`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestChatNewWorktree(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.CHAT_NEW_WORKTREE, server, installation)
+
 private fun aidenShouldRequestSoloCapability(
     capability: AidenRemoteCapability,
     server: AidenServer,
@@ -204,6 +211,23 @@ internal suspend fun aidenRequestBotIssues(
 ): AidenSoloCapabilityNegotiation? =
     aidenRequestCapabilitiesAlone(
         if (aidenShouldRequestBotIssues(server, installation)) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 48: asks [server] for `chat:new-worktree` alone, exactly as [aidenRequestScheduleCards]
+ * asks for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its
+ * new chats then show no New worktree chip on this phone.
+ */
+internal suspend fun aidenRequestChatNewWorktree(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestChatNewWorktree(server, installation)) listOf(AidenRemoteCapability.CHAT_NEW_WORKTREE) else emptyList(),
         client,
         stillCurrent
     )
@@ -547,12 +571,20 @@ class AidenRemoteCoordinator(
                 )
                 // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
                 // name never costs this phone its other grants.
-                val negotiatedServer = negotiateSoloCapability(
+                val issuesServer = negotiateSoloCapability(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = imagesServer,
                     request = ::aidenRequestBotIssues
+                )
+                // Revision 48: `chat:new-worktree` goes alone too, last.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = issuesServer,
+                    request = ::aidenRequestChatNewWorktree
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(

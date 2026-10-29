@@ -49,6 +49,7 @@ import {
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
   AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
+  AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_CURSOR_LENGTH,
   AIDEN_REMOTE_CHAT_SUMMARY_MAX_LIMIT,
   AIDEN_REMOTE_CHAT_TASKS_FEATURE,
@@ -207,7 +208,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure" | "moveToNewWorktree" | "supportsNewWorktrees">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -465,6 +466,7 @@ export type AidenRemoteRouteLabel =
   | "chatVisualDocument"
   | "chatBrowserRecording"
   | "chatSpending"
+  | "chatNewWorktree"
   | "turns"
   | "models"
   | "stream"
@@ -575,6 +577,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatVisualDocument: ["/chats/:id/visuals/:visualId/document"],
   chatBrowserRecording: ["/chats/:id/recordings/:recordingId"],
   chatSpending: ["/chats/:id/spending", "/chats/:id/spending/allow-more"],
+  chatNewWorktree: ["/chats/:id/worktree"],
   turns: ["/chats/:id/turns"],
   models: ["/models"],
   stream: ["/streams/:streamId"],
@@ -1519,6 +1522,11 @@ function requireEmptyObject(value: unknown): void {
   }
 }
 
+/** Revision 48: whether phones can put an empty chat in a new worktree. */
+function newWorktreesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  return dependencies.chats?.supportsNewWorktrees === true && dependencies.chats.moveToNewWorktree !== undefined;
+}
+
 function requireDeviceCapabilities(
   device: AidenRemoteRouterAuthenticatedDevice,
   capabilities: readonly AidenRemoteCapability[],
@@ -1969,6 +1977,8 @@ function advertisedServerCapabilities(
       : []),
     // Revision 39: a display opt-in for any device type while approvals are served.
     ...(scheduleCardsWired(dependencies) ? AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES : []),
+    // Revision 48: offered only while the host makes worktrees for phones.
+    ...(newWorktreesWired(dependencies) ? AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES : []),
     ...(device.acceptsProgressCapabilities === true
       ? AIDEN_REMOTE_PROGRESS_CAPABILITIES.filter((capability) =>
           progressCapabilitySupported(dependencies, capability),
@@ -2399,6 +2409,11 @@ export function createAidenRemoteRequestHandler(
             // Revision 39: a display opt-in for scheduled-task approvals; it never changes canAllow.
             if (!scheduleCardsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Schedule cards are unavailable on this Aiden installation.", 404);
+            }
+          } else if ((AIDEN_REMOTE_CHAT_NEW_WORKTREE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 48: offered only while the host makes worktrees for phones.
+            if (!newWorktreesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "New worktrees are unavailable on this Aiden installation.", 404);
             }
           } else if (capability === "simulators:control") {
             // Refuse non-desktops first so they never learn whether this Mac has simulators.
@@ -3861,6 +3876,29 @@ export function createAidenRemoteRequestHandler(
           200,
           await runChatMutation(dependencies.chats, device, moveMatch[1]!, "chat", () =>
             dependencies.chats!.move(device.id, moveMatch[1]!, revision, key, body)),
+        );
+        return;
+      }
+      const newWorktreeMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/worktree$/u.exec(path);
+      if (newWorktreeMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatNewWorktree";
+        const body = await readJsonBody(request, 32_768);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.moveToNewWorktree || !newWorktreesWired(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // Making a worktree is a Git write; the opt-in only says the phone can show it.
+        requireDeviceCapabilities(device, ["git:write", "chat:new-worktree"]);
+        const revision = requiredHeader(request, "if-match", /^[\x21-\x7e]{1,128}$/u);
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(chats, device, newWorktreeMatch[1]!, "chat", () =>
+            chats.moveToNewWorktree!(device.id, newWorktreeMatch[1]!, revision, key, body)),
         );
         return;
       }

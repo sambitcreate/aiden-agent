@@ -1043,6 +1043,68 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    /// Revision 48: New worktree posts the first message's text with the chat's
+    /// revision and a key, and accepts only the still-empty chat it asked about.
+    func testNewWorktreeMovesTheEmptyChatAndRefusesAnythingElse() async throws {
+        let client = makeClient()
+        let moved = try botFixtureData(at: ["chatNewWorktree", "response"])
+        let failed = try botFixtureData(at: ["chatNewWorktree", "failed"])
+        var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: moved) as? [String: Any])
+        var replies: [(Int, Data)] = [(200, moved), (409, failed)]
+        var withMessage = raw
+        var chat = try XCTUnwrap(raw["chat"] as? [String: Any])
+        // A message the phone reads anywhere else, so only "not empty" is wrong here.
+        let fixtureChat = try XCTUnwrap(JSONSerialization.jsonObject(with: botFixtureData(at: ["chat"])) as? [String: Any])
+        chat["messages"] = try XCTUnwrap(fixtureChat["messages"] as? [[String: Any]]).prefix(1).map { $0 }
+        withMessage["chat"] = chat
+        replies.append((200, try JSONSerialization.data(withJSONObject: withMessage)))
+        raw["path"] = "/Users/sam/.aiden/worktrees/site"
+        replies.append((200, try JSONSerialization.data(withJSONObject: raw)))
+        let key = UUID()
+        var requests = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            defer { requests += 1 }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_new_worktree/worktree")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "chat_revision_new_worktree_1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), key.uuidString.lowercased())
+            XCTAssertEqual(try Self.jsonBody(request) as NSDictionary, ["text": "Fix the login bug"])
+            let (status, data) = replies[requests]
+            return Self.response(for: request, status: status, data: data)
+        }
+        func move() async throws -> AidenChatNewWorktree {
+            try await client.moveChatToNewWorktree(
+                id: "chat_fixture_new_worktree",
+                revision: "chat_revision_new_worktree_1",
+                text: "Fix the login bug",
+                idempotencyKey: key
+            )
+        }
+
+        let result = try await move()
+        XCTAssertEqual(result.chat.workspaceId, "workspace_fixture_worktree")
+        XCTAssertEqual(result.chat.revision, "chat_revision_new_worktree_2")
+        XCTAssertEqual(result.branch, "aiden/fix-the-login-bug")
+        do {
+            _ = try await move()
+            XCTFail("A refusal must reach the phone.")
+        } catch AidenRemoteClientError.server(let status, let body) {
+            XCTAssertEqual(status, 409)
+            XCTAssertEqual(body.code.rawValue, "git_capability_denied")
+            XCTAssertTrue(
+                AidenRemoteClientError.server(statusCode: status, body: body).localizedDescription.contains("couldn't fetch main"),
+                "the Mac's own sentence is what the phone shows"
+            )
+        }
+        await assertInvalidResponse { try await move() }
+        await assertInvalidResponse { try await move() }
+        XCTAssertEqual(requests, 4)
+        await assertInvalidResponse {
+            try await client.moveChatToNewWorktree(id: "chat_fixture_new_worktree", revision: "r", text: "  \n ")
+        }
+        XCTAssertEqual(requests, 4, "a blank message never reaches the Mac")
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"

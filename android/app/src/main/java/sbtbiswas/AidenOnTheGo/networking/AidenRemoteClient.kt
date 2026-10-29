@@ -952,6 +952,33 @@ class AidenRemoteClient(
     }
 
     /**
+     * Revision 48 (`chat:new-worktree`, with `git:write`): the Mac makes a worktree named from
+     * [text], the chat's first message, and moves the still-empty chat [id] into it. It sends
+     * nothing; the turn follows as usual. The same key and chat find the worktree an earlier
+     * attempt made.
+     */
+    suspend fun moveChatToNewWorktree(
+        id: String,
+        revision: String,
+        text: String,
+        idempotencyKey: UUID = UUID.randomUUID()
+    ): AidenChatNewWorktree {
+        AidenBotWire.validateIdentifier(id, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        if (text.isBlank() || text.length > AidenChatNewWorktree.MAX_TEXT_LENGTH) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return executeRequest(
+            "/chats/$id/worktree",
+            method = "POST",
+            ifMatchRevision = revision,
+            idempotencyKey = idempotencyKey,
+            bodyJson = json.encodeToString(ChatNewWorktreeRequest(text = text)),
+            // Fetching the base branch and checking it out can take a while.
+            requestTimeoutSeconds = 120
+        ) { bytes -> AidenChatNewWorktree.decode(String(bytes, Charsets.UTF_8), id) }
+    }
+
+    /**
      * Forks [id] at [messageId] (contract revision 21, `chat-fork-v1`).
      * [summaryFocus] is only sent with [withSummary], which needs
      * `chat-fork-summary-v1`; a blank focus asks for an unfocused summary.
@@ -2883,6 +2910,9 @@ class AidenRemoteClient(
     /** Encodes to `{}` for an unfocused summary. */
     @Serializable
     private data class ChatForkSummaryRequest(val focus: String? = null)
+
+    @Serializable
+    private data class ChatNewWorktreeRequest(val text: String)
 
     @Serializable
     private data class ChatMoveRequest(

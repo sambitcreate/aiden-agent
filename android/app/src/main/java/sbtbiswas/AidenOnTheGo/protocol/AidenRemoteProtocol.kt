@@ -597,6 +597,14 @@ data class AidenRemoteCapability(val rawValue: String) {
          */
         val BOT_ISSUES = AidenRemoteCapability("bot:issues")
 
+        /**
+         * Contract revision 48: with `git:write`, this phone may move an empty Workspace chat into
+         * a new worktree made from its first message (`POST /chats/{chatId}/worktree`, with
+         * `chat:write`). The Mac offers it only in `serverCapabilities`, and it is asked for in a
+         * call of its own.
+         */
+        val CHAT_NEW_WORKTREE = AidenRemoteCapability("chat:new-worktree")
+
         val V1_KNOWN = listOf(
             SERVER_READ, CHAT_READ, CHAT_WRITE, APPROVAL_RESPOND,
             WORKSPACE_READ, WORKSPACE_BROWSE, WORKSPACE_MANAGE,
@@ -632,13 +640,16 @@ data class AidenRemoteCapability(val rawValue: String) {
         /** Revision 42: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
         val PHONE_BOT_ISSUES = listOf(BOT_ISSUES)
 
+        /** Revision 48: negotiable when the Mac lists it in `serverCapabilities`, in its own call. */
+        val PHONE_CHAT_NEW_WORKTREE = listOf(CHAT_NEW_WORKTREE)
+
         /** Every grant `POST /device/capabilities` may add. */
         val NEGOTIABLE = PROGRESS + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_NEW_WORKTREE
 
         /** The pairing vocabulary plus the negotiable phone-scoped subsets. */
         val PHONE_KNOWN = V1_KNOWN + PHONE_RUNS + PHONE_SIMULATORS + PHONE_BOT_CARDS + PHONE_BOT_ACTIVITY +
-            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES
+            PHONE_BOT_HANDOFFS + PHONE_SCHEDULE_CARDS + PHONE_BOT_IMAGES + PHONE_BOT_ISSUES + PHONE_CHAT_NEW_WORKTREE
     }
 }
 

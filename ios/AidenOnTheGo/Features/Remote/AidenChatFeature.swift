@@ -1366,6 +1366,17 @@ final class AidenChatViewModel {
     /// later refresh keeps earlier pages the reader loaded.
     @ObservationIgnored private var hasSettledTranscriptWindow = false
     private(set) var isStarting = false
+    /// Revision 48: the first message starts this chat in a new worktree on
+    /// the Mac. Shown only while `offersNewWorktree`.
+    var startsInNewWorktree = false
+    /// The Mac is making the worktree; the message waits above a Cancel.
+    private(set) var isSettingUpWorktree = false
+    /// What a `git:read` branch list showed for this chat's workspace, if read.
+    private(set) var workspaceHasCommits: Bool?
+    @ObservationIgnored private var worktreeSetupTask: Task<AidenChatNewWorktree, Error>?
+    /// One key per chat and message, so a retry after a lost reply finds the
+    /// worktree the Mac already made instead of failing on the moved chat.
+    @ObservationIgnored private var worktreeAttempt: (text: String, key: UUID)?
     /// The busy send pill's mode. Resets to Queue when the run ends.
     private(set) var runInputMode: AidenStreamInputMode = .queue
     private(set) var streamState: AidenStreamState? {
@@ -1788,6 +1799,37 @@ final class AidenChatViewModel {
     var isLiveReplyUnsettled: Bool {
         isStreaming || activeStreamID != nil || foreignRunIsLive
     }
+    var offersNewWorktree: Bool {
+        guard !isReadOnlyPresentation, !isRemoved else { return false }
+        return AidenNewWorktreeAvailability.isOffered(
+            chat: chat,
+            workspace: coordinator.workspaces.first { $0.id == chat.workspaceId },
+            server: coordinator.server,
+            hasCommits: workspaceHasCommits
+        )
+    }
+
+    /// Reads the workspace's branches when this phone holds `git:read`, so New
+    /// worktree is hidden for a folder that is not a repository or has no
+    /// commits. Without the grant, or when the read fails, the Mac decides.
+    func refreshNewWorktreeRepository() async {
+        guard !isReadOnlyPresentation, !chat.isBotChat, chat.messages.isEmpty,
+              coordinator.server?.capabilities.contains(.chatNewWorktree) == true,
+              coordinator.server?.capabilities.contains(.gitRead) == true,
+              let context = try? coordinator.requestContext(for: instanceId) else { return }
+        let workspaceId = chat.workspaceId
+        guard let result = try? await coordinator.remoteClient(for: context).gitBranches(workspaceId: workspaceId),
+              !isRemoved, coordinator.isCurrent(context), chat.workspaceId == workspaceId else { return }
+        workspaceHasCommits = AidenNewWorktreeAvailability.hasCommits(result)
+    }
+
+    /// Stops waiting for the worktree. The message goes back to the composer.
+    /// If the Mac finishes anyway, the chat is in the worktree next time it
+    /// loads, still empty.
+    func cancelWorktreeSetup() {
+        worktreeSetupTask?.cancel()
+    }
+
     var canSend: Bool {
         guard !isReadOnlyPresentation, !isRemoved, pendingSend == nil, sendRecoveryError == nil else { return false }
         return (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty) &&
@@ -2973,6 +3015,7 @@ final class AidenChatViewModel {
             attachments: submittedAttachments,
             skill: submittedSkill.map(AidenSkillInvocation.init(entry:))
         )
+        let makesWorktree = retryAttempt == nil && startsInNewWorktree && offersNewWorktree
         let previousUpdatedAt = chat.updatedAt
         let optimisticID = "local-\(UUID().uuidString.lowercased())"
         let now = Date()
@@ -3019,6 +3062,37 @@ final class AidenChatViewModel {
             key: turnAttempts.key(for: request), createdAt: Date(), attachments: submittedAttachments)
         let idempotencyKey = attempt.key
         do {
+            if makesWorktree {
+                // Revision 48: the Mac makes the worktree and moves this empty
+                // chat into it before the message is sent there.
+                let key = worktreeAttempt?.text == text ? worktreeAttempt!.key : UUID()
+                worktreeAttempt = (text, key)
+                let client = try coordinator.remoteClient(for: context)
+                let chatId = chat.id
+                let revision = chat.revision
+                let setup = Task {
+                    try await client.moveChatToNewWorktree(id: chatId, revision: revision, text: text, idempotencyKey: key)
+                }
+                worktreeSetupTask = setup
+                isSettingUpWorktree = true
+                defer {
+                    isSettingUpWorktree = false
+                    worktreeSetupTask = nil
+                }
+                let moved = try await withTaskCancellationHandler {
+                    try await setup.value
+                } onCancel: {
+                    setup.cancel()
+                }
+                guard !isRemoved, coordinator.isCurrent(context) else { return }
+                chat.workspaceId = moved.chat.workspaceId
+                chat.revision = moved.chat.revision
+                startsInNewWorktree = false
+                worktreeAttempt = nil
+                Task { await coordinator.refreshWorkspaces() }
+                // Canceled as the worktree arrived: the chat stays there, unsent.
+                if setup.isCancelled { throw CancellationError() }
+            }
             let session: AidenChatDraftStore.Session
             if let existing = draftSession { session = existing }
             else {
@@ -5580,6 +5654,9 @@ struct AidenChatDetailView: View {
         .navigationTitle(presentationStyle == .botMessages ? "" : model.chat.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { chatToolbar }
+        .task(id: newWorktreeRefreshKey) {
+            await model.refreshNewWorktreeRepository()
+        }
         .task(id: spendingRefreshKey) {
             await spending.refresh(owner: spendingOwner, transport: spendingTransport)
         }
@@ -5882,6 +5959,21 @@ struct AidenChatDetailView: View {
         return try? coordinator.remoteClient()
     }
 
+    /// Revision 48: New worktree sits beside the composer's chips until the
+    /// chat's first message, and stays hidden while that message is on its way.
+    private var showsNewWorktreeChip: Bool {
+        allowsMutations && model.offersNewWorktree && !model.isSettingUpWorktree
+    }
+
+    private var newWorktreeRefreshKey: String {
+        [
+            model.chat.id,
+            model.chat.workspaceId,
+            coordinator?.activeInstanceId ?? "",
+            String(coordinator?.server?.capabilities.contains(.chatNewWorktree) == true),
+        ].joined(separator: "|")
+    }
+
     /// Re-read after each reply settles and after a send the Mac refused.
     private var spendingRefreshKey: String {
         [
@@ -5915,13 +6007,23 @@ struct AidenChatDetailView: View {
                     }.font(.footnote)
                 }.padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16)).padding(.bottom, 8)
             }
-            if simulators.deviceCount > 0 {
-                HStack {
-                    AidenSimulatorDeviceButton(count: simulators.deviceCount) {
-                        simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+            if model.isSettingUpWorktree {
+                AidenNewWorktreeSetupRow { model.cancelWorktreeSetup() }
+            }
+            if simulators.deviceCount > 0 || showsNewWorktreeChip {
+                HStack(spacing: 8) {
+                    if simulators.deviceCount > 0 {
+                        AidenSimulatorDeviceButton(count: simulators.deviceCount) {
+                            simulatorViewer = simulators.makeViewer(coordinator: coordinator)
+                        }
+                    }
+                    if showsNewWorktreeChip {
+                        AidenNewWorktreeChip(isOn: $model.startsInNewWorktree)
+                            .disabled(model.isStarting)
                     }
                     Spacer(minLength: 0)
                 }
+                .padding(.horizontal, simulators.deviceCount > 0 ? 0 : 4)
                 .padding(.bottom, 4)
             }
             AidenChatProgressControls(

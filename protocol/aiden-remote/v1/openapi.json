@@ -1007,6 +1007,86 @@
         }
       }
     },
+    "/chats/{chatId}/worktree": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "moveChatToNewWorktree",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-capabilities": [
+          "chat:write",
+          "git:write",
+          "chat:new-worktree"
+        ],
+        "description": "Contract revision 48. New worktree for a phone's first message: the Mac makes a managed worktree from the chat's workspace (from the repository's default branch, fetched from its remote when there is one) on a branch named from text (aiden/<first words>), then moves the still-empty chat into the worktree's workspace and returns it. Send the turn afterwards as usual. The worktree is keyed by the chat, so a retry with any Idempotency-Key reuses the one an earlier attempt made. 409 operation_stale when the chat already has messages; 409 git_capability_denied when Git could not make it (the message says why, without a path); 409 workspace_unavailable when the workspace has no folder or no access. It can take a while when the base is fetched.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "text"
+                ],
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat, now in the new worktree's workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "chat",
+                    "branch"
+                  ],
+                  "properties": {
+                    "chat": {
+                      "$ref": "#/components/schemas/Chat"
+                    },
+                    "branch": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/fork": {
       "parameters": [
         {
@@ -7676,7 +7756,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7719,7 +7800,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7865,7 +7947,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true
@@ -7917,7 +8000,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:new-worktree"
               ]
             },
             "uniqueItems": true

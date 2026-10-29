@@ -2,6 +2,8 @@
 // checkout or a new worktree, from which base, and whether from origin.
 // A UI preference, so it lives in renderer storage and fails soft.
 
+import { resolveWorktreeDefaults, type DraftWorktreeRepositoryState } from "../shared/worktree-on-send";
+
 export type ChatDraftGitMode = "checkout" | "worktree";
 
 export interface ChatDraftGitMemory {
@@ -84,32 +86,15 @@ export function rememberChatDraftGitMemory(
   }
 }
 
-/** What the branch menu knows about the repository (`git:branches`). */
-export interface DraftWorktreeRepositoryState {
-  branches: readonly string[];
-  remoteBranches?: readonly string[];
-  current?: string;
-  defaultBranch?: string;
-  hasRemote?: boolean;
-  unborn?: boolean;
-}
+export type { DraftWorktreeRepositoryState } from "../shared/worktree-on-send";
 
 /**
  * New-worktree defaults for a draft: the remembered base while it still
- * exists, else the repository's default branch, else the current branch.
- * From origin defaults to on when a remote exists. Undefined when the
- * repository has no commit to start from.
+ * exists, else the repository's default (see `resolveWorktreeDefaults`).
  */
 export function resolveDraftWorktreeDefaults(
   memory: ChatDraftGitMemory,
   repository: DraftWorktreeRepositoryState,
 ): { baseRef: string; fromOrigin: boolean } | undefined {
-  if (repository.unborn) return undefined;
-  const exists = (ref: string | undefined): ref is string =>
-    ref !== undefined && (repository.branches.includes(ref) || (repository.remoteBranches ?? []).includes(ref));
-  const baseRef = [memory.baseRef, repository.defaultBranch, repository.current, repository.branches[0]]
-    .find(exists);
-  if (!baseRef) return undefined;
-  const hasRemote = repository.hasRemote ?? (repository.remoteBranches?.length ?? 0) > 0;
-  return { baseRef, fromOrigin: hasRemote && (memory.fromOrigin ?? true) };
+  return resolveWorktreeDefaults(repository, memory);
 }

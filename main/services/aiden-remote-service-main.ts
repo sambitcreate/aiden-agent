@@ -92,6 +92,8 @@ import { persistedChatWorkspaceId } from "./chat-workspace-authority.js";
 import { chatActivityRegistry } from "./chat-activity.js";
 import { chatTitleService } from "./chat-title.js";
 import { configStore } from "./config-store.js";
+import { createAidenRemoteNewWorktrees } from "./aiden-remote-new-worktree.js";
+import { firstMessageWorktrees } from "./first-message-worktree-main.js";
 import { llmClient } from "./llm-client.js";
 import { listConfiguredProviders } from "./provider-list-main.js";
 import { AidenRemoteFileService } from "./aiden-remote-files.js";
@@ -530,6 +532,13 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
           const botsSupported = hostPlatformCapabilities().bots;
           const chats = new AidenRemoteChatService({
             attachments: remoteAttachmentStore,
+            // Revision 48: a phone's New worktree, through the desktop's first-message coordinator.
+            newWorktrees: createAidenRemoteNewWorktrees({
+              getWorkspace: (workspaceId) => configStore.getWorkspace(workspaceId),
+              branches: (folderPath) => gitBranches(folderPath),
+              ensure: (request, seed, owner) => firstMessageWorktrees.ensure(request, seed, owner),
+              owner: (deviceId) => workspaceOwners.owner(deviceId),
+            }),
             application: chatApplicationService,
             chatStore,
             generation: {

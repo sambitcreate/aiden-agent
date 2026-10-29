@@ -93,6 +93,8 @@ import {
   parseAidenRemoteChatProjection,
   parseAidenRemoteSkillCatalog,
   parseAidenRemoteChatContextPressure,
+  parseAidenRemoteChatNewWorktreeRequest,
+  type AidenRemoteChatNewWorktreeRequest,
   projectAidenRemoteContextPressure,
   type AidenRemoteChatContextPressure,
   type AidenRemoteContextPressure,
@@ -1210,6 +1212,21 @@ export class AidenRemoteChatService {
        */
       spendingRefusal?: (chat: Pick<Chat, "id" | "botId">) => Promise<string | undefined>;
       attachments?: AidenRemoteAttachmentStore;
+      /**
+       * Contract revision 48: makes (or, for the same chat, finds again) the
+       * managed worktree a phone's first message asked for, from the chat's
+       * workspace. Absent: `chat:new-worktree` is neither offered nor served.
+       * Errors it throws as `AidenRemoteServiceError` reach the phone as they
+       * are, so they must never carry a path.
+       */
+      newWorktrees?: {
+        create(
+          deviceId: string,
+          sourceWorkspaceId: string,
+          text: string,
+          chatId: string,
+        ): Promise<{ workspaceId: string; branch: string }>;
+      };
       idempotency?: AidenIdempotencyLedger;
       persistIdempotency?: (snapshot: AidenIdempotencySnapshot) => Promise<void>;
       /**
@@ -1866,6 +1883,93 @@ export class AidenRemoteChatService {
           });
           this.options.notifyChanged?.(chatId);
           return projectAidenRemoteChat(moved!);
+        },
+      );
+    } catch (error) {
+      return this.mapOperationError(error);
+    }
+  }
+
+  /** Whether this host makes worktrees for phones' first messages (`chat:new-worktree`). */
+  get supportsNewWorktrees(): boolean {
+    return this.options.newWorktrees !== undefined;
+  }
+
+  /**
+   * Contract revision 48: put an empty chat in a new managed worktree made
+   * from its workspace, named from the message about to be sent, so that
+   * message runs there. The worktree is keyed by the chat, so a retry (any
+   * idempotency key) reuses the one an earlier attempt made instead of
+   * making another. A chat that already has messages stays where it is.
+   */
+  async moveToNewWorktree(
+    deviceId: string,
+    chatId: string,
+    revision: string,
+    key: string,
+    input: unknown,
+  ): Promise<{ chat: AidenRemoteChatProjection; branch: string }> {
+    const newWorktrees = this.options.newWorktrees;
+    if (!newWorktrees) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    let parsed: AidenRemoteChatNewWorktreeRequest;
+    try {
+      parsed = parseAidenRemoteChatNewWorktreeRequest(input);
+    } catch {
+      throw new AidenRemoteServiceError("invalid_request", "The new worktree request is invalid.", 400);
+    }
+    const notEmpty = () =>
+      new AidenRemoteServiceError(
+        "operation_stale",
+        "This chat already has messages, so it stays in its workspace.",
+        409,
+      );
+    try {
+      return await this.executeIdempotent(
+        { deviceId, route: "POST /chats/{id}/worktree", resourceId: safeId(chatId, "chat"), key },
+        { revision, ...parsed },
+        async () => {
+          const chat = await this.chat(chatId);
+          requireRevision(revision, chat);
+          if (chat.messages.length > 0) throw notEmpty();
+          if (!chat.workspaceId) {
+            throw new AidenRemoteServiceError("workspace_unavailable", "This chat has no workspace to make a worktree from.", 409);
+          }
+          const sourceWorkspaceId = chat.workspaceId;
+          let created: { workspaceId: string; branch: string };
+          try {
+            created = await newWorktrees.create(deviceId, sourceWorkspaceId, parsed.text, chatId);
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            throw new AidenRemoteServiceError(
+              "git_capability_denied",
+              "Aiden couldn't make the worktree on your Mac. Try again, or send without New worktree.",
+              409,
+            );
+          }
+          let moved: Chat;
+          try {
+            moved = await this.options.application.moveEmptyToWorkspace(chatId, created.workspaceId, {
+              assertCurrent: (current) => {
+                if (current.messages.length > 0) throw notEmpty();
+              },
+            }) as Chat;
+          } catch (error) {
+            if (error instanceof AidenRemoteServiceError) throw error;
+            const current = await this.chat(chatId).catch(() => undefined);
+            if (current && current.messages.length > 0) throw notEmpty();
+            throw new AidenRemoteServiceError(
+              "operation_in_progress",
+              "The chat is busy. Try again in a moment.",
+              409,
+              true,
+            );
+          }
+          this.options.notifyChanged?.(chatId);
+          return { chat: projectAidenRemoteChat(moved), branch: created.branch };
         },
       );
     } catch (error) {
