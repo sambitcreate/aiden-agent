@@ -762,3 +762,76 @@ test("an event routine an interrupted Add routine already made settles its card 
   assert.deepEqual(answer, { status: "accepted", routineId: routine.id });
   assert.equal((await events.list("bot-a")).length, 1);
 });
+
+test("a Bot proposes a watch through the routines tool, and Add routine saves it waiting for its first check", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "aiden-watch-proposals-"));
+  roots.push(root);
+  const at = Date.UTC(2026, 9, 28, 15);
+  const events = createBotEventRoutineStore({ profileDir: () => root, now: () => at });
+  const appended: Array<{ botId: string; kind: string; data: Record<string, unknown> }> = [];
+  let sequence = 0;
+  const { routines } = harness();
+  const proposals = createBotRoutineProposalService({
+    profileDir: () => root,
+    routines,
+    eventRoutines: events,
+    defaultTimezone: () => "UTC",
+    appendEntry: async (botId, kind, data) => void appended.push({ botId, kind, data }),
+    conversationEntries: async (botId) => appended.filter((entry) => entry.botId === botId),
+    now: () => at,
+    newId: () => `00000000-0000-4000-8000-${String((sequence += 1)).padStart(12, "0")}`,
+  });
+  const cards: Array<{ kind: string; data: unknown }> = [];
+  const tool = routinesCandidate("bot-a", {
+    list: (botId) => routines.list(botId),
+    pause: (botId, id) => routines.pause(botId, id),
+    eventRoutines: {
+      list: async (botId) => (await events.list(botId)).map(({ id, name, enabled }) => ({ id, name, label: "", enabled })),
+      pause: async () => undefined,
+    },
+    propose: async (botId, input, append) => {
+      const outcome = await proposals.propose(botId, input, async (kind, data) => {
+        appended.push({ botId, kind, data: data as Record<string, unknown> });
+        await append(kind, data);
+      });
+      return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
+    },
+  }).bind!(call(cards));
+  const watch = (source: unknown, everyMinutes = 15) => ({
+    action: "propose",
+    name: "Release notes",
+    prompt: "Summarize what changed in the release notes.",
+    trigger: { kind: "watch", source, everyMinutes },
+  });
+
+  // The proposal is checked like the routine it would add.
+  for (const bad of [
+    watch({ type: "url", url: "http://example.com/notes" }),
+    watch({ type: "url", url: "https://example.com/notes" }, 1),
+    watch({ type: "script", script: "../outside.sh" }),
+  ]) {
+    const refused = json(await tool.execute("bad", bad));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.code, "invalid");
+  }
+  assert.equal(cards.length, 0, "a refused watch shows no card");
+
+  const proposed = json(await tool.execute("c1", watch({ type: "url", url: "https://example.com/notes" })));
+  assert.equal(proposed.ok, true);
+  assert.equal(cards.length, 1, "the card lands in the calling conversation");
+  const card = cards[0]!.data as { trigger: unknown; label: string };
+  assert.deepEqual(card.trigger, { kind: "watch", source: { type: "url", url: "https://example.com/notes" }, everyMinutes: 15 });
+  assert.match(card.label, /15 min/u);
+  assert.match(card.label, /example\.com\/notes/u);
+  assert.deepEqual(await events.list("bot-a"), [], "proposing creates nothing and checks nothing");
+
+  const accepted = await proposals.respond({ botId: "bot-a", proposalId: String(proposed.proposalId), decision: "accept" });
+  const [saved] = await events.list("bot-a");
+  assert.equal(accepted.routineId, saved?.id);
+  assert.equal(accepted.token, undefined, "a watch has no link to show");
+  assert.equal(saved?.enabled, true);
+  assert.deepEqual(saved?.trigger, card.trigger);
+  assert.equal(saved?.watch?.hash, undefined, "the first check is still to come");
+  assert.equal(saved?.watch?.nextCheckAt, at);
+  assert.equal(saved?.watch?.failures, 0);
+});

@@ -68,6 +68,7 @@ import { botQuestions } from "./bot-questions-main.js";
 import { botHandoffCandidate } from "./bot-handoff-tool.js";
 import { botHandoffs } from "./bot-handoffs-main.js";
 import { signInCandidate } from "./bot-sign-in-tool.js";
+import { wakeUpCandidate } from "../bot-wake-ups/wake-up-candidate.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
 import { isBrowserToolName } from "../browser-tools.js";
@@ -172,6 +173,15 @@ const lazyRoutineNotes = {
     (await routineServices()).botRoutineNotes.set(botId, taskId, key, value),
   delete: async (botId: string, taskId: string, key: unknown) =>
     (await routineServices()).botRoutineNotes.delete(botId, taskId, key),
+};
+
+// Wake-ups reach the scheduler too, so they load lazily as well.
+const wakeUpServices = () => import("../bot-wake-ups/wake-ups-main.js");
+const lazyWakeUps = {
+  set: async (...args: Parameters<import("../bot-wake-ups/wake-ups.js").BotWakeUps["set"]>) =>
+    (await wakeUpServices()).botWakeUps.set(...args),
+  pending: async (botId: string) => (await wakeUpServices()).botWakeUps.pending(botId),
+  cancel: async (botId: string, id: string) => (await wakeUpServices()).botWakeUps.cancel(botId, id),
 };
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
@@ -462,6 +472,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
+      // Only in turns a person started (ingress also withholds it on routine,
+      // catch-up, wake-up and intro runs), and only while the person's per-Bot
+      // switch is on.
+      if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+        tools.push(wakeUpCandidate(botId, lazyWakeUps));
+      }
       const signInOnComputer = has("computer") && facts.hasComputer;
       // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
       tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));

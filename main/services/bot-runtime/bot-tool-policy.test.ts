@@ -129,3 +129,29 @@ test("the skill tool is offered when any skill is granted, and a call runs only 
   );
   assert.equal((await botToolVerdict("skill", facts(["skill_meal_notes"]), {}, { name: "Unknown" })).allowed, false);
 });
+
+test("a Bot sets its own wake-ups only in turns a person started, and never from a routine, catch-up or wake-up run", async () => {
+  const WAKE_UP = "wake_up";
+  const cases: Array<[string, readonly (string | undefined)[], boolean]> = [
+    ["a message from the Mac", [DESK], true],
+    ["a message from a phone", [PHONE], true],
+    ["a Telegram message", [TELEGRAM], true],
+    ["a person's turn a Telegram message joined", [DESK, TELEGRAM], true],
+    // Every routine fire, catch-up, retry and wake-up runs under a routine request id.
+    ["a routine or wake-up run", [ROUTINE], false],
+    ["a routine run a person's steer joined", [ROUTINE, DESK], false],
+    ["the self-intro", [INTRO], false],
+  ];
+  for (const [label, requestIds, allowed] of cases) {
+    assert.equal(botIngressAllowsTool(WAKE_UP, requestIds), allowed, label);
+    if (requestIds.includes(INTRO)) continue;
+    const turns = requestIds.map(botTurnOf);
+    const turn = { telegram: turns.some((each) => each.telegram), routine: turns.some((each) => each.routine) };
+    assert.equal((await botToolVerdict(WAKE_UP, bareFacts(), turn)).allowed, allowed, label);
+  }
+  assert.equal(
+    await botToolApprovalSummary(WAKE_UP, { action: "set", in_minutes: 20, note: "Check the oven." }, bareFacts()),
+    undefined,
+    "a wake-up needs no approval card",
+  );
+});

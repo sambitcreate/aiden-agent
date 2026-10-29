@@ -34,6 +34,7 @@ import { createChatForkService, type ChatForkRequest } from "./chat-fork-service
 import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
+import { HostRunRegistry } from "./host-run-registry.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -67,6 +68,7 @@ function fixture(
     durableBotSessions?: () => boolean;
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
+    spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -83,6 +85,7 @@ function fixture(
     forks?: ConstructorParameters<typeof AidenRemoteChatService>[0]["forks"];
     inlineVisuals?: ConstructorParameters<typeof AidenRemoteChatService>[0]["inlineVisuals"];
     visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
+    browserRecordings?: ConstructorParameters<typeof AidenRemoteChatService>[0]["browserRecordings"];
     contextPressure?: ConstructorParameters<typeof AidenRemoteChatService>[0]["contextPressure"];
     /** The host's configured models; anything else is refused as `resolve` refuses it. */
     configuredModels?: readonly string[];
@@ -282,6 +285,7 @@ function fixture(
     botTurnAuthorityPreflight:
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
+    ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -299,6 +303,7 @@ function fixture(
     ...(fixtureOptions.forks ? { forks: fixtureOptions.forks } : {}),
     ...(fixtureOptions.inlineVisuals ? { inlineVisuals: fixtureOptions.inlineVisuals } : {}),
     ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
+    ...(fixtureOptions.browserRecordings ? { browserRecordings: fixtureOptions.browserRecordings } : {}),
     ...(fixtureOptions.contextPressure ? { contextPressure: fixtureOptions.contextPressure } : {}),
   });
   return {
@@ -1323,6 +1328,74 @@ test("visual documents refuse visuals the chat does not project and hosts withou
   await assert.rejects(without.service.visualDocument("chat-1", "html-1", light), hasCode("not_found", 404));
 });
 
+function recordingMessage(recordingId: string): ChatMessage {
+  return {
+    id: "assistant-recording",
+    role: "assistant",
+    content: "Here is the checkout flow.",
+    createdAt: 2_000,
+    timeline: {
+      version: 3,
+      generationId: "stream-recording",
+      status: "completed",
+      startedAt: 1_000,
+      finishedAt: 2_000,
+      steps: [{
+        id: "tool-1", order: 0, kind: "tool", toolCallId: "call-1", toolName: "browser_recording_stop",
+        label: "Stop browser recording", status: "completed", startedAt: 1_000, updatedAt: 1_500, finishedAt: 1_500, contentOffset: 0,
+        recording: { id: recordingId, mimeType: "video/mp4", durationMs: 4_000, sizeBytes: 32 },
+      }],
+    },
+  };
+}
+
+test("a chat's browser recordings are read only by the id its own timeline names", async () => {
+  const named = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const other = "recording-11111111-2222-4333-8444-555555555555";
+  const video = Buffer.from("video bytes");
+  const reads: string[] = [];
+  const recordings = {
+    read: async (id: string) => {
+      reads.push(id);
+      return id === named || id === other ? { mimeType: "video/mp4", data: video } : undefined;
+    },
+  };
+  const { service } = fixture(chat({ messages: [recordingMessage(named)] }), { browserRecordings: recordings });
+  assert.equal(service.supportsBrowserRecordings, true);
+  assert.deepEqual(await service.browserRecording("chat-1", named), { bytes: video, mimeType: "video/mp4" });
+  // Another chat's recording, though it is on the Mac, is not this chat's to read.
+  await assert.rejects(service.browserRecording("chat-1", other), hasCode("not_found", 404));
+  await assert.rejects(service.browserRecording("chat-1", "../secret"), hasCode("invalid_request", 400));
+  assert.deepEqual(reads, [named]);
+
+  const gone = fixture(chat({ messages: [recordingMessage(named)] }), { browserRecordings: { read: async () => undefined } });
+  await assert.rejects(gone.service.browserRecording("chat-1", named), hasCode("not_found", 404));
+  const without = fixture(chat({ messages: [recordingMessage(named)] }));
+  assert.equal(without.service.supportsBrowserRecordings, false);
+  await assert.rejects(without.service.browserRecording("chat-1", named), hasCode("not_found", 404));
+});
+
+test("a recording a still-running turn has shown can be played before the reply is saved", async () => {
+  const named = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678";
+  const video = Buffer.from("video bytes");
+  const runs = new HostRunRegistry({ now: () => 1_000 });
+  runs.begin({ runId: "stream-recording", chatId: "chat-1", origin: "remote" });
+  runs.begin({ runId: "stream-other", chatId: "chat-2", origin: "renderer" });
+  const live = recordingMessage(named).timeline!;
+  const running = { ...live, status: "running", finishedAt: undefined };
+  const recordings = {
+    read: async (id: string) => (id === named ? { mimeType: "video/mp4", data: video } : undefined),
+    namedByLiveRun: (chatId: string, id: string) => runs.chatRunNamesRecording(chatId, id),
+  };
+  // The turn stopped the recording and keeps working: only its user prompt is saved so far.
+  const { service } = fixture(chat({ messages: [] }), { browserRecordings: recordings });
+  await assert.rejects(service.browserRecording("chat-1", named), hasCode("not_found", 404));
+  runs.publish("stream-other", "chat:timeline", { streamId: "stream-other", timeline: { ...running, generationId: "stream-other" } });
+  await assert.rejects(service.browserRecording("chat-1", named), hasCode("not_found", 404), "another chat's run names it");
+  runs.publish("stream-recording", "chat:timeline", { streamId: "stream-recording", timeline: running });
+  assert.deepEqual(await service.browserRecording("chat-1", named), { bytes: video, mimeType: "video/mp4" });
+});
+
 test("chat projection omits visuals for a message without any", () => {
   const projection = projectAidenRemoteChat(chat({
     messages: [{ id: "assistant-plain", role: "assistant", content: "Hi", createdAt: 2_000 }],
@@ -1561,6 +1634,35 @@ test("a paused Bot's chat refuses a phone turn before anything is written, and t
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a chat over its spending limit refuses a phone turn with the limit's line, and the same request runs once more is allowed", async () => {
+  const { SpendingService } = await import("./spending-service.js");
+  const spending = new SpendingService({
+    persistence: { load: async () => undefined, save: async () => {} },
+    settings: async () => ({ chatUsd: 2 }),
+    broadcast: () => {},
+  });
+  await spending.record({ kind: "chat", id: "chat-1" }, 2.5);
+  const app = fixture(chat(), {
+    spendingRefusal: (current) => spending.refusal({ kind: "chat", id: current.id }),
+  });
+
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "over-the-limit-turn-0001", { text: "one more thing" }),
+    (error: unknown) =>
+      error instanceof AidenRemoteServiceError &&
+      error.code === "operation_stale" &&
+      error.status === 409 &&
+      error.message === "This chat reached its $2.00 spending limit. Allow more to keep going.",
+  );
+  assert.equal(app.appends(), 0);
+  assert.equal(app.starts(), 0, "no provider request");
+
+  await spending.allowMore("chat", "chat-1");
+  const accepted = await app.service.startTurn("device-1", "chat-1", "over-the-limit-turn-0001", { text: "one more thing" });
+  assert.equal(accepted.status, "accepted");
+  assert.equal(app.starts(), 1);
 });
 
 test("a pause that lands while a phone turn is being admitted refuses it before anything is written", async () => {

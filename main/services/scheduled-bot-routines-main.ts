@@ -20,7 +20,7 @@ export const botRoutineNotes = createBotRoutineNotesStore({ profileDir: () => ap
  * through these ports.
  */
 export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
-  const { botSessionRuntime } = await import("./bot-runtime/bot-session-main.js");
+  const { botSessionRuntime, botSpendingStop } = await import("./bot-runtime/bot-session-main.js");
   const runtime = await botSessionRuntime();
   return {
     submissionForRequest: (botId, requestId) => runtime.submissionForRequest(botId, requestId),
@@ -40,6 +40,7 @@ export async function botRoutinePorts(): Promise<BotRoutineExecutorPorts> {
     fingerprint: async (botId) => (await import("./bot-learning/learning-main.js")).botFingerprint(botId),
     consumeStall: (botId) => botRunStalls.consume(botId),
     checkClaims: async (botId) => (await import("./bot-runtime/bot-session-main.js")).botTurnClaims(botId),
+    spendingStop: (_botId, requestId) => botSpendingStop(requestId),
   };
 }
 

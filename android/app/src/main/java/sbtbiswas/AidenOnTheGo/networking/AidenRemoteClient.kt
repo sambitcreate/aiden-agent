@@ -36,6 +36,7 @@ import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -82,7 +83,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) {
+) : AidenSpendingTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -633,6 +634,44 @@ class AidenRemoteClient(
             json.decodeFromString(String(bytes, Charsets.UTF_8))
         }
 
+    /** Revision 47: the chat's or Bot's spending limit, or `spending: null` without one. */
+    override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
+        executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
+
+    /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
+    override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {
+        if (revision.isEmpty() || revision.length > 128 || revision.any { it.code !in 0x21..0x7e }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return executeRequest(
+            spendingPath(owner) + "/allow-more",
+            method = "POST",
+            ifMatchRevision = revision,
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> decodeSpending(bytes) }
+    }
+
+    private fun spendingPath(owner: AidenSpendingOwner): String = when (owner) {
+        is AidenSpendingOwner.Chat -> {
+            AidenBotWire.validateIdentifier(owner.chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+            "/chats/${owner.chatId}/spending"
+        }
+        is AidenSpendingOwner.Bot -> {
+            AidenBotWire.validateIdentifier(owner.botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+            "/bots/${owner.botId}/spending"
+        }
+    }
+
+    private fun decodeSpending(bytes: ByteArray): AidenSpendingStatus {
+        val text = String(bytes, Charsets.UTF_8)
+        val root = json.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject
+        if (root == null || !root.containsKey("spending")) throw AidenRemoteClientException.InvalidResponse()
+        val status = json.decodeFromString<AidenSpendingStatus>(text)
+        if (status.spending?.isValid == false) throw AidenRemoteClientException.InvalidResponse()
+        return status
+    }
+
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
@@ -1128,6 +1167,61 @@ class AidenRemoteClient(
         AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.CANCELLED, AidenDiagnosticCode.NETWORK)
         throw error
     }
+
+    /**
+     * Revision 46 (`chat-browser-recordings-v1`): the video a completed
+     * `browser_recording_stop` step in [chatId] names, streamed to
+     * `<recordingId>.mp4` or `.webm` in [directory] rather than held in memory.
+     * Only MP4 or WebM with `no-store` and `nosniff`, non-empty and at most
+     * 128 MiB, is accepted; a refused body leaves no file behind. A recording
+     * the Mac no longer has answers 404, thrown as [AidenRemoteClientException.Server].
+     */
+    suspend fun browserRecording(chatId: String, recordingId: String, directory: File): AidenBrowserRecordingFile =
+        withContext(Dispatchers.IO) {
+            if (!AidenVisualDocumentRequest.isValidIdentifier(chatId) || !AidenBrowserRecordingRecap.isValidId(recordingId)) {
+                throw AidenRemoteClientException.InvalidResponse("Invalid browser recording request.")
+            }
+            if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+            // Both ids are limited to unreserved path characters above.
+            val request = Request.Builder()
+                .url("$endpoint/chats/$chatId/recordings/$recordingId")
+                .addHeader("Aiden-Protocol-Version", "1")
+                .addHeader("Accept", "video/mp4, video/webm")
+                .addHeader("Authorization", "Bearer $credential")
+                .get()
+                .build()
+            httpClient.newCall(request).await().use { response ->
+                if (!response.isSuccessful) {
+                    val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                }
+                val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+                if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
+                    response.header("Cache-Control")?.lowercase() != "no-store" ||
+                    response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
+                ) {
+                    AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                    throw AidenRemoteClientException.InvalidResponse()
+                }
+                if (!directory.isDirectory && !directory.mkdirs()) throw IOException("recording directory unavailable")
+                val target = File(directory, "$recordingId.${AidenBrowserRecordingRecap.extension(mimeType)}")
+                val partial = File(directory, "$recordingId.part")
+                try {
+                    val written = try {
+                        response.body.writeBounded(partial, AidenBrowserRecordingRecap.MAX_BYTES) { isActive }
+                    } catch (_: ResponseBodyLimitExceededException) {
+                        AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                        throw AidenRemoteClientException.InvalidResponse()
+                    }
+                    if (written == 0L) throw AidenRemoteClientException.InvalidResponse()
+                    target.delete()
+                    if (!partial.renameTo(target)) throw IOException("recording could not be saved")
+                } finally {
+                    partial.delete()
+                }
+                AidenBrowserRecordingFile(target, mimeType)
+            }
+        }
 
     suspend fun startTurn(
         chatId: String,
@@ -2943,6 +3037,30 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
 }
 
 private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")
+
+/**
+ * Streams the body to [file], refusing more than [maximumBytes]. Stops with a
+ * cancellation once [isActive] turns false, so a closed player stops the read.
+ */
+private fun ResponseBody?.writeBounded(file: File, maximumBytes: Long, isActive: () -> Boolean): Long {
+    val body = this ?: return 0L
+    if (body.contentLength() > maximumBytes) throw ResponseBodyLimitExceededException()
+    var total = 0L
+    body.byteStream().use { input ->
+        file.outputStream().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                if (!isActive()) throw CancellationException("recording read cancelled")
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > maximumBytes) throw ResponseBodyLimitExceededException()
+                output.write(buffer, 0, read)
+            }
+        }
+    }
+    return total
+}
 
 private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
     val body = this ?: return ByteArray(0)

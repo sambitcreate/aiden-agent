@@ -239,3 +239,13 @@ test("Remove names an exact Bot and one numeric submission id", () => {
   assert.throws(() => parseBotWithdraw({ botId: "bot-1", submissionId: "42", extra: true }), /withdraw fields/u);
   assert.throws(() => parseBotWithdraw({ botId: "../x", submissionId: "1" }), /bot id/u);
 });
+
+test("the own-wake-ups switch crosses IPC only as a boolean", () => {
+  const base = { id: "bot-1", expectedRevision: "botrev:one", name: "Planner", instructions: "Plan.", avatar: { version: 1, shape: "hex", color: "sun" } };
+  assert.equal(parseBotUpdate({ ...base, selfWakeUps: false }).selfWakeUps, false);
+  assert.equal(parseBotUpdate({ ...base, selfWakeUps: true }).selfWakeUps, true);
+  assert.equal(parseBotUpdate(base).selfWakeUps, undefined);
+  for (const selfWakeUps of ["off", 0, null]) {
+    assert.throws(() => parseBotUpdate({ ...base, selfWakeUps }), /wake-up|Invalid/u);
+  }
+});

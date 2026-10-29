@@ -1,5 +1,5 @@
 import type { Attachment, Chat, ChatMessage } from "../types";
-import { parseGenerationTimeline } from "../../shared/generation-timeline";
+import { isToolStep, parseGenerationTimeline, type GenerationTimeline } from "../../shared/generation-timeline";
 import {
   parseProviderFailureV1,
   PROVIDER_FAILURE_VERSION,
@@ -101,9 +101,26 @@ export function mapRemoteMessage(value: unknown): ChatMessage | null {
   if (failure) message.providerFailure = failure;
   if (role === "assistant") {
     const timeline = parseGenerationTimeline(input.timeline, content.length, reasoning?.length ?? 0);
-    if (timeline) message.timeline = timeline;
+    if (timeline) message.timeline = withoutHostLocalRecaps(timeline);
   }
   return message;
+}
+
+/**
+ * A browser recording stays on the computer that made it, and this Mac's
+ * player reads only its own, so another computer's chat shows the activity
+ * line without the card.
+ */
+export function withoutHostLocalRecaps(timeline: GenerationTimeline): GenerationTimeline {
+  if (!timeline.steps.some((step) => isToolStep(step) && step.recording)) return timeline;
+  return {
+    ...timeline,
+    steps: timeline.steps.map((step) => {
+      if (!isToolStep(step) || !step.recording) return step;
+      const { recording: _recording, ...rest } = step;
+      return rest;
+    }),
+  };
 }
 
 /** Validates and maps a messages window; throws when the page itself is malformed. */

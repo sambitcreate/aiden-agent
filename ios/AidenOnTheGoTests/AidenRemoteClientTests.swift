@@ -988,6 +988,61 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 2)
     }
 
+    func testSpendingReadsAndAllowMoreCarryTheRevisionAndAnEmptyBody() async throws {
+        let client = makeClient()
+        let reached = try botFixtureData(at: ["spending", "chatReached"])
+        let allowed = try botFixtureData(at: ["spending", "chatAllowMore", "response"])
+        let month = try botFixtureData(at: ["spending", "bot"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            switch step {
+            case 1:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/spending")
+                return Self.response(for: request, status: 200, data: reached)
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/spending/allow-more")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "If-Match"), "sp_fixture_chat_1")
+                XCTAssertEqual(try Self.jsonBody(request).count, 0)
+                return Self.response(for: request, status: 200, data: allowed)
+            default:
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/spending")
+                return Self.response(for: request, status: 200, data: month)
+            }
+        }
+
+        let read = try await client.spending(owner: .chat("chat_fixture_01"))
+        let status = try XCTUnwrap(read.spending)
+        XCTAssertEqual(status.state, .reached)
+        XCTAssertEqual(status.spentUsd, 5.37)
+        let allowedMore = try await client.allowMoreSpending(owner: .chat("chat_fixture_01"), revision: status.revision)
+        let after = try XCTUnwrap(allowedMore.spending)
+        XCTAssertEqual(after.state, .under)
+        XCTAssertEqual(after.allowedUsd, 10)
+        let botRead = try await client.spending(owner: .bot("bot_fixture_01"))
+        let bot = try XCTUnwrap(botRead.spending)
+        XCTAssertEqual(bot.period, .month)
+        XCTAssertNotNil(bot.periodEnd)
+        XCTAssertEqual(step, 3)
+    }
+
+    func testSpendingStatusDecodesNoLimitAndRefusesBadAmounts() throws {
+        let none: AidenSpendingStatus = try botFixtureValue(at: ["spending", "none"])
+        XCTAssertNil(none.spending)
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenSpendingStatus.self, from: Data("{}".utf8)))
+        var raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["spending", "chat"])) as? [String: Any]
+        )
+        var spending = try XCTUnwrap(raw["spending"] as? [String: Any])
+        spending["allowedUsd"] = 1
+        raw["spending"] = spending
+        XCTAssertThrowsError(
+            try AidenRemoteJSONDecoder.decode(AidenSpendingStatus.self, from: JSONSerialization.data(withJSONObject: raw))
+        )
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
@@ -1596,6 +1651,77 @@ final class AidenRemoteClientTests: XCTestCase {
             try await client.botSessionImage(botId: "bot_fixture_01", entryId: "../avatar")
         }
         XCTAssertEqual(step, 5, "an unsafe entry id never leaves the phone")
+    }
+
+    /// Revision 46: a browser recording is read from its chat route, and only
+    /// an MP4 or WebM answer with the no-store and nosniff headers is accepted.
+    func testBrowserRecordingReadsItsChatRouteAndAcceptsOnlyMP4OrWebM() async throws {
+        let client = makeClient()
+        let recordingID = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+        let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D])
+        let safe = ["Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]
+        let answers: [(status: Int, contentType: String, headers: [String: String], body: Data)] = [
+            (200, "video/mp4", safe, video),
+            (200, "video/webm", safe, video),
+            (200, "video/quicktime", safe, video),
+            (200, "text/html", safe, video),
+            (200, "video/mp4", ["Cache-Control": "no-store"], video),
+            (200, "video/mp4", ["X-Content-Type-Options": "nosniff"], video),
+            (200, "video/mp4", safe, Data()),
+            (404, "text/plain", safe, Data()),
+        ]
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/recordings/\(recordingID)")
+            XCTAssertNil(request.url?.query)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            let answer = answers[step - 1]
+            var headers = answer.headers
+            headers["Content-Type"] = answer.contentType
+            headers["Content-Length"] = String(answer.body.count)
+            let response = HTTPURLResponse(url: request.url!, statusCode: answer.status, httpVersion: nil, headerFields: headers)!
+            return (response, answer.body)
+        }
+        let mp4 = try await client.browserRecording(chatId: "chat_fixture_01", recordingId: recordingID)
+        XCTAssertEqual(mp4, AidenBrowserRecordingContent(data: video, mimeType: .mp4))
+        let webm = try await client.browserRecording(chatId: "chat_fixture_01", recordingId: recordingID)
+        XCTAssertEqual(webm.mimeType, .webm)
+        for _ in 0..<5 {
+            await assertInvalidResponse {
+                try await client.browserRecording(chatId: "chat_fixture_01", recordingId: recordingID)
+            }
+        }
+        await assertUnexpectedStatus(404) {
+            try await client.browserRecording(chatId: "chat_fixture_01", recordingId: recordingID)
+        }
+        // Ids the recorder never names never leave the phone.
+        for unsafe in ["../avatar", "recording-0F1E2D3C-4B5A-4678-9ABC-DEF012345678", "attachment_fixture_01"] {
+            await assertInvalidResponse {
+                try await client.browserRecording(chatId: "chat_fixture_01", recordingId: unsafe)
+            }
+        }
+        XCTAssertEqual(step, 8)
+    }
+
+    func testBrowserRecordingsAreAnnouncedOnlyWithTheirFeatureToken() throws {
+        func server(features: [String]?) throws -> AidenServer {
+            var object: [String: Any] = [
+                "protocolVersion": 1,
+                "instanceId": "instance-1",
+                "name": "Mac",
+                "appVersion": "1.0",
+                "capabilities": ["server:read", "chat:read"],
+                "connectionMode": "lan",
+                "serverTime": "2026-10-27T12:00:00Z",
+            ]
+            if let features { object["features"] = features }
+            return try AidenRemoteJSONDecoder.decode(AidenServer.self, from: JSONSerialization.data(withJSONObject: object))
+        }
+        XCTAssertTrue(try server(features: ["chat-visuals-v1", "chat-browser-recordings-v1"]).supportsChatBrowserRecordings)
+        XCTAssertFalse(try server(features: ["chat-visuals-v1", "chat-visual-viewer-v1"]).supportsChatBrowserRecordings)
+        XCTAssertFalse(try server(features: nil).supportsChatBrowserRecordings)
     }
 
     func testBotAvatarUploadCarriesRevisionIdempotencyAndCanonicalStatus() async throws {

@@ -24,6 +24,7 @@ import { SUGGEST_CONNECTION_TOOL_NAME } from "../bot-runtime-tools/suggest-conne
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
 import { BOT_HANDOFF_TOOL_NAME, BOT_SIGN_IN_TOOL_NAME } from "../../../renderer/shared/bot-handoffs.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
+import { BOT_WAKE_UP_TOOL_NAME } from "../../../renderer/shared/bot-wake-ups.js";
 import { BROWSER_BOT_OMITTED_TOOLS, BROWSER_TOOL_NAMES, isBrowserToolName } from "../browser-tools.js";
 import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
 import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
@@ -33,6 +34,8 @@ export const SUBAGENT_TOOL = "subagent";
 export const ROUTINE_TOOL = BOT_ROUTINES_TOOL_NAME;
 /** Per-routine notepad (`bot-routine-notes.ts`); offered only to routine runs. */
 export const ROUTINE_NOTES_TOOL = "routine_notes";
+/** A Bot's own bounded wake-ups (`bot-wake-ups/`); offered only on turns a person started. */
+export const WAKE_UP_TOOL = BOT_WAKE_UP_TOOL_NAME;
 
 /** Everything the policy needs about one Bot, read fresh for each decision. */
 export interface BotToolFacts {
@@ -104,6 +107,14 @@ export function botIngressAllowsTool(name: string, requestIds: readonly (string 
   // run a person's message joined, never sees it.
   if (name === ROUTINE_NOTES_TOOL) {
     return requestIds.length > 0 && requestIds.every((requestId) => botTurnOf(requestId).routine);
+  }
+  // A wake-up is the Bot's answer to a person: no routine, event, catch-up or
+  // wake-up run sets another one, so a Bot cannot keep itself awake.
+  if (name === WAKE_UP_TOOL) {
+    return requestIds.every((requestId) => {
+      const turn = botTurnOf(requestId);
+      return !turn.routine && !turn.intro;
+    });
   }
   return requestIds.every((requestId) => {
     const turn = botTurnOf(requestId);
@@ -183,6 +194,8 @@ export async function botToolVerdict(
     );
   }
   if (name === SUGGEST_CONNECTION_TOOL_NAME) return { allowed: true };
+  // The per-Bot switch decides whether it is offered at all; ingress keeps it to a person's turns.
+  if (name === WAKE_UP_TOOL) return verdict(turn.routine !== true, "Wake-ups are off for this Bot turn.");
   // Writes only the routine's own notes; ingress (`botIngressAllowsTool`) keeps it to routine runs.
   if (name === ROUTINE_NOTES_TOOL) return { allowed: true };
   // The one `skill` tool loads only the granted skills it was built from.

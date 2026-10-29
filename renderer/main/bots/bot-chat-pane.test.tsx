@@ -328,6 +328,49 @@ test("a Bot without an AI model asks for one and sends nothing", async () => {
   assert.equal(calls.some((call) => call.channel === "bots:send"), false);
 });
 
+test("a Bot over its monthly spending limit sends nothing until Allow more", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s", deduped: false }),
+    "spending:status": () => ({ ...month, spentUsd: 20.4, state: "reached" }),
+    "spending:allowMore": () => ({ ...month, extraUsd: 20, spentUsd: 20.4, state: "under" }),
+  });
+  const reached = "Planner reached its $20.00 spending limit this month.";
+  // The composer's status line says why it can't send, alongside the notice.
+  await waitFor(() => assert.equal(screen.getAllByText(reached).length, 2));
+  const blocked = document.querySelector("textarea")!;
+  fireEvent.change(blocked, { target: { value: "One more thing" } });
+  fireEvent.keyDown(blocked, { key: "Enter" });
+  assert.equal(screen.queryByRole("button", { name: "Send message" })?.hasAttribute("disabled") ?? true, true);
+  assert.equal(calls.some((call) => call.channel === "bots:send"), false);
+
+  fireEvent.click(screen.getByRole("button", { name: "Allow $20.00 more" }));
+  const box = await screen.findByPlaceholderText("Ask Planner");
+  fireEvent.change(box, { target: { value: "One more thing" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+});
+
+test("a Bot at its monthly limit can send again once its month starts over, without Allow more", async () => {
+  const month = { ownerKind: "bot", ownerId: "bot-1", period: "month", limitUsd: 20, extraUsd: 0 } as const;
+  const periodEnd = Date.now() + 300;
+  let reads = 0;
+  const calls = await mountChat({
+    "bots:live:subscribe": () => snapshot(),
+    "bots:send": () => ({ submissionId: "s", deduped: false }),
+    "spending:status": () =>
+      ++reads === 1
+        ? { ...month, spentUsd: 20.4, state: "reached", periodStart: periodEnd - 30 * 86_400_000, periodEnd }
+        : { ...month, spentUsd: 0, state: "under", periodStart: periodEnd, periodEnd: periodEnd + 30 * 86_400_000 },
+  });
+  await waitFor(() => assert.equal(screen.getAllByText("Planner reached its $20.00 spending limit this month.").length, 2));
+  const box = await screen.findByPlaceholderText("Ask Planner", undefined, { timeout: 3_000 });
+  fireEvent.change(box, { target: { value: "New month" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Send message" }));
+  await waitFor(() => assert.equal(calls.filter((call) => call.channel === "bots:send").length, 1));
+});
+
 test("a connect card answered with Not now reads Not connected and stays put", async () => {
   await mountChat({
     "bots:live:subscribe": () =>

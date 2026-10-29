@@ -174,7 +174,27 @@ export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
  * assistant line naming the image and pointing to the Mac instead.
  */
 export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 45 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION;
+/**
+ * Contract revision 46 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION`):
+ * a completed `browser_recording_stop` step on a version 3 generation timeline
+ * may carry a display-only `recording` recap (id, type, length, size), and a
+ * device that may read the chat reads the video from
+ * `GET /chats/{chatId}/recordings/{recordingId}`. Older clients ignore it.
+ */
+export const AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION = 46 as const;
+/**
+ * Contract revision 47 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`):
+ * spending limits on phones (`spending-limits-v1`). `GET /chats/{chatId}/spending`
+ * and `GET /bots/{botId}/spending` return the chat's or Bot's limit and what it
+ * has spent (`spending: null` without a limit); `POST …/spending/allow-more`
+ * with `If-Match` adds the limit once more. A turn or Bot message over its
+ * limit is refused with `operation_stale` and the limit's own message, so
+ * older phones show that line and need nothing new.
+ */
+export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 47 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -226,6 +246,12 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_FEATURE = "bot-activity-v1" as const;
  * `attachmentIds` (the text may then be empty).
  */
 export const AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE = "bot-attachments-v1" as const;
+/**
+ * Spending limits on phones (contract revision 47). Announced to phones only
+ * while the host wires its spending ledger: `GET /chats/{chatId}/spending`,
+ * `GET /bots/{botId}/spending` and their `POST …/spending/allow-more`.
+ */
+export const AIDEN_REMOTE_SPENDING_LIMITS_FEATURE = "spending-limits-v1" as const;
 
 const AIDEN_REMOTE_MAX_IDENTIFIER_LENGTH = 128;
 const AIDEN_REMOTE_MAX_ENDPOINT_UTF8_BYTES = 2_048;
@@ -547,6 +573,13 @@ export const AIDEN_REMOTE_CHAT_VISUALS_FEATURE = "chat-visuals-v1" as const;
  * the host ships its viewer bundle; visual entries gain no new key.
  */
 export const AIDEN_REMOTE_CHAT_VISUAL_VIEWER_FEATURE = "chat-visual-viewer-v1" as const;
+/**
+ * Server feature token for browser recordings (contract revision 46):
+ * `GET /chats/{chatId}/recordings/{recordingId}` serves a video the agent
+ * recorded of a browser tab, for a chat whose timeline names it. Announced
+ * only while the route is wired.
+ */
+export const AIDEN_REMOTE_CHAT_BROWSER_RECORDINGS_FEATURE = "chat-browser-recordings-v1" as const;
 /**
  * Server feature token for `GET /chats/{chatId}/context` (contract revision
  * 41): the host's next-request context pressure for one workspace chat.
@@ -1967,6 +2000,9 @@ export interface AidenRemoteContractFixture {
   scheduleCards?: AidenRemoteScheduleCardsFixture;
   /** Revision 45 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
   botImages?: AidenRemoteBotImagesFixture;
+  browserRecordings?: AidenRemoteBrowserRecordingsFixture;
+  /** Revision 47 (`spending-limits-v1`): spending status, Allow more and the refusals. */
+  spending?: AidenRemoteSpendingFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
   agentInterrupt: AidenRemoteChatAgentInterruptFixture;
@@ -6573,6 +6609,40 @@ export interface AidenRemoteBotImagesFixture {
   imagePath: string;
 }
 
+/** Revision 46: a recording stop step as the timeline carries it, and where its video is read. */
+export interface AidenRemoteBrowserRecordingsFixture {
+  /** A completed `browser_recording_stop` tool step with its `recording` recap. */
+  step: Record<string, unknown>;
+  /** The path, under the base path, the device reads the video from. */
+  recordingPath: string;
+}
+
+function parseBrowserRecordingsFixture(value: unknown): AidenRemoteBrowserRecordingsFixture {
+  if (!isRecord(value)) throw new Error("Browser recordings fixture must be an object.");
+  assertExactKeys(value, ["step", "recordingPath"], "Browser recordings fixture");
+  if (!isRecord(value.step)) throw new Error("Browser recordings fixture step must be an object.");
+  const timeline = parseGenerationTimeline({
+    version: 3,
+    generationId: "fixture",
+    status: "completed",
+    startedAt: 0,
+    finishedAt: 0,
+    steps: [value.step],
+  });
+  const step = timeline?.steps[0];
+  if (!step || step.kind !== "tool" || !step.recording) {
+    throw new Error("Browser recordings fixture step must be a completed recording stop with its recap.");
+  }
+  if (
+    typeof value.recordingPath !== "string" ||
+    !/^\/chats\/[A-Za-z0-9._:-]{1,128}\/recordings\/[A-Za-z0-9._:-]{1,128}$/u.test(value.recordingPath) ||
+    !value.recordingPath.endsWith(`/${step.recording.id}`)
+  ) {
+    throw new Error("Browser recordings fixture recordingPath must name the recording.");
+  }
+  return { step: value.step, recordingPath: value.recordingPath };
+}
+
 function parseBotImagesFixture(value: unknown): AidenRemoteBotImagesFixture {
   if (!isRecord(value)) throw new Error("Bot images fixture must be an object.");
   assertExactKeys(value, ["capability", "entry", "legacyEntry", "imagePath"], "Bot images fixture");
@@ -7667,6 +7737,20 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     botImages = parseBotImagesFixture(value.botImages);
   }
+  let browserRecordings: AidenRemoteBrowserRecordingsFixture | undefined;
+  if (value.browserRecordings !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION) {
+      throw new Error(`Browser recording fixtures require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}.`);
+    }
+    browserRecordings = parseBrowserRecordingsFixture(value.browserRecordings);
+  }
+  let spending: AidenRemoteSpendingFixture | undefined;
+  if (value.spending !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION) {
+      throw new Error(`Spending fixtures require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}.`);
+    }
+    spending = parseSpendingFixture(value.spending);
+  }
   if (value.peerRouteAdvertisement !== undefined) {
     if (contractRevision < 31 || !isRecord(value.peerRouteAdvertisement)) throw new Error("Peer routes require contract revision 31.");
     const advertisement = value.peerRouteAdvertisement;
@@ -7764,11 +7848,122 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
     ...(botImages ? { botImages } : {}),
+    ...(browserRecordings ? { browserRecordings } : {}),
+    ...(spending ? { spending } : {}),
   };
 }
 
 const ERROR_DETAIL_DECISIONS = ["allow", "deny", "expired", "cancelled"] as const;
 const ERROR_DETAIL_OUTCOMES = ["answered", "expired", "cancelled"] as const;
+
+export interface AidenRemoteSpending {
+  period: "chat" | "month";
+  state: "under" | "nearing" | "reached";
+  limitUsd: number;
+  allowedUsd: number;
+  spentUsd: number;
+  allowMoreUsd: number;
+  periodStart?: string;
+  periodEnd?: string;
+  revision: string;
+}
+
+export interface AidenRemoteSpendingStatus {
+  /** Null: no limit applies. */
+  spending: AidenRemoteSpending | null;
+}
+
+const AIDEN_REMOTE_SPENDING_PERIODS = ["chat", "month"] as const;
+const AIDEN_REMOTE_SPENDING_STATES = ["under", "nearing", "reached"] as const;
+
+function spendingAmount(record: Record<string, unknown>, key: string, positive: boolean): number {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (positive && value === 0) || value > 1e9) {
+    throw new Error(`Spending ${key} must be a ${positive ? "positive" : "non-negative"} dollar amount.`);
+  }
+  return value;
+}
+
+/** Revision 47: `GET`/`POST …/spending` bodies. */
+export function parseAidenRemoteSpendingStatus(value: unknown): AidenRemoteSpendingStatus {
+  if (!isRecord(value)) throw new Error("Spending status must be an object.");
+  assertExactKeys(value, ["spending"], "Spending status");
+  if (value.spending === null) return { spending: null };
+  if (!isRecord(value.spending)) throw new Error("Spending must be an object or null.");
+  const spending = value.spending;
+  assertExactKeys(
+    spending,
+    ["period", "state", "limitUsd", "allowedUsd", "spentUsd", "allowMoreUsd", "periodStart", "periodEnd", "revision"],
+    "Spending",
+  );
+  const period = enumMember(spending.period, AIDEN_REMOTE_SPENDING_PERIODS, "Spending period");
+  const limitUsd = spendingAmount(spending, "limitUsd", true);
+  const allowedUsd = spendingAmount(spending, "allowedUsd", true);
+  if (allowedUsd < limitUsd) throw new Error("Spending allowedUsd cannot be below the limit.");
+  const times: { periodStart?: string; periodEnd?: string } = {};
+  for (const key of ["periodStart", "periodEnd"] as const) {
+    if (spending[key] === undefined) continue;
+    const text = requiredString(spending, key);
+    if (!Number.isFinite(Date.parse(text))) throw new Error(`Spending ${key} must be a time.`);
+    times[key] = text;
+  }
+  if ((period === "month") !== (times.periodStart !== undefined && times.periodEnd !== undefined)) {
+    throw new Error("Only a month carries its start and end.");
+  }
+  const revision = requiredString(spending, "revision");
+  if (characterLength(revision) > 128) throw new Error("Spending revision is too long.");
+  return {
+    spending: {
+      period,
+      state: enumMember(spending.state, AIDEN_REMOTE_SPENDING_STATES, "Spending state"),
+      limitUsd,
+      allowedUsd,
+      spentUsd: spendingAmount(spending, "spentUsd", false),
+      allowMoreUsd: spendingAmount(spending, "allowMoreUsd", true),
+      ...times,
+      revision,
+    },
+  };
+}
+
+export interface AidenRemoteSpendingFixture {
+  chat: AidenRemoteSpendingStatus;
+  chatReached: AidenRemoteSpendingStatus;
+  chatAllowMore: { request: Record<string, never>; response: AidenRemoteSpendingStatus };
+  bot: AidenRemoteSpendingStatus;
+  none: AidenRemoteSpendingStatus;
+  /** A turn or Bot message over its limit. */
+  refusal: AidenRemoteErrorEnvelope;
+  /** Allow more with a revision that is no longer current. */
+  conflict: AidenRemoteErrorEnvelope;
+}
+
+function parseSpendingFixture(value: unknown): AidenRemoteSpendingFixture {
+  if (!isRecord(value)) throw new Error("Spending fixture must be an object.");
+  assertExactKeys(value, ["chat", "chatReached", "chatAllowMore", "bot", "none", "refusal", "conflict"], "Spending fixture");
+  const allowMore = requestResponseRecord(value.chatAllowMore, "Spending Allow more");
+  if (!isRecord(allowMore.request) || Object.keys(allowMore.request).length > 0) {
+    throw new Error("Allow more takes an empty object.");
+  }
+  const fixture: AidenRemoteSpendingFixture = {
+    chat: parseAidenRemoteSpendingStatus(value.chat),
+    chatReached: parseAidenRemoteSpendingStatus(value.chatReached),
+    chatAllowMore: { request: {}, response: parseAidenRemoteSpendingStatus(allowMore.response) },
+    bot: parseAidenRemoteSpendingStatus(value.bot),
+    none: parseAidenRemoteSpendingStatus(value.none),
+    refusal: parseErrorEnvelopeFixture(value.refusal, "Spending refusal"),
+    conflict: parseErrorEnvelopeFixture(value.conflict, "Spending conflict"),
+  };
+  if (fixture.chatReached.spending?.state !== "reached") throw new Error("chatReached must be reached.");
+  if (fixture.bot.spending?.period !== "month") throw new Error("The Bot fixture must be a month.");
+  if (fixture.none.spending !== null) throw new Error("The none fixture has no limit.");
+  // An older phone shows the refusal as it shows a paused Bot's: no new error code.
+  if (fixture.refusal.error.code !== "operation_stale") throw new Error("A spending refusal must be operation_stale.");
+  if (fixture.conflict.error.code !== "revision_conflict" || !fixture.conflict.error.details?.currentRevision) {
+    throw new Error("A spending conflict must be revision_conflict with currentRevision.");
+  }
+  return fixture;
+}
 
 function parseErrorEnvelopeFixture(value: unknown, label: string): AidenRemoteErrorEnvelope {
   if (!isRecord(value) || !isRecord(value.error)) throw new Error(`${label} is invalid.`);

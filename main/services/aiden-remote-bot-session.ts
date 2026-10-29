@@ -1391,6 +1391,7 @@ const REFUSED_BEFORE_RUNNING: ReadonlySet<BotSessionErrorReason> = new Set([
   "unavailable",
   "bot_paused",
   "paused_by_person",
+  "spending_limit",
 ]);
 
 /**
@@ -1450,6 +1451,7 @@ function mapSessionError(error: unknown, audience: AidenRemoteBotHandoffAudience
       case "model_error":
       case "unavailable":
       case "bot_paused":
+      case "spending_limit":
         throw new AidenRemoteServiceError("operation_stale", error.message, 409);
     }
   }

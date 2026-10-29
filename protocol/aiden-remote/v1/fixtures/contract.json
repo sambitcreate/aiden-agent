@@ -1,5 +1,5 @@
 {
-  "contractRevision": 45,
+  "contractRevision": 47,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -1555,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 45,
+    "contractRevision": 47,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -3102,6 +3102,10 @@
     },
     "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
   },
+  "browserRecordings": {
+    "step": { "id": "tool-5", "order": 0, "kind": "tool", "toolCallId": "call-5", "toolName": "browser_recording_stop", "label": "Stop browser recording", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079672400, "finishedAt": 1787079672400, "contentOffset": 0, "recording": { "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", "mimeType": "video/mp4", "durationMs": 12400, "sizeBytes": 1048576 } },
+    "recordingPath": "/chats/chat_fixture_01/recordings/recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+  },
   "botIssues": {
     "capability": "bot:issues",
     "session": {
@@ -3268,6 +3272,79 @@
         }
       ],
       "now": "2026-10-27T09:10:00.000Z"
+    }
+  },
+  "spending": {
+    "chat": {
+      "spending": {
+        "period": "chat",
+        "state": "nearing",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 4.1,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatReached": {
+      "spending": {
+        "period": "chat",
+        "state": "reached",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 5.37,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatAllowMore": {
+      "request": {},
+      "response": {
+        "spending": {
+          "period": "chat",
+          "state": "under",
+          "limitUsd": 5,
+          "allowedUsd": 10,
+          "spentUsd": 5.37,
+          "allowMoreUsd": 5,
+          "revision": "sp_fixture_chat_2"
+        }
+      }
+    },
+    "bot": {
+      "spending": {
+        "period": "month",
+        "state": "reached",
+        "limitUsd": 20,
+        "allowedUsd": 20,
+        "spentUsd": 20.4,
+        "allowMoreUsd": 20,
+        "periodStart": "2026-10-15T00:00:00.000Z",
+        "periodEnd": "2026-11-15T00:00:00.000Z",
+        "revision": "sp_fixture_bot_1"
+      }
+    },
+    "none": {
+      "spending": null
+    },
+    "refusal": {
+      "error": {
+        "code": "operation_stale",
+        "message": "This chat reached its $5.00 spending limit. Allow more to keep going.",
+        "requestId": "request_fixture_40",
+        "retryable": false
+      }
+    },
+    "conflict": {
+      "error": {
+        "code": "revision_conflict",
+        "message": "The spending limit changed. Refresh it before trying again.",
+        "requestId": "request_fixture_40",
+        "retryable": false,
+        "details": {
+          "currentRevision": "sp_fixture_chat_2"
+        }
+      }
     }
   }
 }

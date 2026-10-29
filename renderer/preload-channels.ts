@@ -45,6 +45,8 @@ export const INVOKE_PREFIXES = [
   "titleProviders:",
   "tts:",
   "usage:",
+  "usageLimits:",
+  "spending:",
   "voice:",
   "webSearch:",
   "workspaces:",
@@ -87,6 +89,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "chat:tool",
   "bots:changed",
   "bots:memory:changed",
+  /** A Bot's event routines changed, or a watch saved a check: `{botId}`. Its profile re-reads the list. */
+  "bots:eventRoutines:changed",
   /** A paired phone asked to finish connecting an app for a Bot: `{botId, pluginId}`. */
   "bots:live:event",
   "bots:connections:setup",
@@ -148,6 +152,9 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "terminal:exit",
   "telegram:model-selection-changed",
   "tts:event",
+  /** The replies waiting for a usage limit changed: `UsageLimitsChangedEvent`. */
+  "usageLimits:changed",
+  "spending:changed",
   "voice:stream-text",
   "workspaces:changed",
   /** An agent tool may have changed files in this workspace's folder: `{ workspaceId }`. */

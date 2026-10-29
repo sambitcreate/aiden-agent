@@ -637,6 +637,7 @@ async function legacyChatHost() {
     "./subagents/child-agent-runtime.js": {
       subagentRuntimeRegistry: {
         setHealthMetrics() {},
+        setLimits() {},
         setRuntimeFaultReporter() {},
         abortGeneration() {},
         abortChat: (chatId: string) => void subagentsStopped.push(chatId),
