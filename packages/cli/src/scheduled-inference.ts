@@ -16,7 +16,7 @@ export async function runScheduledInference(agentDir: string, cwd: string, task:
   const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal]);
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   let removeEvents = () => {}, calls = 0, turns = 0, bytes = 0;
-  const abort = () => { void session?.abort(); };
+  const abort = () => { void session?.abort().catch(() => {}); };
   combined.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(new Error("Scheduled inference timed out.")), 300_000);
   const check = async () => {

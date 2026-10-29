@@ -485,6 +485,25 @@ test("Pi's built-in MCP extension stays off: /mcp is Aiden's and native mcp.json
   } finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
 
+test("foreground serve drains and removes its socket when its terminal hangs up", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const child = spawn(process.execPath, [cli, "serve"], {
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
+  });
+  try {
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+    const deadline = Date.now() + 30_000;
+    while (!/listening at (.+)\n/u.test(stderr) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const socket = /listening at (.+)\n/u.exec(stderr)?.[1];
+    assert.ok(socket && existsSync(socket), stderr);
+    child.kill("SIGHUP");
+    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+    assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
+  } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+});
+
 test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
   const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
   try {

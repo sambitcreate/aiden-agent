@@ -103,7 +103,7 @@ export function createDaemonChats(agentDir: string) {
     cancel(streamId: string, ownerId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0], "user_stop"); return true;
+      void llmClient.cancelChat(pair[0], "user_stop").catch(() => {}); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
       if (closed || owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
@@ -128,8 +128,8 @@ export function createDaemonChats(agentDir: string) {
       let unsubscribe = () => {};
       let botAdmission: BotRuntimeAuthorityAdmission | undefined;
       let removeBotAbort = () => {};
-      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort(); });
-      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort(); }, 300_000);
+      const disposeOwner = owner.onInvalidated(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); });
+      const timer = setTimeout(() => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); }, 300_000);
       const send: typeof owner.send = (channel, payload) => { if (!owner.isDestroyed()) owner.send(channel, payload); };
       const produced: AssistantMessage[] = [];
       let content = "", separator = false, persisted = false;
@@ -147,7 +147,7 @@ export function createDaemonChats(agentDir: string) {
           await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
-          const cancel = () => { entry.abort.abort(); void entry.session?.abort(); };
+          const cancel = () => { entry.abort.abort(); void entry.session?.abort().catch(() => {}); };
           botAdmission.signal.addEventListener("abort", cancel, { once: true });
           removeBotAbort = () => botAdmission?.signal.removeEventListener("abort", cancel);
           if (botAdmission.signal.aborted) cancel();

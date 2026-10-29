@@ -66,8 +66,13 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       const remote = rest.includes("--remote");
       if (rest.includes("--daemon")) { result = await startDaemon(agentDir, { remote }); break; }
       const controller = new AbortController(); const stop = () => controller.abort();
-      process.once("SIGINT", stop); process.once("SIGTERM", stop);
-      try { await (await import("./serve.ts")).serve(agentDir, controller.signal, { remote }); } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
+      // SIGHUP (terminal or ssh pane closed) drains like SIGINT/SIGTERM instead of killing live turns.
+      // A stray rejection in one turn is logged rather than crashing every other turn the daemon serves.
+      const rejected = (reason: unknown) => { process.stderr.write(`aiden: Unhandled daemon rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}\n`); };
+      const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+      for (const name of signals) process.once(name, stop);
+      process.on("unhandledRejection", rejected);
+      try { await (await import("./serve.ts")).serve(agentDir, controller.signal, { remote }); } finally { for (const name of signals) process.removeListener(name, stop); process.removeListener("unhandledRejection", rejected); }
       return true;
     }
     case "provider": {
