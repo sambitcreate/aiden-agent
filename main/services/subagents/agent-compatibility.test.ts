@@ -1344,9 +1344,9 @@ test("main-process shutdown continues to application quit after the subagent dea
     source.indexOf("async function shutdownAndQuit"),
   );
   const settlementStart = source.indexOf(
-    "const subagentsSettled = await subagentRuntimeRegistry.shutdown();",
+    "subagentRuntimeRegistry.shutdown(),",
   );
-  const parentSettlementStart = source.indexOf("await llmClient.shutdown();", parentAbortStart);
+  const parentSettlementStart = source.indexOf("llmClient.shutdown(),", parentAbortStart);
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",
