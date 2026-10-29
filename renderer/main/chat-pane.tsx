@@ -1567,6 +1567,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
