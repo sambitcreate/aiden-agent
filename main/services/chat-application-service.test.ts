@@ -227,8 +227,12 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   const events: string[] = [];
   const application = fixture({
     toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
-    // Agent scratch state is removed only after the chat is durably gone.
-    forgetDeletedChat: async (chatId) => { events.push(`scratch:${chatId}`); },
+    // Agent scratch state is removed only after the chat is durably gone, and a
+    // cleanup that never finishes does not hold up the delete.
+    forgetDeletedChat: (chatId) => {
+      events.push(`scratch:${chatId}`);
+      return new Promise<void>(() => undefined);
+    },
     // Queued snapshots of the chat's visuals stop before anything is removed.
     visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
     subagentRunStore: {

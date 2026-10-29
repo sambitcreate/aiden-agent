@@ -168,8 +168,7 @@ export class AcpPidLedger {
   async sweep(): Promise<number> {
     const survivors = this.entries;
     this.entries = [];
-    const retained: PidLedgerEntry[] = [];
-    let stopped = 0;
+    const killed: PidLedgerEntry[] = [];
     for (const entry of survivors) {
       if (this.dependencies.isAlive(entry.pid)) {
         const command = await this.dependencies.commandOf(entry.pid);
@@ -179,9 +178,12 @@ export class AcpPidLedger {
         if (!(await this.ownsLeaderlessGroup(entry))) continue;
       }
       this.dependencies.killGroup(entry.pid);
-      stopped += 1;
-      if (!(await this.groupGone(entry.pid))) retained.push(entry);
+      killed.push(entry);
     }
+    // Wait for every killed group at once, so several survivors share one grace period.
+    const gone = await Promise.all(killed.map((entry) => this.groupGone(entry.pid)));
+    const retained = killed.filter((_entry, index) => !gone[index]);
+    const stopped = killed.length;
     this.entries = [...retained, ...this.entries].slice(-MAX_ENTRIES);
     this.persist();
     await this.writing;

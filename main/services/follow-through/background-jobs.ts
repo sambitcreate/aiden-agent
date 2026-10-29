@@ -26,7 +26,11 @@ export const JOB_TAIL_CHARS = 20_000;
 export const JOB_STOP_GRACE_MS = 4_000;
 /** Finished jobs each chat keeps listing (with their logs) in this session. */
 export const MAX_FINISHED_JOBS_PER_CHAT = 10;
-/** Finished jobs kept across all chats, so many open chats cannot pile up tails. */
+/**
+ * Finished jobs kept across all chats, so many open chats cannot pile up tails.
+ * Over the cap, the chat with the most finished jobs loses its oldest first, so
+ * one busy chat cannot push out another chat's only result.
+ */
 export const MAX_FINISHED_JOBS = 50;
 export const MAX_JOB_COMMAND_CHARS = 4_000;
 export const MAX_JOB_DESCRIPTION_CHARS = 120;
@@ -543,10 +547,37 @@ export class BackgroundJobs {
   }
 
   private forgetOldFinished(chatId: string): void {
-    const newestFirst = (left: JobRecord, right: JobRecord) => (right.view.endedAt ?? 0) - (left.view.endedAt ?? 0);
-    const finished = [...this.jobs.values()].filter((job) => job.view.state !== "running").sort(newestFirst);
-    const chatFinished = finished.filter((job) => job.view.chatId === chatId);
-    const forget = new Set([...chatFinished.slice(MAX_FINISHED_JOBS_PER_CHAT), ...finished.slice(this.maxFinished)]);
+    const oldestFirst = (left: JobRecord, right: JobRecord) => (left.view.endedAt ?? 0) - (right.view.endedAt ?? 0);
+    const byChat = new Map<string, JobRecord[]>();
+    let total = 0;
+    for (const job of [...this.jobs.values()].filter((record) => record.view.state !== "running").sort(oldestFirst)) {
+      const list = byChat.get(job.view.chatId) ?? [];
+      list.push(job);
+      byChat.set(job.view.chatId, list);
+      total += 1;
+    }
+    const forget: JobRecord[] = [];
+    const chatFinished = byChat.get(chatId) ?? [];
+    while (chatFinished.length > MAX_FINISHED_JOBS_PER_CHAT) {
+      forget.push(chatFinished.shift()!);
+      total -= 1;
+    }
+    while (total > this.maxFinished) {
+      // The chat with the most finished jobs gives up its oldest; ties go to the older job.
+      let fullest: JobRecord[] | undefined;
+      for (const list of byChat.values()) {
+        if (
+          list.length > 0 &&
+          (!fullest ||
+            list.length > fullest.length ||
+            (list.length === fullest.length && oldestFirst(list[0], fullest[0]) < 0))
+        ) {
+          fullest = list;
+        }
+      }
+      forget.push(fullest!.shift()!);
+      total -= 1;
+    }
     const otherChats = new Set<string>();
     for (const job of forget) {
       this.jobs.delete(job.view.id);

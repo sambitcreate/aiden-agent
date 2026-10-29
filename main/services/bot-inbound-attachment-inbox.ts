@@ -181,16 +181,25 @@ export async function writeBotInboundAttachment(input: {
   });
   deadline.catch(() => undefined);
 
+  const storedPath = path.join(
+    input.home.homePath,
+    ".aiden",
+    "telegram-inbox",
+    profile,
+    leaf,
+  );
+  let written = false;
+  const writing = writeThroughHelper().then(() => {
+    written = true;
+  });
   try {
-    await Promise.race([deadline, writeThroughHelper()]);
-    return path.join(
-      input.home.homePath,
-      ".aiden",
-      "telegram-inbox",
-      profile,
-      leaf,
-    );
+    await Promise.race([deadline, writing]);
+    return storedPath;
   } catch {
+    // A write that finished just as the deadline fired is still a good write.
+    // One turn of the event loop lets that completion land; a stalled write does not.
+    await new Promise((resolve) => setImmediate(resolve));
+    if (written) return storedPath;
     child.kill("SIGKILL");
     // A helper stuck in an uninterruptible filesystem call may not close
     // promptly even after SIGKILL; do not let that hang the ingest.

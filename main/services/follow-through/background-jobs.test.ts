@@ -224,6 +224,23 @@ test("finished jobs across many chats are capped, oldest first, and their logs g
   );
 });
 
+test("over the global cap, the busiest chat gives up a finished job before a quiet chat loses its only one", { skip }, async (t) => {
+  const dir = await tempDir();
+  let clock = 1_000;
+  const { jobs, start } = harness(dir, { maxFinished: 3, now: () => (clock += 1) });
+  t.after(() => cleanUp(jobs, dir));
+  const quiet = start("true", "chat-quiet");
+  await eventually(() => jobs.get("chat-quiet", quiet.id)?.state === "exited", "the quiet chat's job to end");
+  const busy: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const job = start("true", "chat-busy");
+    busy.push(job.id);
+    await eventually(() => jobs.get("chat-busy", job.id)?.state === "exited", `busy job ${index} to end`);
+  }
+  assert.deepEqual(jobs.list("chat-quiet").map((job) => job.id), [quiet.id]);
+  assert.deepEqual(new Set(jobs.list("chat-busy").map((job) => job.id)), new Set(busy.slice(1)));
+});
+
 test("stopping a chat's jobs for deletion forgets them and their logs", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, start } = harness(dir);

@@ -374,7 +374,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
-        await deps.forgetDeletedChat?.(chatId).catch(() => undefined);
+        // Scratch cleanup is best effort and must not delay the delete reply.
+        void deps.forgetDeletedChat?.(chatId).catch((error: unknown) =>
+          deps.logError("chats", "Could not remove the deleted chat's agent scratch folder.", error),
+        );
       } finally {
         if (!releaseAdmission) {
           try {

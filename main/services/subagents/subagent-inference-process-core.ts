@@ -79,6 +79,10 @@ function unrefDelay(ms: number): Promise<void> {
  * After an unproven stop, keep retrying the identity-checked kill and exit
  * proof with backoff. A transient `ps` failure would otherwise leave the run,
  * and the parent agent waiting on it, pending forever.
+ *
+ * The retries stop after about 75 s. A run whose exit is still unproven then
+ * stays pending on purpose: settling it would claim a process is gone that may
+ * still be running and writing. Quitting Aiden remains the way out.
  */
 const STOP_RECOVERY_ATTEMPTS = 10;
 // The identity read that just failed has a 1 s `ps` timeout, so retrying

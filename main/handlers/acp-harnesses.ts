@@ -5,10 +5,10 @@
  */
 import type { AcpHarnessStatus } from "../../renderer/shared/acp-harness.js";
 import { projectRuntime } from "../services/acp/status.js";
-import { antigravityEnabled, antigravityService, shutdownAntigravity } from "../services/antigravity/index.js";
+import { antigravityEnabled, antigravityService } from "../services/antigravity/index.js";
 import type { AntigravityService } from "../services/antigravity/service.js";
 import { ANTIGRAVITY_PROVIDER_ID } from "../services/antigravity/models.js";
-import { app, ipcMain, logger } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 
 interface HarnessEntry {
   service(): AntigravityService;
@@ -81,11 +81,5 @@ export function registerAcpHarnessHandlers(): void {
     const entry = harnessFor(providerId);
     await entry.service().removeRuntime();
     return statusOf(providerId as string, entry);
-  });
-
-  // Starts stopping agents as early as possible; the quit sequence in
-  // main/index.ts awaits the same idempotent shutdown within its budget.
-  app.once("before-quit", () => {
-    void shutdownAntigravity().catch(() => undefined);
   });
 }
