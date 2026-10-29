@@ -229,6 +229,100 @@ test("expired rotations are pruned on the next append", async () => {
   });
 });
 
+test("a retained rotation is pruned on the first append after it expires mid-session", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-live-retention-"));
+  const target = path.join(dir, "aiden.log");
+  let current = new Date("2026-08-01T00:00:00.000Z");
+  try {
+    const rotation = `${target}.1`;
+    await fs.writeFile(rotation, `${JSON.stringify({ version: 1, at: current.toISOString() })}\n`, { mode: 0o600 });
+    await fs.utimes(rotation, current, current);
+    initDiagnosticJournal({ targetPath: target, profile: "production", now: () => current });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 1 } });
+    await flushDiagnosticJournal();
+
+    current = new Date(current.getTime() + MAX_DIAGNOSTIC_LOG_AGE_MS - 60_000);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 2 } });
+    await flushDiagnosticJournal();
+    await fs.stat(rotation);
+
+    current = new Date(current.getTime() + 120_000);
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 3 } });
+    await flushDiagnosticJournal();
+    await assert.rejects(fs.stat(rotation), { code: "ENOENT" });
+  } finally {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a burst of lines lands in order through a few batched appends", async (context) => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    const open = fsPromises.open;
+    let journalOpens = 0;
+    const openMock = context.mock.method(fsPromises, "open", async (...args: Parameters<typeof open>) => {
+      if (args[0] === target) journalOpens += 1;
+      return open(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      for (let index = 0; index < 200; index += 1) {
+        writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "backpressure-fixture", fields: { sequence: index } });
+        if (index % 50 === 0) await Promise.resolve();
+      }
+      await flushDiagnosticJournal();
+    } finally {
+      openMock.mock.restore();
+      syncBuiltinESMExports();
+    }
+    const sequences = (await fs.readFile(target, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { event: string; fields?: { sequence?: number } })
+      .filter((record) => record.event === "backpressure-fixture")
+      .map((record) => record.fields?.sequence);
+    assert.deepEqual(sequences, Array.from({ length: 200 }, (_, index) => index));
+    assert.ok(journalOpens <= 10, `expected batched appends, saw ${journalOpens} opens for 200 lines`);
+    assert.equal(diagnosticJournalStatus().pendingWrites, 0);
+  });
+});
+
+test("a batch that crosses the size cap rotates without splitting or losing lines", async () => {
+  await withJournal("production", async (target) => {
+    await flushDiagnosticJournal();
+    const currentBytes = (await fs.stat(target)).size;
+    await fs.appendFile(target, `${"x".repeat(MAX_DIAGNOSTIC_LOG_BYTES - currentBytes - 2_000)}\n`);
+    for (let index = 0; index < 100; index += 1) {
+      writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "rotation-fixture", fields: { sequence: index } });
+    }
+    await flushDiagnosticJournal();
+    const sequences: unknown[] = [];
+    for (const file of [`${target}.1`, target]) {
+      assert.ok((await fs.stat(file)).size <= MAX_DIAGNOSTIC_LOG_BYTES);
+      for (const line of (await fs.readFile(file, "utf8")).split("\n")) {
+        if (!line.startsWith("{")) continue;
+        const record = JSON.parse(line) as { event: string; fields?: { sequence?: number } };
+        if (record.event === "rotation-fixture") sequences.push(record.fields?.sequence);
+      }
+    }
+    assert.deepEqual(sequences, Array.from({ length: 100 }, (_, index) => index));
+  });
+});
+
+test("a log directory removed mid-session is recreated owner-only on the next append", async () => {
+  await withJournal("production", async (target, dir) => {
+    await flushDiagnosticJournal();
+    await fs.rm(dir, { recursive: true, force: true });
+    writeDiagnosticEvent({ level: "warn", area: "diagnostics", event: "retention-check", fields: { sequence: 9 } });
+    await flushDiagnosticJournal();
+    assert.match(await fs.readFile(target, "utf8"), /"sequence":9/u);
+    assert.equal((await fs.stat(dir)).mode & 0o777, 0o700);
+    assert.equal((await fs.stat(target)).mode & 0o777, 0o600);
+    assert.equal(diagnosticJournalStatus().writeFailed, false);
+  });
+});
+
 test("oversized retained rotations are removed at startup", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-diagnostic-retained-size-"));
   const target = path.join(dir, "aiden.log");

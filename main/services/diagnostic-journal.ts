@@ -70,6 +70,15 @@ let activeSegmentStartedAtMs = 0;
 let fatalSegmentStartedAtMs = 0;
 let retentionTimer: NodeJS.Timeout | undefined;
 const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
+// Lines admitted while the queue is busy share one append. A batch closes when
+// it starts draining or when another operation (deletion, snapshot, retention
+// sweep) joins the queue, so no line is reordered across those barriers.
+let openBatch: string[] | null = null;
+// The earliest moment a rotated segment can pass retention. Appends prune only
+// once the clock reaches it (or after a rotation), not on every line.
+let nextRotationExpiryAtMs = 0;
+// The log directory is validated once per session and again after any failure.
+let directoryValidated = false;
 
 function rotatedPath(target: string, index: number): string {
   return `${target}.${index}`;
@@ -259,26 +268,45 @@ function pruneExpiredSync(target: string): void {
   }
 }
 
-async function appendNoFollow(target: string, line: string): Promise<void> {
-  ensurePrivateDirectory(path.dirname(target));
-  const handle = await fs.open(
+function openAppendNoFollow(target: string): Promise<fs.FileHandle> {
+  return fs.open(
     target,
     fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_APPEND | fsConstants.O_NOFOLLOW,
     0o600,
   );
+}
+
+async function appendNoFollow(target: string, contents: string): Promise<void> {
+  const directory = path.dirname(target);
+  if (!directoryValidated) {
+    ensurePrivateDirectory(directory);
+    directoryValidated = true;
+  }
+  let handle: fs.FileHandle;
+  try {
+    handle = await openAppendNoFollow(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    // The directory disappeared since it was validated: recreate it privately.
+    directoryValidated = false;
+    ensurePrivateDirectory(directory);
+    directoryValidated = true;
+    handle = await openAppendNoFollow(target);
+  }
   try {
     const metadata = await handle.stat();
     if (!metadata.isFile() || metadata.nlink !== 1) {
       throw new Error("Diagnostic journal is not an owned regular file.");
     }
-    await handle.chmod(0o600);
-    await handle.writeFile(line, "utf8");
+    if ((metadata.mode & 0o777) !== 0o600) await handle.chmod(0o600);
+    await handle.writeFile(contents, "utf8");
   } finally {
     await handle.close();
   }
 }
 
-async function rotateBeforeAppend(target: string, incomingBytes: number): Promise<void> {
+/** Rotate when the incoming bytes would overflow or age out the active segment; resolves its size. */
+async function rotateBeforeAppend(target: string, incomingBytes: number): Promise<number> {
   let currentBytes = 0;
   try {
     const metadata = await fs.lstat(target);
@@ -293,13 +321,13 @@ async function rotateBeforeAppend(target: string, incomingBytes: number): Promis
   if (
     currentBytes + incomingBytes <= MAX_DIAGNOSTIC_LOG_BYTES &&
     !ageExpired
-  ) return;
+  ) return currentBytes;
 
   if (ageExpired) {
     await fs.rm(target, { force: true });
     await appendNoFollow(target, "");
     activeSegmentStartedAtMs = now().getTime();
-    return;
+    return 0;
   }
 
   await fs.rm(rotatedPath(target, MAX_DIAGNOSTIC_LOG_FILES - 1), { force: true });
@@ -315,10 +343,14 @@ async function rotateBeforeAppend(target: string, incomingBytes: number): Promis
   }
   await appendNoFollow(target, "");
   activeSegmentStartedAtMs = now().getTime();
+  // The retired segment's records start a new retention clock.
+  nextRotationExpiryAtMs = 0;
+  return 0;
 }
 
 async function pruneExpired(target: string): Promise<void> {
   const cutoff = now().getTime() - MAX_DIAGNOSTIC_LOG_AGE_MS;
+  let nextExpiryAtMs = Number.POSITIVE_INFINITY;
   for (let index = 1; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
     const candidate = rotatedPath(target, index);
     try {
@@ -334,10 +366,41 @@ async function pruneExpired(target: string): Promise<void> {
         oldestAtMs < cutoff
       ) {
         await fs.rm(candidate, { force: true });
+      } else {
+        nextExpiryAtMs = Math.min(
+          nextExpiryAtMs,
+          Math.min(metadata.mtimeMs, oldestAtMs) + MAX_DIAGNOSTIC_LOG_AGE_MS,
+        );
       }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+  }
+  nextRotationExpiryAtMs = nextExpiryAtMs;
+}
+
+/**
+ * Append one admitted batch in order. Each chunk is sized so the active
+ * segment never exceeds its cap, and retained rotations are pruned before a
+ * write whenever one of them can have expired.
+ */
+async function appendBatch(target: string, lines: readonly string[]): Promise<void> {
+  let index = 0;
+  while (index < lines.length) {
+    const first = lines[index]!;
+    let chunk = first;
+    let chunkBytes = Buffer.byteLength(first);
+    const currentBytes = await rotateBeforeAppend(target, chunkBytes);
+    if (now().getTime() > nextRotationExpiryAtMs) await pruneExpired(target);
+    index += 1;
+    while (index < lines.length) {
+      const nextBytes = Buffer.byteLength(lines[index]!);
+      if (currentBytes + chunkBytes + nextBytes > MAX_DIAGNOSTIC_LOG_BYTES) break;
+      chunk += lines[index]!;
+      chunkBytes += nextBytes;
+      index += 1;
+    }
+    await appendNoFollow(target, chunk);
   }
 }
 
@@ -430,6 +493,7 @@ export function pruneDiagnosticJournalRetention(at = new Date()): Promise<void> 
     writeFailed = true;
     return Promise.reject(error);
   }
+  openBatch = null;
   const sweep = queue.then(() => pruneGeneralRetentionAt(target, at.getTime()));
   queue = sweep.catch(() => { writeFailed = true; });
   return sweep;
@@ -442,6 +506,9 @@ export function initDiagnosticJournal(options: DiagnosticJournalOptions): void {
   now = options.now ?? (() => new Date());
   sessionId = options.sessionId ?? createDiagnosticSessionId();
   queue = Promise.resolve();
+  openBatch = null;
+  nextRotationExpiryAtMs = 0;
+  directoryValidated = false;
   pendingWrites = 0;
   droppedWrites = 0;
   writeFailed = false;
@@ -522,19 +589,26 @@ function enqueueLine(line: string): void {
     droppedWrites += 1;
     return;
   }
-  const target = targetPath;
   pendingWrites += 1;
+  if (openBatch) {
+    openBatch.push(line);
+    return;
+  }
+  const target = targetPath;
+  const batch = [line];
+  openBatch = batch;
   queue = queue
     .then(async () => {
-      await pruneExpired(target);
-      await rotateBeforeAppend(target, Buffer.byteLength(line));
-      await appendNoFollow(target, line);
+      // Lines admitted from here on belong to a later append.
+      if (openBatch === batch) openBatch = null;
+      await appendBatch(target, batch);
     })
     .catch(() => {
       writeFailed = true;
+      directoryValidated = false;
     })
     .finally(() => {
-      pendingWrites -= 1;
+      pendingWrites -= batch.length;
     });
 }
 
@@ -813,6 +887,7 @@ export async function snapshotDiagnosticJournalFiles(destinationDirectory: strin
     writeFailed = true;
     throw error;
   }
+  openBatch = null;
   const snapshot = queue.then(async () => {
     await pruneGeneralRetentionAt(target, at.getTime());
     await fs.mkdir(destinationDirectory, { recursive: true, mode: 0o700 });
@@ -839,6 +914,7 @@ export async function deleteDiagnosticJournalFiles(): Promise<void> {
   let fatalResetFailure: { error: unknown } | undefined;
   // Reserve deletion before yielding so later appends, rotations, retention and
   // exports cannot run against the files being removed.
+  openBatch = null;
   const deletion = queue.then(async () => {
     if (fatalResetFailure) throw fatalResetFailure.error;
     for (let index = 0; index < MAX_DIAGNOSTIC_LOG_FILES; index += 1) {
