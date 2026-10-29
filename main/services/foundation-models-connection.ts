@@ -9,6 +9,7 @@ import {
   FOUNDATION_MODELS_PROTOCOL_VERSION,
   FoundationModelsConnectionError,
   createFoundationModelsConnection,
+  createPendingHelperStops,
   parseFoundationModelsResponse,
   stopRecordedHelperProcess,
   type NativeFoundationModelsRequest,
@@ -22,6 +23,7 @@ const MAX_STDOUT_BYTES = 64 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
 const activeHelperRequests = new Set<{ dispose: () => void }>();
 let isDisposingFoundationModelsConnection = false;
+const pendingHelperStops = createPendingHelperStops();
 
 function helperEnvironment(): NodeJS.ProcessEnv {
   const safeNames = ["HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING"];
@@ -130,10 +132,12 @@ async function runHelperRequest(
       if (child.exitCode === null && child.signalCode === null) {
         try {
           if (existsSync(processPath)) {
-            void stopRecordedHelperProcess(readFileSync(processPath, "utf8"), defaultHelperPath(), {
-              readExecutable: readProcessExecutable,
-              kill: (pid, signal) => process.kill(pid, signal),
-            });
+            pendingHelperStops.track(
+              stopRecordedHelperProcess(readFileSync(processPath, "utf8"), defaultHelperPath(), {
+                readExecutable: readProcessExecutable,
+                kill: (pid, signal) => process.kill(pid, signal),
+              }),
+            );
           }
         } catch {
           // The helper may already have exited between reading its pid and signalling it.
@@ -248,6 +252,11 @@ export const foundationModelsConnection = createFoundationModelsConnection({
 export function disposeFoundationModelsConnection(): void {
   isDisposingFoundationModelsConnection = true;
   for (const request of [...activeHelperRequests]) request.dispose();
+}
+
+/** Wait, bounded, for helper stops still validating the recorded PID before signalling it. */
+export function settleFoundationModelsHelperStops(budgetMs: number): Promise<boolean> {
+  return pendingHelperStops.settleWithin(budgetMs);
 }
 
 export { FOUNDATION_MODELS_PROTOCOL_VERSION };

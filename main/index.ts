@@ -36,6 +36,7 @@ import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
 import { formFillRuntime } from "./services/form-fill/artifacts.js";
@@ -543,6 +544,11 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         })
         .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
+      // cleanupApplication() asked any running Foundation Models helper to stop; its
+      // PID is checked asynchronously first, so wait (bounded) for the signal.
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
       mcpManager.closeAllWithin(2_000).then((closed) => {

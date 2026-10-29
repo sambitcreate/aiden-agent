@@ -46,6 +46,39 @@ export async function stopRecordedHelperProcess(
   }
 }
 
+/**
+ * Holds helper stops that run asynchronously (the identity lookup comes first)
+ * so quit can wait for them, bounded, instead of exiting before the signal.
+ */
+export function createPendingHelperStops() {
+  const pending = new Set<Promise<void>>();
+  return {
+    track(work: Promise<unknown>): void {
+      const settled: Promise<void> = work
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => pending.delete(settled));
+      pending.add(settled);
+    },
+    /** Resolve true once every tracked stop settles, or false when the budget runs out first. */
+    async settleWithin(budgetMs: number): Promise<boolean> {
+      if (pending.size === 0) return true;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const expired = new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), budgetMs);
+        timer.unref?.();
+      });
+      try {
+        return await Promise.race([Promise.all([...pending]).then(() => true), expired]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
+}
+
 export type NativeFoundationModelsMethod = "availability" | "generateTitle";
 
 export interface NativeFoundationModelsRequest {
