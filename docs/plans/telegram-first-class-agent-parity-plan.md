@@ -2,8 +2,6 @@
 
 Status: Implemented; credentialed Telegram client smoke pending
 
-October 27, 2026 security update: host-issued five-minute, single-use pairing replaces first-message ownership. No Access blocks ordinary Telegram work; Ask retains the separately disclosed unattended grant. Bot-managed authority is unchanged. See [Telegram control](../telegram.md).
-
 Date: 2026-08-13
 
 Reference baseline: `@llblab/pi-telegram` `0.27.12` at `/Users/sambitbiswas/projects/opp/pi-telegram`

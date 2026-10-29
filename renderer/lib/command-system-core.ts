@@ -78,13 +78,19 @@ export function resolveCommandForKeyEvent(
   return null;
 }
 
-/** Commands the palette may list for these capabilities; gated commands are absent, not disabled. */
+/**
+ * Commands the palette may list for these capabilities; gated commands are absent, not disabled.
+ * Commands that belong to what is on screen (the open chat, its folder) are absent while
+ * nothing handles them, so the palette lists only what can run here.
+ */
 export function paletteCommands(
   capabilities: Readonly<Record<StudioFeature, boolean>>,
+  available: (commandId: CommandId) => boolean = () => true,
 ): CommandDefinition[] {
   return COMMANDS.filter(
     (definition) =>
       definition.showInPalette &&
-      (definition.requiresCapability === undefined || capabilities[definition.requiresCapability]),
+      (definition.requiresCapability === undefined || capabilities[definition.requiresCapability]) &&
+      (!definition.paletteWhenAvailable || available(definition.id)),
   );
 }

@@ -2,6 +2,14 @@
 
 Status: In progress. Implementation and stacked PR delivery authorized October 27, 2026.
 
+Owner decisions, October 29, 2026, after a review of the draft stack:
+
+- W1 Telegram pairing (#605) is closed without merging, because Telegram is being removed from Aiden. Its changes are taken back out of the later PRs in the stack.
+- W5 Remote admission (#607) ships as written: unknown computers can ask to pair only while Add device is open, and the request setting defaults to off.
+- W3a private configuration (#609) also accepts a symlinked configuration folder or file whose target is a private folder the person owns, instead of blocking dotfile-managed setups.
+- W12 (#614) ships the production renderer CSP change. The AppImage updater keeps today's feed checksum check and does not require the GitHub CLI; publisher verification in the updater stays an open design question.
+- The stack lands bottom-up, one PR at a time, each after main is merged in and CI is green on its exact head. UI changes (#608, #612) are shown as screenshots first.
+
 We should first close Telegram owner bootstrap and CLI scheduling approval gaps, then protect portable configuration and external mobile voice entry points. The remaining work is split into independently reviewable changes, validation tasks and explicit product decisions. Each change must preserve existing Bot policies, provider bindings, revocation and manual-only network behavior.
 
 This plan covers all 23 findings in the October 27 audit and incorporates the T3 Code comparison. The owner authorized implementation, stacked PRs and fresh-context GPT-6.1 Sol high review on October 27, 2026. Publishing releases, merging and credential rotation remain outside this implementation request.
@@ -88,8 +96,6 @@ The original IDs remain traceable below. Implementation order reflects exposure,
 If only two changes can be completed, finish W1 and W2. Do not combine them into one large PR. W3b can follow W3a because secret sealing has more migration and launch-approval implications than mode enforcement. W4 can proceed independently but requires both native clients before the shared behavior is complete.
 
 ## W1: Require a host-issued Telegram pairing code
-
-Implementation status: implemented locally in the Telegram remediation slice, pending fresh patch review and attended real-bot acceptance. The shared gate now requires an ephemeral five-minute proof, bound to profile and token identity, with single-use consumption and guarded owner persistence. Existing desktop and CLI owners remain valid. No Access admission and queued revocation follow the D1 decision below.
 
 Observed boundary: the bridge currently persists the first eligible private sender as owner. Knowing a bot handle must not be sufficient to acquire this authority.
 
@@ -300,7 +306,7 @@ Primary files: main/services/app-updater.ts, app-updater-linux.ts, main-window.h
 
 | Item | Recommended direction | Required evidence before implementation |
 | --- | --- | --- |
-| D1, Telegram versus workspace permission | Decision implemented locally: No Access blocks ordinary Telegram selection, admission and dispatch; workspace downgrades revoke queued work and cancel active ordinary turns. Ask retains its explicit, separately disclosed unattended Full automation grant in Settings and the connection review. Bot policies remain authoritative. | Focused behavioral coverage exercises denied selection/ingress, queued downgrade, dispatch recheck and valid Bot ingress. Fresh review and attended acceptance remain. The generic permission resolver is unchanged. |
+| D1, Telegram versus workspace permission | Make No Access block regular-workspace Telegram admission. For Ask workspaces, either reject unattended use or require an explicit separately displayed Telegram automation grant. Preserve Bot policy ownership. | Read the current selector, command path, queued/active-turn behavior and Bot bindings; agree the user-facing rule and revocation behavior. No generic min(options.permission, workspace.permission) patch. |
 | D2, desktop/mobile device grants | Host chooses consequential grants; client device type remains display metadata. | Inventory existing host/simulator/mobile grants, compatibility and notice requirements. Coordinate with W5; do not demand unverifiable hardware attestation. |
 | D3, mobile draft backups | Prefer excluding unsent drafts and pending-send text from backup if the product intends device-only retention. | Check iOS privacy promises and actual backup inclusion; cover existing directories, deletion/recreation, data protection and recovery expectations. Android backup policy remains covered. |
 | V1, remembered approval identity | Validate a normal workspace deleted/recreated at the same path and a rebuilt managed worktree. Add incarnation binding only where current admission does not already reject it. | Reproduce approved exact-command reuse with a surviving workspace record. Include workspace removal, path relocation and normal atomic file changes. |

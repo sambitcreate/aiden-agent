@@ -94,6 +94,19 @@ export function renderMcpServersSection(
   tools: readonly PiDiscoverableTool[],
   options: { declared: ReadonlySet<string> },
 ): string {
+  const body = renderMcpServersSectionBody(tools, options);
+  return body ? `<mcp_servers>\n${body}\n</mcp_servers>` : "";
+}
+
+/**
+ * The same section without its `<mcp_servers>` tags, for hosts that wrap
+ * named prompt sections themselves (the Aiden CLI on Pi). Its byte budget
+ * still counts the tags.
+ */
+export function renderMcpServersSectionBody(
+  tools: readonly PiDiscoverableTool[],
+  options: { declared: ReadonlySet<string> },
+): string {
   const servers = new Map<string, ServerEntry>();
   for (const tool of tools) {
     const discovery = tool.discovery;
@@ -153,7 +166,7 @@ export function renderMcpServersSection(
     lines.push(line);
     used += bytes(line) + 1;
   }
-  return `${open}\n${header}\n${lines.join("\n")}${guidance ? `\n${guidance}` : ""}\n${close}`;
+  return `${header}\n${lines.join("\n")}${guidance ? `\n${guidance}` : ""}`;
 }
 
 /**

@@ -6,6 +6,8 @@ import {
   isBotAvatar,
   isBotAvatarAppearance,
   parseBotChatActivity,
+  parseBotInterruptions,
+  type BotInterruptions,
   type BotAvatarAppearance,
   type BotCreateInput,
   type BotDefinition,
@@ -110,6 +112,12 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     ? { version: 1, shape: bot.avatar.shape, color: bot.avatar.color }
     : { ...DEFAULT_BOT_AVATAR };
   const chatActivity = parseBotChatActivity(bot.chatActivity);
+  let interruptions: BotInterruptions | undefined;
+  try {
+    interruptions = bot.interruptions === undefined ? undefined : parseBotInterruptions(bot.interruptions);
+  } catch {
+    interruptions = undefined;
+  }
   const projected = {
     id: bot.id as string,
     name: (bot.name as string).trim(),
@@ -125,6 +133,10 @@ function projectBot(value: unknown): StoredBotDefinition | null {
     // Last, so a freshly saved choice and a reloaded record serialise (and hash into the revision) alike.
     // A choice this build does not know reads as absent (Quiet); the Bot itself is kept.
     ...(chatActivity ? { chatActivity } : {}),
+    // Also last: an unreadable setting reads as the defaults.
+    ...(interruptions ? { interruptions } : {}),
+    // Also last, after interruptions: only "off" is stored.
+    ...(bot.selfWakeUps === false ? { selfWakeUps: false as const } : {}),
   };
   return projected;
 }
@@ -263,6 +275,7 @@ export function createBotStore(options: {
         const normalized = normalizeInput(input);
         const chatActivity = input.chatActivity === undefined ? undefined : parseBotChatActivity(input.chatActivity);
         if (input.chatActivity !== undefined && !chatActivity) throw new Error("Choose a valid chat activity.");
+        const interruptions = input.interruptions === undefined ? undefined : parseBotInterruptions(input.interruptions);
         await loadBotState();
         return store.update((draft) => {
           const bot = draft.bots.find((entry) => entry.id === input.id);
@@ -278,6 +291,15 @@ export function createBotStore(options: {
           else delete bot.description;
           bot.avatar = { version: 1, shape: normalized.avatar.shape, color: normalized.avatar.color };
           if (chatActivity) bot.chatActivity = chatActivity;
+          // Always last, after chat activity, so the stored key order (and the
+          // revision it hashes into) matches a reloaded record.
+          const keptInterruptions = interruptions ?? bot.interruptions;
+          delete bot.interruptions;
+          if (keptInterruptions) bot.interruptions = keptInterruptions;
+          // Last of all; only "off" is stored, so a Bot that never changed it stays unchanged.
+          const selfWakeUpsOff = input.selfWakeUps === undefined ? bot.selfWakeUps === false : input.selfWakeUps === false;
+          delete bot.selfWakeUps;
+          if (selfWakeUpsOff) bot.selfWakeUps = false;
           bot.updatedAt = nextIdentityTimestamp(bot.updatedAt, now);
           return structuredClone(botForRenderer(bot));
         });

@@ -1,6 +1,6 @@
 # Coding follow-through plan
 
-Status: implemented, in review (2026-10-26). Feature guide: [coding follow-through](../coding-follow-through.md).
+Status: implemented; merged in [PR #591](https://github.com/sambitcreate/aiden-agent/pull/591) (2026-10-26) and shipped in 0.62.0. Feature guide: [coding follow-through](../coding-follow-through.md).
 
 ## Goal
 

@@ -25,7 +25,7 @@ Duplicate workspace names receive a short stable ID suffix in both visible and a
 
 ## Chat width
 
-`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, and composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
+`AppearanceConfig.chatWidth` (`narrow`, `default`, `wide`, or `full`; default `default`) is the one Appearance layout preference. `applyAppearanceConfig` writes it to `--chat-content-max-width` (44rem, 52rem, 64rem, or `none`) and `data-chat-width` on the root. Every `.chat-content-column` surface shares that token, so the transcript, pending approvals, the task and subagent row above the composer, and the composer stay aligned. The dock inset still reserves the floating Live button's gutter at Full. Older v1 settings and exports without the field load as Default, and strict parsing rejects unknown values. The control is a four-option radio card group: selection is the label's list-selection fill, never a border, and keyboard focus uses the neutral focus ring. Below 540px of content width it reflows to two columns. `settings-unification.spec.ts` measures the rendered transcript and composer widths for every option and checks that the choice survives a relaunch.
 
 ## Aiden Live
 
@@ -38,6 +38,10 @@ Settings → Connectors (section id `mcp`) has one heading with an ⓘ, **Add cu
 A connector served by a Mac app (iMCP, `macApp` in the catalog) appears only where `app:getInfo` reports `macAppConnectors` (macOS). Its setup dialog (`mcp-mac-app-setup.tsx`) has three rows: **Install** (a green "Installed" chip with the version, or **Check again** and a **Download** link to the vendor's page), **Open** (a green "Open" chip, or **Open iMCP**, which opens the installed copy only when pressed), and **Choose what Aiden can use** (where in the app to turn services on, with an ⓘ saying tool results go to the chat's model). Connection details show the one command it runs. A failed Test or Connect adds a line with the app and macOS settings that usually fix it. Aiden never bundles, downloads, updates or quits the app.
 
 Settings → Providers → Manage shows **Let custom connectors use this key** (off by default) only for a built-in provider with a saved API key; the custom-connector key picker lists only providers with it turned on.
+
+## Limits & spending
+
+Settings → Limits & spending (section id `limits`, in the Agent group) has two `FieldSet` groups. **Usage limits** has one row, "Wait for a limit to clear", with a trailing Select of the longest wait (Don't wait, Up to 1, 6, 12 or 24 hours; default 6), backed by `AppSettings.usageLimitWaitHours`. **Spending limits** has four rows with trailing Selects: Each chat, Each Bot per month, Each routine run (No limit or a preset amount, `AppSettings.spendingLimits`) and "A Bot's month starts on" (1st to 28th). Each row's one secondary line says what the limit covers. A Bot's Profile has a "Spending" group with one "Monthly limit" row (Default, No limit or an amount) and a secondary line with this month's spend. The spending notices above a composer use a warning-tone icon and a soft raised fill, never a colored border; Allow more is the shared primary button. See [usage limits and spending limits](usage-limits-and-spending.md).
 
 ## Web pages
 
@@ -59,7 +63,3 @@ legacy settings). It uses the normal live-preview/save path. This is separate
 from `autoHideComposerContext`, which controls the workspace strip. Hiding the
 meter changes only presentation; Context remains in the workspace launcher and
 the runtime continues context accounting and compaction.
-
-## Telegram pairing
-
-Settings → Telegram uses its existing grouped setup rows. After Connect, an unpaired profile offers Start pairing. A read-only, accessible command field with Copy command and Cancel pairing shows the five-minute proof only in local component state. Profile changes, completion, expiry and unmount clear it. Status queries expose expiry without the secret. The workspace selector and connection review disclose unattended Full automation in Ask workspaces and the No Access ceiling. See [Telegram control](telegram.md).

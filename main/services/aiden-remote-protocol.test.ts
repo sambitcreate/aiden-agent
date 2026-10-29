@@ -3,11 +3,19 @@ import { createDecipheriv, hkdfSync } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import {
+  parseAidenRemoteChatContextPressure,
+  projectAidenRemoteContextPressure,
+} from "./aiden-remote-protocol.js";
 import { BOT_AVATAR_COLORS, BOT_AVATAR_COLOR_HEX, BOT_AVATAR_FACE_HEX } from "../../renderer/shared/bots.js";
 import { parseGenerationTimeline } from "../../renderer/shared/generation-timeline.js";
 import { BOT_ACTIVITY_PHASES, botActivityDisplay, botElapsedLabel } from "../../renderer/shared/bot-activity.js";
 import {
   parseAidenRemoteBotSession,
+  parseAidenRemoteBotIssue,
+  parseAidenRemoteBotIssueActReceipt,
+  parseAidenRemoteBotIssueActRequest,
+  parseAidenRemoteBotIssueList,
   parseAidenRemoteBotSessionActivity,
   parseAidenRemoteBotDetail,
   parseAidenRemoteBotIdentityPatchRequest,
@@ -26,6 +34,11 @@ import {
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_OPT_IN_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION,
+  AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION,
+  AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION,
+  AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
+  parseAidenRemoteSpendingStatus,
+  AIDEN_REMOTE_BOT_ISSUE_MAX,
   AIDEN_REMOTE_HOST_CAPABILITIES,
   AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES,
   AIDEN_REMOTE_HOST_FEED_EVENT_TYPES,
@@ -433,6 +446,7 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   const { chatId, revision, messages, hasOlder } = record(revision19.messagesWindow, "messagesWindow");
   revision19.messagesWindow = { chatId, revision, messages, hasOlder };
   delete revision19.chatFork;
+  delete revision19.spending;
   // Bot chat activity is revision 30.
   delete revision19.botActivity;
   delete revision19.botActivityPrivacy;
@@ -440,8 +454,14 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botAttachments;
   // Bot hand-offs and pause are revision 37.
   delete revision19.botHandoffs;
+  // Bot issues on phones are revision 42.
+  delete revision19.botIssues;
   // Schedule approval cards are revision 39.
   delete revision19.scheduleCards;
+  // Bot shared images are revision 45.
+  delete revision19.botImages;
+  // Browser recordings are revision 46.
+  delete revision19.browserRecordings;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -555,12 +575,15 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats/{chatId}/tasks",
     "/chats/{chatId}/agents",
     "/chats/{chatId}/agents/{agentId}/interrupt",
+    "/chats/{chatId}/context",
     "/chats/{chatId}/skills",
     "/chats/{chatId}/progress/events",
     "/chats/{chatId}/turns",
     "/chats/{chatId}/attachments",
     "/chats/{chatId}/attachments/{attachmentId}",
     "/chats/{chatId}/attachments/{attachmentId}/content",
+    "/chats/{chatId}/spending",
+    "/chats/{chatId}/spending/allow-more",
     "/chats/{chatId}/visuals/{visualId}/document",
     "/bots",
     "/bots/{botId}",
@@ -577,6 +600,9 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/bots/{botId}/questions/{waitId}/answer",
     "/bots/{botId}/handoffs/{waitId}/answer",
     "/bots/{botId}/handoffs/{waitId}/open-on-mac",
+    "/bots/{botId}/spending",
+    "/bots/{botId}/spending/allow-more",
+    "/bots/{botId}/issues/{issueId}/act",
     "/bots/{botId}/pause",
     "/bots/{botId}/routines",
     "/bots/{botId}/routines/{routineId}",
@@ -655,6 +681,8 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/requests/{requestId}/reveal",
     "/pairing/requests/{requestId}",
     "/chats/{chatId}/controls/{panelId}",
+    "/bots/{botId}/session/images/{entryId}",
+    "/chats/{chatId}/recordings/{recordingId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -1003,6 +1031,7 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["post /bots/{botId}/questions/{waitId}/answer", ["bot:read", "bot:write"]],
     ["post /bots/{botId}/handoffs/{waitId}/answer", ["bot:read", "bot:write", "bot:handoffs"]],
     ["post /bots/{botId}/handoffs/{waitId}/open-on-mac", ["bot:read", "bot:write", "bot:handoffs"]],
+    ["post /bots/{botId}/issues/{issueId}/act", ["bot:read", "bot:write", "bot:issues"]],
     ["post /bots/{botId}/pause", ["bot:read", "bot:write", "bot:handoffs"]],
     ["delete /bots/{botId}/pause", ["bot:read", "bot:write", "bot:handoffs"]],
     ["get /bots/{botId}/routines", ["bot:read"]],
@@ -1296,8 +1325,13 @@ test("Bot OpenAPI freezes bounded DTOs, conjunctive grants, and privacy-safe rou
     ["/bots/{botId}/questions/{waitId}/answer", "post", "200", "BotQuestionAnswerReceipt"],
     ["/bots/{botId}/handoffs/{waitId}/answer", "post", "200", "BotHandoffAnswerReceipt"],
     ["/bots/{botId}/handoffs/{waitId}/open-on-mac", "post", "200", "BotHandoffOpenOnMacReceipt"],
+    ["/bots/{botId}/issues/{issueId}/act", "post", "200", "BotIssueActReceipt"],
     ["/bots/{botId}/pause", "post", "200", "BotSessionState"],
     ["/bots/{botId}/pause", "delete", "200", "BotSessionState"],
+    ["/chats/{chatId}/spending", "get", "200", "SpendingStatus"],
+    ["/chats/{chatId}/spending/allow-more", "post", "200", "SpendingStatus"],
+    ["/bots/{botId}/spending", "get", "200", "SpendingStatus"],
+    ["/bots/{botId}/spending/allow-more", "post", "200", "SpendingStatus"],
     ["/bots/{botId}/routines", "get", "200", "BotRoutineList"],
     ["/bots/{botId}/routines", "post", "201", "BotRoutine"],
     ["/bots/{botId}/routines/{routineId}", "patch", "200", "BotRoutine"],
@@ -1364,6 +1398,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/scheduled-tasks/{taskId}/run", "post"],
     ["/bots/{botId}/handoffs/{waitId}/answer", "post"],
     ["/bots/{botId}/handoffs/{waitId}/open-on-mac", "post"],
+    ["/bots/{botId}/issues/{issueId}/act", "post"],
     ["/bots/{botId}/pause", "post"],
     ["/bots/{botId}/pause", "delete"],
   ] as const) {
@@ -1386,6 +1421,8 @@ test("mutation contracts require idempotency or revision preconditions", async (
     ["/scheduled-tasks/settings", "patch"],
     ["/scheduled-tasks/{taskId}/pause", "post"],
     ["/scheduled-tasks/{taskId}/resume", "post"],
+    ["/chats/{chatId}/spending/allow-more", "post"],
+    ["/bots/{botId}/spending/allow-more", "post"],
   ] as const) {
     assert(parameterRefs(route, method).includes("#/components/parameters/IfMatch"));
   }
@@ -2761,8 +2798,13 @@ test("hand-off, answer and paused-flag parsers refuse what a closed decoder woul
   assert.deepEqual(parseAidenRemoteBotHandoff(card), card);
   const { why: _why, open: _open, ...bare } = card;
   assert.deepEqual(parseAidenRemoteBotHandoff({ ...bare, kind: "sign_in" }), { ...bare, kind: "sign_in" });
+  assert.deepEqual(parseAidenRemoteBotHandoff({ ...card, takesNote: false }), { ...card, takesNote: false });
+  assert.deepEqual(parseAidenRemoteBotHandoff(raw.botHandoffs.noNoteHandoff), raw.botHandoffs.noNoteHandoff);
   for (const invalid of [
     { ...card, extra: true },
+    { ...card, takesNote: true },
+    { ...card, takesNote: "false" },
+    { ...card, takesNote: null },
     { ...card, kind: "payment" },
     { ...card, waitId: "wait id" },
     { ...card, action: "   " },
@@ -2810,12 +2852,17 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
+  delete older.botImages;
+  delete older.browserRecordings;
+  // Bot issues are revision 42, newer than the hand-off fixture's revision.
+  delete older.botIssues;
   // The number is re-claimed at merge, so the test names it only through the constant.
   assert.throws(
     () => parseAidenRemoteContractFixture(older),
     new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION}\\b`, "u"),
   );
   delete older.botHandoffs;
+  delete older.spending;
   assert.equal(parseAidenRemoteContractFixture(older).botHandoffs, undefined);
 
   // The fixture guards its own invariants: a legacy view may not leak a holder word.
@@ -2829,6 +2876,43 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   const wrongCode = structuredClone(raw);
   wrongCode.botHandoffs.legacy.pausedError.error.code = "bot_paused";
   assert.throws(() => parseAidenRemoteContractFixture(wrongCode), /operation_stale/u);
+});
+
+test("spending fixtures need their own revision, parse strictly, and refuse with a code older phones know", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).spending!;
+  assert.equal(fixture.chat.spending?.state, "nearing");
+  assert.equal(fixture.chatAllowMore.response.spending?.allowedUsd, 10);
+  assert.equal(fixture.none.spending, null);
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.spending;
+  assert.equal(parseAidenRemoteContractFixture(older).spending, undefined);
+
+  const status = raw.spending.bot;
+  const bad = (change: (copy: any) => void) => {
+    const copy = structuredClone(status);
+    change(copy);
+    return () => parseAidenRemoteSpendingStatus(copy);
+  };
+  assert.deepEqual(parseAidenRemoteSpendingStatus(status), status);
+  assert.throws(bad((copy) => { copy.spending.costUsd = 1; }), /unsupported field/u);
+  assert.throws(bad((copy) => { copy.spending.state = "over"; }));
+  assert.throws(bad((copy) => { copy.spending.limitUsd = 0; }), /positive/u);
+  assert.throws(bad((copy) => { copy.spending.spentUsd = -1; }));
+  assert.throws(bad((copy) => { copy.spending.allowedUsd = 1; }), /below the limit/u);
+  assert.throws(bad((copy) => { delete copy.spending.periodEnd; }), /month/u);
+  assert.throws(bad((copy) => { copy.spending.period = "chat"; }), /month/u);
+
+  const wrongCode = structuredClone(raw);
+  wrongCode.spending.refusal.error.code = "spending_limit";
+  assert.throws(() => parseAidenRemoteContractFixture(wrongCode));
 });
 
 test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
@@ -2871,4 +2955,301 @@ test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the
   assert.equal(summary({ ...section.pausedSummary, paused: false }), false);
   assert.equal(handoff({ ...section.session.handoff, extra: true }), false);
   assert.equal(handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }), false);
+});
+
+test("Bot shared images need their own revision, and the schema and parser accept the fixture and refuse inline bytes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).botImages!;
+  assert.equal(fixture.capability, "bot:images");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
+  delete older.browserRecordings;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.botImages;
+  delete older.spending;
+  assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
+
+  const ajv = new Ajv2020({ strict: false });
+  const entry = ajv.compile({ $ref: "#/components/schemas/BotSessionEntry", components: spec.components });
+  for (const sample of [raw.botImages.entry, raw.botImages.legacyEntry]) {
+    assert.equal(entry(sample), true, JSON.stringify(entry.errors));
+  }
+  const inline = { ...raw.botImages.entry, data: "iVBORw0KGgo=" };
+  const gif = { ...raw.botImages.entry, mimeType: "image/gif" };
+  const huge = { ...raw.botImages.entry, size: 8 * 1024 * 1024 + 1 };
+  for (const refused of [inline, gif, huge]) {
+    assert.equal(entry(refused), false, JSON.stringify(refused).slice(0, 80));
+    assert.throws(() => parseAidenRemoteBotSessionEntry(refused));
+  }
+  const mismatched = structuredClone(raw);
+  mismatched.botImages.imagePath = "/bots/bot_fixture_01/session/images/entry_other";
+  assert.throws(() => parseAidenRemoteContractFixture(mismatched), /must name the entry/u);
+});
+
+test("browser recordings need their own revision, and a recording step carries only a playable recap", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).browserRecordings!;
+  assert.ok(fixture.recordingPath.endsWith(raw.browserRecordings.step.recording.id));
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BROWSER_RECORDINGS_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.browserRecordings;
+  delete older.spending;
+  assert.equal(parseAidenRemoteContractFixture(older).browserRecordings, undefined);
+
+  const ajv = new Ajv2020({ strict: false });
+  const step = ajv.compile({ $ref: "#/components/schemas/GenerationToolStep", components: spec.components });
+  const sample = raw.browserRecordings.step;
+  assert.equal(step(sample), true, JSON.stringify(step.errors));
+  const withPath = { ...sample, recording: { ...sample.recording, path: "/Users/me/recording.mp4" } };
+  const gif = { ...sample, recording: { ...sample.recording, mimeType: "image/gif" } };
+  const otherTool = { ...sample, toolName: "browser_screenshot" };
+  const running = { ...sample, status: "running" };
+  for (const refused of [withPath, gif, otherTool, running]) {
+    assert.equal(step(refused), false, JSON.stringify(refused).slice(0, 120));
+    // The shared timeline parser keeps the step but never the recap.
+    const parsed = parseGenerationTimeline({
+      version: 3, generationId: "g", status: "completed", startedAt: 0, finishedAt: 0, steps: [refused],
+    });
+    assert.equal((parsed?.steps[0] as { recording?: unknown } | undefined)?.recording, undefined);
+  }
+
+  const mismatched = structuredClone(raw);
+  mismatched.browserRecordings.recordingPath = "/chats/chat_fixture_01/recordings/recording-11111111-2222-4333-8444-555555555555";
+  assert.throws(() => parseAidenRemoteContractFixture(mismatched), /must name the recording/u);
+});
+
+test("Bot issue fixtures round-trip, and every misuse is refused", async () => {
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw);
+  const section = fixture.botIssues!;
+  assert.equal(section.capability, "bot:issues");
+  assert.deepEqual(
+    section.session.issues?.map((issue) => issue.resolved),
+    [false, false, false, true],
+  );
+  const [noAction, routine, stall] = section.session.issues!;
+  assert.deepEqual(noAction!.actions, []);
+  assert.deepEqual(
+    routine!.actions.map((action) => action.kind),
+    ["open_chat", "resume_routine"],
+  );
+  assert.equal(routine!.routineId, "task_fixture_routine_01");
+  assert.equal(stall!.kind, "run_stalled");
+  assert.equal(section.summary.issueCount, 2);
+  assert.equal(section.notification.notifications[0]?.kind, "issue");
+  assert.equal(section.notification.notifications[0]?.routineId, undefined);
+  assert.equal(section.notification.notifications[0]?.status, undefined);
+  assert.equal(section.act.response.result, "done");
+  assert.equal(section.notOpen.result, "not_open");
+  assert.equal(section.events.some((event) => event.type === "issues"), true);
+
+  const issue = section.session.issues![1]!;
+  for (const bad of [
+    { ...issue, kind: "surprise" },
+    { ...issue, id: "not an id" },
+    { ...issue, title: "x".repeat(81) },
+    { ...issue, body: "x".repeat(281) },
+    { ...issue, actions: [{ kind: "open_settings", section: "model" }] },
+    { ...issue, actions: [{ kind: "resume_routine" }] },
+    { ...issue, actions: [{ ...issue.actions[1], routineId: "not an id" }] },
+    { ...issue, actions: [...issue.actions, { kind: "stop_run" }] },
+    { ...issue, resolved: true },
+    { ...issue, extra: true },
+  ]) {
+    assert.throws(() => parseAidenRemoteBotIssue(bad), JSON.stringify(bad).slice(0, 120));
+  }
+  assert.throws(
+    () => parseAidenRemoteBotIssueList([noAction, noAction]),
+    /ids must be unique/u,
+  );
+  assert.throws(
+    () =>
+      parseAidenRemoteBotIssueList(
+        Array.from({ length: AIDEN_REMOTE_BOT_ISSUE_MAX + 1 }, (_, index) => ({
+          ...noAction,
+          id: `issue_${index}`,
+        })),
+      ),
+    /at most/u,
+  );
+
+  // The act body names one action a phone may send, and never settings.
+  assert.deepEqual(parseAidenRemoteBotIssueActRequest({ action: { kind: "stop_run" } }), {
+    action: { kind: "stop_run" },
+  });
+  for (const bad of [
+    { action: { kind: "open_settings", section: "providers" } },
+    { action: { kind: "stop_run", routineId: "routine_1" } },
+    { action: { kind: "resume_routine" } },
+    { action: { kind: "keep_waiting" }, extra: true },
+    {},
+  ]) {
+    assert.throws(() => parseAidenRemoteBotIssueActRequest(bad), JSON.stringify(bad));
+  }
+  assert.throws(() => parseAidenRemoteBotIssueActReceipt({ result: "later" }), /Bot issue act result/u);
+  assert.equal(parseAidenRemoteBotIssueActReceipt({ result: "not_open" }).result, "not_open");
+
+  // A session carries issues only for a holder; the parser accepts both shapes
+  // and refuses a card that is not the current shape.
+  const holder = { ...raw.botSession, issues: section.session.issues };
+  assert.equal(parseAidenRemoteBotSession(holder).issues?.length, 4);
+  assert.equal("issues" in parseAidenRemoteBotSession(raw.botSession), false);
+  assert.throws(
+    () => parseAidenRemoteBotSession({ ...holder, issues: [{ ...issue, kind: "surprise" }] }),
+    /Bot issue kind/u,
+  );
+});
+
+test("Bot issue OpenAPI schemas accept the shared fixture and refuse what the parsers refuse", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const section = raw.botIssues;
+  const ajv = new Ajv2020({ strict: false });
+  const schema = (name: string) => ajv.compile({ $ref: `#/components/schemas/${name}`, components: spec.components });
+  const issue = schema("BotIssue");
+  const event = schema("BotSessionEvent");
+  const summary = schema("BotSummary");
+  const request = schema("BotIssueActRequest");
+  const receipt = schema("BotIssueActReceipt");
+  const notification = schema("BotRoutineNotificationList");
+  for (const [validate, sample, label] of [
+    [issue, section.session.issues[0], "open issue"],
+    [issue, section.session.issues[3], "settled issue"],
+    [request, section.act.request, "act request"],
+    [receipt, section.act.response, "act receipt"],
+    [receipt, section.notOpen, "not-open receipt"],
+    [summary, section.summary, "summary"],
+    [notification, section.notification, "notification feed"],
+  ] as const) {
+    assert.equal(validate(sample), true, `${label}: ${JSON.stringify(validate.errors)}`);
+  }
+  for (const frame of section.events) {
+    assert.equal(event(frame), true, `${frame.type} ${frame.seq}: ${JSON.stringify(event.errors)}`);
+  }
+  assert.equal(issue({ ...section.session.issues[1], kind: "surprise" }), false);
+  assert.equal(issue({ ...section.session.issues[1], actions: [{ kind: "open_settings", section: "model" }] }), false);
+  assert.equal(issue({ ...section.session.issues[1], resolved: true }), false);
+  assert.equal(request({ action: { kind: "open_settings", section: "model" } }), false);
+  assert.equal(receipt({ result: "later" }), false);
+  assert.equal(summary({ ...section.summary, issueCount: 0 }), false);
+  assert.equal(
+    notification({
+      ...section.notification,
+      notifications: [{ ...section.notification.notifications[0], status: "failed" }],
+    }),
+    true,
+    "the schema lets an older routine item keep its kind",
+  );
+});
+
+test("context pressure crosses the wire as counts only, and schema and parser refuse the same shapes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const { chatContextPressure } = await json("fixtures/contract.json") as {
+    chatContextPressure: { chatId: string; pressure: Record<string, unknown> };
+  };
+  const ajv = new Ajv2020({ strict: false });
+  const schema = ajv.compile({ $ref: "#/components/schemas/ChatContextPressure", components: spec.components });
+  const accepts = (value: unknown) => {
+    try {
+      parseAidenRemoteChatContextPressure(value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  assert.equal(schema(chatContextPressure), true);
+  assert.deepEqual(parseAidenRemoteChatContextPressure(chatContextPressure), chatContextPressure);
+  const unknown = { chatId: chatContextPressure.chatId, pressure: null };
+  assert.equal(schema(unknown), true);
+  assert.deepEqual(parseAidenRemoteChatContextPressure(unknown), unknown);
+
+  const pressure = chatContextPressure.pressure;
+  const without = (key: string) => Object.fromEntries(Object.entries(pressure).filter(([name]) => name !== key));
+  const refused: Record<string, unknown> = {
+    "a breakdown": { ...pressure, breakdown: { categories: [{ id: "mcp-tools", tokens: 18_000 }], deferred: [] } },
+    "a prompt cache": { ...pressure, promptCache: { ttlMs: 300_000, lastRequestAt: 1 } },
+    "history detail": { ...pressure, compressibleHistoryMessages: 4 },
+    "a negative count": { ...pressure, messageTokens: -1 },
+    "an empty window": { ...pressure, contextWindow: 0 },
+    "an unknown source": { ...pressure, source: "guessed" },
+    "a string count": { ...pressure, contextTokens: "48250" },
+    "no source": without("source"),
+    "no computedAt": without("computedAt"),
+  };
+  for (const [label, candidate] of Object.entries(refused)) {
+    assert.equal(schema({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
+    assert.equal(accepts({ chatId: chatContextPressure.chatId, pressure: candidate }), false, label);
+  }
+  for (const [label, envelope] of Object.entries({
+    "no pressure key": { chatId: chatContextPressure.chatId },
+    "a path-shaped chat id": { chatId: "../chat", pressure: null },
+    "an extra key": { ...chatContextPressure, draftText: "hello" },
+  })) {
+    assert.equal(schema(envelope), false, label);
+    assert.equal(accepts(envelope), false, label);
+  }
+  // JSON cannot carry a non-finite number, so only the parser sees one.
+  assert.equal(accepts({ chatId: "chat-1", pressure: { ...pressure, percentOfWindow: Number.NaN } }), false);
+});
+
+test("the host's full context projection is reduced to the documented counts", () => {
+  const desktop = {
+    contextTokens: 9_000,
+    contextWindow: 128_000,
+    inputBudgetTokens: 100_000,
+    reservedTokens: 28_000,
+    percentOfWindow: 7.03,
+    percentOfUsableInput: 9,
+    shouldCompact: false,
+    messageTokens: 3_000,
+    staticTokens: 6_000,
+    providerUsageTokens: 8_500,
+    addedAfterUsageAnchorTokens: 500,
+    compressibleHistoryMessages: 2,
+    source: "provider-anchored",
+    computedAt: 1_787_166_120_000,
+    breakdown: {
+      categories: [{ id: "mcp-tools", tokens: 6_000 }],
+      deferred: [{ id: "mcp-tools", tokens: 400, count: 1, servers: [{ name: "Acme internal tracker", count: 1, tokens: 400 }] }],
+    },
+    promptCache: { ttlMs: 300_000, lastRequestAt: 1_787_166_000_000 },
+  };
+  const wire = projectAidenRemoteContextPressure(desktop);
+  assert.deepEqual(Object.keys(wire).sort(), [
+    "computedAt",
+    "contextTokens",
+    "contextWindow",
+    "inputBudgetTokens",
+    "messageTokens",
+    "percentOfUsableInput",
+    "percentOfWindow",
+    "reservedTokens",
+    "shouldCompact",
+    "source",
+    "staticTokens",
+  ]);
+  assert.equal(JSON.stringify(wire).includes("Acme"), false);
+  assert.equal(wire.contextTokens, 9_000);
+  assert.equal(wire.source, "provider-anchored");
+  // A projection missing a counted field is refused rather than sent half-filled.
+  const { staticTokens: _staticTokens, ...partial } = desktop;
+  assert.throws(() => projectAidenRemoteContextPressure(partial));
 });

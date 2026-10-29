@@ -1,3 +1,4 @@
+import { createWorkspaceFilesTouchedNotifier } from "./workspace-files-touched.js";
 import { aidenAppNavigation } from "./aiden-app-navigation.js";
 import type { AgentNoticeV1 } from "../../renderer/shared/agent-notices.js";
 import { createAidenAppTools } from "./aiden-app-tools.js";
@@ -8,6 +9,11 @@ import { providerRegistry } from "./provider-registry.js";
 import { canWarmForegroundChat, PiCacheWarmer, withPiCacheWarming } from "./pi-cache-warming.js";
 import { createModelPaceMeasurement } from "./model-pace-core.js";
 import { modelPaceRecorder } from "./model-pace-runtime.js";
+import { usageLimits } from "./usage-limit-main.js";
+import { withUsageLimitWait } from "./usage-limit-stream.js";
+import { spending } from "./spending-main.js";
+import { createSpendingMeter, spendCounts } from "./spending-service.js";
+import type { SpendingOwner } from "./spending-core.js";
 import { createLocalClassifierModels } from "./pi-local-classifier.js";
 import { piResourcesForSkillSnapshot } from "./skill-tools.js";
 import { createMcpServersSectionRefresher, renderMcpServersSection } from "./mcp-server-instructions.js";
@@ -430,6 +436,7 @@ import {
 } from "../../renderer/shared/image-generation/types.js";
 import {
   CHAT_ARTIFACT_EVENT_VERSION,
+  CHAT_ARTIFACT_VERSION,
   type ChatHtmlArtifactV1,
 } from "../../renderer/shared/chat-artifacts.js";
 import { MAX_HTML_ARTIFACTS_PER_RESPONSE } from "../../renderer/shared/generative-ui.js";
@@ -450,7 +457,7 @@ import type { ChatUiVisualV1 } from "../../renderer/shared/aiden-ui/types.js";
 import { wrapGenerativeUiHtml } from "./generative-ui-html.js";
 import { registerGenerativeUiPreviewDocument } from "./generative-ui-preview-store.js";
 import { GENERATIVE_UI_EXTENSION_ID } from "./generative-ui-extension.js";
-import { createArtifactPlacementLedger, imageAttachmentPlacements } from "./generative-ui-placements.js";
+import { createArtifactPlacementLedger, imageAttachmentPlacements, presentPlacedImage } from "./generative-ui-placements.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { generationHasVisibleOutput } from "./generation-visible-output.js";
 import { createGenerationHarness } from "./generation-harness.js";
@@ -493,6 +500,10 @@ import { chatProgressEvents } from "./chat-progress-events.js";
 import { GenerationDeltaCoalescer } from "./generation-delta-coalescer.js";
 
 subagentRuntimeRegistry.setHealthMetrics(subagentHealthMetrics);
+subagentRuntimeRegistry.setLimits({
+  usageLimits: (owner, providerLabel, extra) => usageLimits.streamOptions(owner, providerLabel, extra),
+  spending,
+});
 subagentRuntimeRegistry.setRuntimeFaultReporter((source) => {
   logger.warn("subagents", `Pi child runtime fault (${source}).`);
 });
@@ -748,6 +759,12 @@ async function prepareBotSkillAuthority(
   };
 }
 
+const notifyWorkspaceFilesTouched = createWorkspaceFilesTouchedNotifier({
+  // A skill the agent just wrote must not be hidden by the registry's short-lived snapshot.
+  invalidate: (workspaceId) => skillRegistry.invalidate(workspaceId),
+  broadcast: (workspaceId) => ipcMain.broadcast("workspace:files-touched", { workspaceId }),
+});
+
 function broadcastChatSettled(
   streamId: string,
   chatId: string,
@@ -999,7 +1016,7 @@ async function prepareGeneration(
       return current.messages.flatMap((message) => withoutVisualSnapshots(message.attachments ?? []));
     },
   });
-  const shareImage = (attachment: Attachment) => {
+  const shareImage = (attachment: Attachment, toolCallId: string) => {
     const existing = responseImages();
     if (existing.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
       throw new Error("This response already contains the maximum number of images.");
@@ -1012,6 +1029,20 @@ async function prepareGeneration(
       throw new Error("The images shared in this response exceed the 16 MB limit.");
     }
     sharedImages.push(attachment);
+    if (attachment.kind !== "image" || attachment.data === undefined) {
+      imagePlacements.record(attachment.id, toolCallId);
+      return;
+    }
+    // Shown live at the sharing call's row, like a displayed image.
+    const { id, name, mimeType, size, data } = attachment;
+    presentPlacedImage(
+      imagePlacements,
+      { version: CHAT_ARTIFACT_VERSION, kind: "image", attachment: { id, name, mimeType, kind: "image", size, data } },
+      toolCallId,
+      (event) => {
+        sendGeneration(streamId, "chat:artifact", { streamId, event });
+      },
+    );
   };
   const runtime =
     botContext?.prepared.runtime ??
@@ -1067,7 +1098,6 @@ async function prepareGeneration(
       botContext: undefined,
       botApprovedRoots: [] as string[],
       botMutatingToolNames: new Set<string>(),
-      assistantSettingsPermission: designSettings.assistant?.settingsPermission ?? "ask",
     };
   }
   const botBound = botContext !== undefined;
@@ -1944,17 +1974,8 @@ async function prepareGeneration(
         if (displayedImageIds.has(artifact.attachment.id)) return false;
         displayedImageIds.add(artifact.attachment.id);
         displayedImages.push(artifact.attachment);
-        // Only generated images claim their call's row (and its Lens placeholder).
-        if (source.tool === "generate_image") imagePlacements.record(artifact.attachment.id, source.toolCallId);
-        const placedToolCallId = imagePlacements.publicIdFor(artifact.attachment.id);
-        sendGeneration(streamId, "chat:artifact", {
-          streamId,
-          event: {
-            version: CHAT_ARTIFACT_EVENT_VERSION,
-            operation: "present",
-            artifact,
-            ...(placedToolCallId ? { toolCallId: placedToolCallId } : {}),
-          },
+        presentPlacedImage(imagePlacements, artifact, source.toolCallId, (event) => {
+          sendGeneration(streamId, "chat:artifact", { streamId, event });
         });
         return true;
       },
@@ -2202,10 +2223,6 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
-    // The Aiden system prompt reads its approval posture from settings, which
-    // are already loaded here; re-reading them at the prompt site would be a
-    // second disk round trip inside the generation's hot path.
-    assistantSettingsPermission: settings.assistant?.settingsPermission ?? "ask",
   };
 }
 
@@ -2373,6 +2390,12 @@ export const llmClient = {
       authoritativeBot = await resolveBotForGeneration(chat, authoritativeMode, (botId) =>
         botStore.get(botId),
       );
+      // Over its spending limit, a chat (or a Bot's month) starts no reply.
+      const spendingRefusal = await spending.refusal(
+        authoritativeBot ? { kind: "bot", id: authoritativeBot.id } : { kind: "chat", id: chat.id },
+        authoritativeBot?.name,
+      );
+      if (spendingRefusal) throw new Error(spendingRefusal);
       if (authoritativeBot) {
         const canonical = selectCanonicalBotChat(await chatStore.listByBot(authoritativeBot.id));
         if (canonical?.id !== chat.id) {
@@ -2571,7 +2594,6 @@ export const llmClient = {
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
-      assistantSettingsPermission,
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
@@ -2593,6 +2615,16 @@ export const llmClient = {
     // Agent-backed providers (ACP harnesses) own their conversation context:
     // Aiden neither trims nor compacts the transcript they receive.
     const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
+    // Each response's price counts toward the chat's limit (a Bot chat's, its
+    // month). A sign-in or a model on this Mac counts as $0.
+    const spendingOwner: SpendingOwner = authoritativeBot
+      ? { kind: "bot", id: authoritativeBot.id }
+      : { kind: "chat", id: params.chatId };
+    const spendingMeter = createSpendingMeter({
+      spending,
+      owner: spendingOwner,
+      counts: () => spendCounts({ local: isLocalModelProvider(runtime.provider), provider: runtime.provider, models: runtime.models }),
+    });
     const approvalModelSelection = {
       providerId: runtime.provider.id,
       providerName: runtime.provider.label,
@@ -3171,7 +3203,6 @@ export const llmClient = {
                 devices: devicesEnabled(),
                 botComputers: hostPlatformCapabilities().botComputers,
               }),
-              settingsPermission: assistantSettingsPermission,
               availableTools: toolsWithRuntimeContributions.map((tool) => tool.name),
               mcpToolNames: tools.filter((tool) => mcpAgentToolIdentity(tool) !== undefined).map((tool) => tool.name),
               mcpServers: assistantMcpInventory.servers,
@@ -3298,16 +3329,17 @@ export const llmClient = {
       };
       const compactionOptions = {
         engine: compactionEngine,
-        models: createPiCompactionModels(runtime, (message) =>
-          usageStore.record(
+        models: createPiCompactionModels(runtime, (message) => {
+          spendingMeter.count(message);
+          return usageStore.record(
             assistantUsageRecord({
               message,
               provider: runtime.provider,
               model,
               source: "compaction",
             }),
-          ),
-        ),
+          );
+        }),
         model,
         thinkingLevel,
         settings: {
@@ -3452,6 +3484,7 @@ export const llmClient = {
           },
           resolveRuntime: (signal) => resolveModelRuntime(params.providerId, params.model, signal, params.chatId),
           recordUsage: async (message, freshRuntime) => {
+            spendingMeter.count(message);
             await usageStore.record(assistantUsageRecord({ message, provider: freshRuntime.provider, model: freshRuntime.model, source: "cache-warm" }));
           },
           // A warming read restarts the provider's cache lifetime without a
@@ -3478,7 +3511,16 @@ export const llmClient = {
         onError: (error) =>
           logger.debug("model-pace", `Could not measure pace for stream ${streamId}.`, error),
       });
-      const observedStream: typeof realStream = pace.wrap(warmedStream);
+      // Outermost, so a usage-limit wait is neither timed as pace nor warmed:
+      // a request turned away before any reply waits and sends again, same model.
+      const observedStream: typeof realStream = harnessProvider
+        ? pace.wrap(warmedStream)
+        : spendingMeter.wrap(
+            withUsageLimitWait(
+              pace.wrap(warmedStream),
+              usageLimits.streamOptions({ kind: "chat", id: params.chatId }, runtime.provider.label),
+            ),
+          );
       const promptCacheTtl = promptCacheTtlMs(model);
       candidate = createGenerationHarness(generationProfile, {
         contributions: runtimeContributions,
@@ -3623,7 +3665,17 @@ export const llmClient = {
           tools: [...runtimeTools],
           messages: initialMessages,
         },
-        ...(attendedAssistant ? { finishTurn: endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested) } : {}),
+        finishTurn: async (turn) => {
+          if (attendedAssistant) {
+            const decision = endRunAfterIgnoredToolRecovery(() => attendedToolRecoveryRequested)(turn);
+            if (decision) return decision;
+          }
+          // The step that crossed the spending limit has finished: end here, so
+          // the chat shows its limit notice rather than a failed reply.
+          if (harnessProvider) return undefined;
+          await spendingMeter.settled();
+          return (await spending.block(spendingOwner).catch(() => undefined)) ? { action: "end" } : undefined;
+        },
         prepareNextTurnWithContext: createPiTurnContextPreparation({
           generationOptions: generationContextOptions,
           attended: attendedAssistant,
@@ -4348,6 +4400,8 @@ export const llmClient = {
               phase: denied ? "blocked" : event.isError ? "error" : "result",
               toolName: event.toolName,
             });
+            // A failed command may still have written files, so only a denied call is skipped.
+            if (!denied) notifyWorkspaceFilesTouched(workspaceId, event.toolName);
             break;
           }
           default:
@@ -5220,14 +5274,6 @@ export const llmClient = {
   },
 
   /** Discard active snapshots when the user disables skills across the app. */
-  cancelForSkillsDisabled(): void {
-    for (const streamId of new Set([...initializing.keys(), ...active.keys()])) {
-      this.cancel(streamId, "user_stop");
-    }
-    // Detached children may retain skill instructions in their forked context.
-    subagentRuntimeRegistry.abortAll();
-  },
-
   /** Closing the global gate cancels every snapshot that could race the setting change. */
   cancelComputerUseGenerations(): void {
     computerUseGenerationGate.close();

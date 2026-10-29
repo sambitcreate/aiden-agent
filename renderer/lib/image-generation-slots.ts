@@ -11,9 +11,9 @@
 //   `aspectRatio` argument when it is one of IMAGE_ASPECT_RATIOS; anything else
 //   (or none) is 1:1.
 // - A placeholder claims only images placed on its own call: the host sends
-//   each generated image with the public `call-N` id of the generate_image call
-//   that produced it (`placements`, attachment id → toolCallId). display_image
-//   results carry no placement and are never claimed. The first such image is
+//   each image with the public `call-N` id of the call that produced it
+//   (`placements`, attachment id → toolCallId). display_image and share_image
+//   images carry their own call's id, so no placeholder ever claims them. The first such image is
 //   revealed inside the placeholder; the call's other images stay hidden until
 //   the reveal ends, then all show as ordinary attachments at the call's row.
 // - Once an image arrived the placeholder never returns to scanning, even if
@@ -182,10 +182,10 @@ export interface ImageGenerationRowSlots<Slot> {
 }
 
 /**
- * Anchor each placeholder and each placed generated image at the activity row
- * holding its generate_image call, the way visuals anchor at their call's row.
- * Anything without a matching row (no timeline, display_image results,
- * uploads) keeps the trailing position after all rows.
+ * Anchor each placeholder and each placed image at the activity row holding
+ * its producing call, the way visuals anchor at their call's row. Anything
+ * without a matching row (no timeline, no placement) keeps the trailing
+ * position after all rows.
  */
 export function imageGenerationRowSlots<Slot extends { toolCallId: string }>(
   rows: readonly AssistantPresentationRow[] | null,

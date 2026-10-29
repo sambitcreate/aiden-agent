@@ -1,6 +1,7 @@
 import type { AskUserQuestionAnswerStatus, AskUserQuestionResponseV1 } from "../../shared/ask-user-question";
 import type { ChatForkLineageV1, ChatForkPosition } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult, ChatRunInputMode } from "../../shared/chat-run-input";
+import type { ChatContextPressureV1 } from "../../shared/context-pressure";
 import type {
   PeerBlockedReason,
   PeerOperationErrorDetails,
@@ -8,6 +9,7 @@ import type {
   PeerRunStreamState,
   PeerRunSubscription,
 } from "../../shared/peer-host";
+import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
 import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import type { ToolApprovalScope } from "../../shared/tool-approval-scope";
 import type { RemoteMessagesWindow } from "./remote-chat-mapper";
@@ -41,6 +43,8 @@ export type HostChatCapability =
   | "fork"
   /** Fork with summary, and retry, skip or cancel a fork's summary. */
   | "forkSummary"
+  /** Read the chat's next-request context pressure for the composer meter. */
+  | "contextPressure"
   // Host-wide: starting new work on the host.
   | "createChat"
   | "browseFolders"
@@ -97,7 +101,36 @@ export interface HostChatSendInput {
   attachmentIds?: string[];
   /** A skill from the host's own catalog. */
   skill?: SkillInvocationV1;
+  /** The host model this turn runs on, as a pair; the host saves it as the chat's model. */
+  model?: HostTurnModel;
+  /** An effort level the chosen host model lists; omitted for the host's own default. */
+  thinkingLevel?: GenerationThinkingLevel;
 }
+
+export interface HostTurnModel {
+  providerId: string;
+  modelId: string;
+}
+
+/**
+ * The host's next-request context pressure, as a paired host sends it
+ * (contract revision 41): the meter's headline counts only, without the
+ * per-category breakdown, prompt cache or provider-anchor detail.
+ */
+export type RemoteContextPressure = Pick<
+  ChatContextPressureV1,
+  | "contextTokens"
+  | "contextWindow"
+  | "inputBudgetTokens"
+  | "reservedTokens"
+  | "percentOfWindow"
+  | "percentOfUsableInput"
+  | "shouldCompact"
+  | "messageTokens"
+  | "staticTokens"
+  | "source"
+  | "computedAt"
+>;
 
 /** A file this Mac read, in the shape the host's attachment upload accepts. */
 export type HostChatAttachmentUpload =
@@ -280,6 +313,14 @@ export interface HostChatAdapter {
   cancelForkSummary?(chatId: string): Promise<boolean>;
   /** Reads the chat's lineage, including its summary, which list rows leave out. */
   forkLineage?(chatId: string): Promise<HostChatResult<HostChatLineage>>;
+  /**
+   * The chat's next-request context pressure, priced with `model` when the
+   * composer has picked one the chat has not sent with yet. `null` means the
+   * host cannot project it now (no model, or history unavailable): show no
+   * meter. The local pane reads `chatsApi.contextPressure` directly, so only
+   * a paired host's adapter has this.
+   */
+  contextPressure?(chatId: string, model?: HostTurnModel): Promise<HostChatResult<RemoteContextPressure | null>>;
   dispose(): void;
 }
 

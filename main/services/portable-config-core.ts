@@ -62,6 +62,8 @@ import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
 import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -733,6 +735,12 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
+  if (settings.spendingLimits !== undefined) {
+    const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
+    if (spendingLimits === undefined) delete runtime.spendingLimits;
+    else runtime.spendingLimits = spendingLimits;
+  }
   if (settings.compactionModelOverrides !== undefined) {
     try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
     catch { delete runtime.compactionModelOverrides; }

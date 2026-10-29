@@ -323,16 +323,29 @@ enum class AidenBotRoutineNotificationStatus {
     @SerialName("failed") FAILED
 }
 
-/** One finished Bot routine run the phone may post once, as `aiden.bot-routine.<id>`. */
+/** Revision 42: a routine result (absent `kind`) or one of the Bot's "Needs you" cards. */
+@Serializable
+enum class AidenBotNotificationKind {
+    @SerialName("routine") ROUTINE,
+    @SerialName("issue") ISSUE
+}
+
+/**
+ * One finished Bot routine run the phone may post once, as `aiden.bot-routine.<id>`, or (revision
+ * 42, `bot:issues`) one issue card. An issue item's [routineName] is the card's title and it
+ * carries no [routineId] or [status].
+ */
 @Serializable
 data class AidenBotRoutineNotification(
     /** The routine run id. */
     val id: String,
+    /** Revision 42: absent means [AidenBotNotificationKind.ROUTINE]. */
+    val kind: AidenBotNotificationKind? = null,
     val botId: String,
     val botName: String,
-    val routineId: String,
+    val routineId: String? = null,
     val routineName: String,
-    val status: AidenBotRoutineNotificationStatus,
+    val status: AidenBotRoutineNotificationStatus? = null,
     @Serializable(with = InstantIso8601Serializer::class) val finishedAt: Instant,
     /** First 160 characters of the reply (redacted), or a fixed failure line. */
     val preview: String
@@ -341,10 +354,21 @@ data class AidenBotRoutineNotification(
         AidenBotWire.validateString(id, "notification.id", AidenBotRoutineWire.MAX_ID_LENGTH)
         AidenBotWire.validateIdentifier(botId, "notification.botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         AidenBotWire.validateString(botName, "notification.botName", AidenBotWire.MAX_NAME_LENGTH)
-        AidenBotWire.validateString(routineId, "notification.routineId", AidenBotRoutineWire.MAX_ID_LENGTH)
+        routineId?.let { AidenBotWire.validateString(it, "notification.routineId", AidenBotRoutineWire.MAX_ID_LENGTH) }
         AidenBotWire.validateString(routineName, "notification.routineName", AidenBotRoutineWire.MAX_NAME_LENGTH)
         AidenBotWire.validateString(preview, "notification.preview", MAX_PREVIEW_LENGTH, allowEmpty = true)
+        // A routine result says which routine ran and how it ended; an issue card carries neither.
+        when (kind ?: AidenBotNotificationKind.ROUTINE) {
+            AidenBotNotificationKind.ROUTINE -> if (routineId == null || status == null) {
+                throw AidenBotContractException.InvalidField("notification")
+            }
+            AidenBotNotificationKind.ISSUE -> if (routineId != null || status != null) {
+                throw AidenBotContractException.InvalidField("notification")
+            }
+        }
     }
+
+    val isIssue: Boolean get() = kind == AidenBotNotificationKind.ISSUE
 
     companion object {
         const val MAX_PREVIEW_LENGTH = 160

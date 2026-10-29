@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createBotStore } from "./bot-store-core.js";
-import { DEFAULT_BOT_AVATAR, resolveBotChatActivity } from "../../renderer/shared/bots.js";
+import { DEFAULT_BOT_AVATAR, DEFAULT_BOT_INTERRUPTIONS, resolveBotChatActivity, resolveBotInterruptions } from "../../renderer/shared/bots.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "aiden-bots-"));
@@ -379,6 +379,57 @@ test("a stored chat activity that isn't a current choice reads as absent and kee
     assert.equal(byId.get("bot:extra"), undefined);
     assert.deepEqual(byId.get("bot:good"), { level: "detailed", wording: "follows" });
     assert.deepEqual(resolveBotChatActivity(byId.get("bot:newer")), { level: "quiet", wording: "follows" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Bot's interruption setting round-trips, keeps its place after chat activity, and absent reads as the defaults", async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
+    assert.equal(created.interruptions, undefined);
+    assert.deepEqual(resolveBotInterruptions(created.interruptions), DEFAULT_BOT_INTERRUPTIONS);
+    const quiet = { quietHours: { enabled: false, start: "21:00", end: "08:00" }, dailyLimit: 3 };
+    const saved = await store.update({
+      id: created.id, expectedRevision: created.revision, name: created.name,
+      instructions: created.instructions, avatar: created.avatar, interruptions: quiet,
+    });
+    assert.deepEqual(saved.interruptions, quiet);
+    const withActivity = await store.update({
+      id: created.id, expectedRevision: saved.revision, name: created.name,
+      instructions: created.instructions, avatar: created.avatar,
+      chatActivity: { level: "summary", wording: "thinking" },
+    });
+    assert.deepEqual(withActivity.interruptions, quiet, "an edit that leaves it out keeps it");
+    const reopened = await createBotStore({ root: () => root, now: () => 500 }).get(created.id);
+    assert.equal(reopened?.revision, withActivity.revision, "a saved record and the reloaded one share a revision");
+    await assert.rejects(store.update({
+      id: created.id, expectedRevision: withActivity.revision, name: created.name,
+      instructions: created.instructions, avatar: created.avatar,
+      interruptions: { ...quiet, dailyLimit: 99 },
+    }), /interruption/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Bot's own-wake-ups switch is on by default, stays off once turned off, and an edit that leaves it out keeps it", async () => {
+  const { root, store } = await fixture();
+  try {
+    const created = await store.create({ name: "Planner", instructions: "Plan dinners.", avatar: { version: 1, shape: "hex", color: "sun" } });
+    assert.notEqual(created.selfWakeUps, false, "on unless the person turns it off");
+    const base = { id: created.id, name: created.name, instructions: created.instructions, avatar: created.avatar };
+    const off = await store.update({ ...base, expectedRevision: created.revision, selfWakeUps: false });
+    assert.equal(off.selfWakeUps, false);
+    const renamed = await store.update({ ...base, expectedRevision: off.revision, name: "Dinner planner" });
+    assert.equal(renamed.selfWakeUps, false, "an edit that leaves it out keeps it");
+    const reopened = await createBotStore({ root: () => root, now: () => 900 }).get(created.id);
+    assert.equal(reopened?.selfWakeUps, false);
+    assert.equal(reopened?.revision, renamed.revision);
+    const on = await store.update({ ...base, expectedRevision: renamed.revision, selfWakeUps: true });
+    assert.notEqual(on.selfWakeUps, false);
+    assert.notEqual(on.revision, renamed.revision);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

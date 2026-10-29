@@ -2,6 +2,19 @@ import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from 
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import {
+  parseUsageLimitWaits,
+  USAGE_LIMITS_CHANGED_CHANNEL,
+  type UsageLimitWaitView,
+  type UsageLimitsChangedEvent,
+} from "../shared/usage-limits";
+import {
+  parseSpendingLimitUsd,
+  parseSpendingStatusView,
+  SPENDING_CHANGED_CHANNEL,
+  type SpendingChangedEvent,
+  type SpendingStatusView,
+} from "../shared/spending";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -547,6 +560,42 @@ export const modelPaceApi = {
   clear: () => invoke<void>("modelPace:clear"),
 };
 
+/** Replies waiting for a provider usage limit to clear, on this Mac. */
+export const usageLimitsApi = {
+  list: async () => parseUsageLimitWaits(await invoke<unknown>("usageLimits:list")),
+  /** Send the waiting reply's test request now; false when it was tried in the last 30 seconds. */
+  retryNow: (ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string) =>
+    invoke<boolean>("usageLimits:retryNow", ownerKind, ownerId),
+  onChanged: (handler: (waits: UsageLimitWaitView[]) => void) =>
+    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) => handler(parseUsageLimitWaits(event?.waits))),
+};
+
+export type BotSpendingLimitChoice = { kind: "default" } | { kind: "none" } | { kind: "amount"; usd: number };
+
+function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
+  const choice = value as { kind?: unknown; usd?: unknown } | null;
+  if (choice?.kind === "none") return { kind: "none" };
+  const usd = choice?.kind === "amount" ? parseSpendingLimitUsd(choice.usd) : undefined;
+  return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
+}
+
+export const spendingApi = {
+  status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
+  /** Raise the chat's limit, or the Bot's month, by the limit once more. */
+  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
+  /** "default" follows Settings, null is no limit, a number is the Bot's own. */
+  setBotLimit: async (botId: string, choice: "default" | null | number) =>
+    parseBotSpendingLimitChoice(await invoke<unknown>("spending:setBotLimit", botId, choice)),
+  /** `ownerId` "*" means every chat or every Bot (the limits in Settings changed). */
+  onChanged: (handler: (event: SpendingChangedEvent) => void) =>
+    onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
+      if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
+};
+
 export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
@@ -732,7 +781,6 @@ export interface TelegramStatus {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
-  pairing: { expiresAt?: number };
   providerId?: string;
   model?: string;
   workspaceId?: string;
@@ -759,8 +807,6 @@ export interface TelegramStatus {
   }>;
 }
 export const telegramApi = {
-  beginPairing: (profile: string) => invoke<{ code: string; expiresAt: number }>("telegram:beginPairing", profile),
-  cancelPairing: (profile: string) => invoke<{ cancelled: boolean }>("telegram:cancelPairing", profile),
   get: () => invoke<TelegramStatus>("telegram:get"),
   setKey: (key: string) => invoke<{ hasKey: boolean }>("telegram:setKey", key),
   setEnabled: (enabled: boolean) => invoke<boolean>("telegram:setEnabled", enabled),
@@ -935,6 +981,13 @@ export const modelsApi = {
 // ── Workspaces ────────────────────────────────────────────────────────
 export const workspacesApi = {
   list: () => invoke<Workspace[]>("workspaces:list"),
+  memoryFacts: (workspaceId: string) =>
+    invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
+      "workspaces:memoryFacts",
+      workspaceId,
+    ),
+  deleteMemoryFact: (workspaceId: string, factId: string) =>
+    invoke<boolean>("workspaces:deleteMemoryFact", workspaceId, factId),
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
@@ -1023,6 +1076,10 @@ export const browserApi = {
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
   openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+  /** A video the agent recorded, by the id its chat step names; null once it is gone. */
+  recording: (recordingId: string) =>
+    invoke<{ mimeType: string; data: Uint8Array } | null>("browser:recording", recordingId),
+  revealRecording: (recordingId: string) => invoke<void>("browser:reveal-recording", recordingId),
 };
 
 async function botComputersStatus(channel: string): Promise<BotComputersStatus> {
@@ -1689,6 +1746,9 @@ export const botsApi = {
     read: (botId: string, path: string) =>
       invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
   },
+  /** "Add to this Bot" on a connect card: an app already connected in Aiden joins this Bot's Custom access. */
+  grantConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:grant", botId, pluginId),
   /** Not now on a connect card: this Bot won't suggest that connection again. */
   dismissConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:dismiss", botId, pluginId),
@@ -1740,6 +1800,52 @@ export const botsApi = {
         "bots:routineProposals:respond",
         input,
       ),
+  },
+  /** Routines that run when something happens: a file change or the routine's link. */
+  eventRoutines: {
+    list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
+    create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
+    remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
+    rotateLink: (input: { botId: string; id: string }) =>
+      invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+    /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  /** What a Bot learned: the page's overview, Undo, and lesson answers. */
+  learning: {
+    get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
+    undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
+    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string } }) =>
+      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
+    respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
+      invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),
+    removeLesson: (input: { botId: string; lessonId: string }) => invoke<void>("bots:lessons:remove", input),
+  },
+  /** Skills a Bot proposed (or found in its folder) and the person's answer. */
+  skillProposals: {
+    respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
+      invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
+  },
+  /** A Bot's health checks: the newest report, and Check now. */
+  health: {
+    report: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", { botId }),
+    check: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport>("bots:health:check", { botId }),
+  },
+  /** "Needs you" issues the host raised for a Bot, and the person's answers. */
+  issues: {
+    list: (input: { botId: string; open?: boolean }) =>
+      invoke<import("../shared/bot-issues").BotIssue[]>("bots:issues:list", input),
+    /** One of the card's actions; a settled issue answers `not_open`. */
+    act: (input: { botId: string; issueId: string; action: import("../shared/bot-issues").BotIssueAction }) =>
+      invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
   },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),

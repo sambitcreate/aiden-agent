@@ -21,6 +21,12 @@ export const hostQueryKeys = {
   forkLineage: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId, "fork-lineage"] as const,
   /** The skills one chat on one host may invoke. */
   skills: (hostId: string, chatId: string) => ["host", hostId, "chat", chatId, "skills"] as const,
+  /**
+   * The next turn's context pressure for one chat, as its host projects it
+   * for a model (the chat's own when none is named) at one transcript revision.
+   */
+  contextPressure: (hostId: string, chatId: string, revision: string, model?: { providerId: string; modelId: string }) =>
+    ["host", hostId, "chat", chatId, "context", revision, model?.providerId ?? "", model?.modelId ?? ""] as const,
   /** The models a host offers for new chats. */
   models: (hostId: string) => ["host", hostId, "models"] as const,
   /** The folders a host lets this Mac browse: its roots, or one page of a folder. */

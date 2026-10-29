@@ -111,6 +111,41 @@ test("a dismissed card stays as a quiet record with no actions", () => {
   assert.deepEqual(view.buttons, []);
 });
 
+test("an app connected in Aiden but left out of the Bot's access offers Add to this Bot", () => {
+  const calls: string[] = [];
+  const element = (
+    <ConnectCard
+      card={card("needs_access", "notion")}
+      onConnect={(pluginId) => calls.push(`connect:${pluginId}`)}
+      onDismiss={(pluginId) => calls.push(`dismiss:${pluginId}`)}
+      onAddToBot={(pluginId) => calls.push(`add:${pluginId}`)}
+    />
+  );
+  const view = renderDocument(element);
+  assert.match(view.text, /Add Notion to this Bot/u);
+  assert.match(view.text, /connected in Aiden, but this Bot’s access doesn’t include it/u);
+  assert.match(view.text, /So I can sort your inbox each morning\./u);
+  assert.deepEqual(
+    view.buttons.map((button) => button.name).sort(),
+    ["Add Notion to this Bot", "Not now for Notion"],
+  );
+  press(buttonNamed(element, "Add Notion to this Bot"));
+  press(buttonNamed(element, "Not now for Notion"));
+  assert.deepEqual(calls, ["add:notion", "dismiss:notion"], "nothing is added without the tap");
+  assert.throws(
+    () => press(buttonNamed(<ConnectCard card={card("needs_access", "notion")} busy onConnect={noop} onAddToBot={noop} />, "Add Notion to this Bot")),
+    /disabled/u,
+  );
+});
+
+test("where the Bot's access can't be changed, a needs-access card falls back to Connect", () => {
+  const view = renderDocument(
+    <ConnectCard card={card("needs_access", "notion")} connectLabel="Finish on Studio" onConnect={noop} />,
+  );
+  assert.deepEqual(view.buttons.map((button) => button.name), ["Connect Notion"]);
+  assert.doesNotMatch(view.text, /Connected ✓/u);
+});
+
 test("a busy card disables Connect", () => {
   const element = (
     <ConnectCard card={card("pending")} busy onConnect={() => assert.fail("pressed")} onDismiss={noop} />

@@ -78,6 +78,18 @@ Aiden reads a server's annotations as the server states them:
 
 Grant connection tools only from servers you trust to describe them honestly.
 
+## Rules in codemode scripts
+
+A Bot with connection, file, shell or lookup tools also gets `codemode`, which
+lets it script those tools. Every call a script makes is checked like a direct
+call: its ingress, its access, its approval and the rules. A rule that asks
+opens the same approval card, which waits as long as a direct call's and is
+asked again under the same card after Resume; the script picks up where it
+was. A script has no time limit unless it sets one. A rule that hands a step to the person doesn't
+open a card from inside a script: the call is refused and the Bot is told to
+make it directly, so the person gets the hand-off card as usual. Scripts never
+reach cards, the Bot's own computer or browser, routines or subagents.
+
 ## Hand-off cards from rules
 
 - A card the password-or-code rule opened takes no note: the composer is off
@@ -87,6 +99,14 @@ Grant connection tools only from servers you trust to describe them honestly.
 - A card the password or money rule opened never quotes what the Bot was
   typing. Its reason, and the Done the Bot reads, name the field instead
   ("was about to: type into the “Card number” field").
+- A card a rule opened for the Bot's browser or computer tools is a step on
+  the Bot's own screen: on the Mac it offers "Open in <Bot>’s browser" or
+  "Open <Bot>’s computer" (never the person's own browser), and on a phone
+  (a device holding `bot:handoff-on-mac`) Finish on your Mac opens it there.
+  The Mac's Bot panel then shows that browser tab or the Computer tab, once
+  per card and without moving keyboard focus. A browser step that names no
+  page holds the tab the Bot is on, as it is; with no tab open, only the
+  chat comes forward.
 - Each turn's answer is its own transcript row, even when a provider reuses
   the same tool-call id in every turn.
 
@@ -102,8 +122,11 @@ Grant connection tools only from servers you trust to describe them honestly.
   the person set, so the Bot doesn't run any step its rules would check, and
   is told "This Bot's rules couldn't be read, so this action didn't run." The
   rules editor shows the defaults with an alert, and the next change starts
-  again from them and replaces the file. A file that can't be read at all
+  again from them and replaces the file. Before replacing it, Aiden keeps the
+  damaged bytes beside it as `rules.json.unreadable` (then
+  `rules.json.unreadable.2`, and so on, never over an earlier copy), so rules
+  the person wrote can be recovered by hand. A file that can't be read at all
   (permissions, a directory in its place) fails closed the same way, and the
   editor offers Try again.
-- Deleting the Bot removes the file and refuses later writes.
+- Deleting the Bot removes the file and its kept copies, and refuses later writes.
 - Phones don't show rules yet.

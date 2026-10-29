@@ -1,5 +1,5 @@
 import * as React from "react";
-import { settingsApi } from "./ipc";
+import { onNotification, settingsApi } from "./ipc";
 import {
   APPEARANCE_CHANGE_EVENT,
   applyAppearanceConfig,
@@ -34,34 +34,44 @@ export function useTheme(): void {
     };
     window.addEventListener(APPEARANCE_CHANGE_EVENT, handleRuntimeChange);
 
-    const hydrationRevision = readAppearanceIntentRevision();
-    void runAppearanceIntent(hydrationRevision, async (isCurrent) => {
-      const appearance = await settingsApi.getAppearance();
-      if (!active || !isCurrent()) return;
-      let themeInfo = await nativeRevision.readStable(
-        () => window.aidenAPI.nativeTheme.getInfo(),
-      );
-      if (!active || !isCurrent()) return;
-      nativeDark = themeInfo.shouldUseDarkColors;
-      nativeHighContrast = themeInfo.shouldUseHighContrastColors === true;
-      config = normalizeAppearanceConfig(appearance);
-      if (themeInfo.themeSource !== config.mode) {
-        await window.aidenAPI.nativeTheme.setThemeSource(config.mode);
-        const updated = await nativeRevision.readStable(
+    // Re-read the persisted appearance on mount and whenever main reports a
+    // change this window did not author (an agent tool, a chat control panel,
+    // a paired phone). Queued behind local intents, and dropped when a newer
+    // one starts, so it never rolls back an in-flight Settings or Command-K edit.
+    const hydrate = () => {
+      const hydrationRevision = readAppearanceIntentRevision();
+      return runAppearanceIntent(hydrationRevision, async (isCurrent) => {
+        const appearance = await settingsApi.getAppearance();
+        if (!active || !isCurrent()) return;
+        let themeInfo = await nativeRevision.readStable(
           () => window.aidenAPI.nativeTheme.getInfo(),
         );
         if (!active || !isCurrent()) return;
-        themeInfo = updated;
-        nativeDark = updated.shouldUseDarkColors;
-        nativeHighContrast = updated.shouldUseHighContrastColors === true;
-      }
-      render();
-    }).catch(() => {
-      if (
-        active &&
-        hydrationRevision === readAppearanceIntentRevision()
-      )
+        nativeDark = themeInfo.shouldUseDarkColors;
+        nativeHighContrast = themeInfo.shouldUseHighContrastColors === true;
+        config = normalizeAppearanceConfig(appearance);
+        if (themeInfo.themeSource !== config.mode) {
+          await window.aidenAPI.nativeTheme.setThemeSource(config.mode);
+          const updated = await nativeRevision.readStable(
+            () => window.aidenAPI.nativeTheme.getInfo(),
+          );
+          if (!active || !isCurrent()) return;
+          themeInfo = updated;
+          nativeDark = updated.shouldUseDarkColors;
+          nativeHighContrast = updated.shouldUseHighContrastColors === true;
+        }
         render();
+      }).catch(() => {
+        if (
+          active &&
+          hydrationRevision === readAppearanceIntentRevision()
+        )
+          render();
+      });
+    };
+    void hydrate();
+    const unsubscribePersisted = onNotification("settings:appearance-changed", () => {
+      if (active) void hydrate();
     });
 
     const unsubscribe = window.aidenAPI.nativeTheme.onChanged((info) => {
@@ -79,6 +89,7 @@ export function useTheme(): void {
     return () => {
       active = false;
       unsubscribe();
+      unsubscribePersisted();
       reducedMotion.removeEventListener("change", refreshSystemPreferences);
       window.removeEventListener(APPEARANCE_CHANGE_EVENT, handleRuntimeChange);
     };

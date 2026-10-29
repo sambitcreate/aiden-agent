@@ -7,7 +7,7 @@ import { ipcMain } from "../platform.js";
 import { configStore } from "../services/config-store.js";
 import { telegramService } from "../services/telegram/telegram-service.js";
 import {
-  assertTelegramWorkspaceAccess,
+  isTelegramFolderWorkspace,
   telegramWorkspaceSelectionId,
 } from "../services/telegram/telegram-workspace-core.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
@@ -16,7 +16,6 @@ export interface TelegramStatusResponse {
   enabled: boolean;
   hasToken: boolean;
   allowedUserId?: number;
-  pairing: { expiresAt?: number };
   providerId?: string;
   model?: string;
   polling: boolean;
@@ -42,7 +41,6 @@ export function registerTelegramHandlers(): void {
       enabled: settings.telegramEnabled ?? false,
       hasToken: await telegramService.hasActiveToken(),
       allowedUserId: settings.telegramAllowedUserId,
-      pairing: telegramService.pairingStatus(),
       providerId: settings.telegramProviderId,
       model: settings.telegramModel,
       workspaceId: settings.telegramWorkspaceId,
@@ -89,12 +87,6 @@ export function registerTelegramHandlers(): void {
     return { connected: false };
   });
 
-  ipcMain.handle("telegram:beginPairing", (_event, profile: unknown) => telegramService.beginPairing(typeof profile === "string" ? profile : ""));
-  ipcMain.handle("telegram:cancelPairing", (_event, profile: unknown) => {
-    telegramService.cancelPairing(typeof profile === "string" ? profile : "");
-    return { cancelled: true };
-  });
-
   ipcMain.handle("telegram:resetPairing", async () => {
     await telegramService.resetPairing();
     return { reset: true };
@@ -116,7 +108,9 @@ export function registerTelegramHandlers(): void {
     const selectedWorkspaceId = telegramWorkspaceSelectionId(workspaceId);
     if (selectedWorkspaceId) {
       const workspace = await configStore.getWorkspace(selectedWorkspaceId);
-      assertTelegramWorkspaceAccess(workspace);
+      if (!isTelegramFolderWorkspace(workspace)) {
+        throw new Error("Choose a configured folder workspace for Telegram project automation.");
+      }
     }
     await telegramService.setActiveSettings({ telegramWorkspaceId: selectedWorkspaceId });
     return { workspaceId: selectedWorkspaceId };
