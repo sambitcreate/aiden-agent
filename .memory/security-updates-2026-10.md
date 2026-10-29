@@ -14,4 +14,5 @@
 
 ## October 27 remediation refresh
 
-Zod4.6.7, CLI undici8.12.3, KaTeX0.18.2, HappyDOM21.0.4, body-parser2.4.0 and tinypool2.1.2 are evaluated in the security dependency PR. Pi remains1.4.0 and electron-builder26.15.3. See docs/security/dependency-maintenance-2026-10-27.md and the remediation plan for checks and acceptance. StableElectron stillcarriesNode24.22.0; prerelease46/nightly47 have24.22.1, so stablefixremainsupstream.
+Zod 4.6.7, CLI undici 8.12.3, KaTeX 0.18.2, Happy DOM 21.0.4, body-parser 2.4.0, tinypool 2.1.2 and @hono/node-server 2.1.5 are in the security dependency PR (#611). Pi stays 1.4.0 and electron-builder 26.15.3. See docs/security/dependency-maintenance-2026-10-27.md and the remediation plan for checks. The Electron Node fix landed separately on main (43.8.4, #632), above.
+
