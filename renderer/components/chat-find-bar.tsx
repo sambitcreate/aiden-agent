@@ -204,6 +204,8 @@ export function useChatFind(scopeKey: string, enabled = true): React.ReactNode {
     () => setState((open) => ({ scope: scopeKey, request: (open?.request ?? 0) + 1 })),
     enabled,
   );
+  // Leaving the chat forgets the bar, so coming back doesn't reopen it.
+  if (state && state.scope !== scopeKey) setState(null);
   if (!enabled || state?.scope !== scopeKey) return null;
   return <ChatFindBar request={state.request} onClose={() => setState(null)} />;
 }

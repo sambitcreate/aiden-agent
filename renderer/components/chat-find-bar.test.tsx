@@ -1,11 +1,14 @@
-import "../main/bots/test-dom";
+import { installBotTestIpc } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ChatFindBar } from "./chat-find-bar";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { ChatFindBar, useChatFind } from "./chat-find-bar";
 import { ScrollArea } from "./ui";
 import { chatFindStatus, findChatMatches } from "../lib/chat-find";
+import { CommandSystemProvider, useCommandSystem } from "../lib/command-system";
+import type { CommandId } from "../shared/keybindings";
 
 afterEach(cleanup);
 
@@ -152,4 +155,48 @@ test("Esc closes the bar and gives focus back to what had it", async () => {
   assert.equal(closed, 2);
   assert.equal(screen.queryByRole("search"), null);
   assert.equal(document.activeElement, message);
+});
+
+test("⌘F's bar closes on leaving the chat and stays closed on coming back", async () => {
+  installBotTestIpc({
+    "settings:get": () => null,
+    "shortcut:get": () => null,
+    "app:renderer-ready": () => null,
+  });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: Infinity } },
+  });
+  let run: (commandId: CommandId) => boolean = () => false;
+  function Pane({ chatId }: { chatId: string }) {
+    run = useCommandSystem().execute;
+    const findBar = useChatFind(chatId);
+    return (
+      <ScrollArea overlay={findBar}>
+        <p>Chat {chatId}</p>
+      </ScrollArea>
+    );
+  }
+  // One pane that stays mounted while the chat changes, as in the app.
+  const app = (chatId: string) => (
+    <QueryClientProvider client={queryClient}>
+      <CommandSystemProvider>
+        <Pane chatId={chatId} />
+      </CommandSystemProvider>
+    </QueryClientProvider>
+  );
+  try {
+    const { rerender } = render(app("a"));
+    act(() => void run("chat.find"));
+    await waitFor(() => assert.ok(screen.getByRole("search")));
+    rerender(app("b"));
+    assert.ok(!screen.queryByRole("search"), "another chat has no bar");
+    rerender(app("a"));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    assert.ok(!screen.queryByRole("search"), "coming back doesn't reopen it");
+    act(() => void run("chat.find"));
+    await waitFor(() => assert.ok(screen.getByRole("search"), "⌘F still opens it"));
+  } finally {
+    cleanup();
+    queryClient.clear();
+  }
 });
