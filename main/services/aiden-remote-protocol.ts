@@ -166,6 +166,16 @@ export const AIDEN_REMOTE_BOT_HANDOFF_ON_MAC_CONTRACT_REVISION = 43 as const;
 export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
 /**
  * Contract revision 45 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`):
+ * images a Bot shares (`share_image`) reach phones. A device that negotiates
+ * `bot:images` receives `shared_image` session entries (name, type and size,
+ * never the bytes) and reads the bytes from
+ * `GET /bots/{botId}/session/images/{entryId}`. Every other device gets an
+ * assistant line naming the image and pointing to the Mac instead.
+ */
+export const AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION = 45 as const;
+/**
+ * Contract revision 46 (provisional; re-claim the next revision after `main`'s
  * at merge by changing only `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`):
  * spending limits on phones (`spending-limits-v1`). `GET /chats/{chatId}/spending`
  * and `GET /bots/{botId}/spending` return the chat's or Bot's limit and what it
@@ -174,7 +184,7 @@ export const AIDEN_REMOTE_IMAGE_PLACEMENT_CONTRACT_REVISION = 44 as const;
  * limit is refused with `operation_stale` and the limit's own message, so
  * older phones show that line and need nothing new.
  */
-export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 45 as const;
+export const AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION = 46 as const;
 export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
@@ -228,7 +238,7 @@ export const AIDEN_REMOTE_BOT_ACTIVITY_FEATURE = "bot-activity-v1" as const;
  */
 export const AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE = "bot-attachments-v1" as const;
 /**
- * Spending limits on phones (contract revision 45). Announced to phones only
+ * Spending limits on phones (contract revision 46). Announced to phones only
  * while the host wires its spending ledger: `GET /chats/{chatId}/spending`,
  * `GET /bots/{botId}/spending` and their `POST …/spending/allow-more`.
  */
@@ -366,6 +376,13 @@ export const AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES = ["bot:handoffs", "bot:hando
 export type AidenRemoteBotHandoffCapability = (typeof AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES)[number];
 
 /**
+ * Contract revision 45: a device holding `bot:images` receives `shared_image`
+ * session entries and may read their bytes from the session image route
+ * (which still needs `bot:read` and `chat:read`). It grants no other authority.
+ */
+export const AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES = ["bot:images"] as const;
+
+/**
  * Contract revision 42: a device holding `bot:issues` receives the session
  * `issues` list and `issues` frame, the Bot summary `issueCount`, issue
  * notifications and the issue act route. Like `bot:cards` it grants no
@@ -381,6 +398,7 @@ export const AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
 ] as const;
 
@@ -407,6 +425,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
@@ -424,6 +443,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  ...AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
 ] as const;
@@ -1294,7 +1314,30 @@ export type AidenRemoteBotSessionEntry =
       status: AidenRemoteBotRoutineProposalStatus;
       routineId?: string;
       createdAt?: string;
+    }
+  /**
+   * Contract revision 45, only for devices holding `bot:images`: an image the
+   * Bot shared. The bytes are read from
+   * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
+   */
+  | {
+      type: "shared_image";
+      id: string;
+      name: string;
+      mimeType: AidenRemoteBotSharedImageMimeType;
+      /** Bytes, at most `AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES`. */
+      size: number;
     };
+
+/** Revision 45: the image types a Bot can share (`share_image` accepts PNG and JPEG). */
+export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES = ["image/png", "image/jpeg"] as const;
+export type AidenRemoteBotSharedImageMimeType = (typeof AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES)[number];
+/** Revision 45: the largest image a session image read returns (the desktop's inline image limit). */
+export const AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** Revision 45: the longest image name on the wire. */
+export const AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS = 255;
+/** Session entry types that only `bot:images` devices receive. */
+export const AIDEN_REMOTE_BOT_IMAGE_ENTRY_TYPES = ["shared_image"] as const;
 
 export const AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES = ["pending", "accepted", "dismissed"] as const;
 export type AidenRemoteBotRoutineProposalStatus = (typeof AIDEN_REMOTE_BOT_ROUTINE_PROPOSAL_STATUSES)[number];
@@ -1939,7 +1982,9 @@ export interface AidenRemoteContractFixture {
   botIssues?: AidenRemoteBotIssuesFixture;
   /** Revision 39 (`schedule:cards`): scheduled-task approval cards and the cards every reader rejects. */
   scheduleCards?: AidenRemoteScheduleCardsFixture;
-  /** Revision 45 (`spending-limits-v1`): spending status, Allow more and the refusals. */
+  /** Revision 45 (`bot:images`): a shared image as holders and other devices see it, and its byte route. */
+  botImages?: AidenRemoteBotImagesFixture;
+  /** Revision 46 (`spending-limits-v1`): spending status, Allow more and the refusals. */
   spending?: AidenRemoteSpendingFixture;
   taskProgress: AidenRemoteChatTaskProgress;
   agentRoster: AidenRemoteChatAgentRoster;
@@ -5668,6 +5713,20 @@ export function parseAidenRemoteBotSessionEntry(value: unknown): AidenRemoteBotS
           : {}),
       };
     }
+    case "shared_image": {
+      assertExactKeys(value, ["type", "id", "name", "mimeType", "size"], "Bot shared image");
+      const size = value.size;
+      if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 1 || size > AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES) {
+        throw new Error("Bot shared image size is invalid.");
+      }
+      return {
+        type: "shared_image",
+        id,
+        name: boundedText(value.name, "Bot shared image name", AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS),
+        mimeType: enumMember(value.mimeType, AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES, "Bot shared image mimeType"),
+        size,
+      };
+    }
     default:
       throw new Error("Bot session entry type is invalid.");
   }
@@ -6520,6 +6579,33 @@ export interface AidenRemoteScheduleCardsFixture {
   cards: Array<{ label: string; schedule: AidenRemoteApprovalSchedule }>;
   /** Cards every reader drops, falling back to the summary card. */
   rejected: Array<{ label: string; schedule: unknown }>;
+}
+
+/** Revision 45: one image a Bot shared, as each kind of device reads it. */
+export interface AidenRemoteBotImagesFixture {
+  capability: (typeof AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES)[number];
+  /** What a `bot:images` device is sent. */
+  entry: Extract<AidenRemoteBotSessionEntry, { type: "shared_image" }>;
+  /** What every other device is sent for the same entry: an assistant line pointing to the Mac. */
+  legacyEntry: Extract<AidenRemoteBotSessionEntry, { type: "message" }>;
+  /** The path, under the base path, the device reads the bytes from. */
+  imagePath: string;
+}
+
+function parseBotImagesFixture(value: unknown): AidenRemoteBotImagesFixture {
+  if (!isRecord(value)) throw new Error("Bot images fixture must be an object.");
+  assertExactKeys(value, ["capability", "entry", "legacyEntry", "imagePath"], "Bot images fixture");
+  const capability = enumMember(value.capability, AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES, "Bot images fixture capability");
+  const entry = parseAidenRemoteBotSessionEntry(value.entry);
+  if (entry.type !== "shared_image") throw new Error("Bot images fixture entry must be a shared image.");
+  const legacyEntry = parseAidenRemoteBotSessionEntry(value.legacyEntry);
+  if (legacyEntry.type !== "message" || legacyEntry.role !== "assistant" || legacyEntry.id !== entry.id) {
+    throw new Error("Bot images fixture legacyEntry must be the same entry as an assistant message.");
+  }
+  if (typeof value.imagePath !== "string" || !/^\/bots\/[A-Za-z0-9._:-]{1,160}\/session\/images\/[A-Za-z0-9._:-]{1,128}$/u.test(value.imagePath) || !value.imagePath.endsWith(`/${entry.id}`)) {
+    throw new Error("Bot images fixture imagePath must name the entry.");
+  }
+  return { capability, entry, legacyEntry, imagePath: value.imagePath };
 }
 
 function parseScheduleCardsFixture(value: unknown): AidenRemoteScheduleCardsFixture {
@@ -7593,6 +7679,13 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     }
     scheduleCards = parseScheduleCardsFixture(value.scheduleCards);
   }
+  let botImages: AidenRemoteBotImagesFixture | undefined;
+  if (value.botImages !== undefined) {
+    if (contractRevision < AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION) {
+      throw new Error(`Bot image fixtures require contract revision ${AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION}.`);
+    }
+    botImages = parseBotImagesFixture(value.botImages);
+  }
   let spending: AidenRemoteSpendingFixture | undefined;
   if (value.spending !== undefined) {
     if (contractRevision < AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION) {
@@ -7696,6 +7789,7 @@ export function parseAidenRemoteContractFixture(value: unknown): AidenRemoteCont
     ...(botHandoffs ? { botHandoffs } : {}),
     ...(botIssues ? { botIssues } : {}),
     ...(scheduleCards ? { scheduleCards } : {}),
+    ...(botImages ? { botImages } : {}),
     ...(spending ? { spending } : {}),
   };
 }
@@ -7731,7 +7825,7 @@ function spendingAmount(record: Record<string, unknown>, key: string, positive: 
   return value;
 }
 
-/** Revision 45: `GET`/`POST …/spending` bodies. */
+/** Revision 46: `GET`/`POST …/spending` bodies. */
 export function parseAidenRemoteSpendingStatus(value: unknown): AidenRemoteSpendingStatus {
   if (!isRecord(value)) throw new Error("Spending status must be an object.");
   assertExactKeys(value, ["spending"], "Spending status");

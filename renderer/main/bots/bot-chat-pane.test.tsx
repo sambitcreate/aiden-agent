@@ -854,7 +854,7 @@ const CHECK_IN_PROPOSAL = {
   name: "Daily check-in",
   prompt: "Check in briefly with one or two things worth knowing today.",
   schedule: { kind: "daily" as const, time: "09:00" },
-  timezone: "UTC",
+  timezone: "America/New_York",
   label: "Every day at 9:00 AM",
 };
 
@@ -896,7 +896,7 @@ test("a routine proposal shows its name, schedule and prompt, and Add routine ac
   });
   const card = await screen.findByRole("group", { name: "Routine suggestion: Daily check-in" });
   assert.ok(within(card).getByText("Add a routine?"));
-  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM"));
+  assert.ok(within(card).getByText("Daily check-in · Every day at 9:00 AM · Eastern Time"));
   assert.ok(within(card).getByText(CHECK_IN_PROPOSAL.prompt));
 
   fireEvent.click(within(card).getByRole("button", { name: "Add routine" }));
@@ -905,7 +905,7 @@ test("a routine proposal shows its name, schedule and prompt, and Add routine ac
   await waitFor(() => assert.equal(responds().length, 1));
   assert.deepEqual(responds()[0]!.args[0], { botId: "bot-1", proposalId: "proposal-1", decision: "accept" });
   respond({ status: "accepted", routineId: "task-9" });
-  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.ok(await within(card).findByText("Added ✓ · Every day at 9:00 AM · Eastern Time"));
   assert.equal(within(card).queryByRole("button") === null, true, "a settled card has no actions");
   assert.equal(responds().length, 1, "a second click while it was answering sent nothing");
 });
@@ -946,7 +946,7 @@ test("a failed answer keeps the proposal answerable, and one answered elsewhere 
     type: "entry",
     entry: proposalEntry("accepted", "task-9"),
   }));
-  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM"));
+  assert.ok(await screen.findByText("Added ✓ · Every day at 9:00 AM · Eastern Time"));
 });
 
 test("a queued message shows faded as Queued, and Remove withdraws that one submission", async () => {

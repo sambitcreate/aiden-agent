@@ -34,6 +34,7 @@ import {
   AIDEN_REMOTE_MOBILE_SIMULATOR_CAPABILITIES,
   AIDEN_REMOTE_OPT_IN_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION,
+  AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION,
   AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION,
   parseAidenRemoteSpendingStatus,
   AIDEN_REMOTE_BOT_ISSUE_MAX,
@@ -456,6 +457,8 @@ test("pairing request fixtures only carry a sealed envelope for an approved requ
   delete revision19.botIssues;
   // Schedule approval cards are revision 39.
   delete revision19.scheduleCards;
+  // Bot shared images are revision 45.
+  delete revision19.botImages;
   // Message visuals are revision 28.
   for (const message of record(revision19.chat, "chat").messages as Record<string, unknown>[]) delete message.visuals;
   assert.throws(() => parseAidenRemoteContractFixture(revision19), /require contract revision 20/u);
@@ -675,6 +678,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/pairing/requests/{requestId}/reveal",
     "/pairing/requests/{requestId}",
     "/chats/{chatId}/controls/{panelId}",
+    "/bots/{botId}/session/images/{entryId}",
   ];
   assert.deepEqual(Object.keys(paths), requiredPaths);
   assert.deepEqual(document.security, [{ deviceBearer: [], protocolVersion: [] }]);
@@ -2844,6 +2848,7 @@ test("Bot hand-off fixtures require their own revision, and an older fixture par
   older.contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_HANDOFFS_CONTRACT_REVISION - 1;
   delete older.scheduleCards;
+  delete older.botImages;
   // Bot issues are revision 42, newer than the hand-off fixture's revision.
   delete older.botIssues;
   // The number is re-claimed at merge, so the test names it only through the constant.
@@ -2945,6 +2950,41 @@ test("Bot hand-off OpenAPI schemas accept the shared fixture and refuse what the
   assert.equal(summary({ ...section.pausedSummary, paused: false }), false);
   assert.equal(handoff({ ...section.session.handoff, extra: true }), false);
   assert.equal(handoff({ ...section.session.handoff, open: { url: "http://bank.example.com" } }), false);
+});
+
+test("Bot shared images need their own revision, and the schema and parser accept the fixture and refuse inline bytes", async () => {
+  const { default: Ajv2020 } = await import("ajv/dist/2020.js");
+  const spec = await json("openapi.json") as { components: { schemas: Record<string, object> } };
+  const raw = (await json("fixtures/contract.json")) as Record<string, any>;
+  const fixture = parseAidenRemoteContractFixture(raw).botImages!;
+  assert.equal(fixture.capability, "bot:images");
+
+  const older = structuredClone(raw);
+  older.contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
+  record(older.hostHealth, "hostHealth").contractRevision = AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION - 1;
+  assert.throws(
+    () => parseAidenRemoteContractFixture(older),
+    new RegExp(`require contract revision ${AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION}\\b`, "u"),
+  );
+  delete older.botImages;
+  delete older.spending;
+  assert.equal(parseAidenRemoteContractFixture(older).botImages, undefined);
+
+  const ajv = new Ajv2020({ strict: false });
+  const entry = ajv.compile({ $ref: "#/components/schemas/BotSessionEntry", components: spec.components });
+  for (const sample of [raw.botImages.entry, raw.botImages.legacyEntry]) {
+    assert.equal(entry(sample), true, JSON.stringify(entry.errors));
+  }
+  const inline = { ...raw.botImages.entry, data: "iVBORw0KGgo=" };
+  const gif = { ...raw.botImages.entry, mimeType: "image/gif" };
+  const huge = { ...raw.botImages.entry, size: 8 * 1024 * 1024 + 1 };
+  for (const refused of [inline, gif, huge]) {
+    assert.equal(entry(refused), false, JSON.stringify(refused).slice(0, 80));
+    assert.throws(() => parseAidenRemoteBotSessionEntry(refused));
+  }
+  const mismatched = structuredClone(raw);
+  mismatched.botImages.imagePath = "/bots/bot_fixture_01/session/images/entry_other";
+  assert.throws(() => parseAidenRemoteContractFixture(mismatched), /must name the entry/u);
 });
 
 test("Bot issue fixtures round-trip, and every misuse is refused", async () => {

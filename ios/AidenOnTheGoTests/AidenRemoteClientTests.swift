@@ -1613,6 +1613,46 @@ final class AidenRemoteClientTests: XCTestCase {
         XCTAssertEqual(step, 7)
     }
 
+    /// Revision 45: a shared image is read from its session route, and only a
+    /// PNG or JPEG answer with the no-store and nosniff headers is accepted.
+    func testBotSessionImageReadsItsRouteAndAcceptsOnlyPNGOrJPEG() async throws {
+        let client = makeClient()
+        let png = Self.pngData(width: 4, height: 4, color: .systemIndigo)
+        let answers: [(contentType: String, headers: [String: String])] = [
+            ("image/png", ["Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]),
+            ("image/jpeg", ["Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]),
+            ("text/html", ["Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]),
+            ("image/png", ["Cache-Control": "no-store"]),
+            ("image/png", ["X-Content-Type-Options": "nosniff"]),
+        ]
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer device-credential")
+            let answer = answers[step - 1]
+            var headers = answer.headers
+            headers["Content-Type"] = answer.contentType
+            headers["Content-Length"] = String(png.count)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: headers)!
+            return (response, png)
+        }
+        for _ in 0..<2 {
+            let data = try await client.botSessionImage(botId: "bot_fixture_01", entryId: "entry_fixture_shared_image_01")
+            XCTAssertEqual(data, png)
+        }
+        for _ in 0..<3 {
+            await assertInvalidResponse {
+                try await client.botSessionImage(botId: "bot_fixture_01", entryId: "entry_fixture_shared_image_01")
+            }
+        }
+        await assertInvalidResponse {
+            try await client.botSessionImage(botId: "bot_fixture_01", entryId: "../avatar")
+        }
+        XCTAssertEqual(step, 5, "an unsafe entry id never leaves the phone")
+    }
+
     func testBotAvatarUploadCarriesRevisionIdempotencyAndCanonicalStatus() async throws {
         let client = makeClient()
         let uploadData = Self.pngData(width: 32, height: 32, color: .systemTeal)
@@ -4574,6 +4614,68 @@ final class AidenRemoteClientTests: XCTestCase {
                 aidenBotSessionFeedGrants(installation).contains(.botHandoffNotes),
                 "a Bot chat reopens its feed once the notes are granted"
             )
+        }
+    }
+
+    /// Contract revision 45: `bot:images` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and a Bot chat reopens its feed
+    /// once it is granted.
+    @MainActor
+    func testCoordinatorAsksForBotImagesAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-images", deviceId: "device-images", credential: "credential-images"),
+                trust: makeSystemTrust(),
+                name: "Images Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-images",
+                        "name": "Images Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["bot:images"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["bot:images"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .botImages), offered)
+            XCTAssertEqual(aidenBotSessionFeedGrants(installation).contains(.botImages), offered)
         }
     }
 

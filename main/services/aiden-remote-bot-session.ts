@@ -33,6 +33,10 @@
 //   which drops the old line from their transcript. The person's answer is
 //   their message for everyone. Idempotent results are stored in the holder
 //   view and projected per device after the ledger returns.
+// - Contract revision 45 (`bot:images`): an image the Bot shared is a
+//   `shared_image` entry (name, type, size) for devices holding it, which read
+//   the bytes from the session image route. Every other device gets an
+//   assistant line under the same id that names the image and points to the Mac.
 // - Routines, connection requests and starter presets call their main services.
 
 import { createHash, randomUUID } from "node:crypto";
@@ -51,11 +55,13 @@ import { formatBotRoutineLabel } from "../../renderer/shared/bot-routine-label.j
 import { botRoutineCron } from "../../renderer/shared/bot-routine-schedule.js";
 import type { BotDefinition } from "../../renderer/shared/bots.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { imageBytesMatchMime } from "./attachments.js";
 import type { AidenRemoteAttachmentProjection, AidenRemoteAttachmentStore } from "./aiden-remote-attachments.js";
 import type { Attachment } from "./types.js";
 import type { BotMemoryView } from "../../renderer/shared/bot-memory.js";
 import {
   BOT_DAILY_CHECKIN_SUGGESTION,
+  botRoutineProposalWhen,
   type BotRoutineProposalRespondInput,
   type BotRoutineProposalRespondResult,
 } from "../../renderer/shared/bot-routine-proposals.js";
@@ -65,6 +71,10 @@ import { toRemoteBotIssues } from "./aiden-remote-bot-issues.js";
 import {
   AIDEN_REMOTE_BOT_ACTIVITY_APP_MAX_CHARS,
   AIDEN_REMOTE_BOT_CARD_ENTRY_TYPES,
+  AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES,
+  AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES,
+  AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS,
+  type AidenRemoteBotSharedImageMimeType,
   AIDEN_REMOTE_BOT_MESSAGE_MAX_CHARS,
   AIDEN_REMOTE_BOT_QUEUED_MAX,
   type AidenRemoteBotQueuedMessage,
@@ -493,6 +503,8 @@ export function projectBotSessionEntries(
         break;
       }
       case "routine_proposal": {
+        // A card the Bot revised is replaced by the next one; phones show only that.
+        if (entry.supersededBy !== undefined) break;
         const createdAt = isoOf(entry.at);
         const { proposal } = entry;
         output.push({
@@ -501,11 +513,18 @@ export function projectBotSessionEntries(
           proposalId: proposal.proposalId,
           name: wireText(proposal.name, 120).trim() || "Routine",
           prompt: bounded(proposal.prompt).trim() || proposal.name,
-          label: wireText(proposal.label, 120).trim() || "On a schedule",
+          // The card's own "when": a schedule with its timezone, or what starts it.
+          label: wireText(botRoutineProposalWhen(proposal), 120).trim() || (proposal.trigger ? "When something happens" : "On a schedule"),
           status: entry.status,
           ...(entry.status === "accepted" && entry.routineId ? { routineId: wireText(entry.routineId, 160) } : {}),
           ...(createdAt ? { createdAt } : {}),
         });
+        break;
+      }
+      case "shared_image": {
+        // Revision 45: name, type and size only; the bytes have their own route.
+        const image = sharedImageWireOf(entry);
+        if (image) output.push({ type: "shared_image", id, ...image });
         break;
       }
       default:
@@ -513,6 +532,32 @@ export function projectBotSessionEntries(
     }
   }
   return output;
+}
+
+/** The wire view of a shared image, or null when a phone could not show it (a type or size outside the contract). */
+function sharedImageWireOf(image: {
+  name: string;
+  mimeType: string;
+  size: number;
+}): { name: string; mimeType: AidenRemoteBotSharedImageMimeType; size: number } | null {
+  const mimeType = (AIDEN_REMOTE_BOT_SHARED_IMAGE_MIME_TYPES as readonly string[]).includes(image.mimeType)
+    ? (image.mimeType as AidenRemoteBotSharedImageMimeType)
+    : undefined;
+  if (!mimeType || !Number.isSafeInteger(image.size) || image.size < 1 || image.size > AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES) {
+    return null;
+  }
+  return { name: wireText(image.name, AIDEN_REMOTE_BOT_SHARED_IMAGE_NAME_MAX_CHARS).trim() || "image", mimeType, size: image.size };
+}
+
+/** What a device without `bot:images` reads for a shared image (revision 45). */
+export function botSharedImageLegacyText(name: string): string {
+  return `I shared an image: ${name}. Open this chat on your Mac to see it.`;
+}
+
+/** A shared image as a device without `bot:images` reads it: an assistant line under the same id. */
+function withoutSharedImage(entry: AidenRemoteBotSessionEntry): AidenRemoteBotSessionEntry {
+  if (entry.type !== "shared_image") return entry;
+  return { type: "message", id: entry.id, role: "assistant", text: botSharedImageLegacyText(entry.name) };
 }
 
 /** The entries a device without `bot:cards` may see: revision-26 parsers throw on the card types. */
@@ -529,9 +574,13 @@ function withoutSubmissionId(entry: AidenRemoteBotSessionEntry): AidenRemoteBotS
   return rest;
 }
 
-/** The entries one device is sent: cards for `bot:cards`, submission ids for `bot:activity`. */
+/**
+ * The entries one device is sent: cards for `bot:cards`, submission ids for
+ * `bot:activity`, shared images for `bot:images` (a line for everyone else).
+ */
 function entriesFor(entries: readonly AidenRemoteBotSessionEntry[], audience: Audience): AidenRemoteBotSessionEntry[] {
-  const shown = audience.cards ? [...entries] : withoutBotCards(entries);
+  const carded = audience.cards ? [...entries] : withoutBotCards(entries);
+  const shown = audience.images ? carded : carded.map(withoutSharedImage);
   return audience.activity ? shown : shown.map(withoutSubmissionId);
 }
 
@@ -682,6 +731,8 @@ interface Audience {
   notes: boolean;
   /** `bot:handoff-on-mac` beside it: a step on the Bot's own screen says so (revision 43). */
   onMac: boolean;
+  /** `bot:images`: `shared_image` entries instead of a line pointing to the Mac (revision 45). */
+  images: boolean;
   /** `bot:issues`: the `issues` frame and snapshot key (revision 42). */
   issues: boolean;
 }
@@ -922,7 +973,7 @@ class BotLiveProjector {
         // A stalled client is dropped; it reconnects and gets a fresh snapshot.
         subscriber.overflowed = true;
       } else {
-        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.issues}`;
+        const key = `${subscriber.cards}:${subscriber.activity}:${subscriber.handoffs}:${subscriber.notes}:${subscriber.onMac}:${subscriber.images}:${subscriber.issues}`;
         let text = rendered.get(key);
         if (text === undefined) {
           text = render(subscriber);
@@ -976,9 +1027,14 @@ class BotLiveProjector {
     const entry = event.type === "entry" ? (event.payload as { entry: AidenRemoteBotSessionEntry }).entry : undefined;
     const bare = entry && withoutSubmissionId(entry);
     const untagged = bare && bare !== entry ? sseFrame(id, "entry", { ...data, payload: { entry: bare } }) : text;
+    // Revision 45: a shared image reaches a device without `bot:images` as its line.
+    const imageLine = entry?.type === "shared_image"
+      ? sseFrame(id, "entry", { ...data, payload: { entry: withoutSharedImage(entry) } })
+      : undefined;
     this.broadcast((audience) => {
       if ((card && !audience.cards) || (activityOnly && !audience.activity)) return noOp(audience);
       if (issuesOnly && !audience.issues) return noOp(audience);
+      if (imageLine && !audience.images) return imageLine;
       if (handoffOnly && !audience.handoffs) {
         if (legacy === "snapshot") return this.snapshotFrame(audience);
         return legacy ? sseFrame(id, "entry", { ...data, type: "entry", payload: { entry: legacy } }) : noOp(audience);
@@ -1140,6 +1196,25 @@ class BotLiveProjector {
       if (WIRE_SUBMISSION_ID.test(submissionId)) this.submissionOf.set(entryId, submissionId);
     }
     return this.submissionOf;
+  }
+
+  /**
+   * Revision 45: the bytes of a shared image in the current conversation, by
+   * its wire entry id, or null when no shown entry has that id. Bytes that do
+   * not match their type or the size bound are refused like a missing image.
+   */
+  sharedImage(entryId: string): { bytes: Buffer; mimeType: AidenRemoteBotSharedImageMimeType } | null {
+    if (!this.view) return null;
+    for (const entry of projectBotTranscript(this.view.entries)) {
+      if (entry.type !== "shared_image" || wireEntryId(entry.id) !== entryId) continue;
+      const wire = sharedImageWireOf(entry);
+      if (!wire) return null;
+      const bytes = Buffer.from(entry.data, "base64");
+      if (bytes.length !== entry.size || bytes.length > AIDEN_REMOTE_BOT_SHARED_IMAGE_MAX_BYTES) return null;
+      if (!imageBytesMatchMime(bytes, wire.mimeType)) return null;
+      return { bytes, mimeType: wire.mimeType };
+    }
+    return null;
   }
 
   /** How many bubble tags this projector holds (the memo's size, for tests of its bound). */
@@ -1484,7 +1559,7 @@ function routineError(error: unknown): never {
 const HOLDER_AUDIENCE: AidenRemoteBotHandoffAudience = { handoffs: true };
 
 /** The opt-ins a route was called with, from the device's grants. */
-type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; issues?: boolean };
+type AudienceOptions = { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; handoffOnMac?: boolean; images?: boolean; issues?: boolean };
 
 /** Ledger route of each session control. */
 const CONTROL_ROUTES = {
@@ -1570,6 +1645,31 @@ export class AidenRemoteBotSessionService {
    */
   get supportsHandoffs(): boolean {
     return Boolean(this.options.handoffs && this.options.openHandoffOnMac);
+  }
+
+  /**
+   * Shared images on phones (revision 45, `bot:images`). The bytes come from
+   * the conversation itself, so every host that serves Bot sessions serves them.
+   */
+  get supportsSharedImages(): boolean {
+    return true;
+  }
+
+  /**
+   * `GET /bots/{botId}/session/images/{entryId}`: the bytes of an image the Bot
+   * shared, while it is in the Bot's current conversation.
+   */
+  async sharedImage(botId: string, entryId: string): Promise<{ bytes: Buffer; mimeType: AidenRemoteBotSharedImageMimeType }> {
+    const bot = await this.options.bots.bot(botId);
+    let projector: BotLiveProjector;
+    try {
+      projector = await this.liveProjector(bot.id);
+    } catch (error) {
+      return mapSessionError(error);
+    }
+    const image = projector.sharedImage(entryId);
+    if (!image) throw new AidenRemoteServiceError("not_found", "This image is no longer in the Bot's chat.", 404);
+    return image;
   }
 
   /** Staged image and text uploads for Bot messages (revision 33, `bot-attachments-v1`). */
@@ -2084,6 +2184,7 @@ export class AidenRemoteBotSessionService {
       handoffs: options.handoffs === true && this.supportsHandoffs,
       notes: options.handoffs === true && options.handoffNotes === true && this.supportsHandoffs,
       onMac: options.handoffs === true && options.handoffOnMac === true && this.supportsHandoffs,
+      images: options.images === true,
       issues: options.issues === true && this.supportsIssues,
     };
   }

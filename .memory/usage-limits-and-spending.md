@@ -14,7 +14,7 @@ Guide: `docs/usage-limits-and-spending.md`. Plan and the owner's 14 decisions: `
 
 ## Remote
 
-Revision 45 `spending-limits-v1` is PROVISIONAL (first written as 40; moved to 43 on 2026-10-28 when main held 42, then to 44 after #631 took 43, then to 45 after #639 took 44, all on 2026-10-28): re-claim at merge in `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`, the fixture's two `contractRevision` fields, iOS `AidenRemotePhase0Tests` and Android fixture tests. Phones only (feature token count was at 30 of the 32 cap; now 31). Allow more is compare-and-set on a status revision (`sp_` + hash of period, start, limit and extra cents) through `SpendingService.allowMoreIf`.
+Revision 46 `spending-limits-v1` is PROVISIONAL (first written as 40; moved to 43 on 2026-10-28 when main held 42, then to 44 after #631 took 43, then to 45 after #639 took 44, all on 2026-10-28; then to 46 on 2026-10-29 after #626 took 45): re-claim at merge in `AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`, the fixture's two `contractRevision` fields, iOS `AidenRemotePhase0Tests` and Android fixture tests. Phones only (feature token count was at 30 of the 32 cap; now 31). Allow more is compare-and-set on a status revision (`sp_` + hash of period, start, limit and extra cents) through `SpendingService.allowMoreIf`.
 
 ## Gaps
 

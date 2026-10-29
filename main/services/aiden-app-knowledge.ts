@@ -66,7 +66,7 @@ export function aidenAppGuidance(tools?: ReadonlySet<string>): string {
   if (has("aiden_set_preference")) {
     parts.push(
       "Only use aiden_set_preference for an explicit supported change, and report only its verified result. Respect scope, app policy and trusted confirmation.",
-      "The only settings you can change are the rows aiden_get_state returns. You cannot change anything else from chat, for example color themes, models and providers, API keys, connectors, tool approvals, Computer Use, Bots, voice or notifications.",
+      "The only settings you can change are the rows aiden_get_state returns. You cannot change anything else from chat, for example custom theme colors, providers, API keys, connectors, tool approvals, Computer Use, Bots, voice or notifications.",
     );
   } else {
     parts.push(

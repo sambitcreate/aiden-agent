@@ -47,6 +47,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import sbtbiswas.AidenOnTheGo.features.chat.AidenMessageImageAttachments
+import sbtbiswas.AidenOnTheGo.features.chat.AidenMessageMediaEdge
 import sbtbiswas.AidenOnTheGo.features.chat.AidenPowerSaveScope
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.features.chat.AidenQuestionCard
@@ -239,7 +241,7 @@ private fun AidenBotSessionContent(
     // Steer or Queue while the Bot works: Queue by default, and Queue again once the turn ends.
     var busyMode by remember(botId) { mutableStateOf(AidenStreamInputMode.QUEUE) }
     LaunchedEffect(ui.isRunning) { busyMode = aidenBotBusyMode(busyMode, ui.isRunning) }
-    // Revision 45: the Bot's month, re-read after each reply and send.
+    // Revision 46: the Bot's month, re-read after each reply and send.
     val spending = remember(botId) { AidenSpendingNoticeState() }
     val spendingTransport = cl.takeIf { serverInfo?.supportsSpendingLimits == true }
     LaunchedEffect(botId, spendingTransport, ui.isRunning, ui.entries.size, ui.outgoing.size) {
@@ -459,6 +461,11 @@ private fun AidenBotSessionContent(
                             phase = ui.proposalResponses[entry.proposalId],
                             onAnswer = { decision -> scope.launch { controller.respondToProposal(entry.proposalId, decision) } }
                         )
+                        // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+                        is AidenBotSessionEntry.SharedImage -> AidenMessageImageAttachments(
+                            attachments = listOf(controller.sharedImageAttachment(entry)),
+                            edge = AidenMessageMediaEdge.LEADING
+                        ) { controller.sharedImageData(entry.id) }
                     }
                 }
                 if (!partial.isNullOrEmpty()) {

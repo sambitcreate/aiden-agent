@@ -5830,7 +5830,7 @@ struct AidenChatDetailView: View {
         return "\(model.chat.id)|\(chatLoadEpoch)|\(simulatorRefreshEpoch)|\(available)"
     }
 
-    /// Revision 45: a Workspace chat's total, or a Bot chat's month.
+    /// Revision 46: a Workspace chat's total, or a Bot chat's month.
     private var spendingOwner: AidenSpendingOwner {
         model.chat.botId.map(AidenSpendingOwner.bot) ?? .chat(model.chat.id)
     }
@@ -7065,7 +7065,9 @@ private struct AidenAttachmentGallerySelection: Identifiable {
     let id: String
 }
 
-private struct AidenMessageImageAttachmentsView: View {
+/// An inline image (or a deck of them) that opens the full-screen viewer with
+/// Save to Photos. Shared by chat messages and the images a Bot shares.
+struct AidenMessageImageAttachmentsView: View {
     @Environment(AidenHapticCenter.self) private var haptics
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let attachments: [AidenMessageAttachment]

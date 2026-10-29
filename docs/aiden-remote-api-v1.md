@@ -52,6 +52,7 @@ Initial capability IDs:
 | `bot:issues` | Opt-in, no authority of its own (contract revision 42). Delivers the Bot session `issues` list and `issues` frame, the summary `issueCount`, and issue items in the routine notification feed, and opens `POST /bots/{botId}/issues/{issueId}/act`, which still needs `bot:read` and `bot:write`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without the issue route), never issued by pairing. There is no `/server` feature token for it. See "Bot issues on phones, revision 42". |
 | `bot:handoff-on-mac` | Opt-in, no authority of its own (contract revision 43, provisional). Delivers `onMac: true` on an `action` card whose step is on the Bot's own browser or computer, to a device that also holds `bot:handoffs`. Offered, negotiated and refused by earlier hosts exactly like `bot:handoff-notes`. |
 | `schedule:cards` | Opt-in, no authority (contract revision 39). Delivers the display-only `schedule` card on scheduled-task approvals, on `GET /streams/{streamId}/approval` and on a phone's run `approval_required` events and gap snapshots. The card is sent only to a device that also holds `schedule:read`. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities` (`404 not_found` on a host without stream or run approvals), never issued by pairing. There is no `/server` feature token for it. See "Scheduled-task approval cards, revision 39". |
+| `bot:images` | Opt-in, no authority of its own (contract revision 45). Delivers `shared_image` Bot session entries (an image a Bot shared with `share_image`, without its bytes) and lets the device read their bytes from `GET /bots/{botId}/session/images/{entryId}`, which also needs `bot:read` and `chat:read`. Every other device gets the same entry as an assistant line. Negotiable post-pairing by any device type through `POST /device/capabilities` while the host lists it in `serverCapabilities`, never issued by pairing. A host before revision 45 refuses the name, so devices ask for it in a call of its own. See "Bot shared images, revision 45". |
 | `tasks:read` | Read the bounded chat task-progress projection and receive `task_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `agents:read` | Read the bounded delegated-agent roster projection and receive `agents_update` events. Granted only after explicit client negotiation at pairing or post-pairing. |
 | `questions:respond` | Resolve `ask_user_question` prompts owned by this device/stream and receive `question_required` events. Granted only after explicit client negotiation at pairing or post-pairing. |
@@ -310,7 +311,8 @@ These routes were frozen as contract in Phase 1 and implemented in Phase 4 throu
 - `GET /bots/{botId}/avatar/{assetRevision}`: authenticated canonical 512 × 512 PNG only, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. Bot ID and asset revision must match the current main-owned record.
 - `POST /bots/{botId}/handoffs/{waitId}/answer`, `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`, and `POST` / `DELETE /bots/{botId}/pause` (contract revision 37): need `bot:read`, `bot:write` and `bot:handoffs`, plus an `Idempotency-Key`. See "Bot hand-offs and pause, revision 37".
 - `POST /bots/{botId}/issues/{issueId}/act` (contract revision 42): needs `bot:read`, `bot:write` and `bot:issues`, plus an `Idempotency-Key`. See "Bot issues on phones, revision 42".
-- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 45, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 45".
+- `GET /bots/{botId}/session/images/{entryId}` (contract revision 45): the bytes of an image the Bot shared, while it is in the Bot's current conversation. Needs `bot:read`, `chat:read` and `bot:images`. See "Bot shared images, revision 45".
+- `GET /bots/{botId}/spending` and `POST /bots/{botId}/spending/allow-more` (contract revision 46, `spending-limits-v1`): a Bot's monthly spending limit and Allow more. See "Spending limits, revision 46".
 
 An authorized archived Bot remains readable but read-only until restored: list/detail, conversation/history, existing attachment and managed-home file reads, access views, and the current canonical avatar remain available. Chat open-or-create, new turns, uploads, writes, approval effects, identity/access/avatar mutations, and attempts to add the archived Bot to favorites return `bot_archived`; restore remains allowed. Archiving atomically removes favorite membership. Bot reads without `bot:read`, mutations without the full conjunctive grant, cross-Bot/chat references, corrupt bindings, unavailable records, and unknown IDs retain the same non-inferential unavailable classification. Catalog or policy revision drift returns `revision_conflict` with only the current safe revision; invalid/removed opaque selections fail closed and never fall back to Full. Authoritative Custom views may retain selected catalog tombstones marked `available: false` so drift is visible, but new mutations may select only entries currently marked available.
 
@@ -753,6 +755,8 @@ Malformed or absent hints leave manual/QR pairing available.
 
 The desktop owner must explicitly allow **Paired-device chat controls** in Appearance. Only then does `/server` advertise `chat-ui-panels-enabled-v1`; capable clients may negotiate `app-controls:read` and `app-controls:respond` through the existing additive capability endpoint. Chat write access alone grants neither. Disabling owner consent blocks future reads/changes even when old grants remain on the device record.
 
+Desktop-only controls (Color theme and Model for new chats, added 2026-10-27) are not part of this vocabulary. Card snapshots for paired devices omit those rows, and a `models` card in a desktop chat is projected to devices as its plain text fallback, so v1 clients never receive an unknown control or topic.
+
 `GET /chats/{chatId}/controls/{panelId}` requires `chat:read`, `app-controls:read`, current canonical chat access and owner consent. It returns bounded, current host-owned labels, options, values, revisions and disabled reasons. `POST` on that same path additionally requires `app-controls:respond` and the exact four-field `AppControlOperation` in OpenAPI. Memory writes retain the existing `workspace:manage` requirement. Bot panels and changed workspace targets are unavailable. Preferences always affect the paired host; phone appearance remains device-local.
 
 The host persists an operation intent before entering its domain service and returns a verified receipt after persistence/effects. Repeating the same actor/target/operation ID returns its original receipt, including `outcome_unknown`; it cannot repeat an uncertain effect. A changed request under the same ID is rejected. Failed/offline clients do not queue writes. Re-read current state after a conflict or uncertain receipt. The revision represents the control's current value and policy, not an ordered event sequence. Confirmed receipts expire after 30 days; unresolved intents remain, and the ledger rejects new operations at 500 records instead of silently discarding replay protection.
@@ -946,9 +950,34 @@ An unknown or malformed `action` is `400 invalid_request`. An action the card ne
 
 **Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botIssues`: the capability, a session carrying an open card with actions, an open card with no phone action, and a settled card, the `issues` frame that settles one, the act request and receipt, the `not_open` receipt, a summary with `issueCount`, and a phone-feed issue item. The desktop parser reads the section only when `contractRevision` is 41 or newer.
 
-## Spending limits, revision 45 (`spending-limits-v1`, provisional)
+## Bot shared images, revision 45 (`bot:images`)
 
-Revision 45 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
+The host keeps it in one constant (`AIDEN_REMOTE_BOT_IMAGES_CONTRACT_REVISION`; provisional, re-claimed at merge after whatever `main` holds then).
+
+When a Bot shares an image with its `share_image` tool, the Mac shows the picture in the Bot's chat. Before this revision a paired device saw nothing for it. Now a device that holds `bot:images` gets the image, and every other device gets a line saying where to see it.
+
+**Negotiation.** The host lists `bot:images` in `serverCapabilities` while it serves the image route; there is no `/server` feature token. A device sends `POST /device/capabilities {accepts: ["bot:images"]}` in its **own** call, after its other negotiations, so a host that refuses it (`404 not_found` when the route is not wired, `400 invalid_request` from a host older than revision 45) never costs the device its other grants. Pairing never issues it. Because the host fixes a session stream's audience when the stream opens, a Bot chat opened while the device is still negotiating reopens its stream once it holds the grant.
+
+**The entry.** In `GET /bots/{botId}/session`, `entry` events and snapshots, a holder gets `{ type: "shared_image", id, name, mimeType, size }` with exact keys:
+
+| Key | Notes |
+| --- | --- |
+| `id` | The entry id, used in the image route |
+| `name` | 1–255 characters, the file name the Bot gave it |
+| `mimeType` | `image/png` or `image/jpeg` |
+| `size` | Bytes, 1 to 8 MiB (the Mac's inline image limit) |
+
+The bytes never travel in the session. A device without `bot:images` gets, under the same `id` and at the same place, an assistant message: "I shared an image: NAME. Open this chat on your Mac to see it." Clients before revision 45 skip an entry type they do not know, so the line is what keeps them from losing the moment.
+
+**Bytes.** `GET /bots/{botId}/session/images/{entryId}` answers the image with its own `Content-Type` (`image/png` or `image/jpeg`), `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It needs `bot:read`, `chat:read` and `bot:images` (`403 capability_denied` otherwise), and answers `404 not_found` with "This image is no longer in the Bot's chat." when the entry is gone from the Bot's current conversation (a new conversation, or an image the Mac could not verify). The host checks the stored bytes against their size and type before it sends them.
+
+**Clients.** Aiden On The Go for iOS and Android ask for `bot:images` only when the host lists it, in a call of its own, and treat a `400` or `404` as a host that does not offer it. They draw the image on the Bot's side of the chat, read its bytes when it is drawn, keep them in memory while the chat is open (never on disk) within a 32 MiB budget, least recently drawn first out, and only while the transcript still shows them, and read a dropped image or a failed read again the next time the image is drawn. Android's picture cache is app-wide and entry ids repeat across Bots and Macs, so its viewer id for a shared image also names the Mac and Bot (`bot-image:<scope>:<entryId>`); the image route still takes the entry id. Tapping it opens the same full-screen viewer as chat photos. A paired Mac opening another Mac's Bot does not take the grant and shows the line.
+
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `botImages`: the capability, a holder's `entry`, the `legacyEntry` other devices get, and the `imagePath`. The desktop parser reads the section only when `contractRevision` is 45 or newer.
+
+## Spending limits, revision 46 (`spending-limits-v1`, provisional)
+
+Revision 46 is provisional and is re-claimed at merge, after whatever `main` holds then. The host keeps it in one constant (`AIDEN_REMOTE_SPENDING_LIMITS_CONTRACT_REVISION`). The owner sets spending limits on the Mac (see [Usage limits and spending limits](usage-limits-and-spending.md)); phones read a chat's or a Bot's status and allow more.
 
 **Negotiation.** The host lists `spending-limits-v1` in `/server` `features` for phones while its spending ledger is wired. Paired desktops are not offered it. A phone calls the routes only on a host that lists it.
 
@@ -961,4 +990,4 @@ Revision 45 is provisional and is re-claimed at merge, after whatever `main` hol
 
 **Clients.** Aiden On The Go for iOS and Android read the status when a workspace chat or Bot chat opens, after a run settles, when the message count changes and after a send error. They show a quiet line at `nearing` and a card with **Allow $X more** at `reached`, in the same words as the Mac; the limits themselves are changed on the Mac. A tap that gets `409 revision_conflict` re-reads instead of adding twice.
 
-**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 45 or newer.
+**Fixtures.** `protocol/aiden-remote/v1/fixtures/contract.json` holds `spending`: a chat under and at its limit, the allow-more request and response, a Bot's month, no limit, the refused send (`operation_stale`) and the conflict (`revision_conflict` with `currentRevision`). The desktop parser reads the section only when `contractRevision` is 46 or newer.

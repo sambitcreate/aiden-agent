@@ -25,7 +25,7 @@ import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 const val AIDEN_SPENDING_NOTICE_TAG = "aiden-spending-notice"
 
 /**
- * Revision 45: a quiet line from 80% of the limit; once it is reached, a card with Allow
+ * Revision 46: a quiet line from 80% of the limit; once it is reached, a card with Allow
  * more. Status lives in the icon's tint, never in a border.
  */
 @Composable

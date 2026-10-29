@@ -202,7 +202,7 @@ struct AidenBotSessionChatView: View {
         .task(id: filesLookupKey) {
             await loadFilesTools()
         }
-        // Revision 45: re-read the Bot's month after each reply, send and refusal.
+        // Revision 46: re-read the Bot's month after each reply, send and refusal.
         .task(id: spendingRefreshKey) {
             await spending.refresh(owner: .bot(botID), transport: spendingTransport)
         }
@@ -556,6 +556,15 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .sharedImage(image):
+            // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+            AidenMessageImageAttachmentsView(
+                attachments: [image.attachment],
+                edge: .leading,
+                loadData: { attachment in await model.sharedImageData(entryId: attachment.id) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 48)
         }
     }
 

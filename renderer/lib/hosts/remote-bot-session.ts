@@ -82,9 +82,11 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
       return { id: entry.id, type: "notice", notice: entry.notice };
     case "failed_turn":
       return withTime({ id: entry.id, type: "failed_turn" as const, retryText: entry.retryText ?? null }, entry.createdAt);
-    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here.
+    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here. Nor
+    // revision 45 images: without `bot:images` the host sends the line that stands for them.
     case "memory_update":
     case "routine_proposal":
+    case "shared_image":
       return null;
   }
 }

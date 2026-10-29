@@ -43,6 +43,7 @@ import {
   AIDEN_REMOTE_BOT_PROACTIVE_FEATURE,
   AIDEN_REMOTE_BOT_ACTIVITY_CAPABILITIES,
   AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES,
+  AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   AIDEN_REMOTE_BOT_ACTIVITY_FEATURE,
   AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE,
@@ -267,7 +268,7 @@ export interface AidenRemoteRouterDependencies {
   providers?: Pick<AidenRemoteProviderService, "create">;
   memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
   /**
-   * Spending limits (contract revision 45). Absent: the spending routes are
+   * Spending limits (contract revision 46). Absent: the spending routes are
    * `not_found` and phones are not told `spending-limits-v1`.
    */
   spending?: Pick<AidenRemoteSpendingService, "chat" | "bot" | "allowMoreChat" | "allowMoreBot">;
@@ -340,6 +341,9 @@ export interface AidenRemoteRouterDependencies {
         | "pause"
         | "unpause"
         | "supportsHandoffs"
+        // Contract revision 45 (`bot:images`).
+        | "sharedImage"
+        | "supportsSharedImages"
         // Contract revision 42 (`bot:issues`).
         | "actIssue"
         | "supportsIssues"
@@ -409,6 +413,7 @@ export type AidenRemoteRouteLabel =
   | "botSession"
   | "botAttachment"
   | "botSessionEvents"
+  | "botSessionImage"
   | "botQuestionAnswer"
   | "botHandoffAnswer"
   | "botHandoffOpenOnMac"
@@ -504,6 +509,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   ],
   botAttachment: ["/bots/:botId/attachments", "/bots/:botId/attachments/:attachmentId"],
   botSessionEvents: ["/bots/:botId/session/events"],
+  botSessionImage: ["/bots/:botId/session/images/:entryId"],
   botQuestionAnswer: ["/bots/:botId/questions/:waitId/answer"],
   botHandoffAnswer: ["/bots/:botId/handoffs/:waitId/answer"],
   botHandoffOpenOnMac: ["/bots/:botId/handoffs/:waitId/open-on-mac"],
@@ -1664,7 +1670,7 @@ export function aidenRemoteServerFeatures(
     ...(support.botActivity ? [AIDEN_REMOTE_BOT_ACTIVITY_FEATURE] : []),
     // Bot message attachments (contract revision 33).
     ...(support.botAttachments ? [AIDEN_REMOTE_BOT_ATTACHMENTS_FEATURE] : []),
-    // Spending limits (contract revision 45): the Mac shows its own notices.
+    // Spending limits (contract revision 46): the Mac shows its own notices.
     ...(phone && support.spending ? [AIDEN_REMOTE_SPENDING_LIMITS_FEATURE] : []),
     // The phone simulator viewer (contract revision 26); sharing consent is reported by `/simulators`.
     ...(phone && support.mobileSimulators ? [AIDEN_REMOTE_MOBILE_SIMULATORS_FEATURE] : []),
@@ -1827,6 +1833,20 @@ function holdsBotHandoffOnMac(
   return device.capabilities.has("bot:handoff-on-mac") && holdsBotHandoffs(device, dependencies);
 }
 
+/** Revision 45: shared-image entries and their byte route ship together, or not at all. */
+function botImagesWired(dependencies: AidenRemoteRouterDependencies): boolean {
+  const sessions = dependencies.botSessions;
+  return sessions?.supportsSharedImages === true && typeof sessions.sharedImage === "function";
+}
+
+/** Whether this device is sent `shared_image` entries (revision 45). */
+function holdsBotImages(
+  device: AidenRemoteRouterAuthenticatedDevice,
+  dependencies: AidenRemoteRouterDependencies,
+): boolean {
+  return device.capabilities.has("bot:images") && botImagesWired(dependencies);
+}
+
 /** A revision-37 route: not_found where unwired, capability_denied without `bot:handoffs`. */
 function requireBotHandoffs(
   device: AidenRemoteRouterAuthenticatedDevice,
@@ -1933,6 +1953,10 @@ function advertisedServerCapabilities(
     // Revision 37: offered only while the hand-off and pause routes are wired.
     ...(device.acceptsBotCapabilities === true && botHandoffsWired(dependencies)
       ? AIDEN_REMOTE_BOT_HANDOFF_CAPABILITIES
+      : []),
+    // Revision 45: offered only while shared images and their route are wired.
+    ...(device.acceptsBotCapabilities === true && botImagesWired(dependencies)
+      ? AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES
       : []),
     // Revision 42: offered only while the issue act route is wired.
     ...(device.acceptsBotCapabilities === true && botIssuesWired(dependencies)
@@ -2354,6 +2378,11 @@ export function createAidenRemoteRequestHandler(
             if (!botHandoffsWired(dependencies)) {
               throw new AidenRemoteServiceError("not_found", "Bot hand-offs are unavailable on this Aiden installation.", 404);
             }
+          } else if ((AIDEN_REMOTE_BOT_IMAGE_CAPABILITIES as readonly string[]).includes(capability)) {
+            // Revision 45: an opt-in to shared-image entries, offered only while their route is wired.
+            if (!botImagesWired(dependencies)) {
+              throw new AidenRemoteServiceError("not_found", "Bot images are unavailable on this Aiden installation.", 404);
+            }
           } else if ((AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES as readonly string[]).includes(capability)) {
             // Revision 42: an opt-in to issue cards, offered only while their route is wired.
             if (!botIssuesWired(dependencies)) {
@@ -2649,6 +2678,7 @@ export function createAidenRemoteRequestHandler(
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
             handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+            images: holdsBotImages(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           }),
         );
@@ -2673,9 +2703,26 @@ export function createAidenRemoteRequestHandler(
             handoffs: holdsBotHandoffs(device, dependencies),
             handoffNotes: holdsBotHandoffNotes(device, dependencies),
             handoffOnMac: holdsBotHandoffOnMac(device, dependencies),
+            images: holdsBotImages(device, dependencies),
             issues: holdsBotIssues(device, dependencies),
           },
         );
+        return;
+      }
+      const botSessionImageMatch =
+        /^\/bots\/([A-Za-z0-9._:-]{1,160})\/session\/images\/([A-Za-z0-9._:-]{1,128})$/u.exec(path);
+      if (botSessionImageMatch && request.method === "GET") {
+        requireNoQuery(query);
+        route = "botSessionImage";
+        const device = await authenticate(request, dependencies.devices, "bot:read");
+        deviceIdSuffix = device.id.slice(-8);
+        if (!botImagesWired(dependencies)) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        // The image is part of the Bot's transcript: reading it is a chat read.
+        requireDeviceCapabilities(device, ["chat:read", "bot:images"]);
+        const image = await dependencies.botSessions!.sharedImage!(botSessionImageMatch[1]!, botSessionImageMatch[2]!);
+        writeAttachmentContent(response, { bytes: image.bytes, mimeType: image.mimeType });
         return;
       }
       const botMessagesMatch = /^\/bots\/([A-Za-z0-9._:-]{1,160})\/messages$/u.exec(path);

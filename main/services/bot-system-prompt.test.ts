@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { createBotRoutinesTool } from "./schedule-tool.js";
 import {
   botRoutineGuidance,
   resolveBotForGeneration,
@@ -29,6 +30,26 @@ test("Bot wake-up guidance follows the tools offered to this turn", () => {
   assert.match(guidance, /accepts the Add routine card/u);
   assert.match(guidance, /same Bot chat/u);
   assert.match(guidance, /running on an awake computer/u);
+  assert.match(guidance, /action revise/u);
+});
+
+test("the Bot's prompt and its routines tool name the same ways it can be woken", () => {
+  const wakeList = (text: string) => text.slice(text.indexOf("You can be woken by:")).split("\n").filter((line) => line.startsWith("- "));
+  const prompt = wakeList(botRoutineGuidance(new Set(["routines"])));
+  assert.ok(prompt.length >= 5);
+  assert.ok(prompt.some((line) => /scheduled routine/u.test(line)));
+  assert.ok(prompt.some((line) => /file change/u.test(line) && /link/u.test(line)), "event routines are listed");
+  assert.ok(prompt.some((line) => /approval/u.test(line)), "resolved waits are listed");
+  const tool = createBotRoutinesTool("bot-1", {
+    list: async () => [],
+    pause: async () => {
+      throw new Error("unused");
+    },
+    propose: async () => ({ ok: true, proposalId: "unused" }),
+  });
+  const described = tool.description.split("\n").filter((line) => line.startsWith("- "));
+  assert.deepEqual(described, prompt);
+  assert.doesNotMatch(botRoutineGuidance(new Set()), /You can be woken by/u, "no list when the turn can't propose");
 });
 
 test("bot persona composition preserves the base prompt and escapes structural delimiters", () => {
