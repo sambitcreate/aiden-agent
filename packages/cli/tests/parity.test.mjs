@@ -521,6 +521,39 @@ test("an approved schedule mutation rechecks authority at publication, after asy
   assert.equal((await api.scheduleCommand(dir, ["list"]))[0].enabled, true);
 });
 
+test("a codemode script in a Full workspace still needs consent to save a scheduled task", async (t) => {
+  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
+  const run = async (approve) => {
+    const dir = temporary(t);
+    const workspace = await api.workspaceCommand(dir, ["add", dir]);
+    await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+    const request = { action: "save", name: "Nightly", cron: "0 2 * * *", timezone: "UTC", prompt: "Summarize the repository", permission: "full", workspaceId: workspace.id };
+    const faux = fauxProvider({ provider: "faux-schedule", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
+    // Session parity also asks the model for a chat title, so answer by request shape, not order.
+    const respond = (context) => context.messages.at(-1)?.role === "toolResult" ? fauxAssistantMessage("Done")
+      : context.messages.some((message) => message.role === "system" && (message.toolsAdded ?? []).some((tool) => tool.name === "codemode"))
+        ? fauxAssistantMessage(fauxToolCall("codemode", { code: `text(JSON.stringify(await tools.schedule_task(${JSON.stringify(request)})))` }), { stopReason: "toolUse" })
+        : fauxAssistantMessage("Nightly summary");
+    faux.setResponses([respond, respond, respond, respond]);
+    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createSessionParityExtension(dir), api.createScheduleExtension(dir), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools: ["read", "codemode"] }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+    t.after(() => session.dispose());
+    const titles = [];
+    const uiContext = new Proxy({ confirm: async (title) => { titles.push(title); return approve; } }, {
+      get: (target, key) => key in target ? target[key] : () => undefined,
+    });
+    await session.bindExtensions({ uiContext });
+    await session.prompt("Schedule a nightly summary");
+    return { titles, tasks: await api.scheduleCommand(dir, ["list"]) };
+  };
+  const denied = await run(false);
+  assert.deepEqual(denied.titles, ["Allow scheduled-task change?"], "the nested call asked once, even with Full access");
+  assert.deepEqual(denied.tasks, [], "a declined nested save publishes nothing");
+});
+
 test("a cancelled or expired publication receipt cannot change an existing task", async (t) => {
   const { dir, tool, input, context } = await scheduleToolFixture(t);
   await tool.execute("create", input, undefined, undefined, context);
