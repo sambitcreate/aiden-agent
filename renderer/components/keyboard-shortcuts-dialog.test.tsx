@@ -6,7 +6,6 @@ import {
 } from "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createBotTestQueryClient, mountWithBotRouter } from "../main/bots/test-providers";
@@ -149,7 +148,7 @@ function Handler({ commandId, onRun }: { commandId: CommandId; onRun: () => void
 
 function menuCommandsSent(): string[] | undefined {
   const sent = calls.filter((call) => call.channel === "app:setMenuCommands");
-  return sent.at(-1)?.args[0] as string[] | undefined;
+  return sent[sent.length - 1]?.args[0] as string[] | undefined;
 }
 
 test("the menu bar learns which commands can run now, and a menu key the page saw isn't run twice", async () => {
@@ -167,9 +166,12 @@ test("the menu bar learns which commands can run now, and a menu key the page sa
   const { rerender } = render(app(true));
   await waitFor(() => assert.ok(menuCommandsSent()?.includes("chat.find")));
   rerender(app(false));
-  await waitFor(
-    () => assert.equal(menuCommandsSent()?.includes("chat.find"), false),
-    "greyed out once no chat can run it",
+  await waitFor(() =>
+    assert.equal(
+      menuCommandsSent()?.includes("chat.find"),
+      false,
+      "greyed out once no chat can run it",
+    ),
   );
   rerender(app(true));
   await waitFor(() => assert.ok(menuCommandsSent()?.includes("chat.find")));
