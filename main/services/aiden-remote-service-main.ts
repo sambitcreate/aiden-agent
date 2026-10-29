@@ -70,12 +70,10 @@ import {
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
-  aidenRemoteStreamStoreOptions,
-  normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
   type AidenRemotePendingApproval,
-  type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
+import { AidenRemoteStreamJournal } from "./aiden-remote-stream-journal.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
@@ -372,12 +370,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     () => userData,
     aidenRemoteOperationStoreOptions(),
   );
-  const streamStore = new DataStore<AidenRemoteStreamSnapshot>(
-    STREAMS_FILE,
-    { version: 1, streams: [] },
-    () => userData,
-    aidenRemoteStreamStoreOptions(),
-  );
+  const streamJournal = new AidenRemoteStreamJournal(STREAMS_FILE, () => userData);
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
     {
@@ -489,7 +482,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             listProviders: listConfiguredProviders,
             getSettings: () => configStore.getSettings(),
           });
-          const loadedStreamSnapshot = normalizeAidenRemoteStreamSnapshot(await streamStore.load());
+          const loadedStreamSnapshot = await streamJournal.load();
           const revokedDeviceIds = new Set(
             (await state.snapshot()).devices
               .filter(({ revokedAt }) => revokedAt !== undefined)
@@ -500,7 +493,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             revokedDeviceIds,
           );
           if (streamSnapshot.streams.length !== loadedStreamSnapshot.streams.length) {
-            await streamStore.save(streamSnapshot);
+            await streamJournal.replace(streamSnapshot);
           }
           const streams = new AidenRemoteStreamService({
             now: Date.now,
@@ -520,7 +513,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             notifyApprovalChanged: (chatId) =>
               ipcMain.broadcast("remote:approval-changed", { chatId }),
             snapshot: streamSnapshot,
-            persist: (snapshot) => streamStore.save(snapshot),
+            persist: (write) => streamJournal.save(write),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             onPersistenceError: (error) =>
