@@ -184,6 +184,21 @@ test("palette omits studio commands while their capability is off", () => {
   );
 });
 
+test("chat actions show in the palette only while something on screen can run them", () => {
+  const capabilities = { designStudio: true, createImages: true };
+  const nothingOnScreen = paletteCommands(capabilities, () => false).map(({ id }) => id);
+  assert.ok(!nothingOnScreen.includes("chat.rename"));
+  assert.ok(!nothingOnScreen.includes("chat.stop"));
+  assert.ok(!nothingOnScreen.includes("tools.browser"));
+  // App-wide commands stay listed whether or not a handler is mounted yet.
+  assert.ok(nothingOnScreen.includes("settings.open"));
+  assert.ok(nothingOnScreen.includes("chat.search"));
+
+  const renameOnly = paletteCommands(capabilities, (id) => id === "chat.rename").map(({ id }) => id);
+  assert.ok(renameOnly.includes("chat.rename"));
+  assert.ok(!renameOnly.includes("chat.delete"));
+});
+
 test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
   assert.equal(bindings["design.open"], null);

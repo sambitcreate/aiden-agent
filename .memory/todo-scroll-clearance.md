@@ -7,3 +7,7 @@ The floating todo chip sits above the composer footer, while `ScrollArea` previo
 Verification: 101/101 focused todo tests, TypeScript type-check, scoped ESLint, and Vite renderer build passed. The focused test covers the snapshot visibility matrix, chat wiring, and rendered scroll-area padding. Installed-app visual acceptance remains separate from local build verification.
 
 PR review follow-up: renderer preflight had a strict source assertion for the old one-line padding style. Its contract now checks the additive, clamped scroll clearance while preserving the toolbar and footer assertions. The focused todo suite alone did not cover this shared component contract.
+
+Update 2026-10-27: the todo chip and the subagent composer pill now share `ComposerFloatingRow` (`renderer/components/todo-panel.tsx`), and `composerFloatingRowOffsets(visible)` supplies the same 44/56 px offsets while either is on screen. See `.memory/subagent-running-visibility.md`.
+
+Update 2026-10-28: the row now measures its own height (ResizeObserver via `onHeightChange`), and `composerFloatingRowOffsets(visible, height)` clears at least one 36 px line plus 8/20 px, so a wrapped two-line row on narrow panes pushes the transcript up instead of covering it.

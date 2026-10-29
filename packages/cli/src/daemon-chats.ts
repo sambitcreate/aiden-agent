@@ -28,6 +28,7 @@ import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
+import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
 
 /**
@@ -56,7 +57,7 @@ export function createDaemonChats(agentDir: string) {
   const activity = new ChatActivityRegistry(() => {});
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
-  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
+  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; cancellationOrigin?: GenerationCancellationOrigin; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
   const reserved = new Set<string>();
   const idleWaiters = new Map<string, Set<() => void>>();
   const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
@@ -85,7 +86,14 @@ export function createDaemonChats(agentDir: string) {
       }
       return true;
     },
-    async cancelChat(id: string) { admission.releaseChat(id); const entry = active.get(id); entry?.abort.abort(); await entry?.session?.abort(); },
+    /** Stops the chat's turn; the first stop's origin is what its timeline records, as on the desktop. */
+    async cancelChat(id: string, origin: GenerationCancellationOrigin = "chat_deletion") {
+      admission.releaseChat(id); const entry = active.get(id);
+      if (entry && !entry.abort.signal.aborted) entry.cancellationOrigin ??= origin;
+      entry?.abort.abort(); await entry?.session?.abort();
+    },
+    /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
+    async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
     approve(id: string, decision: "allow" | "deny", ownerId: string) {
       const pending = approvals.get(id); if (!pending || pending.ownerId !== ownerId) return false;
       approvals.delete(id); pending.resolve(decision === "allow"); return true;
@@ -93,7 +101,7 @@ export function createDaemonChats(agentDir: string) {
     cancel(streamId: string, ownerId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0]); return true;
+      void llmClient.cancelChat(pair[0], "user_stop"); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
       if (owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
@@ -264,7 +272,7 @@ export function createDaemonChats(agentDir: string) {
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
         const cancelled = entry.abort.signal.aborted;
-        const finalTimeline = timeline.finish(cancelled ? "cancelled" : "failed");
+        const finalTimeline = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
         if (!persisted && (content || produced.length)) {
           await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).catch(() => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
@@ -282,6 +290,6 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, admission, deletion, sessionPath,
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat!(id))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

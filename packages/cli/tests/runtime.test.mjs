@@ -184,6 +184,45 @@ test("fullscreen TUI is the default unless overridden by flag or saved setting",
 	);
 });
 
+/** Evaluates shouldDefaultToCodemode from the pure src/codemode-default.ts module, like fullscreenDefault. */
+function codemodeDefault(args, settingsPaths) {
+	const result = spawnSync(
+		process.execPath,
+		[
+			"--experimental-strip-types",
+			"--input-type=module",
+			"-e",
+			`import { shouldDefaultToCodemode } from ${JSON.stringify(
+				pathToFileURL(path.join(pkgDir, "src", "codemode-default.ts")).href,
+			)}; process.stdout.write(String(shouldDefaultToCodemode(${JSON.stringify(args)}, ${JSON.stringify(
+				settingsPaths,
+			)})));`,
+		],
+		{ cwd: pkgDir, encoding: "utf-8", timeout: 60_000 },
+	);
+	assert.equal(result.status, 0, result.stderr);
+	return result.stdout === "true";
+}
+
+test("codemode is on by default unless a tool flag or saved defaultTools chooses otherwise", () => {
+	assert.equal(codemodeDefault([], []), true, "fresh installs get codemode next to the default tools");
+	for (const flags of [["--tools", "read,bash"], ["-t", "-codemode"], ["--no-tools"], ["-nbt"], ["--no-extensions"]]) {
+		assert.equal(codemodeDefault(flags, []), false, `${flags.join(" ")} wins over the default`);
+	}
+	const dir = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
+	const settings = path.join(dir, "settings.json");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["-codemode"] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved -codemode turns it off");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["read", "bash"] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved plain list replaces the defaults, codemode included");
+	writeFileSync(settings, JSON.stringify({ defaultTools: [] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved empty list means no default tools, codemode included");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["+grep"] }));
+	assert.equal(codemodeDefault([], [settings]), true, "adding other tools keeps the codemode default");
+	writeFileSync(settings, "{ not json");
+	assert.equal(codemodeDefault([], [settings]), true, "an unreadable settings file falls through to the default");
+});
+
 
 test("desktop skills folders (~/.aiden/skills priority set) feed CLI commands", () => {
 	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-home-"));

@@ -29,6 +29,9 @@ function savedOperation(intent: SavedChatIntent): PeerOperation {
       text: request.input.text,
       ...(request.input.attachmentIds?.length ? { attachmentIds: request.input.attachmentIds } : {}),
       ...(request.input.skill ? { skill: request.input.skill } : {}),
+      // A replay must repeat the original body, or the host refuses the key.
+      ...(request.input.model ? { providerId: request.input.model.providerId, modelId: request.input.model.modelId } : {}),
+      ...(request.input.thinkingLevel ? { thinkingLevel: request.input.thinkingLevel } : {}),
     } };
     case "cancel": return { operation: "runCancel", resourceId: request.input.runId, idempotencyKey, body: {} };
     case "respondApproval": return { operation: "runRespondApproval", resourceId: request.input.runId,

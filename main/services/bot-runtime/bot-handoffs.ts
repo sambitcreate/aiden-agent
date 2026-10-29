@@ -15,6 +15,7 @@ import {
   botHandoffAnswerOf,
   botHandoffTakesNote,
   type BotHandoffAnswer,
+  type BotHandoffTarget,
   type BotPendingHandoff,
 } from "../../../renderer/shared/bot-handoffs.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
@@ -27,9 +28,10 @@ export interface BotHandoffRequest extends BotPendingHandoff {
 /**
  * The card a rule opens instead of running a call (plan §4.4): an action card
  * naming its rule, with the page the call was on (a Bot browser call) as its
- * Open.
+ * Open. `target` is where that call would have acted: the Bot's own browser or
+ * computer, which the card's Open brings forward.
  */
-export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRequest {
+export function ruleHandoffRequest(request: BotRuleHandoffRequest, target?: BotHandoffTarget): BotHandoffRequest {
   return {
     botId: request.botId,
     waitId: request.waitId,
@@ -38,6 +40,7 @@ export function ruleHandoffRequest(request: BotRuleHandoffRequest): BotHandoffRe
     action: request.action,
     why: request.why,
     ...(request.open === undefined ? {} : { open: { url: request.open.url } }),
+    ...(target === undefined ? {} : { target }),
     source: "rule",
     rule: { id: request.rule.id, label: request.rule.label },
     signal: request.signal,

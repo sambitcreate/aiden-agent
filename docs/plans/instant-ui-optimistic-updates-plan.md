@@ -86,6 +86,10 @@ The owner still felt a delay after pressing Send in a Bot chat. The message did 
 - iOS and Android: a message on its way is drawn as sent, with "Sending…" only once it has waited 2 s (offline, or a slow Mac). Queued, Steer and "Couldn't send · Try again" are unchanged; the phones already showed "Getting ready" at once.
 - Not changed: how fast the Mac admits a send. Reusing the Bot's tool set and prompt between sends is a possible follow-up.
 
+## Follow-up: no "Sending…" on desktop Bots (2026-10-28)
+
+The owner still saw "Sending…" under a desktop Bot message when the Mac took more than 2 s to admit it, and asked that the message simply read as sent. The desktop echo no longer has a slow label: it looks sent from the press, and the "Getting ready" line below the transcript is the only sign of a slow start. A failed send still drops the echo and shows its error. The phones keep their 2 s "Sending…" (offline is a real state there); the Mac's admission time is unchanged.
+
 ## Out of scope for this pass
 
 Desktop read snapshots that survive a relaunch (cache-first plan D1, D3), the model catalog disk caches on both phones, Files/Git caches (I7, A5), and the paired-Mac remote Bot open on old hosts. These stay on the cache-first plan.

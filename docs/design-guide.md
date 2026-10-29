@@ -39,7 +39,9 @@ tile, the action as a plain question ("Run this command?", "Edit forecast.ts?"),
 the exact request in a monospaced well, one quiet line under it ("Aiden is
 paused until you choose.", or the file and its size of change), and two equal
 large buttons. Deny is the filled neutral action and keeps initial focus; Allow
-once is the accent action. When the host offers remembered scopes, Allow once
+once is the accent action. In the open chat each button carries its key as a
+quiet trailing label (`⌘⌫` Deny, `⌘↩` Allow once), at reduced opacity rather
+than in a keycap, so the pair still reads as two plain actions. When the host offers remembered scopes, Allow once
 becomes a joined action whose chevron menu lists **Allow for this chat** and
 **Always allow in this workspace**, each with one line on what it covers: a
 command rule covers only that exact command, but a file rule covers any later

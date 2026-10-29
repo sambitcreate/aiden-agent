@@ -82,6 +82,22 @@ test("a batch is checked against the budget only on its final state", async () =
   assert.equal(texts[texts.length - 1], "Weekly meal plan is vegetarian except Fridays.");
 });
 
+test("a batch with expected entries writes nothing once a person's edit landed in between", async () => {
+  const p = profile();
+  const store = createBotMemoryStore({ profileDir: p.root });
+  await store.apply(BOT, "memory", [{ action: "add", content: "Briefing at 8 with weather and calendar." }]);
+  const seen = (await store.load(BOT)).stores.memory.texts;
+  // The person edits while an automatic write (Undo, tidy) is getting ready.
+  const [entry] = memoryView(await store.load(BOT)).memory.entries;
+  assert.ok((await store.edit(BOT, { kind: "replace", target: "memory", entryId: entry!.id, text: "Briefing at 8; never mention work." })).ok);
+  const late = await store.apply(BOT, "memory", [{ action: "replace", match: "Briefing", content: "Briefing at 8." }], { expectTexts: seen });
+  assert.equal(late.ok, false);
+  assert.equal(!late.ok && late.code, "changed");
+  assert.deepEqual((await store.load(BOT)).stores.memory.texts, ["Briefing at 8; never mention work."]);
+  const current = (await store.load(BOT)).stores.memory.texts;
+  assert.equal((await store.apply(BOT, "memory", [{ action: "replace", match: "Briefing", content: "Briefing at 8." }], { expectTexts: current })).ok, true);
+});
+
 test("a failing operation aborts the whole batch", async () => {
   const p = profile();
   const store = createBotMemoryStore({ profileDir: p.root });

@@ -11,6 +11,8 @@ test("Bot skills resolve configured, global, and only the selected Bot home with
     ],
     botId: "bot:a",
     loadBotHomePath: async () => "/private/bot-a",
+    // The person approved this home skill (unapproved ones never load).
+    isHomeSkillApproved: async () => true,
     discover: async (workspaceRoot) => {
       discoveredRoots.push(workspaceRoot);
       return workspaceRoot

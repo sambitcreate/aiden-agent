@@ -2,6 +2,14 @@
 
 Status: In progress. Implementation and stacked PR delivery authorized October 27, 2026.
 
+Owner decisions, October 29, 2026, after a review of the draft stack:
+
+- W1 Telegram pairing (#605) is closed without merging, because Telegram is being removed from Aiden. Its changes are taken back out of the later PRs in the stack.
+- W5 Remote admission (#607) ships as written: unknown computers can ask to pair only while Add device is open, and the request setting defaults to off.
+- W3a private configuration (#609) also accepts a symlinked configuration folder or file whose target is a private folder the person owns, instead of blocking dotfile-managed setups.
+- W12 (#614) ships the production renderer CSP change. The AppImage updater keeps today's feed checksum check and does not require the GitHub CLI; publisher verification in the updater stays an open design question.
+- The stack lands bottom-up, one PR at a time, each after main is merged in and CI is green on its exact head. UI changes (#608, #612) are shown as screenshots first.
+
 We should first close Telegram owner bootstrap and CLI scheduling approval gaps, then protect portable configuration and external mobile voice entry points. The remaining work is split into independently reviewable changes, validation tasks and explicit product decisions. Each change must preserve existing Bot policies, provider bindings, revocation and manual-only network behavior.
 
 This plan covers all 23 findings in the October 27 audit and incorporates the T3 Code comparison. The owner authorized implementation, stacked PRs and fresh-context GPT-6.1 Sol high review on October 27, 2026. Publishing releases, merging and credential rotation remain outside this implementation request.

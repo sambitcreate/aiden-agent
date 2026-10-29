@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TodoPanel, todoPanelHasVisibleChrome } from "./todo-panel.js";
+import { composerFloatingRowOffsets, TodoPanel, todoPanelHasVisibleChrome } from "./todo-panel.js";
 import { ScrollArea } from "./ui.js";
 
 const source = readFileSync(new URL("./todo-panel.tsx", import.meta.url), "utf8");
@@ -15,7 +15,6 @@ test("storage-disabled tracking stays hidden because it requires no user action"
   assert.equal(html, "");
   assert.doesNotMatch(source, /Task tracking not enabled|cannot save or update a task list here/u);
 });
-const chatPaneSource = readFileSync(new URL("../main/chat-pane.tsx", import.meta.url), "utf8");
 const uiSource = readFileSync(new URL("./ui.tsx", import.meta.url), "utf8");
 
 test("visible chrome and scroll clearance share the complete snapshot state matrix", () => {
@@ -42,17 +41,26 @@ test("visible chrome and scroll clearance share the complete snapshot state matr
   assert.equal(todoPanelHasVisibleChrome(ready("completed")), false);
   assert.equal(todoPanelHasVisibleChrome(ready("pending")), true);
   assert.equal(todoPanelHasVisibleChrome(ready("in_progress")), true);
-  assert.match(
-    chatPaneSource,
-    /scrollToBottomButtonOffset=\{todoPanelVisible \? 44 : 0\}/u,
-  );
-  assert.match(chatPaneSource, /scrollContentBottomOffset=\{todoPanelVisible \? 56 : 0\}/u);
+  assert.deepEqual(composerFloatingRowOffsets(false), {
+    scrollToBottomButtonOffset: 0,
+    scrollContentBottomOffset: 0,
+  });
+  const offsets = composerFloatingRowOffsets(true);
+  // The last transcript row clears the floating row, and the jump button sits above it.
+  assert.ok(offsets.scrollContentBottomOffset > offsets.scrollToBottomButtonOffset);
+  assert.ok(offsets.scrollToBottomButtonOffset > 0);
+  // A row that wraps onto a second line pushes the transcript up by the extra height.
+  const wrapped = composerFloatingRowOffsets(true, 80);
+  assert.ok(wrapped.scrollContentBottomOffset > 80);
+  assert.ok(wrapped.scrollToBottomButtonOffset > offsets.scrollToBottomButtonOffset);
+  // A measurement before layout (zero) still clears one line.
+  assert.deepEqual(composerFloatingRowOffsets(true, 0), offsets);
   const html = renderToStaticMarkup(
-    <ScrollArea scrollContentBottomOffset={56} footer={<div>Composer</div>}>
+    <ScrollArea {...offsets} footer={<div>Composer</div>}>
       <div>Last transcript row</div>
     </ScrollArea>,
   );
-  assert.match(html, /padding-bottom:56px/u);
+  assert.match(html, new RegExp(`padding-bottom:${offsets.scrollContentBottomOffset}px`, "u"));
   assert.match(html, /Last transcript row/u);
   assert.match(html, /Composer/u);
 });
