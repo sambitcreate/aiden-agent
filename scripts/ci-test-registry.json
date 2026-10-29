@@ -203,6 +203,7 @@
         "main/services/pi-agent-runtime-harness-finish-turn.test.ts",
         "main/services/pi-codemode.test.ts",
         "main/services/context-pressure-tools.test.ts",
+        "main/services/recent-chat-cache.test.ts",
         "main/services/pi-compaction-core.test.ts",
         "main/services/pi-journal-fork.test.ts",
         "main/services/fork-summary-service.test.ts",
