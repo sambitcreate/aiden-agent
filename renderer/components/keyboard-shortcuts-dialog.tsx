@@ -37,8 +37,9 @@ export function KeyCombo({
         <Kbd className="text-primary">{prettyAcceleratorForPlatform(key, platform)}</Kbd>
       </React.Fragment>
     ));
+  // Long combos wrap onto a second line rather than widen a narrow window.
   return (
-    <span className="inline-flex shrink-0 flex-wrap items-center justify-end gap-1 text-mini text-tertiary">
+    <span className="inline-flex max-w-[60%] flex-wrap items-center justify-end gap-1 text-mini text-tertiary">
       {chips(keys, range ? "–" : "/")}
       {alsoKeys?.length ? (
         <>
