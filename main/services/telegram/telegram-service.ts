@@ -60,7 +60,7 @@ import {
   telegramBotNoticeAudienceId,
 } from "./telegram-profile-config.js";
 import { createTelegramThreadStore } from "./telegram-thread-store.js";
-import { createTelegramOwnershipLease } from "./telegram-ownership.js";
+import { createTelegramTransportOwnership, telegramSharedOwnershipRoot } from "./telegram-ownership.js";
 import {
   chunkForTelegram,
   chunkRichMarkdown,
@@ -351,9 +351,13 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     root: () => app.getPath("userData"),
     profile,
   });
-  const ownership = createTelegramOwnershipLease({
-    root: () => app.getPath("userData"),
+  // The bot-keyed lease lives in the shared Aiden root so `aiden serve` and
+  // this app (or two profiles holding one token) never poll one bot together.
+  const ownership = createTelegramTransportOwnership({
+    profileRoot: () => app.getPath("userData"),
     profile,
+    sharedRoot: () => telegramSharedOwnershipRoot(),
+    getToken: resolveToken,
   });
   let threadProvisioning = Promise.resolve();
   // Bot-bound messages go to the Bot's durable session; replies leave through
@@ -1017,9 +1021,18 @@ export function createTelegramProfileManager() {
       return secrets.hasKey(telegramProfileTokenKey(activeProfile));
     },
     async setActiveToken(token: string): Promise<void> {
-      const key = telegramProfileTokenKey(activeProfile);
-      if (token) await secrets.setKey(key, token);
-      else await secrets.deleteKey(key);
+      const profile = activeProfile;
+      const key = telegramProfileTokenKey(profile);
+      if (!token) {
+        await secrets.deleteKey(key);
+        return;
+      }
+      const previous = await secrets.getKey(key);
+      await secrets.setKey(key, token);
+      // A running transport keeps the old bot's identity and offset until it
+      // re-runs getMe, so a new token must restart it (or revive one stopped
+      // by a revoked token).
+      if (previous !== token) await services.get(profile)?.restart();
     },
     async setEnabled(enabled: boolean): Promise<void> {
       await setProfileSettings(activeProfile, { telegramEnabled: enabled });

@@ -66,6 +66,14 @@ import {
 
 const POLL_TIMEOUT_SECONDS = 30;
 const ERROR_SLEEP_MS = 3_000;
+/** Longest pause between polls while Telegram or the network keeps failing. */
+const MAX_POLL_RETRY_SLEEP_MS = 5 * 60_000;
+/** Shown when Telegram rejects the token itself; retrying with it can never work. */
+const REJECTED_TOKEN_MESSAGE =
+  "Telegram rejected the bot token. It was revoked or is not valid. Get a new token from @BotFather and connect again.";
+/** Shown on 409: another getUpdates poller or a webhook holds this bot's updates. */
+const POLL_CONFLICT_MESSAGE =
+  "Another app is reading this Telegram bot's messages, or a webhook is set for it. Stop the other Aiden app, `aiden serve`, or tool that uses this bot (or delete its webhook); Aiden keeps retrying.";
 /** Longest pause between retries of one update that keeps failing. */
 const MAX_UPDATE_RETRY_SLEEP_MS = 60_000;
 /** Attempts one update gets before it is reported to its chat and skipped. */
@@ -184,8 +192,45 @@ export interface TelegramServiceDeps {
   resolveThreadWorkspace?(threadId: number): Promise<string | undefined>;
   ensureThreadTargets?(chatId: number): Promise<void>;
   clearThreadTargets?(): Promise<void>;
-  acquireOwnership?(): { acquired: boolean; recovered: boolean; ownerPid?: number };
+  /**
+   * Claims the transport before polling. `scope: "bot"` means another process
+   * (a desktop app or `aiden serve`) already polls this bot token.
+   */
+  acquireOwnership?(): TelegramOwnershipClaim | Promise<TelegramOwnershipClaim>;
   releaseOwnership?(): void;
+}
+
+export interface TelegramOwnershipClaim {
+  acquired: boolean;
+  recovered: boolean;
+  ownerPid?: number;
+  scope?: "profile" | "bot";
+}
+
+function ownershipConflictMessage(claim: TelegramOwnershipClaim): string {
+  const owner = claim.ownerPid ?? "unknown";
+  return claim.scope === "bot"
+    ? `This Telegram bot is already in use by another Aiden process (${owner}), such as the desktop app or \`aiden serve\`. Stop it there to use the bot here.`
+    : `Telegram profile is already owned by process ${owner}.`;
+}
+
+/** 401 (revoked) and 404 (malformed) mean the token itself is unusable. */
+function isRejectedTokenError(cause: unknown): boolean {
+  return cause instanceof TelegramApiError && (cause.code === 401 || cause.code === 404);
+}
+
+/** Exponential backoff for consecutive poll failures, never shorter than Telegram's retry_after. */
+export function telegramPollRetryDelayMs(failures: number, cause: unknown): number {
+  const backoff = Math.min(ERROR_SLEEP_MS * 2 ** Math.max(0, failures - 1), MAX_POLL_RETRY_SLEEP_MS);
+  const retryAfter = cause instanceof TelegramApiError && cause.retryAfter !== undefined && cause.retryAfter > 0
+    ? cause.retryAfter * 1_000
+    : 0;
+  return Math.max(backoff, retryAfter);
+}
+
+function describePollFailure(cause: unknown): string {
+  if (cause instanceof TelegramApiError && cause.code === 409) return POLL_CONFLICT_MESSAGE;
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 export interface TelegramBotBindingLookup {
@@ -381,33 +426,73 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     };
   }
 
-  async function start(): Promise<void> {
+  /** Bumped by stop(), so a launch still awaiting its claim knows it was cancelled. */
+  let lifecycleEpoch = 0;
+  let launching: Promise<void> | undefined;
+
+  /**
+   * Start the transport once. `force` is connect(): it skips the enabled gate
+   * and reports failures to the caller instead of only recording them.
+   */
+  async function launch(force: boolean): Promise<void> {
+    while (launching) await launching.catch(() => undefined);
     if (started) return;
+    const attempt = launchOnce(force);
+    launching = attempt;
+    try {
+      await attempt;
+    } finally {
+      if (launching === attempt) launching = undefined;
+    }
+  }
+
+  async function launchOnce(force: boolean): Promise<void> {
+    const epoch = lifecycleEpoch;
     const snap = await deps.config.snapshot();
-    if (!snap.enabled || !snap.hasToken) return;
-    const ownership = deps.acquireOwnership?.();
+    if (force && !snap.hasToken) throw new Error("Cannot connect without a bot token.");
+    if (!force && (!snap.enabled || !snap.hasToken)) return;
+    if (epoch !== lifecycleEpoch) return;
+    const ownership = await deps.acquireOwnership?.();
+    if (epoch !== lifecycleEpoch) {
+      // stop() ran while the claim was in flight; hand the lease straight back.
+      if (ownership?.acquired) deps.releaseOwnership?.();
+      return;
+    }
     if (ownership && !ownership.acquired) {
-      lastError = `Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`;
-      recordDiagnostic("warning", lastError);
+      const message = ownershipConflictMessage(ownership);
+      if (force) throw new Error(message);
+      lastError = message;
+      recordDiagnostic("warning", message);
       return;
     }
     if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
     started = true;
     lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
+    const controller = new AbortController();
+    abortController = controller;
+    void runPollLoop(controller.signal).catch((cause) => {
+      // A loop that was stopped (or replaced by a newer start) must not touch
+      // the state or the lease of the loop that runs now.
+      if (controller.signal.aborted) return;
+      stop();
       lastError = cause instanceof Error ? cause.message : String(cause);
       recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
       deps.error("Telegram polling stopped unexpectedly.", cause);
     });
-    deps.info("Telegram bridge started.");
-    recordDiagnostic("info", "Telegram polling started.");
+    if (force) {
+      deps.info("Telegram bridge connected.");
+    } else {
+      deps.info("Telegram bridge started.");
+      recordDiagnostic("info", "Telegram polling started.");
+    }
+  }
+
+  function start(): Promise<void> {
+    return launch(false);
   }
 
   function stop(): void {
+    lifecycleEpoch += 1;
     started = false;
     abortController?.abort();
     abortController = undefined;
@@ -431,25 +516,20 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   }
 
   /** Force-start after enablement/token changes (bypasses the enabled gate). */
-  async function connect(): Promise<void> {
-    const snap = await deps.config.snapshot();
-    if (!snap.hasToken) throw new Error("Cannot connect without a bot token.");
-    if (started) return;
-    const ownership = deps.acquireOwnership?.();
-    if (ownership && !ownership.acquired) throw new Error(`Telegram profile is already owned by process ${ownership.ownerPid ?? "unknown"}.`);
-    if (ownership?.recovered) recordDiagnostic("recovery", "Recovered a stale Telegram transport owner lease.");
-    started = true;
+  function connect(): Promise<void> {
+    return launch(true);
+  }
+
+  /**
+   * Re-run the transport after its token changed: getMe identifies the new
+   * bot (resetting a different bot's offset) and the claim moves to it.
+   * Like start(), it only polls while the bridge is enabled.
+   */
+  async function restart(): Promise<void> {
+    while (launching) await launching.catch(() => undefined);
+    if (started) stop();
     lastError = undefined;
-    abortController = new AbortController();
-    void runPollLoop(abortController.signal).catch((cause) => {
-      if (abortController?.signal.aborted) return;
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      recordDiagnostic("error", lastError);
-      started = false;
-      deps.releaseOwnership?.();
-      deps.error("Telegram polling stopped unexpectedly.", cause);
-    });
-    deps.info("Telegram bridge connected.");
+    await start();
   }
 
   /** Disconnect and clear pairing (keeps the token). */
@@ -479,12 +559,58 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
   }
 
   async function runPollLoop(signal: AbortSignal): Promise<void> {
+    let failures = 0;
+    let reported: string | undefined;
+    /** Record a failed poll and wait before the next one; false when polling must end. */
+    const pollFailed = async (stage: string, cause: unknown): Promise<boolean> => {
+      if (signal.aborted) return false;
+      if (isRejectedTokenError(cause)) {
+        // Retrying a revoked token forever would look like a silent bridge.
+        stop();
+        lastError = REJECTED_TOKEN_MESSAGE;
+        recordDiagnostic("error", REJECTED_TOKEN_MESSAGE);
+        deps.error(`Telegram ${stage} rejected the bot token; polling stopped.`, cause);
+        return false;
+      }
+      failures += 1;
+      const message = describePollFailure(cause);
+      lastError = message;
+      // One diagnostic per distinct failure, so a long outage cannot flood the log.
+      if (message !== reported) {
+        reported = message;
+        recordDiagnostic("error", message);
+        deps.error(`Telegram ${stage} failed.`, cause);
+      }
+      await deps.sleep(telegramPollRetryDelayMs(failures, cause), signal).catch(() => undefined);
+      return !signal.aborted;
+    };
+    const pollSucceeded = (): void => {
+      failures = 0;
+      reported = undefined;
+      lastError = undefined;
+    };
+
+    for (;;) {
+      try {
+        const me = await deps.api.getMe(signal);
+        if (signal.aborted) return;
+        // Update ids are per bot: a new token's bot starts from its own offset.
+        if (await deps.config.adoptBot(me.id)) {
+          recordDiagnostic("info", "A different Telegram bot is connected; its pending messages will be read.");
+        }
+        if (signal.aborted) return;
+        botUsername = me.username;
+        botTopicsEnabled = me.has_topics_enabled === true;
+        deps.info(`Telegram bot connected as @${me.username}.`);
+        break;
+      } catch (cause) {
+        if (!(await pollFailed("getMe", cause))) return;
+      }
+    }
+    pollSucceeded();
     try {
-      const me = await deps.api.getMe();
-      botUsername = me.username;
-      botTopicsEnabled = me.has_topics_enabled === true;
-      deps.info(`Telegram bot connected as @${me.username}.`);
       const settings = await deps.config.getSettings();
+      if (signal.aborted) return;
       if (settings.telegramThreadedMode && !botTopicsEnabled) {
         recordDiagnostic("warning", "Private-chat threads are enabled in Aiden but disabled for this bot. Enable Threaded Mode in BotFather.");
       } else if (settings.telegramAllowedUserId !== undefined) {
@@ -492,14 +618,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
           deps.warn(`Telegram thread provisioning is unavailable: ${cause instanceof Error ? cause.message : String(cause)}`);
         });
       }
-      await refreshCommands();
     } catch (cause) {
-      lastError = cause instanceof Error ? cause.message : String(cause);
-      deps.error("Telegram getMe failed.", cause);
-      started = false;
-      deps.releaseOwnership?.();
-      return;
+      deps.warn(`Telegram settings were unavailable while connecting: ${cause instanceof Error ? cause.message : String(cause)}`);
     }
+    if (signal.aborted) return;
+    await refreshCommands();
+    if (signal.aborted) return;
 
     let offset = await deps.config.getOffset();
     /**
@@ -514,14 +638,11 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         updates = await deps.api.getUpdates(offset, POLL_TIMEOUT_SECONDS, signal);
       } catch (cause) {
         if (signal.aborted || !started) break;
-        lastError = cause instanceof Error ? cause.message : String(cause);
-        recordDiagnostic("error", lastError);
-        deps.error("Telegram getUpdates failed.", cause);
-        await deps.sleep(ERROR_SLEEP_MS, signal).catch(() => undefined);
+        if (!(await pollFailed("getUpdates", cause))) break;
         continue;
       }
 
-      lastError = undefined;
+      pollSucceeded();
 
       processingUpdates = true;
       for (const update of updates) {
@@ -1811,9 +1932,13 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
         now: deps.now,
       });
 
-      // Start typing indicator AFTER activeTurn is set so the loop condition
-      // evaluates true on its first iteration.
-      void sendTypingIndicator(turn.chatId, turn.threadId).catch(() => undefined);
+      // Start typing indicator AFTER activeInput is set so the loop condition
+      // evaluates true on its first iteration. It ends with this turn, a Stop,
+      // or the transport stopping, whichever comes first.
+      const typingSignal = abortController
+        ? AbortSignal.any([cancellation.signal, abortController.signal])
+        : cancellation.signal;
+      void sendTypingIndicator(turn, typingSignal).catch(() => undefined);
 
       const result: TelegramTurnResult = await sendTelegramTurn(
         deps.turn,
@@ -2077,17 +2202,12 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     }
   }
 
-  let typingActive = false;
-  async function sendTypingIndicator(chatId: number, threadId?: number): Promise<void> {
-    if (typingActive) return;
-    typingActive = true;
-    try {
-      while (activeTurn && started) {
-        await deps.api.sendChatAction(chatId, "typing", threadId).catch(() => undefined);
-        await deps.sleep(TYPING_INTERVAL_MS).catch(() => undefined);
-      }
-    } finally {
-      typingActive = false;
+  async function sendTypingIndicator(turn: QueuedTelegramTurn, signal: AbortSignal): Promise<void> {
+    const live = () => !signal.aborted && started && activeInput === turn;
+    while (live()) {
+      await deps.api.sendChatAction(turn.chatId, "typing", turn.threadId).catch(() => undefined);
+      if (!live()) return;
+      await deps.sleep(TYPING_INTERVAL_MS, signal).catch(() => undefined);
     }
   }
 
@@ -2096,6 +2216,7 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
     stop,
     stopAndSettle,
     connect,
+    restart,
     disconnect,
     resetPairing,
     refreshCommands,

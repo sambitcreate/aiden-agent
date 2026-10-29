@@ -8,12 +8,15 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
+import { AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME, aidenConfigDir } from "../aiden-config-dir.js";
 import { writeFileAtomic } from "../durable-fs.js";
 
 interface OwnershipRecord {
@@ -131,5 +134,92 @@ export function createTelegramOwnershipLease(options: {
       }
     },
     owns,
+  };
+}
+
+/** The public numeric bot id that prefixes a Bot API token (`<botId>:<secret>`). */
+export function telegramBotIdFromToken(token: string | null | undefined): number | undefined {
+  const match = /^(\d{1,15}):\S+$/u.exec(token?.trim() ?? "");
+  const id = match ? Number(match[1]) : Number.NaN;
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
+/**
+ * Where bot-keyed transport leases live, shared by the desktop app and the CLI
+ * so both cannot long-poll the same bot at once.
+ *
+ * - Desktop: `<aidenConfigDir>` (defaults to `~/.aiden`).
+ * - CLI: the same when the agent dir is the default `~/.aiden/agent` or when
+ *   `AIDEN_CONFIG_DIR` is set; otherwise the agent dir itself, so sandboxed
+ *   and test agent dirs never claim the real shared root.
+ */
+export function telegramSharedOwnershipRoot(agentDir?: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (env[AIDEN_CONFIG_DIR_ENV]?.trim() || agentDir === undefined) return aidenConfigDir(env);
+  const home = path.join(os.homedir(), AIDEN_DIR_NAME);
+  const canonical = (file: string): string => {
+    try {
+      return realpathSync.native(file);
+    } catch {
+      return path.resolve(file);
+    }
+  };
+  const defaultAgent = path.join(home, "agent");
+  return path.resolve(agentDir) === defaultAgent || canonical(agentDir) === canonical(defaultAgent)
+    ? home
+    : path.resolve(agentDir);
+}
+
+export interface TelegramTransportClaim {
+  acquired: boolean;
+  recovered: boolean;
+  ownerPid?: number;
+  /** Which lease refused: this profile's, or the bot token's shared one. */
+  scope?: "profile" | "bot";
+}
+
+/**
+ * The transport claim a poller holds: its profile lease plus a lease keyed by
+ * the token's bot id under the shared root, so a desktop profile and
+ * `aiden serve` (or two desktop profiles) never poll the same bot together.
+ */
+export function createTelegramTransportOwnership(options: {
+  profileRoot(): string;
+  profile: string;
+  sharedRoot(): string;
+  getToken(): Promise<string | null>;
+  now?: () => number;
+  staleMs?: number;
+}) {
+  const timing = { ...(options.now ? { now: options.now } : {}), ...(options.staleMs ? { staleMs: options.staleMs } : {}) };
+  const profileLease = createTelegramOwnershipLease({ root: options.profileRoot, profile: options.profile, ...timing });
+  let botLease: ReturnType<typeof createTelegramOwnershipLease> | undefined;
+
+  function release(): void {
+    botLease?.release();
+    botLease = undefined;
+    profileLease.release();
+  }
+
+  return {
+    async acquire(): Promise<TelegramTransportClaim> {
+      const botId = telegramBotIdFromToken(await options.getToken());
+      const profile = profileLease.acquire();
+      if (!profile.acquired) return { ...profile, scope: "profile" };
+      if (botId === undefined) return profile;
+      try {
+        const lease = createTelegramOwnershipLease({ root: options.sharedRoot, profile: `bot-${botId}`, ...timing });
+        const bot = lease.acquire();
+        if (!bot.acquired) {
+          profileLease.release();
+          return { ...bot, scope: "bot" };
+        }
+        botLease = lease;
+        return { acquired: true, recovered: profile.recovered || bot.recovered };
+      } catch (cause) {
+        profileLease.release();
+        throw cause;
+      }
+    },
+    release,
   };
 }
