@@ -796,6 +796,15 @@ textarea {
   outline: none !important;
 }
 
+/* The conversation F6 lands on. Its ring is a sibling drawn below the overlaid
+   toolbar, inset because the conversation's edges meet the window's. */
+.conversation-scrollport { outline: none; }
+.conversation-focus-ring { display: none; }
+.conversation-scrollport:focus-visible ~ .conversation-focus-ring {
+  display: block;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
 /* Non-text controls retain a visible keyboard focus indicator. */
 :root :where(button, [role="button"], [role="radio"], [role="switch"], [role="checkbox"], [role="separator"], [role="listbox"], select, a, summary, [tabindex]:not([tabindex="-1"]):not(input):not(textarea)):focus-visible {
   outline: 2px solid var(--focus-ring) !important;
@@ -1042,6 +1051,16 @@ textarea {
 .transcript-settled-contained {
   content-visibility: auto;
   contain-intrinsic-size: auto 200px;
+}
+
+/* Find in chat (⌘F): every match in a soft fill, the current one solid. */
+::highlight(aiden-find) {
+  background-color: color-mix(in srgb, var(--support-warning) 28%, transparent);
+}
+
+::highlight(aiden-find-current) {
+  background-color: var(--support-warning);
+  color: var(--support-warning-foreground);
 }
 
 .transcript-sticky-section {

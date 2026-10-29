@@ -266,6 +266,14 @@ test("back, forward, stop and attach get their keys unless a saved shortcut alre
   assert.equal(effectiveBinding("composer.attach", rebound), "Command+Shift+U");
 });
 
+test("Find in chat gets Command+F unless a saved shortcut already uses it", () => {
+  assert.equal(effectiveBinding("chat.find", repairKeybindingOverrides(undefined)), "Command+F");
+  const saved = { version: 1, commands: { "chat.search": { binding: "Command+F" } } };
+  const repaired = repairKeybindingOverrides(saved);
+  assert.equal(effectiveBinding("chat.search", repaired), "Command+F");
+  assert.equal(effectiveBinding("chat.find", repaired), null);
+});
+
 test("a shortcut saved for New chat keeps Command+Shift+O ahead of Open folder", () => {
   // Saved by an earlier build: New chat on Command+Shift+O, before Open folder… owned that default.
   const saved = { version: 1, commands: { "chat.new": { binding: "Command+Shift+O" } } };

@@ -72,6 +72,7 @@ import { BOT_UNAVAILABLE_LABEL, type BotSessionState } from "./bot-session-state
 import { botRoutinesKey } from "./bot-routines";
 import { WakeUpChip } from "../../components/bots/wake-up-chip";
 import { useConnectionSetup } from "./use-connection-setup";
+import { useChatFind } from "../../components/chat-find-bar";
 import { retryUsageLimitNow, useUsageLimitNow, useUsageLimitWait } from "../../lib/use-usage-limit-wait";
 import { formatUsageLimitTime, type UsageLimitWaitView } from "../../shared/usage-limits";
 import { useSpendingStatus } from "../../lib/use-spending-status";
@@ -1011,6 +1012,7 @@ export function BotChatPane({ botId }: { botId: string }) {
   const [addingConnection, setAddingConnection] = React.useState(false);
   const approvals = useBotApprovals(botId);
   const [answering, setAnswering] = React.useState(false);
+  const findBar = useChatFind(botId);
   const handoffActions = useBotHandoffActions(botId, live.snapshot?.handoff?.waitId);
 
   // The Bot's routines, read only when its chat shows a wake-up chip.
@@ -1050,6 +1052,8 @@ export function BotChatPane({ botId }: { botId: string }) {
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
+      focusRegion="chat"
+      overlay={findBar}
       scrollRestorationId={`bot-chat:${botId}`}
       className="h-full min-h-0"
       alignFooterToScrollContent
