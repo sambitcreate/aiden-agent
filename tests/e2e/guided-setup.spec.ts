@@ -330,7 +330,7 @@ test("classifier approval lets users inspect late payload fields before denying"
         kind: "model-classification", providerId: "research", providerLabel: "Research team", modelId: "judge",
         stateJson: payload.state, questionsJson: payload.questions, stateBytes: Buffer.byteLength(payload.state), questionsBytes: Buffer.byteLength(payload.questions), payloadComplete: true,
       } });
-      return { streamId };
+      return { streamId, accepted: true, started: true };
     });
     ipcMain.handle("chat:approve", (_event, _id: string, decision: string) => {
       (globalThis as unknown as { classifierDecision: string }).classifierDecision = decision;
