@@ -9,6 +9,7 @@ import {
   type Session,
 } from "electron";
 import { BrowserBackgroundThrottling } from "./background-throttling.js";
+import { PIP_FRAME_INTERVAL_MS, PIP_SCREENCAST, PipFeed } from "./pip-feed.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -178,7 +179,12 @@ interface LiveTab {
   attached?: BrowserWindow;
   floatingViewport?: BrowserTab["viewport"];
   pip?: BrowserWindow;
+  /** Only while the screencast is unavailable (DevTools is open). */
   pipTimer?: ReturnType<typeof setInterval>;
+  pipFeed?: PipFeed;
+  /** The throttling lease and window hosting that keep the page rendering for the preview. */
+  pipLease?: () => void;
+  pipUnhost?: () => void;
   recording?: RecordingSession;
   pendingRecorder?: BrowserWindow;
   visible: boolean;
@@ -860,6 +866,8 @@ export class BrowserService {
       tab.navigationCommand = undefined;
       tab.queue.interrupt();
       tab.backgroundThrottling.reset();
+      // An open Picture in Picture keeps its screencast through the reload, so it keeps its lease.
+      if (tab.pipLease) tab.pipLease = tab.backgroundThrottling.acquire();
       // A crashed renderer cannot keep producing screencast frames. Finalize
       // the recorder instead of leaving it alive through an unrelated recovery.
       if (tab.recording) void this.stopRecording(tab).catch(() => {});
@@ -1062,8 +1070,10 @@ export class BrowserService {
         });
         tab.network = tab.network.slice(-200);
       }
-      if (method === "Page.screencastFrame") this.recordFrame(tab, params);
+      if (method === "Page.screencastFrame") this.screencastFrame(tab, params);
     });
+    // Opening DevTools detaches the debugger, which ends the screencast.
+    wc.debugger.on("detach", () => this.pipLostScreencast(tab));
     wc.on("destroyed", () => {
       if (!tab.closing) this.close(tab);
     });
@@ -1256,7 +1266,7 @@ export class BrowserService {
     tab.queue.interrupt();
     tab.backgroundThrottling.reset();
     this.detach(tab);
-    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    this.endPictureInPicture(tab);
     this.cancelCrashRecovery(tab);
     if (tab.pip && !tab.pip.isDestroyed()) tab.pip.destroy();
     if (tab.recording) {
@@ -1852,11 +1862,78 @@ export class BrowserService {
     tab.state.floating = enabled;
     if (publish) this.emit(tab.state.workspaceId);
   }
+  /** Stops feeding the Picture in Picture window; the window itself is the caller's. */
+  private endPictureInPicture(tab: LiveTab): void {
+    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    tab.pipTimer = undefined;
+    const feed = tab.pipFeed;
+    tab.pipFeed = undefined;
+    feed?.dispose();
+    tab.pipLease?.();
+    tab.pipLease = undefined;
+    tab.pipUnhost?.();
+    tab.pipUnhost = undefined;
+    // A recording keeps its own screencast running.
+    if (feed && !tab.recording && !tab.closing)
+      void this.send(tab, "Page.stopScreencast").catch(() => {});
+  }
+  private ackScreencastFrame(tab: LiveTab, sessionId: unknown): void {
+    const wc = tab.view.webContents;
+    if (!wc.isDestroyed() && wc.debugger.isAttached())
+      void wc.debugger.sendCommand("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  }
+  private screencastFrame(tab: LiveTab, params: Record<string, any>): void {
+    const feed = tab.pipFeed;
+    // Picture in Picture alone paces the screencast by holding the ack until
+    // it paints; a recording needs every frame, so it acknowledges at once.
+    const pipPaces = Boolean(feed) && !tab.recording;
+    if (!pipPaces) this.ackScreencastFrame(tab, params.sessionId);
+    this.recordFrame(tab, params);
+    feed?.push(params.data, params.sessionId, pipPaces);
+  }
+  /**
+   * The capture loop Picture in Picture uses on Linux, and falls back to when
+   * the tab's debugger is unavailable (DevTools is open): a PNG capture every 250 ms.
+   */
+  private pipCaptureLoop(tab: LiveTab, pip: BrowserWindow, paint: (source: string) => Promise<unknown>): void {
+    const current = () => tab.pip === pip && !pip.isDestroyed() && !tab.closing;
+    let pending = false;
+    let lastFrame = "";
+    const frame = async () => {
+      if (pending || !current()) return;
+      // A hidden or minimized preview has no viewer; skip the capture.
+      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
+      pending = true;
+      try {
+        const image = await this.capture(tab);
+        const source = `data:${image.mimeType};base64,${image.data}`;
+        // A static page re-encodes to the same frame; skip the repaint.
+        if (current() && source !== lastFrame) {
+          await paint(source);
+          lastFrame = source;
+        }
+      } catch {
+        /* A cold or navigating page retries on the next frame. */
+      } finally {
+        pending = false;
+      }
+    };
+    if (tab.pipTimer) clearInterval(tab.pipTimer);
+    tab.pipTimer = setInterval(() => void frame(), PIP_FRAME_INTERVAL_MS);
+  }
+  /** The debugger went away (DevTools opened): keep the preview alive by capturing instead. */
+  private pipLostScreencast(tab: LiveTab): void {
+    const pip = tab.pip;
+    const feed = tab.pipFeed;
+    if (!pip || pip.isDestroyed() || !feed || tab.closing) return;
+    tab.pipFeed = undefined;
+    feed.dispose();
+    this.pipCaptureLoop(tab, pip, (source) =>
+      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`),
+    );
+  }
   private async pictureInPicture(tab: LiveTab, enabled: boolean): Promise<void> {
-    if (tab.pipTimer) {
-      clearInterval(tab.pipTimer);
-      tab.pipTimer = undefined;
-    }
+    this.endPictureInPicture(tab);
     if (tab.pip && !tab.pip.isDestroyed()) tab.pip.destroy();
     tab.pip = undefined;
     tab.state.pictureInPicture = enabled;
@@ -1880,8 +1957,7 @@ export class BrowserService {
     const current = () => tab.pip === pip && !pip.isDestroyed() && !tab.closing;
     pip.once("closed", () => {
       if (tab.pip !== pip) return;
-      if (tab.pipTimer) clearInterval(tab.pipTimer);
-      tab.pipTimer = undefined;
+      this.endPictureInPicture(tab);
       tab.pip = undefined;
       tab.state.pictureInPicture = false;
       this.emit(tab.state.workspaceId);
@@ -1896,31 +1972,44 @@ export class BrowserService {
       throw error;
     }
     if (!current()) return;
-    let pending = false;
-    let lastFrame = "";
-    const frame = async () => {
-      if (pending || !current()) return;
-      // A hidden or minimized preview has no viewer; skip the capture.
-      if (lastFrame && (!pip.isVisible() || pip.isMinimized())) return;
-      pending = true;
-      try {
-        const image = await this.capture(tab);
-        const source = `data:${image.mimeType};base64,${image.data}`;
-        // A static page re-encodes to the same frame; skip the repaint.
-        if (current() && source !== lastFrame) {
-          await pip.webContents.executeJavaScript(
-            `document.querySelector('img').src=${JSON.stringify(source)}`,
-          );
-          lastFrame = source;
-        }
-      } catch {
-        /* A cold or navigating page retries on the next frame. */
-      } finally {
-        pending = false;
-      }
-    };
-    await frame();
-    if (current()) tab.pipTimer = setInterval(() => void frame(), 250);
+    const paint = (source: string) =>
+      pip.webContents.executeJavaScript(`document.querySelector('img').src=${JSON.stringify(source)}`);
+    // A still page sends no screencast frame until it changes; show it now.
+    try {
+      const image = await this.capture(tab);
+      if (current()) await paint(`data:${image.mimeType};base64,${image.data}`);
+    } catch {
+      /* A cold page shows its first screencast frame instead. */
+    }
+    if (!current()) return;
+    // Linux hosts every tab invisibly for capture; its screencast behind a
+    // hidden host window is unverified, so it keeps the capture loop.
+    if (process.platform === "linux") {
+      this.pipCaptureLoop(tab, pip, paint);
+      return;
+    }
+    // Keep the page rendering for the preview's lifetime, even as a hidden tab
+    // or behind a minimized window: without both, Chromium stops the screencast.
+    tab.pipLease = tab.backgroundThrottling.acquire();
+    tab.pipUnhost = this.hostWhileActive(tab);
+    // Chromium encodes changed frames off the main thread; this only paints them.
+    const feed = new PipFeed({
+      paint: async (data) => {
+        if (current()) await paint(`data:image/jpeg;base64,${data}`);
+      },
+      ack: (sessionId) => this.ackScreencastFrame(tab, sessionId),
+      viewing: () => current() && pip.isVisible() && !pip.isMinimized(),
+    });
+    tab.pipFeed = feed;
+    pip.on("show", () => feed.resume());
+    pip.on("restore", () => feed.resume());
+    // A recording's screencast already feeds the preview.
+    if (tab.recording) return;
+    try {
+      await this.send(tab, "Page.startScreencast", { ...PIP_SCREENCAST });
+    } catch {
+      if (tab.pipFeed === feed) this.pipLostScreencast(tab);
+    }
   }
   private async startRecording(tab: LiveTab, fps: number, signal?: AbortSignal): Promise<void> {
     if (tab.recording) throw new Error("This browser tab is already recording.");
@@ -2030,6 +2119,8 @@ export class BrowserService {
       };
       tab.recording = recording;
       tab.state.recording = true;
+      // The recording acknowledges every frame; give back any the preview held.
+      tab.pipFeed?.releaseAcks();
       try {
         await this.send(
           tab,
@@ -2053,11 +2144,6 @@ export class BrowserService {
     }
   }
   private recordFrame(tab: LiveTab, params: Record<string, any>): void {
-    const wc = tab.view.webContents;
-    if (!wc.isDestroyed() && wc.debugger.isAttached())
-      void wc.debugger
-        .sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId })
-        .catch(() => {});
     const recording = tab.recording;
     if (
       !recording ||
@@ -2091,7 +2177,8 @@ export class BrowserService {
     tab.state.recording = false;
     clearTimeout(recording.stopTimer);
     try {
-      await this.send(tab, "Page.stopScreencast").catch(() => {});
+      // An open Picture in Picture keeps the screencast; it paces it from here on.
+      if (!tab.pipFeed) await this.send(tab, "Page.stopScreencast").catch(() => {});
       await recording.pending;
       if (recording.failed) throw new Error(recording.failed);
       const encoded: unknown = await browserDeadline(
