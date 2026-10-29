@@ -6,6 +6,7 @@ import {
 import {
   GENERATION_TIMELINE_VERSION,
   boundGenerationTimelineSteps,
+  emptyGenerationTimelineFolds,
   isTerminalAgentStep,
   isToolStep,
   type AgentStep,
@@ -384,6 +385,7 @@ export function safeToolDescriptor(toolName: string, args: unknown): SafeToolDes
 export class GenerationTimelineProjector {
   private readonly timeline: GenerationTimeline;
   private readonly stepIndex = new Map<string, number>();
+  private readonly folds = emptyGenerationTimelineFolds();
   private toolSequence = 0;
   private thinkingSequence = 0;
   private thinkingMergeFloor = 0;
@@ -772,7 +774,10 @@ export class GenerationTimelineProjector {
   snapshot(): GenerationTimeline {
     return {
       ...this.timeline,
-      steps: boundGenerationTimelineSteps(this.timeline.steps.map((step) => ({ ...step }) as AgentStep)),
+      steps: boundGenerationTimelineSteps(
+        this.timeline.steps.map((step) => ({ ...step }) as AgentStep),
+        this.folds,
+      ),
     };
   }
 

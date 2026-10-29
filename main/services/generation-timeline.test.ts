@@ -1043,8 +1043,15 @@ test("a long run's saved timeline stays readable past the step limit", () => {
   assert.deepEqual(kept.find((step) => step.toolName === "edit_file")?.lineChanges, { additions: 4, deletions: 1 });
   assert.ok(kept.some((step) => step.toolName === "display_image"));
   assert.ok(kept.some((step) => step.status === "failed"));
-  // Merging older thoughts was enough: every tool call is still listed.
-  assert.equal(kept.length, 154);
+  // Thoughts stay where they happened: none sits above a call that started before it ended.
+  final.steps.forEach((step, index) => {
+    const next = final.steps[index + 1];
+    if (!isToolStep(step) && next) assert.ok((step.finishedAt ?? 0) <= next.startedAt, `${step.id} before ${next.id}`);
+  });
+  // The oldest plain reads made the room; the reads still listed are the newest ones.
+  const reads = kept.filter((step) => step.toolName === "read_file").map((step) => step.target);
+  assert.ok(reads.length < 150);
+  assert.deepEqual(reads, Array.from({ length: reads.length }, (_, index) => `src/file-${150 - reads.length + index}.ts`));
 });
 
 test("a run of more tool calls than the step limit drops the oldest plain reads first", () => {
@@ -1070,4 +1077,62 @@ test("a run of more tool calls than the step limit drops the oldest plain reads 
   assert.equal(kept[kept.length - 1]?.target, "src/file-249.ts");
   // Public call ids still name the original calls, so anything placed after them stays put.
   assert.equal(kept[1]?.toolCallId, "call-2");
+});
+
+test("a step folded out of a long run never comes back while the run goes on", () => {
+  const published: GenerationTimeline[] = [];
+  const projector = new GenerationTimelineProjector("generation-1", (value) => published.push(value));
+  projector.toolStarted("slow", "read_file", { path: "src/slow.ts" });
+  projector.toolRunning("slow");
+  projector.toolStarted("write", "write_file", { path: "notes.md" });
+  projector.toolFinished("write", "completed");
+  for (let round = 0; round < 199; round += 1) {
+    projector.toolStarted(`edit-${round}`, "edit_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`edit-${round}`, "completed");
+  }
+  // The slow read settles after the limit was reached, becoming the cheapest step to fold.
+  projector.toolFinished("slow", "completed");
+  projector.finish("completed");
+
+  const seen = new Set<string>();
+  const gone = new Set<string>();
+  for (const snapshot of published) {
+    assert.ok(snapshot.steps.length <= 200);
+    const ids = new Set(snapshot.steps.map((step) => step.id));
+    for (const id of gone) assert.ok(!ids.has(id), `${id} came back`);
+    for (const id of seen) if (!ids.has(id)) gone.add(id);
+    for (const id of ids) seen.add(id);
+  }
+  assert.ok(gone.size > 0);
+});
+
+test("folding a long run never moves its reply text or an image's row", () => {
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  let content = "";
+  const say = (text: string) => {
+    content += text;
+    projector.setContentOffset(content.length);
+  };
+  // A lone read between two paragraphs, then a row that opens with a read and shows a visual.
+  projector.toolStarted("between", "read_file", { path: "src/between.ts" });
+  projector.toolFinished("between", "completed");
+  say("First paragraph. ");
+  projector.toolStarted("lead", "read_file", { path: "src/lead.ts" });
+  projector.toolFinished("lead", "completed");
+  projector.toolStarted("visual", "render_ui", { title: "Chart" });
+  projector.toolFinished("visual", "completed");
+  say("Second paragraph. ");
+  for (let round = 0; round < 260; round += 1) {
+    projector.toolStarted(`read-${round}`, "read_file", { path: `src/file-${round}.ts` });
+    projector.toolFinished(`read-${round}`, "completed");
+  }
+  const full = projector.finish("completed");
+  assert.equal(full.steps.length, 200);
+
+  const rows = assistantPresentationRows(content, full)!;
+  const texts = rows.filter((row) => row.kind === "text").map((row) => row.content);
+  assert.deepEqual(texts, ["First paragraph. ", "Second paragraph. "]);
+  const visualRow = rows.find((row) => row.kind === "activity" && row.steps.some((step) => isToolStep(step) && step.toolName === "render_ui"));
+  assert.ok(visualRow && visualRow.kind === "activity");
+  assert.equal((visualRow.steps[0] as AgentToolStep).target, "src/lead.ts");
 });

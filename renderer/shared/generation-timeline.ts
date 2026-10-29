@@ -448,16 +448,15 @@ export function parseGenerationTimeline(
   };
 }
 
-/** The newest steps are never folded, so the live ticker and recent trail stay exact. */
+/** The newest steps are kept exact while older ones can still fold. */
 const BOUND_KEPT_TAIL = 40;
 
-/** Read-only calls whose row carries nothing beyond its line. */
+/** Calls whose row carries nothing beyond its line and that change nothing. */
 const ROUTINE_TOOLS = new Set([
   "read_file",
   "list_dir",
   "glob",
   "grep",
-  "run_command",
   "web_search",
   "browser_status",
   "browser_snapshot",
@@ -475,15 +474,15 @@ const ANCHOR_TOOLS = new Set([
 ]);
 
 function carriesRecap(step: AgentToolStep): boolean {
-  return Boolean(
-    step.producedFile || step.lineChanges || step.questionnaire || step.extraction || step.recording,
-  );
+  return Boolean(step.producedFile || step.lineChanges || step.questionnaire || step.extraction);
 }
 
 /** Lower drops first; Infinity never drops. */
 function foldRank(step: AgentStep): number {
   if (!isToolStep(step)) return Infinity;
   if (!isTerminalAgentStep(step.status)) return Infinity;
+  // Subagent chips sit on their row, and phones fetch only recordings a saved step names.
+  if (step.toolName === "subagent" || step.recording) return Infinity;
   if (step.status !== "completed") return 3;
   if (ROUTINE_TOOLS.has(step.toolName) && !carriesRecap(step)) return 0;
   if (!ANCHOR_TOOLS.has(step.toolName) && !carriesRecap(step)) return 1;
@@ -512,49 +511,116 @@ function mergeThinking(steps: readonly AgentThinkingStep[]): AgentThinkingStep {
   return merged;
 }
 
+/** What a bounded timeline already folded, so later updates never bring a step back. */
+export interface GenerationTimelineFolds {
+  dropped: Set<string>;
+  /** A thinking step's id, mapped to the earlier thinking step it joined. */
+  mergedInto: Map<string, string>;
+}
+
+export function emptyGenerationTimelineFolds(): GenerationTimelineFolds {
+  return { dropped: new Set(), mergedInto: new Map() };
+}
+
+function isFinishedThinking(step: AgentStep | undefined): step is AgentThinkingStep {
+  return Boolean(step && !isToolStep(step) && step.finishedAt !== undefined);
+}
+
+function sharesActivityRow(a: AgentStep | undefined, b: AgentStep | undefined): boolean {
+  return Boolean(
+    a && b && isToolStep(a) && isToolStep(b) && !a.questionnaire && !b.questionnaire &&
+      a.contentOffset === b.contentOffset,
+  );
+}
+
 /**
- * Keep a long run's timeline within what every reader accepts. Older finished
- * thinking stretches merge into the first one (its reasoning span covers all
- * of theirs), then older settled tool steps drop: read-only calls first, then
- * plain calls, then calls that carry a recap or anchor an image, then failed
- * ones. Steps still running and the newest `BOUND_KEPT_TAIL` steps are kept.
+ * Whether dropping `list[index]` leaves the rest of the reply where it was:
+ * the reply text on either side stays split at the same place, and a row
+ * holding an image or visual keeps its first step (the row's identity).
+ */
+function canDrop(list: readonly AgentStep[], index: number): boolean {
+  const step = list[index]!;
+  const before = index > 0 ? list[index - 1]!.contentOffset : 0;
+  if (before !== step.contentOffset && list[index + 1]?.contentOffset !== step.contentOffset) {
+    return false;
+  }
+  if (sharesActivityRow(list[index - 1], step)) return true;
+  for (let next = index + 1; sharesActivityRow(list[next - 1], list[next]); next += 1) {
+    const later = list[next] as AgentToolStep;
+    if (ANCHOR_TOOLS.has(later.toolName) || later.toolName === "subagent") return false;
+  }
+  return true;
+}
+
+/**
+ * Keep a long run's timeline within what every reader accepts. Older settled
+ * tool steps drop, oldest first: read-only calls, then plain calls, then calls
+ * that carry a recap or anchor an image, then failed ones. When a drop leaves
+ * two finished thoughts side by side they join, so every thought stays where
+ * it happened and its reasoning stays shown. A drop never moves reply text or
+ * an image. The newest `BOUND_KEPT_TAIL` steps fold only when nothing older
+ * can, and running steps never do. `folds` remembers each decision: pass the
+ * same object on every update of one run so a folded step stays folded.
  */
 export function boundGenerationTimelineSteps(
   steps: readonly AgentStep[],
+  folds: GenerationTimelineFolds = emptyGenerationTimelineFolds(),
   max = MAX_GENERATION_TIMELINE_STEPS,
 ): AgentStep[] {
-  if (steps.length <= max) return [...steps];
-  let excess = steps.length - max;
-  const tailStart = Math.max(0, steps.length - BOUND_KEPT_TAIL);
-  const kept: (AgentStep | null)[] = [...steps];
-
-  const thinking: number[] = [];
-  for (let index = 0; index < tailStart; index += 1) {
-    const step = steps[index]!;
-    if (isToolStep(step)) continue;
-    if (step.finishedAt === undefined) break;
-    thinking.push(index);
+  if (steps.length <= max && folds.dropped.size === 0 && folds.mergedInto.size === 0) {
+    return [...steps];
   }
-  if (thinking.length > 1) {
-    const folded = thinking.slice(0, Math.min(excess, thinking.length - 1) + 1);
-    kept[folded[0]!] = mergeThinking(folded.map((index) => steps[index] as AgentThinkingStep));
-    for (const index of folded.slice(1)) kept[index] = null;
-    excess -= folded.length - 1;
+  const rootOf = (id: string): string => {
+    let root = id;
+    while (folds.mergedInto.has(root)) root = folds.mergedInto.get(root)!;
+    return root;
+  };
+  const groups = new Map<string, AgentThinkingStep[]>();
+  const list: AgentStep[] = [];
+  for (const step of steps) {
+    if (folds.dropped.has(step.id)) continue;
+    const root = rootOf(step.id);
+    if (root !== step.id) {
+      groups.get(root)?.push(step as AgentThinkingStep);
+      continue;
+    }
+    if (!isToolStep(step)) groups.set(step.id, [step]);
+    list.push(step);
+  }
+  for (let index = 0; index < list.length; index += 1) {
+    const group = groups.get(list[index]!.id);
+    if (group && group.length > 1) list[index] = mergeThinking(group);
   }
 
-  for (let rank = 0; rank <= 3 && excess > 0; rank += 1) {
-    for (let index = 0; index < tailStart && excess > 0; index += 1) {
-      const step = kept[index];
-      if (step && foldRank(step) === rank) {
-        kept[index] = null;
-        excess -= 1;
+  for (const keepTail of [true, false]) {
+    for (let rank = 0; rank <= 3 && list.length > max; rank += 1) {
+      for (let index = 0; list.length > max && index < list.length - (keepTail ? BOUND_KEPT_TAIL : 0);) {
+        const step = list[index]!;
+        if (foldRank(step) !== rank || !canDrop(list, index)) {
+          index += 1;
+          continue;
+        }
+        folds.dropped.add(step.id);
+        list.splice(index, 1);
+        const earlier = list[index - 1];
+        const later = list[index];
+        if (
+          isFinishedThinking(earlier) &&
+          isFinishedThinking(later) &&
+          earlier.contentOffset === later.contentOffset
+        ) {
+          const group = [...(groups.get(earlier.id) ?? [earlier]), ...(groups.get(later.id) ?? [later])];
+          groups.set(earlier.id, group);
+          groups.delete(later.id);
+          folds.mergedInto.set(later.id, earlier.id);
+          list[index - 1] = mergeThinking(group);
+          list.splice(index, 1);
+        }
       }
     }
   }
 
-  return kept
-    .filter((step): step is AgentStep => step !== null)
-    .map((step, order) => (step.order === order ? step : { ...step, order }));
+  return list.map((step, order) => (step.order === order ? step : { ...step, order }));
 }
 
 export function isTerminalAgentStep(status: AgentStepStatus): boolean {
