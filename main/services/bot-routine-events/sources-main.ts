@@ -167,7 +167,7 @@ const folders = createBotFolderWatches({
     return { close: () => handle.close() };
   },
   dispatcher,
-  wroteSince: (routine, absolutePath, since) => botOwnWrites.wroteSince(routine.botId, absolutePath, since),
+  ownWrite: (routine, absolutePath, since) => botOwnWrites.writtenSince(routine.botId, absolutePath, since),
   stat: async (absolutePath) => {
     const stats = await fsPromises.stat(absolutePath).catch(() => undefined);
     return stats ? { mtimeMs: stats.mtimeMs, size: stats.size } : undefined;

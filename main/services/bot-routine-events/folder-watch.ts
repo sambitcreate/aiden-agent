@@ -4,17 +4,19 @@
 //
 // While the routine's own run is going (several may overlap), changes are
 // held. Once the last run has ended and a short settle has passed, the files
-// that run wrote with its file tools are dropped (a Bot writing a summary into
-// the folder it watches would otherwise fire itself) and every other held
-// change goes on as a normal event, so a file the person drops in mid-run is
-// not lost. A late watch notice for a file the Bot wrote is dropped while the
-// file is still exactly as the Bot left it.
+// that run wrote with its file tools are dropped while they are still exactly
+// the version the Bot wrote (a Bot writing a summary into the folder it watches
+// would otherwise fire itself). Every other held change goes on as a normal
+// event, so a file the person drops in, edits or deletes mid-run is not lost,
+// even one the Bot wrote. A late watch notice for a file the Bot wrote is
+// dropped while the file is still exactly as the Bot left it.
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { BOT_ROUTINE_EVENT_LIMITS, matchesTriggerPattern } from "../../../renderer/shared/bot-routine-trigger.js";
 import type { BotRoutineEventDispatcher } from "./dispatcher.js";
+import type { BotFileFingerprint } from "./own-writes.js";
 import type { BotEventRoutine } from "./store.js";
 
 export const BOT_FOLDER_EVENT_MAX_PATHS = 50;
@@ -23,7 +25,7 @@ export const BOT_FOLDER_OWN_RUN_SETTLE_MS = 5_000;
 /** How long a late notice for a file the Bot wrote is checked against its saved size and time. */
 const OWN_WRITE_ECHO_MS = 60_000;
 
-type Fingerprint = { mtimeMs: number; size: number } | undefined;
+type Fingerprint = BotFileFingerprint | undefined;
 
 export interface BotFolderWatchDependencies {
   routines(): Promise<BotEventRoutine[]>;
@@ -31,8 +33,8 @@ export interface BotFolderWatchDependencies {
   /** `onError`: the watch died (folder deleted or replaced); it is re-armed on the next rearm. */
   watch(folder: string, listener: (file: string | null) => void, onError: () => void): { close(): void };
   dispatcher: Pick<BotRoutineEventDispatcher, "emit">;
-  /** True when this routine's Bot wrote `absolutePath` with its file tools at or after `since`. */
-  wroteSince?(routine: BotEventRoutine, absolutePath: string, since: number): boolean;
+  /** The version this routine's Bot last wrote at `absolutePath` with its file tools, when at or after `since`. */
+  ownWrite?(routine: BotEventRoutine, absolutePath: string, since: number): BotFileFingerprint | undefined;
   /** Size and modified time, or undefined when the file is gone. */
   stat?(absolutePath: string): Promise<Fingerprint>;
   /** A routine whose folder is outside the Bot's home, or can't be watched: tell the person once. */
@@ -117,18 +119,23 @@ export function createBotFolderWatches(dependencies: BotFolderWatchDependencies)
     }));
   }
 
-  /** The last run ended and the settle passed: drop the Bot's own files, pass on the rest. */
+  /**
+   * The last run ended and the settle passed: drop the Bot's own files that are
+   * still the version it wrote, pass on the rest (a file the person changed or
+   * deleted after the Bot wrote it included).
+   */
   async function release(routine: BotEventRoutine, run: { since: number; held: Set<string> }): Promise<void> {
     const folder = watches.get(routine.id)?.folder;
     if (!folder) return;
     for (const relative of run.held) {
       const absolute = path.join(folder, relative);
-      if (dependencies.wroteSince?.(routine, absolute, run.since)) {
-        if (stat) {
-          const fingerprint = await stat(absolute).catch(() => undefined);
-          echoes.set(`${routine.id}\0${absolute}`, { fingerprint, until: dependencies.now() + OWN_WRITE_ECHO_MS });
+      const written = dependencies.ownWrite?.(routine, absolute, run.since);
+      if (written) {
+        const current = stat ? await stat(absolute).catch(() => undefined) : written;
+        if (sameFile(current, written)) {
+          echoes.set(`${routine.id}\0${absolute}`, { fingerprint: written, until: dependencies.now() + OWN_WRITE_ECHO_MS });
+          continue;
         }
-        continue;
       }
       if (watches.get(routine.id)?.folder !== folder) return;
       add(routine, relative);

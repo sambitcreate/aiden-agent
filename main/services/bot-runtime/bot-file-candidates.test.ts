@@ -40,9 +40,11 @@ test("a routine run's file writes are journaled even though the registry built t
     await write(candidates, ["tg:7"], "telegram.md");
 
     assert.equal(await fs.readFile(path.join(root, "report.md"), "utf8"), "out");
-    assert.equal(journal.wroteSince(BOT, path.join(root, "report.md"), since), true);
-    assert.equal(journal.wroteSince(BOT, path.join(root, "notes.md"), since), false);
-    assert.equal(journal.wroteSince(BOT, path.join(root, "telegram.md"), since), false);
+    // The journal holds the version the routine's write left, as the folder watch reads it.
+    const report = await fs.stat(path.join(root, "report.md"));
+    assert.deepEqual(journal.writtenSince(BOT, path.join(root, "report.md"), since), { mtimeMs: report.mtimeMs, size: report.size });
+    assert.equal(journal.writtenSince(BOT, path.join(root, "notes.md"), since), undefined);
+    assert.equal(journal.writtenSince(BOT, path.join(root, "telegram.md"), since), undefined);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

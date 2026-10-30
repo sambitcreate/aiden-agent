@@ -41,8 +41,12 @@ Runtime/routines/health:
 - Folder watch: the file tool router's `onWrite` records routine-turn writes in
   `own-writes.ts` (`botOwnWrites`). While a routine's runs are active (refcount
   per routine) changes are held; on the last end plus 5 s settle, paths the
-  routine wrote are dropped (and fingerprinted by mtime/size for 60 s to
-  swallow late fs.watch echoes) and the rest fire. Shell writes are not
+  routine wrote are dropped only while the file still matches the mtime/size
+  the journal captured at the Bot's write (`record` stats it; the router awaits
+  `onWrite` so this lands before the call returns), and that fingerprint
+  swallows late fs.watch echoes for 60 s. A Bot-written file the person edits
+  or deletes before release fires (Pullfrog PR #659 finding). Same-size edits
+  within the filesystem's mtime resolution can't be told apart. The rest fire. Shell writes are not
   journaled. Each `watch` is wrapped in try/catch (one bad folder refuses only
   that routine), and a generation counter captured synchronously in `rearm()`
   stops a rearm that finishes after dispose.

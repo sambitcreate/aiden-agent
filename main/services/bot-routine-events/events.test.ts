@@ -194,8 +194,8 @@ function folderHarness(routines: BotEventRoutine[], options: {
   missing?: Set<string>;
   /** Folders whose watch throws when opened (deleted in between, or EMFILE). */
   unwatchable?: Set<string>;
-  /** Absolute paths the Bot wrote with its file tools. */
-  wrote?: Set<string>;
+  /** Absolute paths the Bot wrote with its file tools, and the version each write left. */
+  wrote?: Map<string, { mtimeMs: number; size: number }>;
   /** Each file's size and time, as the folder watch reads them. */
   stats?: Map<string, { mtimeMs: number; size: number }>;
   /** Holds `routines()` open until released, to land a dispose mid-rearm. */
@@ -220,7 +220,7 @@ function folderHarness(routines: BotEventRoutine[], options: {
       return { close: () => listeners.delete(folder) };
     },
     dispatcher: { emit: async (_botId, routineId, event) => { emitted.push({ routineId, ...event }); return "queued"; } },
-    wroteSince: (_routine, absolutePath) => options.wrote?.has(absolutePath) === true,
+    ownWrite: (_routine, absolutePath) => options.wrote?.get(absolutePath),
     stat: async (absolutePath) => options.stats?.get(absolutePath),
     refused: (routine) => refused.push(routine.id),
     accepted: (routine) => accepted.push(routine.id),
@@ -296,7 +296,7 @@ test("a routine's own files don't fire it again, but a file dropped in during it
   const inbox = path.join("/home/bot", "Inbox");
   const summary = path.join(inbox, "summary.md");
   const stats = new Map([[summary, { mtimeMs: 10, size: 120 }]]);
-  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", wrote: new Set([summary]), stats });
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", wrote: new Map([[summary, { mtimeMs: 10, size: 120 }]]), stats });
   await h.watches.rearm();
   const listener = h.listeners.get(inbox)!;
   const routine = routineOf("r1", "Inbox");
@@ -328,6 +328,40 @@ test("a routine's own files don't fire it again, but a file dropped in during it
   assert.deepEqual(h.emitted.map((event) => event.payload), ["dropped-in.pdf", "summary.md"]);
 });
 
+test("a file the Bot wrote and the person then changed or deleted during the run still fires once it ends", async () => {
+  const inbox = path.join("/home/bot", "Inbox");
+  const edited = path.join(inbox, "summary.md");
+  const deleted = path.join(inbox, "draft.md");
+  const wrote = new Map([
+    [edited, { mtimeMs: 10, size: 120 }],
+    [deleted, { mtimeMs: 11, size: 80 }],
+  ]);
+  // On disk at release: the person rewrote summary.md and removed draft.md.
+  const stats = new Map([[edited, { mtimeMs: 15, size: 133 }]]);
+  const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot", wrote, stats });
+  await h.watches.rearm();
+  const listener = h.listeners.get(inbox)!;
+  const routine = routineOf("r1", "Inbox");
+
+  h.watches.runStarted(routine);
+  listener("summary.md");
+  listener("draft.md");
+  h.watches.runEnded(routine);
+  // Within the settle window: the person's edit and delete notices are held too.
+  listener("summary.md");
+  listener("draft.md");
+  h.fireTimers();
+  await h.watches.idle();
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["draft.md\nsummary.md"]);
+
+  // The person's version is not taken for the Bot's: a later notice for it fires too.
+  listener("summary.md");
+  await h.watches.idle();
+  h.fireTimers();
+  assert.deepEqual(h.emitted.map((event) => event.payload), ["draft.md\nsummary.md", "summary.md"]);
+});
+
 test("with two runs of a routine going, changes stay held until the last one ends", async () => {
   const h = folderHarness([routineOf("r1", "Inbox")], { home: "/home/bot" });
   await h.watches.rearm();
@@ -348,16 +382,20 @@ test("with two runs of a routine going, changes stay held until the last one end
   assert.deepEqual(h.emitted.map((event) => event.payload), ["late.pdf"]);
 });
 
-test("the own-writes journal only counts a Bot's own writes made since the run began", () => {
+test("the own-writes journal keeps the version a Bot's own write left, since the run began", async () => {
   let at = 1_000;
-  const journal = createBotOwnWrites(() => at);
-  journal.record("bot-a", "/home/bot/Inbox/summary.md");
-  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 1_000), true);
-  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 1_001), false, "written before the run began");
-  assert.equal(journal.wroteSince("bot-b", "/home/bot/Inbox/summary.md", 0), false, "another Bot's write");
+  const disk = new Map([["/home/bot/Inbox/summary.md", { mtimeMs: 7, size: 42 }]]);
+  const journal = createBotOwnWrites(() => at, async (file) => disk.get(file));
+  await journal.record("bot-a", "/home/bot/Inbox/summary.md");
+  assert.deepEqual(journal.writtenSince("bot-a", "/home/bot/Inbox/summary.md", 1_000), { mtimeMs: 7, size: 42 });
+  assert.equal(journal.writtenSince("bot-a", "/home/bot/Inbox/summary.md", 1_001), undefined, "written before the run began");
+  assert.equal(journal.writtenSince("bot-b", "/home/bot/Inbox/summary.md", 0), undefined, "another Bot's write");
+  await journal.record("bot-a", "/home/bot/Inbox/vanished.md");
+  assert.equal(journal.writtenSince("bot-a", "/home/bot/Inbox/vanished.md", 0), undefined, "a version that can't be read isn't the Bot's");
   at += 2 * 60 * MIN;
-  journal.record("bot-a", "/home/bot/Inbox/other.md");
-  assert.equal(journal.wroteSince("bot-a", "/home/bot/Inbox/summary.md", 0), false, "old entries are pruned");
+  disk.set("/home/bot/Inbox/other.md", { mtimeMs: 8, size: 1 });
+  await journal.record("bot-a", "/home/bot/Inbox/other.md");
+  assert.equal(journal.writtenSince("bot-a", "/home/bot/Inbox/summary.md", 0), undefined, "old entries are pruned");
 });
 
 class MemoryPersistence<T> {

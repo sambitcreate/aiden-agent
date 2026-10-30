@@ -1,27 +1,49 @@
 // A short-lived journal of the files a Bot's routine runs wrote with its file
-// tools (write_file, edit_file). The folder watch reads it to tell the Bot's
-// own output from a file the person dropped in while the run was going: only
-// the Bot's own paths are ignored. Shell commands are not journaled.
+// tools (write_file, edit_file), with the size and modified time each write
+// left. The folder watch reads it to tell the Bot's own output from a file the
+// person dropped in or changed while the run was going: a held path is the
+// Bot's own only while the file is still exactly the version the Bot wrote.
+// Shell commands are not journaled.
+
+import { promises as fs } from "node:fs";
 
 const KEEP_MS = 60 * 60_000;
 
-export function createBotOwnWrites(now: () => number = Date.now) {
-  /** `${botId}\0${absolutePath}` → when it was last written. */
-  const writes = new Map<string, number>();
+/** A file's size and modified time, as the folder watch compares them. */
+export type BotFileFingerprint = { mtimeMs: number; size: number };
+
+async function statFingerprint(absolutePath: string): Promise<BotFileFingerprint | undefined> {
+  const stats = await fs.stat(absolutePath).catch(() => undefined);
+  return stats?.isFile() ? { mtimeMs: stats.mtimeMs, size: stats.size } : undefined;
+}
+
+export function createBotOwnWrites(
+  now: () => number = Date.now,
+  stat: (absolutePath: string) => Promise<BotFileFingerprint | undefined> = statFingerprint,
+) {
+  /** `${botId}\0${absolutePath}` → when it was last written, and the version it left. */
+  const writes = new Map<string, { at: number; fingerprint: BotFileFingerprint }>();
   const key = (botId: string, absolutePath: string) => `${botId}\0${absolutePath}`;
 
   return {
-    record(botId: string, absolutePath: string): void {
+    /** Journals a write that just succeeded, with the version it left on disk. */
+    async record(botId: string, absolutePath: string): Promise<void> {
       const at = now();
-      for (const [entry, writtenAt] of writes) {
-        if (at - writtenAt > KEEP_MS) writes.delete(entry);
+      const fingerprint = await stat(absolutePath).catch(() => undefined);
+      for (const [entry, written] of writes) {
+        if (at - written.at > KEEP_MS) writes.delete(entry);
       }
-      writes.set(key(botId, absolutePath), at);
+      // A version that can't be read can't be told from the person's: not journaled.
+      if (!fingerprint) {
+        writes.delete(key(botId, absolutePath));
+        return;
+      }
+      writes.set(key(botId, absolutePath), { at, fingerprint });
     },
-    /** True when this Bot wrote the file with its file tools at or after `since`. */
-    wroteSince(botId: string, absolutePath: string, since: number): boolean {
-      const at = writes.get(key(botId, absolutePath));
-      return at !== undefined && at >= since;
+    /** The version this Bot's file tools last left at `absolutePath`, when written at or after `since`. */
+    writtenSince(botId: string, absolutePath: string, since: number): BotFileFingerprint | undefined {
+      const written = writes.get(key(botId, absolutePath));
+      return written && written.at >= since ? written.fingerprint : undefined;
     },
   };
 }

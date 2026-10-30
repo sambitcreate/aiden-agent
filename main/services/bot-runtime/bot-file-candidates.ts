@@ -12,8 +12,8 @@ import { botTurnOf } from "./bot-tool-policy.js";
 export interface BotFileCandidateInput {
   /** The turn the tools were built for is a routine run. */
   routine: boolean;
-  /** Journals one file a routine run wrote with write_file or edit_file. */
-  recordOwnWrite(absolutePath: string): void;
+  /** Journals one file a routine run wrote with write_file or edit_file, as the write left it. */
+  recordOwnWrite(absolutePath: string): void | Promise<void>;
 }
 
 export function botFileCandidates(locations: readonly BotFileToolLocation[], input: BotFileCandidateInput): BotToolCandidate[] {

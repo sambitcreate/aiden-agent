@@ -41,7 +41,7 @@ export interface BotFileToolRouterOptions {
   /** Installation-owned native helper used for edit_file. */
   readonly fileMutatorBinary?: string;
   /** After write_file or edit_file succeeds: the real absolute path it changed. */
-  readonly onWrite?: (absolutePath: string) => void;
+  readonly onWrite?: (absolutePath: string) => void | Promise<void>;
 }
 
 /** File tools that change a file; only these are fenced from protected roots. */
@@ -331,7 +331,8 @@ export function buildBotFileTools(options: BotFileToolRouterOptions): AgentTool[
         }
         if (options.onWrite && WRITING_TOOLS.has(name) && typeof underlyingParams.path === "string") {
           const written = await realTarget(path.resolve(selected.root, underlyingParams.path)).catch(() => undefined);
-          if (written) options.onWrite(written);
+          // Awaited, so the journal holds the version this call left before the call returns.
+          if (written) await Promise.resolve(options.onWrite(written)).catch(() => undefined);
         }
         return result;
       },
