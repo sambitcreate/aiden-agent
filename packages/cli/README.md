@@ -90,7 +90,7 @@ Phones and Macs paired with the server see its workspaces, chats, Bots, schedule
 
 `aiden schedule save <file>` validates and saves a schedule; `schedule list`, `preview <cron> [timezone]`, `status`, `runs`, `notifications [since-ms]`, `run`, `pause`, `resume` and `remove <id>` inspect and control it. `schedule status` reports the next run, overdue task IDs and pending Bot fires. Schedules keep their own read-only/Full tool selection and exact MCP connection bindings.
 
-A model can't save, pause, resume or remove a schedule from a server chat: those changes need a person's foreground confirmation, which the server has no terminal to ask for, so they are refused. Use the `aiden schedule` commands. Listing, previewing and inspecting runs stay read-only.
+Server chats have no schedule tool, so the model can't create or change schedules. Manage them with the `aiden schedule` commands or from a paired app.
 
 ## MCP connectors
 
@@ -163,7 +163,7 @@ docker run --rm -it -v aiden-state:/home/node/.aiden \
   -v "$PWD:/workspace" aiden-cli:local
 ```
 
-The default command is `serve`; append another command (for example `auth login <provider>` or `help`) to run it instead. The image runs as the unprivileged `node` user. Mounted workspace permissions must permit that user to read and write according to the selected access tier. Use a dedicated volume per server. Configure and pair Remote before publishing its port (49320 by default); mounting the Docker socket is unnecessary. Tailscale routing and LAN mDNS discovery depend on host networking and are best configured on the host.
+The default command is `serve`; append another command (for example `auth login <provider>` or `help`) to run it instead. The image runs as the unprivileged `node` user. Mounted workspace permissions must permit that user to read and write according to the selected access tier. Use a dedicated volume per server. Configure and pair Remote before publishing its port (49320 by default); mounting the Docker socket is unnecessary. Tailscale routing and LAN mDNS discovery depend on host networking and are best configured on the host. Inside a container the server advertises the container's own hostname, which phones usually can't resolve, so LAN pairing from Docker is untested; running `aiden serve` directly on the host is the tested path.
 
 The build prefers architecture-verified prebuilt helpers from `prebuilt/native/<target>` (darwin-universal, linux-x64, linux-arm64; regenerate with `node scripts/build-native-helpers.mjs`, optionally `--docker linux/amd64 linux/arm64` for cross-targets) or a directory named by `AIDEN_NATIVE_PREBUILT_DIR`, so installing on a supported platform needs no C toolchain; it compiles from `native/` only when no matching prebuilt exists. macOS builds use Xcode Command Line Tools; Linux source builds use a C17 compiler and OpenSSL development headers. Windows native helper support is outside this implementation. No model catalogs, credentials, speech weights or private history are fetched into the image.
 
