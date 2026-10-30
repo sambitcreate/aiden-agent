@@ -9498,19 +9498,23 @@ private struct AidenVisualRowView: View {
     }
 }
 
+/// A one-row view of reasoning that never opens or closes on its own. While
+/// the model thinks, the row shows the latest finished line in place, so a fast
+/// turn with many short thoughts never moves the transcript. Opening it is the
+/// reader's choice.
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let text: String
     let label: String
     let active: Bool
-    @State private var isExpanded = true
-    @State private var userControlled = false
+    @State private var isExpanded = false
+    /// Keeps its last text once thinking ends so the line can fade out in place.
+    @State private var liveLine = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                userControlled = true
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
@@ -9519,7 +9523,25 @@ private struct AidenReasoningCard: View {
                     Text(label)
                         .font(.caption.weight(.semibold))
                         .aidenActivityShimmer(active)
-                    Spacer(minLength: 6)
+                        .layoutPriority(1)
+                    ZStack(alignment: .leading) {
+                        if !liveLine.isEmpty {
+                            Text(liveLine)
+                                .id(liveLine)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .offset(y: 4)),
+                                    removal: .opacity
+                                ))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(active && !isExpanded ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: active)
+                    .accessibilityHidden(true)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(palette.secondary)
@@ -9546,16 +9568,16 @@ private struct AidenReasoningCard: View {
         .padding(.horizontal, 12)
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
-        .task {
-            guard active else {
-                isExpanded = false
-                return
-            }
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, !userControlled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                isExpanded = false
-            }
+        .onChange(of: text, initial: true) { refreshLiveLine() }
+        .onChange(of: active) { refreshLiveLine() }
+    }
+
+    private func refreshLiveLine() {
+        guard active else { return }
+        let line = AidenAgentActivityPresentation.latestReasoningLine(text)
+        guard !line.isEmpty, line != liveLine else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+            liveLine = line
         }
     }
 }

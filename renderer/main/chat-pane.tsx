@@ -100,7 +100,17 @@ import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
 } from "../components/ask-user-question-expiry-notice";
-import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
+import {
+  ComposerFloatingRow,
+  composerFloatingRowOffsets,
+  TodoPanel,
+  todoPanelHasVisibleChrome,
+} from "../components/todo-panel";
+import { revealSubagentRunInTranscript } from "../components/subagent-chips";
+import {
+  SubagentComposerPill,
+  useSubagentComposerPill,
+} from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
@@ -254,6 +264,7 @@ import {
   isAcpHarnessProvider,
   type AcpHarnessBlockedSurface,
 } from "../shared/acp-harness";
+import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -708,6 +719,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const findBar = useChatFind(chatId);
   // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
   // the draft's composer for focus; it may mount a few frames after navigation.
   React.useEffect(() => {
@@ -980,6 +992,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
+  const subagentPill = useSubagentComposerPill(
+    chatId,
+    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null,
+    environmentPanel.subagentsEnabled,
+  );
+  const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
+  const [floatingRowHeight, setFloatingRowHeight] = React.useState(0);
+  const subagentTrayShortcut = useShortcutBinding("subagents.toggleTray");
+  const subagentPillVisible = subagentPill.model !== null;
+  React.useEffect(() => {
+    if (!subagentPillVisible) setSubagentTrayOpen(false);
+  }, [subagentPillVisible]);
+  React.useEffect(() => setSubagentTrayOpen(false), [chatId]);
+  useCommandHandler(
+    "subagents.toggleTray",
+    () => setSubagentTrayOpen((open) => !open),
+    subagentPillVisible,
+  );
+  const transcriptStreamingRef = React.useRef(false);
+  transcriptStreamingRef.current = displayedStreamingText !== null;
+  const showSubagentsInChat = React.useCallback((runIds: readonly string[]) => {
+    // While text streams the transcript pins itself each frame, which would cut a smooth scroll short.
+    const instant =
+      transcriptStreamingRef.current || document.documentElement.dataset.reduceMotion === "true";
+    return runIds.some((runId) => revealSubagentRunInTranscript(runId, { instant }));
+  }, []);
   const imageArtifactRecoveryPending =
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
@@ -3230,7 +3268,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
       }
     : undefined;
-  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+  const floatingChromeVisible = todoPanelHasVisibleChrome(todoSnapshot) || subagentPillVisible;
 
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
   if (botChatId) return null;
@@ -3260,6 +3298,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3301,6 +3341,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         actions={
           <WorkspaceToolButtons
+            chatId={chatId}
             hasWorkspace={Boolean(effectiveWorkspace)}
             hasFolder={Boolean(effectiveWorkspace?.folderPath)}
             hasFolderAccess={Boolean(
@@ -3348,8 +3389,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ]}
         showScrollToBottomButton
         streaming={displayedStreamingText !== null}
-        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
-        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
+        {...composerFloatingRowOffsets(floatingChromeVisible, floatingRowHeight)}
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
@@ -3382,7 +3422,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </EventPresence>
-            <TodoPanel snapshot={todoSnapshot} />
+            <ComposerFloatingRow onHeightChange={setFloatingRowHeight}>
+              <TodoPanel snapshot={todoSnapshot} floating={false} />
+              {subagentPill.model ? (
+                <SubagentComposerPill
+                  model={subagentPill.model}
+                  open={subagentTrayOpen}
+                  onOpenChange={setSubagentTrayOpen}
+                  stopPendingRunIds={environmentPanel.subagentStopPendingRunIds}
+                  stopErrors={environmentPanel.subagentStopErrorsByRunId}
+                  onOpenRun={environmentPanel.openSubagent}
+                  onOpenPanel={(returnTarget) => environmentPanel.showTools("subagents", returnTarget)}
+                  onStop={environmentPanel.stopSubagent}
+                  onShowInChat={showSubagentsInChat}
+                  shortcut={subagentTrayShortcut}
+                  onDismiss={() => {
+                    setSubagentTrayOpen(false);
+                    subagentPill.dismiss();
+                  }}
+                  returnFocus={() => composerRef.current}
+                />
+              ) : null}
+            </ComposerFloatingRow>
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}
