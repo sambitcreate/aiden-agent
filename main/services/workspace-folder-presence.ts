@@ -57,7 +57,7 @@ export class WorkspaceFolderMissingError extends Error {
   }
 }
 
-type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree">;
+type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree" | "noWorkspace">;
 
 /**
  * A No workspace chat's folder is Aiden's own, so a missing one (cleared app

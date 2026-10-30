@@ -1,9 +1,9 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 
-type StoredWorkspace = { id: string; name: string; folderPath?: string; noWorkspace?: true };
+type StoredWorkspace = { id: string; name: string; folderPath?: string; permission?: string; noWorkspace?: true };
 type ChatIndexEntry = { id: string; title: string; workspaceId?: string; botId?: string };
 
 async function workspaces(userDataDir: string): Promise<StoredWorkspace[]> {
@@ -48,14 +48,37 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   expect(path.dirname(firstHome!.folderPath!)).toBe(path.join(userDataDir, "chat-folders"));
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 
-  // A new chat from the Chats group gets a folder of its own when it is sent.
+  // A hidden folder that went missing is made again on the next message.
+  await rm(firstHome!.folderPath!, { recursive: true });
+  await page.locator("textarea").fill("And a packing list");
+  await page.locator("textarea").press("Enter");
+  await expect
+    .poll(async () => {
+      const saved = JSON.parse(await readFile(path.join(userDataDir, "chats", `${first.id}.json`), "utf8")) as {
+        messages: Array<{ role: string }>;
+      };
+      return saved.messages.filter((message) => message.role === "assistant").length;
+    }, { timeout: 20_000 })
+    .toBe(2);
+  expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
+
+  // A new chat from the Chats group gets a folder of its own, and the access
+  // chosen before sending applies to it alone.
   await chatsGroup.hover();
   await page.getByRole("button", { name: "New chat without a workspace" }).click();
+  await page.getByRole("button", { name: /^Workspace access: Ask first/u }).click();
+  await page
+    .getByRole("radiogroup", { name: "Workspace access" })
+    .getByRole("radio", { name: /^Workspace access: No access/u })
+    .click();
+  await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
   await sendAndWaitForReply(page, "Draft a soup recipe", userDataDir, 2);
   const second = (await regularChats(userDataDir)).find((chat) => chat.id !== first.id)!;
   const secondHome = (await workspaces(userDataDir)).find((workspace) => workspace.id === second.workspaceId);
   expect(secondHome?.noWorkspace).toBe(true);
   expect(secondHome!.folderPath).not.toBe(firstHome!.folderPath);
+  expect(secondHome!.permission).toBe("none");
+  expect((await workspaces(userDataDir)).find((workspace) => workspace.id === firstHome!.id)?.permission).toBe("ask");
 
   // One Chats group lists both, and the hidden folders never show as workspace rows.
   await expect(page.locator("[data-sidebar]").getByRole("button", { name: /^(Collapse|Expand) Chats$/u })).toHaveCount(1);

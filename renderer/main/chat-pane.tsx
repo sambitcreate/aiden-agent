@@ -2562,11 +2562,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(effectiveWorkspace.id, { permission });
+      let targetId = effectiveWorkspace.id;
+      // A No workspace draft shares its folder with an existing chat until it
+      // is sent. Give it its own folder now so that chat keeps its access.
+      if (getChatDraft(chatId) && isNoWorkspace(effectiveWorkspace)) {
+        const separateId = await noWorkspaceFolderForFirstSend(
+          { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+          effectiveWorkspace.id,
+        );
+        if (separateId) {
+          updateChatDraft(chatId, { workspaceId: separateId });
+          selectWorkspace(separateId);
+          targetId = separateId;
+        }
+      }
+      await workspacesApi.update(targetId, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
-          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+          queryKey: queryKeys.skillCatalog(targetId),
         }),
       ]);
     },
@@ -2579,6 +2593,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
       qc,
+      selectWorkspace,
     ],
   );
 

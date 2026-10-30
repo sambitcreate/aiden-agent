@@ -56,10 +56,15 @@ test("starting in a missing folder is refused with the workspace and folder name
 test("only workspaces whose chats use their folder are checked", async () => {
   const gone = path.join(root, "never-there");
   assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "ask" }), true);
-  // No folder, No Access (the folder is never touched), and an Aiden-managed
-  // worktree (it has its own restore flow) are left alone.
+  // No folder, No Access (the folder is never touched), an Aiden-managed
+  // worktree (it has its own restore flow) and a No workspace chat's hidden
+  // folder (made again when the chat runs) are left alone.
   assert.equal(await workspaceFolderMissing({ name: "No folder", folderPath: undefined, permission: "ask" }), false);
   assert.equal(await workspaceFolderMissing({ name: "Website", folderPath: gone, permission: "none" }), false);
+  assert.equal(
+    await workspaceFolderMissing({ name: "No workspace", folderPath: gone, permission: "ask", noWorkspace: true }),
+    false,
+  );
   assert.equal(
     await workspaceFolderMissing({
       name: "Website",
