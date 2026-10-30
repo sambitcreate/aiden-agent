@@ -36,6 +36,11 @@ SPACE_STATUS="$(printf '%s' "$LIST_JSON" | node -e '
     const space = JSON.parse(raw).find((s) => s.id === process.argv[1]);
     process.stdout.write(space ? String(space.status) : "missing");
   });' "$REF")"
+# A missing or stopped Space has no processes left to stop, so --reset does not create or resume one.
+if [ "${1:-}" = "--reset" ] && [ "$SPACE_STATUS" != ready ]; then
+  echo "Space $SPACE is $SPACE_STATUS; nothing to reset."
+  exit 0
+fi
 case "$SPACE_STATUS" in
   missing)
     echo "Creating Space $SPACE…"

@@ -125,6 +125,30 @@ test("creates a missing Space and reports the guest's exit status", async (t) =>
   assert.equal(recorded.find((call) => call[1] === "exec")[3], "local:aiden-e2e-2");
 });
 
+test("resumes a stopped Space instead of creating another", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  const result = await run(space, ["--run", "true"], { FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"stopped"}]' });
+  assert.equal(result.status, 0);
+  const recorded = await calls(space.fake);
+  assert.deepEqual(recorded.find((call) => call[1] === "resume"), ["sb", "resume", "local:aiden-e2e"]);
+  assert.ok(recorded.every((call) => call[1] !== "create"));
+  assert.ok(recorded.some((call) => call[1] === "exec"), "the run continues in the resumed Space");
+});
+
+test("--reset leaves a missing or stopped Space alone", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+
+  for (const listing of ["[]", '[{"id":"local:aiden-e2e","status":"stopped"}]']) {
+    const result = await run(space, ["--reset"], { FAKE_CUA_LS: listing });
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /nothing to reset/);
+  }
+  assert.deepEqual([...new Set((await calls(space.fake)).map((call) => call[1]))], ["ls"]);
+});
+
 test("--reset succeeds on a clean Space and surfaces real failures", async (t) => {
   const space = await checkout();
   t.after(() => rm(space.root, { recursive: true, force: true }));
