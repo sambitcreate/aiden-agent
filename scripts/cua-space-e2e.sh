@@ -1,91 +1,156 @@
 #!/usr/bin/env bash
 # Run Aiden's Electron e2e suite inside a local Cua Spaces Linux sandbox so test windows never take over
-# this Mac's display. Mirrors CI's Linux job: Node 22.22.3, CI's apt packages, xvfb-run.
+# this Mac's display. It follows CI's Linux E2E job (Node 22.22.3, CI's apt packages, xvfb-run, CI=1), but on
+# Apple silicon the Space is Linux arm64, and specs that branch on darwin take their Linux path here.
 #
 #   scripts/cua-space-e2e.sh                                     # full suite
 #   scripts/cua-space-e2e.sh tests/e2e/workspace-panel.spec.ts   # any playwright args
 #   scripts/cua-space-e2e.sh --watch tests/e2e/foo.spec.ts       # render on the Space desktop (watch it in Cua Spaces)
-#   CUA_SPACE=aiden-e2e-2 scripts/cua-space-e2e.sh --shard=2/3   # a second Space for a parallel shard
-#   scripts/cua-space-e2e.sh --run npm run test:foreground-file-tools:electron  # any window-opening command
+#   scripts/cua-space-e2e.sh --run npm run test:foreground-file-tools:electron  # any window-opening command (argv)
+#   scripts/cua-space-e2e.sh --reset                             # stop processes left by an interrupted run
+#   CUA_SPACE=aiden-e2e-2 scripts/cua-space-e2e.sh --shard=2/3   # another Space, e.g. a concurrent session or shard
 #
+# One run at a time per Space (a second run against a busy Space exits 75). New Spaces get CUA_SPACE_CPUS (4) and
+# CUA_SPACE_MEMORY (8GB); on a Mac all Linux Spaces share cua's runtime VM, so parallel shards need a bigger one
+# (`cua config set runtime.linux_cpus` / `runtime.linux_memory_gib`).
 # Needs the cua CLI (https://cua.ai/install.sh). Removes nothing on the host; `cua sb rm <name>` deletes the Space.
 set -euo pipefail
 
 SPACE="${CUA_SPACE:-aiden-e2e}"
+REF="local:$SPACE"
 CUA="${CUA_BIN:-$(command -v cua || echo "$HOME/.local/bin/cua")}"
 export CUA_TELEMETRY="${CUA_TELEMETRY:-0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
 
-if ! "$CUA" sb ls 2>/dev/null | grep -q "local:$SPACE "; then
-  echo "Creating Space $SPACE…"
-  "$CUA" sb create linux --name "$SPACE" --cpu 8 --memory 16GB --wait desktop
+if [ ! -x "$CUA" ]; then
+  echo "cua CLI not found. Install it with: curl -fsSL https://cua.ai/install.sh | DO_NOT_TRACK=1 sh -s -- --only spaces --no-onboarding" >&2
+  exit 127
 fi
 
-# Tracked and untracked (non-ignored) files, so uncommitted work is tested too.
-(cd "$ROOT" && git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
+if ! LIST_JSON="$("$CUA" sb ls --local --json)"; then
+  echo "cua sb ls failed; is the cua daemon running?" >&2
+  exit 1
+fi
+SPACE_STATUS="$(printf '%s' "$LIST_JSON" | node -e '
+  let raw = ""; process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+    const space = JSON.parse(raw).find((s) => s.id === process.argv[1]);
+    process.stdout.write(space ? String(space.status) : "missing");
+  });' "$REF")"
+case "$SPACE_STATUS" in
+  missing)
+    echo "Creating Space $SPACE…"
+    "$CUA" sb create linux --name "$SPACE" --cpu "${CUA_SPACE_CPUS:-4}" --memory "${CUA_SPACE_MEMORY:-8GB}" --wait desktop ;;
+  ready) ;;
+  *)
+    echo "Space $SPACE is $SPACE_STATUS; resuming…"
+    "$CUA" sb resume "$REF" ;;
+esac
+
+if [ "${1:-}" = "--reset" ]; then
+  exec "$CUA" sb exec -i "$REF" -- pkill -u cua -f "aiden-agent/node_modules|xvfb-run|Xvfb :9[0-9]" </dev/null
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+RUN_ID="$(basename "$WORK")"
+
+# Tracked and untracked (non-ignored) files, so uncommitted work is tested too. `ls-files -c` still lists
+# tracked paths deleted from the working tree, so keep only paths that exist; tar still fails on unreadable ones.
+# Untracked secrets that .gitignore does not cover stay on the host.
+(cd "$ROOT" && {
+  git ls-files -c -z
+  git ls-files -o --exclude-standard -z -- . ':(exclude,glob)**/.env*' ':(exclude,glob)**/.npmrc' \
+    ':(exclude,glob)**/*.pem' ':(exclude,glob)**/*.key' ':(exclude,glob)**/*.p12'
+} | while IFS= read -r -d '' path; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi; done \
+  | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
 LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
 
 cat > "$WORK/run.sh" <<'GUEST'
 #!/usr/bin/env bash
 set -uo pipefail
-LOCK_HASH="$1"; shift
+RUN_ID="$1"; LOCK_HASH="$2"; shift 2
+SRC=~/aiden-src-$RUN_ID.tgz
+RESULTS=~/test-results-$RUN_ID.tgz
+trap 'rm -f "$SRC" "$0"' EXIT
+
+exec 9>/tmp/aiden-e2e.lock
+if ! flock -n 9; then
+  echo "SPACE_BUSY: another run is using this Space. Wait for it, set CUA_SPACE to another Space, or run --reset if an interrupted run left processes behind."
+  exit 75
+fi
+
+# Run children in the background and wait, so Ctrl-C / a dropped host (SIGINT/TERM/HUP from `exec -i`)
+# stops the whole tree instead of orphaning Electron and Xvfb.
+kill_tree() { local child; for child in $(pgrep -P "$1"); do kill_tree "$child"; done; kill "$1" 2>/dev/null; }
+trap 'for c in $(pgrep -P $$); do kill_tree "$c"; done; exit 130' INT TERM HUP
+run_fg() { "$@" & wait $!; }
+
 NODE_VERSION=22.22.3
 case "$(uname -m)" in aarch64|arm64) NODE_ARCH=arm64 ;; *) NODE_ARCH=x64 ;; esac
-if ! /opt/node22/bin/node --version 2>/dev/null | grep -q "v$NODE_VERSION"; then
-  curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz" -o /tmp/node.tar.xz
-  sudo mkdir -p /opt/node22 && sudo tar -xJf /tmp/node.tar.xz -C /opt/node22 --strip-components=1
+if ! /opt/node22/bin/node --version 2>/dev/null | grep -qx "v$NODE_VERSION"; then
+  { curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz" -o /tmp/node.tar.xz &&
+    sudo rm -rf /opt/node22 && sudo mkdir -p /opt/node22 &&
+    sudo tar -xJf /tmp/node.tar.xz -C /opt/node22 --strip-components=1; } || { echo "NODE_INSTALL_FAILED"; exit 2; }
 fi
 export PATH=/opt/node22/bin:$PATH
+if [ "$(node --version)" != "v$NODE_VERSION" ]; then echo "NODE_VERSION_MISMATCH: $(node --version)"; exit 2; fi
+
 if [ ! -f /var/lib/aiden-e2e-apt-done ]; then
   export DEBIAN_FRONTEND=noninteractive
-  sudo -E apt-get update -qq
-  sudo -E apt-get install -y -qq xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11 \
-    build-essential python3 libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 libxss1 libdrm2 >/dev/null
-  sudo touch /var/lib/aiden-e2e-apt-done
+  { run_fg sudo -E apt-get update -qq &&
+    run_fg sudo -E apt-get install -y -qq xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11 \
+      build-essential python3 libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 libxss1 libdrm2 >/dev/null &&
+    sudo touch /var/lib/aiden-e2e-apt-done; } || { echo "APT_INSTALL_FAILED"; exit 2; }
 fi
 
 mkdir -p ~/aiden-agent && cd ~/aiden-agent
 # Replace the source but keep node_modules between runs.
 find . -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
-tar -xzf ~/aiden-src.tgz
-if [ "$(cat node_modules/.aiden-lock-hash 2>/dev/null)" != "$LOCK_HASH" ]; then
-  npm ci --no-audit --no-fund && echo "$LOCK_HASH" > node_modules/.aiden-lock-hash
+tar -xzf "$SRC" || { echo "SOURCE_EXTRACT_FAILED"; exit 2; }
+CACHE_KEY="$LOCK_HASH-node$NODE_VERSION-$(uname -m)"
+if [ "$(cat node_modules/.aiden-cache-key 2>/dev/null)" != "$CACHE_KEY" ]; then
+  run_fg npm ci --no-audit --no-fund || { echo "NPM_CI_FAILED"; exit 2; }
+  echo "$CACHE_KEY" > node_modules/.aiden-cache-key
+else
+  # The source swap above deletes postinstall outputs outside node_modules (resources/generative-ui), so
+  # rerun the idempotent postinstall when npm ci is skipped.
+  run_fg npm run postinstall || { echo "POSTINSTALL_FAILED"; exit 2; }
 fi
 
 ulimit -c 0
 if [ "${1:-}" = "--run" ]; then
   shift
-  xvfb-run --auto-servernum dbus-run-session -- bash -c "$*"
+  run_fg xvfb-run --auto-servernum dbus-run-session -- "$@"
   exit $?
 fi
 
 WATCH=0
 if [ "${1:-}" = "--watch" ]; then WATCH=1; shift; fi
-npm run type-check:e2e && npm run build || { echo "E2E_BUILD_FAILED"; exit 2; }
+{ run_fg npm run type-check:e2e && run_fg npm run build; } || { echo "E2E_BUILD_FAILED"; exit 2; }
+export CI=1
 if [ "$WATCH" = 1 ]; then
-  DISPLAY=:1 dbus-run-session -- npx playwright test --config=playwright.config.ts --fail-on-flaky-tests "$@"
+  DISPLAY=:1 run_fg dbus-run-session -- npx playwright test --config=playwright.config.ts --fail-on-flaky-tests "$@"
 else
-  xvfb-run --auto-servernum dbus-run-session -- npx playwright test --config=playwright.config.ts --fail-on-flaky-tests "$@"
+  run_fg xvfb-run --auto-servernum dbus-run-session -- npx playwright test --config=playwright.config.ts --fail-on-flaky-tests "$@"
 fi
 status=$?
-tar -czf ~/test-results.tgz test-results playwright-report 2>/dev/null || true
+tar -czf "$RESULTS" test-results playwright-report 2>/dev/null || true
 exit $status
 GUEST
 
-"$CUA" sb cp "$WORK/src.tgz" "$SPACE:/home/cua/aiden-src.tgz" >/dev/null
-"$CUA" sb cp "$WORK/run.sh" "$SPACE:/home/cua/aiden-run.sh" >/dev/null
+"$CUA" sb cp "$WORK/src.tgz" "$REF:/home/cua/aiden-src-$RUN_ID.tgz" >/dev/null
+"$CUA" sb cp "$WORK/run.sh" "$REF:/home/cua/aiden-run-$RUN_ID.sh" >/dev/null
 
 set +e
 # -i streams output, passes argv untouched, sets no time limit and returns the guest's exit status
 # (plain `sb exec` applies a default timeout that cuts a full run short).
-"$CUA" sb exec -i "$SPACE" -- bash /home/cua/aiden-run.sh "$LOCK_HASH" "$@" </dev/null
+"$CUA" sb exec -i "$REF" -- bash "/home/cua/aiden-run-$RUN_ID.sh" "$RUN_ID" "$LOCK_HASH" "$@" </dev/null
 status=$?
 set -e
 
 OUT="$ROOT/test-results/cua-space-$SPACE"
-if "$CUA" sb cp "$SPACE:/home/cua/test-results.tgz" "$WORK/results.tgz" >/dev/null 2>&1; then
+if "$CUA" sb cp "$REF:/home/cua/test-results-$RUN_ID.tgz" "$WORK/results.tgz" >/dev/null 2>&1; then
+  "$CUA" sb exec -i "$REF" -- rm -f "/home/cua/test-results-$RUN_ID.tgz" </dev/null || true
   rm -rf "$OUT" && mkdir -p "$OUT"
   tar -xzf "$WORK/results.tgz" -C "$OUT" 2>/dev/null || true
   echo "Artifacts copied to $OUT"
