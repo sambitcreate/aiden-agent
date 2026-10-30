@@ -8688,11 +8688,37 @@ struct AidenQuestionCard: View {
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
-    @State private var draft = AidenQuestionComposerDraft()
+    @State private var draft: AidenQuestionComposerDraft
+
+    init(
+        model: AidenChatViewModel? = nil,
+        prompt: AidenPendingQuestion,
+        onSubmit: @escaping (AidenQuestionRespondRequest) -> Void
+    ) {
+        self.model = model
+        self.prompt = prompt
+        self.onSubmit = onSubmit
+        // Callers key the card by prompt id, so a new prompt starts fresh.
+        _draft = State(initialValue: AidenQuestionComposerDraft(questions: prompt.questions))
+    }
 
     var stopButton: AidenChatStopButton? { model.map { AidenChatStopButton(model: $0) } }
 
     private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
+
+    private var hint: String {
+        let recommended = !AidenQuestionAnswerDraft.recommendedSelections(for: prompt.questions).isEmpty
+        switch (prompt.questions.count > 1, recommended) {
+        case (true, true):
+            return String(localized: "Recommended answers are already selected. Questions you leave blank are skipped.")
+        case (true, false):
+            return String(localized: "Answer what you can — unanswered questions are skipped.")
+        case (false, true):
+            return String(localized: "The recommended answer is already selected. Change it or type your own.")
+        case (false, false):
+            return String(localized: "Choose an option or type your own answer.")
+        }
+    }
 
     private func binding(for index: Int) -> Binding<String> {
         Binding(
@@ -8717,9 +8743,7 @@ struct AidenQuestionCard: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(palette.foreground)
 
-                        Text(prompt.questions.count > 1
-                             ? String(localized: "Answer what you can — unanswered questions are skipped.")
-                             : String(localized: "Choose an option or type your own answer."))
+                        Text(hint)
                             .font(.caption)
                             .foregroundStyle(palette.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -8770,6 +8794,7 @@ struct AidenQuestionCard: View {
 
                         ForEach(question.options, id: \.label) { option in
                             let selected = draft.selections[index]?.contains(option.label) == true
+                            let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
                             Button {
                                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                                     draft.toggle(option.label, questions: prompt.questions)
@@ -8784,9 +8809,19 @@ struct AidenQuestionCard: View {
                                         .frame(width: 20)
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(option.label)
-                                            .font(.callout)
-                                            .foregroundStyle(palette.foreground)
+                                        HStack(spacing: 6) {
+                                            Text(label.text)
+                                                .font(.callout)
+                                                .foregroundStyle(palette.foreground)
+                                            if label.recommended {
+                                                Text("Recommended")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(palette.accent)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(palette.accent.opacity(0.12), in: Capsule())
+                                            }
+                                        }
                                         Text(option.description)
                                             .font(.caption)
                                             .foregroundStyle(palette.secondary)
@@ -8803,7 +8838,9 @@ struct AidenQuestionCard: View {
                                 selected ? palette.accent.opacity(0.10) : palette.canvas,
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                             )
-                            .accessibilityLabel(option.label)
+                            .accessibilityLabel(label.recommended
+                                ? String(localized: "\(label.text), recommended")
+                                : label.text)
                             .accessibilityValue(selected
                                 ? String(localized: "Selected")
                                 : String(localized: "Not selected"))
