@@ -35,6 +35,7 @@ export const COMMAND_IDS = [
   "terminal.toggle",
   "environment.toggle",
   "quick-view.toggle",
+  "subagents.toggleTray",
   "file.save",
   "navigate.back",
   "navigate.forward",
@@ -42,6 +43,9 @@ export const COMMAND_IDS = [
   "bots.search",
   "scheduled.open",
   "profile.open",
+  "focus.sidebar",
+  "focus.chat",
+  "focus.panel",
   "tools.review",
   "tools.files",
   "tools.browser",
@@ -58,6 +62,7 @@ export const COMMAND_IDS = [
   "chat.copyLatest",
   "chat.details",
   "chat.stop",
+  "chat.find",
   "composer.attach",
   "workspace.access",
 ] as const;
@@ -194,6 +199,7 @@ export const COMMANDS = [
     defaultBinding: "Command+Shift+[",
     scope: "chat",
     global: false,
+    allowInEditable: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -206,6 +212,7 @@ export const COMMANDS = [
     defaultBinding: "Command+Shift+]",
     scope: "chat",
     global: false,
+    allowInEditable: true,
     showInPalette: true,
     showInSettings: true,
   }),
@@ -219,6 +226,7 @@ export const COMMANDS = [
       defaultBinding: `Command+${index + 1}`,
       scope: "chat",
       global: false,
+      allowInEditable: true,
       showInPalette: false,
       showInSettings: true,
     }),
@@ -376,6 +384,21 @@ export const COMMANDS = [
     showInSettings: true,
   }),
   command({
+    id: "subagents.toggleTray",
+    title: "Show running subagents",
+    description: "Open or close the subagent tray above the composer while subagents are shown.",
+    category: "Tools",
+    keywords: ["subagents", "agents", "pill", "tray", "running"],
+    // A chord that types no character, so it can work from the composer. It is
+    // only claimed while the pill is on screen.
+    defaultBinding: "Command+Shift+S",
+    scope: "app",
+    global: false,
+    allowInEditable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
     id: "file.save",
     title: "Save file",
     description: "Save the active file editor.",
@@ -474,6 +497,27 @@ export const COMMANDS = [
   }),
   ...(
     [
+      ["focus.sidebar", "Focus sidebar", "Move focus to the sidebar's current row.", ["sidebar", "list", "region", "f6"]],
+      ["focus.chat", "Focus conversation", "Move focus to the conversation so arrow keys scroll it.", ["conversation", "transcript", "messages", "region", "f6"]],
+      ["focus.panel", "Focus side panel", "Move focus into the open side panel.", ["panel", "environment", "region", "f6"]],
+    ] as const
+  ).map(([id, title, description, keywords]) =>
+    command({
+      id,
+      title,
+      description,
+      category: "Navigate",
+      keywords: [...keywords],
+      defaultBinding: null,
+      scope: "app",
+      global: false,
+      allowInEditable: true,
+      showInPalette: true,
+      showInSettings: true,
+    }),
+  ),
+  ...(
+    [
       ["tools.review", "Open Changes", "Show this folder's Git changes in the Environment panel.", ["review", "diff", "git", "changes"]],
       ["tools.files", "Open Files", "Browse and edit this folder's files in the Environment panel.", ["files", "editor", "folder"]],
       ["tools.browser", "Open Browser", "Open the shared browser in the Environment panel.", ["web", "browser", "preview"]],
@@ -533,6 +577,20 @@ export const COMMANDS = [
     category: "Chat",
     keywords: ["cancel", "interrupt", "halt"],
     defaultBinding: "Command+.",
+    scope: "chat",
+    global: false,
+    allowInEditable: true,
+    paletteWhenAvailable: true,
+    showInPalette: true,
+    showInSettings: true,
+  }),
+  command({
+    id: "chat.find",
+    title: "Find in chat",
+    description: "Search the open conversation's text.",
+    category: "Chat",
+    keywords: ["search", "find", "text", "match"],
+    defaultBinding: "Command+F",
     scope: "chat",
     global: false,
     allowInEditable: true,
@@ -1109,7 +1167,9 @@ const INTRODUCED_DEFAULT_COMMANDS: readonly CommandId[] = [
   "navigate.back",
   "navigate.forward",
   "chat.stop",
+  "chat.find",
   "composer.attach",
+  "subagents.toggleTray",
 ];
 
 function yieldIntroducedDefaults(next: KeybindingOverridesV1): void {

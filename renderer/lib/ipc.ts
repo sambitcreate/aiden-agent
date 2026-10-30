@@ -2,6 +2,7 @@ import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from 
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
+import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import {
   parseUsageLimitWaits,
@@ -1026,6 +1027,9 @@ export const workspacesApi = {
   /** Credential-free repository identity, or null outside a repository with a network remote. */
   repositoryIdentity: (workspaceId: string) =>
     invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
+  /** Whether the workspace's folder is still on disk. */
+  folderPresence: (workspaceId: string) =>
+    invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),

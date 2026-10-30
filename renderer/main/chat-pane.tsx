@@ -25,6 +25,7 @@ import {
   activeWorktreeSend,
   continueWorktreeSendInView,
   isWorktreeSendCancelled,
+  WorktreeSendCancelledError,
   registerWorktreeSendContinuation,
   startWorktreeFirstSend,
   subscribeActiveWorktreeSends,
@@ -80,6 +81,8 @@ import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
+import { WORKSPACE_FOLDER_MISSING_SEND_REFUSAL, workspaceFolderCheckApplies } from "../shared/workspace-folder-presence";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -100,7 +103,17 @@ import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
 } from "../components/ask-user-question-expiry-notice";
-import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
+import {
+  ComposerFloatingRow,
+  composerFloatingRowOffsets,
+  TodoPanel,
+  todoPanelHasVisibleChrome,
+} from "../components/todo-panel";
+import { revealSubagentRunInTranscript } from "../components/subagent-chips";
+import {
+  SubagentComposerPill,
+  useSubagentComposerPill,
+} from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
@@ -259,6 +272,7 @@ import {
   isAcpHarnessProvider,
   type AcpHarnessBlockedSurface,
 } from "../shared/acp-harness";
+import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -314,6 +328,23 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
   effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
+  // A moved or deleted folder is named above the composer, and a send is
+  // refused before it reaches the agent (main refuses it again at start).
+  const folderWorkspaceId =
+    effectiveWorkspace && workspaceFolderCheckApplies(effectiveWorkspace) ? effectiveWorkspace.id : undefined;
+  const folderPresenceQuery = useQuery({
+    queryKey: queryKeys.workspaceFolderPresence(folderWorkspaceId ?? ""),
+    queryFn: () => workspacesApi.folderPresence(folderWorkspaceId!),
+    enabled: folderWorkspaceId !== undefined,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const missingWorkspaceFolder =
+    folderWorkspaceId !== undefined && folderPresenceQuery.data?.presence === "missing"
+      ? { name: effectiveWorkspace!.name, folder: folderPresenceQuery.data.folder }
+      : undefined;
+  const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
+  folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
   const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
     chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
@@ -713,6 +744,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const findBar = useChatFind(chatId);
   // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
   // the draft's composer for focus; it may mount a few frames after navigation.
   React.useEffect(() => {
@@ -985,6 +1017,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
+  const subagentPill = useSubagentComposerPill(
+    chatId,
+    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null,
+    environmentPanel.subagentsEnabled,
+  );
+  const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
+  const [floatingRowHeight, setFloatingRowHeight] = React.useState(0);
+  const subagentTrayShortcut = useShortcutBinding("subagents.toggleTray");
+  const subagentPillVisible = subagentPill.model !== null;
+  React.useEffect(() => {
+    if (!subagentPillVisible) setSubagentTrayOpen(false);
+  }, [subagentPillVisible]);
+  React.useEffect(() => setSubagentTrayOpen(false), [chatId]);
+  useCommandHandler(
+    "subagents.toggleTray",
+    () => setSubagentTrayOpen((open) => !open),
+    subagentPillVisible,
+  );
+  const transcriptStreamingRef = React.useRef(false);
+  transcriptStreamingRef.current = displayedStreamingText !== null;
+  const showSubagentsInChat = React.useCallback((runIds: readonly string[]) => {
+    // While text streams the transcript pins itself each frame, which would cut a smooth scroll short.
+    const instant =
+      transcriptStreamingRef.current || document.documentElement.dataset.reduceMotion === "true";
+    return runIds.some((runId) => revealSubagentRunInTranscript(runId, { instant }));
+  }, []);
   const imageArtifactRecoveryPending =
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
@@ -1862,6 +1920,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       }
       if (getChatDraft(chatId) && draftGitPendingRef.current) {
         throw new Error("Reading Git status… Send again in a moment.");
+      }
+      const folderWorkspace = folderWorkspaceRef.current;
+      if (folderWorkspace) {
+        const folderCheckVisit = chatVisitRef.current;
+        // A failed check is no reason to refuse; main checks again at start.
+        const presence = await qc
+          .fetchQuery({
+            queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+            queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+            staleTime: 0,
+          })
+          .catch(() => undefined);
+        // The user left this chat during the check: send nothing from a pane
+        // that now shows another chat. The composer's saved draft keeps the text.
+        if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
+          throw new WorktreeSendCancelledError();
+        }
+        // The notice above the composer names the folder; the toast stays short.
+        if (presence?.presence === "missing") throw new Error(WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
       }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
@@ -3306,7 +3383,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
       }
     : undefined;
-  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+  const floatingChromeVisible = todoPanelHasVisibleChrome(todoSnapshot) || subagentPillVisible;
 
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
   if (botChatId) return null;
@@ -3336,6 +3413,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3377,6 +3456,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         actions={
           <WorkspaceToolButtons
+            chatId={chatId}
             hasWorkspace={Boolean(effectiveWorkspace)}
             hasFolder={Boolean(effectiveWorkspace?.folderPath)}
             hasFolderAccess={Boolean(
@@ -3424,8 +3504,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ]}
         showScrollToBottomButton
         streaming={displayedStreamingText !== null}
-        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
-        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
+        {...composerFloatingRowOffsets(floatingChromeVisible, floatingRowHeight)}
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
@@ -3458,7 +3537,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </EventPresence>
-            <TodoPanel snapshot={todoSnapshot} />
+            <ComposerFloatingRow onHeightChange={setFloatingRowHeight}>
+              <TodoPanel snapshot={todoSnapshot} floating={false} />
+              {subagentPill.model ? (
+                <SubagentComposerPill
+                  model={subagentPill.model}
+                  open={subagentTrayOpen}
+                  onOpenChange={setSubagentTrayOpen}
+                  stopPendingRunIds={environmentPanel.subagentStopPendingRunIds}
+                  stopErrors={environmentPanel.subagentStopErrorsByRunId}
+                  onOpenRun={environmentPanel.openSubagent}
+                  onOpenPanel={(returnTarget) => environmentPanel.showTools("subagents", returnTarget)}
+                  onStop={environmentPanel.stopSubagent}
+                  onShowInChat={showSubagentsInChat}
+                  shortcut={subagentTrayShortcut}
+                  onDismiss={() => {
+                    setSubagentTrayOpen(false);
+                    subagentPill.dismiss();
+                  }}
+                  returnFocus={() => composerRef.current}
+                />
+              ) : null}
+            </ComposerFloatingRow>
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}
@@ -3508,6 +3608,14 @@ export function ChatPane({ chatId }: { chatId: string }) {
               />
             ) : null}
             {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {missingWorkspaceFolder && !questionnaire ? (
+              <WorkspaceFolderMissingNotice
+                workspaceName={missingWorkspaceFolder.name}
+                folder={missingWorkspaceFolder.folder}
+                checking={folderPresenceQuery.isFetching}
+                onCheckAgain={() => void folderPresenceQuery.refetch()}
+              />
+            ) : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}

@@ -755,6 +755,13 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  // The latest prompt, when it has a finished reply and can be edited in a fork.
+  const lastPromptForkId = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return null;
+    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
+    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
+    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  }, [completedForkTurns, onForkChat, sessionChat]);
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -2019,6 +2026,25 @@ export function Composer({
         }
       }
     }
+    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    if (
+      event.key === "ArrowUp" &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      text === "" &&
+      attachments.length === 0 &&
+      !selectedSkill &&
+      !isGenerating &&
+      lastPromptForkId
+    ) {
+      event.preventDefault();
+      void forkFromTurn(lastPromptForkId, "before");
+      return;
+    }
     if (
       escapeStopsGeneration({
         key: event.key,
@@ -2106,7 +2132,7 @@ export function Composer({
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
-        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
+        <div data-focus-region="composer" className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -2356,6 +2382,7 @@ export function Composer({
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
               data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
+              data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
