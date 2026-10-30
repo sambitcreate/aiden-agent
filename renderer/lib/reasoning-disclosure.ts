@@ -1,43 +1,65 @@
-export const REASONING_PREVIEW_MS = 1_000;
-
-export interface ReasoningDisclosureState {
-  expanded: boolean;
-  userControlled: boolean;
-}
-
-export type ReasoningDisclosureEvent = { type: "preview-elapsed" } | { type: "toggle" };
-
 /**
- * Streaming reasoning previews open so the disclosure is discoverable. Stored
- * responses start closed, matching Pi's inspect-on-demand transcript behavior.
+ * A reasoning disclosure only moves when the reader asks it to. Closing eases
+ * shut first when motion is allowed, so the body stays mounted while it folds.
  */
-export function initialReasoningDisclosure(streaming: boolean): ReasoningDisclosureState {
-  return { expanded: streaming, userControlled: false };
-}
+export type ReasoningDisclosurePhase = "closed" | "open" | "closing";
 
-/** Explicit user intent always wins over the one-time automatic preview. */
+export type ReasoningDisclosureEvent =
+  /** The reader pressed the header. `animate` is false under Reduce Motion. */
+  | { type: "toggle"; animate: boolean }
+  /** The closing fold finished. */
+  | { type: "closed" };
+
 export function reduceReasoningDisclosure(
-  state: ReasoningDisclosureState,
+  phase: ReasoningDisclosurePhase,
   event: ReasoningDisclosureEvent,
-): ReasoningDisclosureState {
-  if (event.type === "toggle") {
-    return { expanded: !state.expanded, userControlled: true };
-  }
-  if (state.userControlled || !state.expanded) return state;
-  return { expanded: false, userControlled: false };
+): ReasoningDisclosurePhase {
+  if (event.type === "closed") return phase === "closing" ? "closed" : phase;
+  if (phase === "open") return event.animate ? "closing" : "closed";
+  // Pressing a closing header reopens it from wherever the fold has reached.
+  return "open";
 }
 
-export type ReasoningDisclosureLayout = "collapsed" | "preview" | "full";
+/**
+ * The line a collapsed, still-thinking row shows: the latest sentence or line
+ * the model has finished, with Markdown markers removed. Unfinished text is
+ * left out, so the row changes once per finished thought instead of per token.
+ */
+export function latestReasoningLine(text: string): string {
+  let end = lastUnitEnd(text, text.length);
+  while (end >= 0) {
+    const start = lastUnitEnd(text, end) + 1;
+    const line = cleanReasoningLine(text.slice(start, end));
+    if (line) return line;
+    end = start - 1;
+  }
+  return "";
+}
+
+const SENTENCE_END = new Set([".", "!", "?", "…"]);
+const CLOSERS = new Set(['"', "'", ")", "]", "”", "’"]);
 
 /**
- * The automatic streaming preview is a short, tail-following window. Once the
- * reader deliberately opens a disclosure it flows at full height inside the
- * transcript, with a sticky header, so long reasoning reads like prose instead
- * of a cramped nested scroller.
+ * The index of the whitespace that ends the last finished unit before `before`,
+ * or -1. A unit ends at a line break, or at sentence punctuation (and any
+ * closing quotes) that whitespace already follows.
  */
-export function reasoningDisclosureLayout(
-  state: ReasoningDisclosureState,
-): ReasoningDisclosureLayout {
-  if (!state.expanded) return "collapsed";
-  return state.userControlled ? "full" : "preview";
+function lastUnitEnd(text: string, before: number): number {
+  for (let index = before - 1; index >= 0; index -= 1) {
+    const char = text[index]!;
+    if (char === "\n") return index;
+    if (!/\s/u.test(char)) continue;
+    let mark = index - 1;
+    while (mark >= 0 && CLOSERS.has(text[mark]!)) mark -= 1;
+    if (mark >= 0 && SENTENCE_END.has(text[mark]!)) return index;
+  }
+  return -1;
+}
+
+function cleanReasoningLine(line: string): string {
+  return line
+    .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/u, "")
+    .replace(/\*\*|__|`/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
 }

@@ -770,6 +770,7 @@ export function Sidebar({
   return (
     <div
       data-sidebar
+      data-focus-region="sidebar"
       className="glass-surface relative flex h-full min-h-0 flex-col overflow-hidden"
     >
       <div className="drag-region flex h-13 shrink-0 items-center justify-end px-3">{actions}</div>
@@ -819,7 +820,7 @@ export const SidebarFooter = ({ className, ...props }: React.HTMLAttributes<HTML
     {...props}
   />
 );
-export const SidebarList = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
+export const SidebarList = ({ className, ...props }: React.ComponentProps<"div">) => (
   <div className={cn("flex flex-col px-2.5 pb-3", className)} {...props} />
 );
 export function SidebarListGroup({
@@ -949,9 +950,18 @@ export function ScrollArea({
   scrollToBottomButtonOffset = 0,
   scrollContentBottomOffset = 0,
   scrollRestorationId,
+  focusRegion,
+  overlay,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Marks the scrollport as the conversation F6 moves to, so arrow keys and
+   * Page Up/Down scroll it once it has focus.
+   */
+  focusRegion?: "chat";
+  /** Floats at the top right, just below the toolbar, such as Find in chat. */
+  overlay?: React.ReactNode;
   /**
    * Names this scrollport for the router's scroll restoration, so a page never
    * inherits another page's offset just because their scrollports sit at the
@@ -1291,6 +1301,7 @@ export function ScrollArea({
 
   return (
     <div
+      data-scroll-area
       className={cn("relative isolate h-full min-h-0 overflow-hidden bg-background", className)}
       // Sticky descendants (transcript section headers) rest just below the
       // overlaid toolbar instead of sliding underneath it.
@@ -1307,7 +1318,19 @@ export function ScrollArea({
         data-scroll-top={atTop}
         data-scroll-bottom={atScrollEnd}
         data-follow={autoScrollToBottom ? following : undefined}
-        className="scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain"
+        {...(focusRegion
+          ? {
+              "data-focus-region": focusRegion,
+              "data-focus-region-entry": "",
+              role: "region",
+              "aria-label": "Conversation",
+              tabIndex: -1,
+            }
+          : {})}
+        className={cn(
+          "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+          focusRegion && "conversation-scrollport",
+        )}
         style={{
           paddingTop: toolbarHeight,
           paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
@@ -1329,6 +1352,18 @@ export function ScrollArea({
           {children}
         </div>
       </div>
+      {focusRegion ? (
+        // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+        <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+      ) : null}
+      {overlay ? (
+        <div
+          className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+          style={{ top: toolbarHeight + 8 }}
+        >
+          <div className="pointer-events-auto">{overlay}</div>
+        </div>
+      ) : null}
       {showScrollToBottomButton && offerJump ? (
         // The button floats over the scrollport like the footer, but is centred
         // on the same chat column as the composer, so it follows the column

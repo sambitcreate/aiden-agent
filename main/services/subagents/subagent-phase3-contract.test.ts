@@ -674,7 +674,7 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
   ]);
   assert.match(
     llm,
-    /if \(workspace && !botBound\) await assertManagedWorktreeAdmission\(workspace\)/u,
+    /if \(workspace && !botBound\) \{[\s\S]{0,240}?await assertManagedWorktreeAdmission\(workspace\)/u,
   );
   assert.match(llm, /botContext\?\.prepared\.workspace/u);
   assert.match(terminal, /workspaceFolder[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);

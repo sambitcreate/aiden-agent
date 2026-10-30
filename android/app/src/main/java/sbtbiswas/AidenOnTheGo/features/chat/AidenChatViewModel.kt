@@ -1576,7 +1576,7 @@ class AidenChatViewModel(
                     draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
-                    if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
+                    if (e is AidenRemoteClientException.Server && AidenDraftSendReconciliation.refusalSettlesSend(e.statusCode, e.body.code)) {
                         draftSession?.let { session -> withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) } }
                         _pendingSend.value = null
                         turnAttempts.reset()
