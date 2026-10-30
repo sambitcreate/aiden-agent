@@ -17,7 +17,7 @@ npm run cli:build         # generates themes + bundles dist/app/
 
 The root install is required: without it the build fails with `Could not resolve "@earendil-works/pi-ai"` and similar errors. A clone already set up for desktop development (`npm ci` at the root) can skip that step.
 
-To run it as `aiden` from any folder, link it once with `cd packages/cli && npm link`. The link points at this checkout, so later `git pull` plus `npm run cli:build` updates the command; `npm unlink -g aiden-cli` removes it. If npm's global folder is not writable (Node from the nodejs.org installer uses `/usr/local`), run the link with `sudo` or install Node with Homebrew. `aiden --version` prints the CLI package version (`0.1.0`), which is separate from the desktop app's version.
+To run it as `aiden` from any folder, link it once with `cd packages/cli && npm link`. The link points at this checkout, so later `git pull` plus `npm run cli:build` (from the repo root) updates the command; `npm unlink -g aiden-cli` removes it. If npm's global folder is not writable (Node from the nodejs.org installer uses `/usr/local`), run the link with `sudo` or install Node with Homebrew. `aiden --version` prints the CLI package version (`0.1.0`), which is separate from the desktop app's version.
 
 Or from this directory: `npm install && npm run build` (after the root install). During development, `npm test` builds nothing — run `npm run build` first (tests exercise the built bundle).
 
