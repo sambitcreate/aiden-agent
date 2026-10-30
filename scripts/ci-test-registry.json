@@ -463,6 +463,7 @@
         "main/services/aiden-remote-tailscale-route.test.ts",
         "main/services/aiden-remote-tailscale.test.ts",
         "main/services/aiden-remote-tls-identity.test.ts",
+        "main/services/aiden-remote-lan-hostname.test.ts",
         "main/services/aiden-remote-workspace-browser.test.ts",
         "main/services/aiden-remote-workspace-http.test.ts",
         "main/services/aiden-remote-workspaces.test.ts",
