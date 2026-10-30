@@ -278,6 +278,19 @@ function AssistantResponse({
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const reasoningLabel = reasoningActivityLabel(timeline, active);
+  // One action row closes the turn, after its last row. While the reply
+  // streams it is laid out but hidden there, so a new paragraph never moves it.
+  const actions = content ? (
+    <MessageActions
+      copyText={content}
+      readAloud={readAloud}
+      hidden={streaming && !streamComplete}
+      footer={footer}
+      fork={streaming ? undefined : fork}
+    />
+  ) : (
+    proselessActions(footer, fork)
+  );
   const showReasoning = Boolean(reasoning);
   if (!rows || !timeline) {
     const activityTimeline = timeline
@@ -321,16 +334,14 @@ function AssistantResponse({
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
-              readAloud={readAloud}
-              footer={footer}
-              fork={fork}
+              showCopy={false}
             />
           ) : null,
         ]}
         {media}
-        {!content ? proselessActions(footer, fork) : null}
         {visualNodes(slots.trailing)}
         {uiNodes(uiSlots.trailing, false)}
+        {actions}
       </>
     );
   }
@@ -401,18 +412,14 @@ function AssistantResponse({
             streamComplete={streamComplete}
             textClosed={index < rows.length - 1}
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
-            showCopy={isLastText}
-            copyText={content}
-            readAloud={isLastText ? readAloud : undefined}
-            footer={isLastText ? footer : undefined}
-            fork={isLastText ? fork : undefined}
+            showCopy={false}
           />
         );
       })}
       {media}
-      {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
       {visualNodes(slots.trailing)}
       {uiNodes(uiSlots.trailing, false)}
+      {actions}
     </>
   );
 }
@@ -420,12 +427,7 @@ function AssistantResponse({
 /** A reply with only attachments or activity still needs its fork action. */
 function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
   if (!fork) return footer ?? null;
-  // The reply's media sits above, so hovering this row reveals the action.
-  return (
-    <div className="group">
-      <MessageActions copyText="" footer={footer} fork={fork} />
-    </div>
-  );
+  return <MessageActions copyText="" footer={footer} fork={fork} />;
 }
 
 function settledTurnFooter(message: ChatMessage): React.ReactNode {
@@ -525,9 +527,14 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       ),
     [messageAttachments, messageTimeline, storedImagePlacements],
   );
+  const contained =
+    deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
   const row = (
-    <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
-      ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
+    // Hovering anywhere on a reply reveals the action row at its end.
+    <div
+      data-transcript-reply={assistant ? "" : undefined}
+      className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
+    >
       {live ? (
         <AssistantResponse {...live} streaming />
       ) : !message ? null : message.role === "assistant" ? (
@@ -599,6 +606,8 @@ export type InterruptedReplyActions = {
   onResume: () => void;
   /** True while Resume is sending. */
   busy?: boolean;
+  /** What the reply was waiting for approval to do. Approvals are never carried over a restart. */
+  approvalSummaries?: readonly string[];
 };
 
 /** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
@@ -606,9 +615,27 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
   return (
     <Callout role="status" data-interrupted-reply="true">
       <Text variant="small-strong">This reply was interrupted</Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block">
-        Aiden closed before it finished. Resume to pick up where it stopped.
-      </Text>
+      {actions.approvalSummaries?.length ? (
+        <>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Aiden closed while waiting for your approval, so this didn’t run:
+          </Text>
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+            {actions.approvalSummaries.map((summary, index) => (
+              <li key={index} className="break-words text-small text-primary">
+                {summary}
+              </li>
+            ))}
+          </ul>
+          <Text variant="small" color="secondary" className="mt-1 block">
+            Resume to pick up where it stopped.
+          </Text>
+        </>
+      ) : (
+        <Text variant="small" color="secondary" className="mt-0.5 block">
+          Aiden closed before it finished. Resume to pick up where it stopped.
+        </Text>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
           Resume
