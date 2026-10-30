@@ -83,7 +83,7 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   await writeFile(path.join(repo, "ignored.log"), "noise\n");
   await rm(path.join(repo, "removed.ts"));
   await mkdir(path.join(repo, "keys"));
-  for (const secret of [".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12"]) {
+  for (const secret of [".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
     await writeFile(path.join(repo, secret), "secret\n");
   }
 
@@ -99,7 +99,7 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   assert.ok(files.includes("tracked.ts"));
   assert.ok(files.includes("src/new-feature.ts"));
   assert.ok(files.includes("scripts/cua-space-e2e.sh"));
-  for (const excluded of ["removed.ts", "ignored.log", ".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12"]) {
+  for (const excluded of ["removed.ts", "ignored.log", ".env.local", ".npmrc", "keys/AuthKey_ABC123.p8", "keys/dev.pem", "keys/release.jks", "keys/signing.p12", "keys/id_ed25519", "keys/id_rsa.pub", "keys/dev.mobileprovision", ".netrc", ".git-credentials"]) {
     assert.ok(!files.includes(excluded), `${excluded} stays on the host`);
   }
 
@@ -120,7 +120,7 @@ test("creates a missing Space and reports the guest's exit status", async (t) =>
   assert.equal(result.status, 3);
   const recorded = await calls(space.fake);
   assert.deepEqual(recorded.find((call) => call[1] === "create"), [
-    "sb", "create", "linux", "--name", "aiden-e2e-2", "--cpu", "4", "--memory", "8GB", "--wait", "desktop",
+    "sb", "create", "linux", "--on", "local", "--name", "aiden-e2e-2", "--cpu", "4", "--memory", "8GB", "--wait", "desktop",
   ]);
   assert.equal(recorded.find((call) => call[1] === "exec")[3], "local:aiden-e2e-2");
 });

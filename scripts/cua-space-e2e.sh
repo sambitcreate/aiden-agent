@@ -39,7 +39,7 @@ SPACE_STATUS="$(printf '%s' "$LIST_JSON" | node -e '
 case "$SPACE_STATUS" in
   missing)
     echo "Creating Space $SPACE…"
-    "$CUA" sb create linux --name "$SPACE" --cpu "${CUA_SPACE_CPUS:-4}" --memory "${CUA_SPACE_MEMORY:-8GB}" --wait desktop ;;
+    "$CUA" sb create linux --on local --name "$SPACE" --cpu "${CUA_SPACE_CPUS:-4}" --memory "${CUA_SPACE_MEMORY:-8GB}" --wait desktop ;;
   ready) ;;
   *)
     echo "Space $SPACE is $SPACE_STATUS; resuming…"
@@ -88,7 +88,10 @@ RUN_ID="$(basename "$WORK")"
   git ls-files -c -z
   git ls-files -o --exclude-standard -z -- . ':(exclude,glob)**/.env*' ':(exclude,glob)**/.npmrc' \
     ':(exclude,glob)**/*.pem' ':(exclude,glob)**/*.key' ':(exclude,glob)**/*.p12' ':(exclude,glob)**/*.p8' \
-    ':(exclude,glob)**/*.pfx' ':(exclude,glob)**/*.jks' ':(exclude,glob)**/*.keystore'
+    ':(exclude,glob)**/*.pfx' ':(exclude,glob)**/*.jks' ':(exclude,glob)**/*.keystore' ':(exclude,glob)**/*.ppk' \
+    ':(exclude,glob)**/*.mobileprovision' ':(exclude,glob)**/id_rsa*' ':(exclude,glob)**/id_dsa*' \
+    ':(exclude,glob)**/id_ecdsa*' ':(exclude,glob)**/id_ed25519*' ':(exclude,glob)**/.netrc' \
+    ':(exclude,glob)**/.git-credentials'
 } | while IFS= read -r -d '' path; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi; done \
   | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
 LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
