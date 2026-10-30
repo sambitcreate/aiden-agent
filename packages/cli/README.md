@@ -15,7 +15,7 @@ npm run cli:build         # generates themes + bundles dist/app/
 ./packages/cli/dist/app/cli.js          # the `aiden` TUI
 ```
 
-The root install is required: without it the build fails with `Could not resolve "@earendil-works/pi-ai"` and similar errors. A clone already set up for desktop development (`npm ci` at the root) can skip that step.
+The root install is required: without it the build fails with `Could not resolve "@earendil-works/pi-ai"` and similar errors. In a clone you also use for desktop development, run the usual `npm ci` (with install scripts) instead: `--ignore-scripts` reinstalls the root `node_modules` without the desktop's postinstall patches and Electron download.
 
 To run it as `aiden` from any folder, link it once with `cd packages/cli && npm link`. The link points at this checkout, so later `git pull` plus `npm run cli:build` (from the repo root) updates the command; `npm unlink -g aiden-cli` removes it. If npm's global folder is not writable (Node from the nodejs.org installer uses `/usr/local`), run the link with `sudo` or install Node with Homebrew. `aiden --version` prints the CLI package version (`0.1.0`), which is separate from the desktop app's version.
 
