@@ -19,7 +19,7 @@
   "scripts": {
     "build": "node --experimental-strip-types scripts/generate-themes.ts && node scripts/patch-branding.mjs && node scripts/build.mjs",
     "themes": "node --experimental-strip-types scripts/generate-themes.ts",
-    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/themes.test.mjs tests/extensions.test.mjs tests/skill-paths.test.mjs tests/parity.test.mjs",
+    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/themes.test.mjs tests/extensions.test.mjs tests/skill-paths.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

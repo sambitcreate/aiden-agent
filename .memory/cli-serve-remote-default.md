@@ -1,0 +1,8 @@
+# `aiden serve` Remote on by default (2026-10-30)
+
+- `aiden serve` starts Remote unless `--no-remote`; `--remote` is still accepted as a no-op. `serve --daemon` spawns the child with `--no-remote` when chosen and always with `--no-pair`. Flag parsing and the foreground/daemon flow live in `packages/cli/src/serve-command.ts`.
+- A foreground `serve` with stdout on a TTY opens one LAN pairing window after startup (`--pair tailscale` picks Tailscale, `--no-pair` skips it) through the daemon's own `remote pair` control-socket path, renders it with `pairing-display.ts`, polls `remote pair-status`, and prints one line when the 5-minute window expires or a device pairs. Non-TTY output (Docker logs, systemd, `--daemon`) never mints or shows a pairing secret.
+- `serve status` adds `remote: { on, connectionMode, lanPort, lanEndpoint, tailscaleEndpoint?, tailscaleConnected, pairedDeviceCount }`, read from a `serve status` control-socket command (`{ on: false }` when off or not running).
+- The Remote LAN listener binds the dual-stack wildcard `::`; on kernels without IPv6 (EAFNOSUPPORT, including the cloud test container) `aiden-remote-service.ts` now falls back to `0.0.0.0`. Before this, every CLI Remote test failed in such containers.
+- Linux Bonjour (avahi-publish-service) is best effort in the CLI: missing or exiting avahi logs a warning and no longer stops or fails Remote.
+- Tests: `packages/cli/tests/serve-startup.test.mjs` (the TTY case uses util-linux `script` and skips elsewhere).

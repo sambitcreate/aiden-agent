@@ -19,7 +19,8 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   schedule list|save <file>|preview <cron> [timezone]|runs|notifications [since-ms]|run|pause|resume|remove <id>
   telegram status|connect|configure <file>|disable|disconnect
   speech status|download|select|delete <id>|transcribe <pcm16-file> <model-id>
-  serve [--remote] [--daemon] | stop | status   Scheduling, Telegram, and Remote daemon
+  serve [--no-remote] [--pair lan|tailscale|--no-pair] [--daemon] | stop | status
+                                            Server for phones and other clients (Remote on by default)
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause <id>
   bots enable-durable                       Back up legacy Bot history; restart daemon to switch

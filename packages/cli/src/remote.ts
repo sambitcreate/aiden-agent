@@ -36,18 +36,27 @@ import { scheduledSettingsPatch } from "../../../main/services/scheduled-setting
 import { createCliGitService } from "./git-commands.ts";
 import { createCliRemoteWorktrees } from "./remote-worktrees.ts";
 
+/**
+ * Linux discovery is best effort. Headless hosts and containers often lack
+ * avahi-publish-service or a running avahi-daemon; clients still pair from the
+ * QR or manual code, so a missing or exiting publisher only logs a warning and
+ * never stops the Remote listeners.
+ */
 function bonjourPublisher() {
   if (process.platform === "darwin") return new DnsSdAidenRemoteBonjourPublisher();
   let child: ChildProcess | undefined;
+  const warn = (reason: string) => process.stderr.write(`aiden: Local network discovery is unavailable (${reason}). Phones can still pair with the QR or manual code.\n`);
   return {
-    async start(input: { instanceId: string; displayName: string; port: number }, failed: (error: Error) => void) {
-      child = spawn("avahi-publish-service", [input.displayName, "_aiden-agent._tcp", String(input.port), "v=1", `instance=${input.instanceId}`], { stdio: "ignore" });
-      const current = child;
-      await new Promise<void>((resolve, reject) => {
-        current.once("spawn", resolve); current.once("error", reject);
+    async start(input: { instanceId: string; displayName: string; port: number }) {
+      const current = spawn("avahi-publish-service", [input.displayName, "_aiden-agent._tcp", String(input.port), "v=1", `instance=${input.instanceId}`], { stdio: "ignore" });
+      child = current;
+      const started = await new Promise<boolean>((resolve) => {
+        current.once("spawn", () => resolve(true));
+        current.once("error", (error: NodeJS.ErrnoException) => { warn(error.code === "ENOENT" ? "avahi-publish-service is not installed" : error.message); resolve(false); });
       });
-      current.on("error", failed);
-      current.once("exit", (code) => { if (child === current) { child = undefined; failed(new Error(`Local discovery stopped (${code}).`)); } });
+      current.on("error", () => undefined);
+      if (!started) { if (child === current) child = undefined; return; }
+      current.once("exit", (code) => { if (child === current) { child = undefined; warn(`avahi-publish-service exited with code ${code}`); } });
     },
     stop() { const current = child; child = undefined; current?.kill(); },
   };
