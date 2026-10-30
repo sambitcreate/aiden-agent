@@ -63,6 +63,7 @@ export function RemoteBotsSection({
                 <li key={bot.id}>
                   <button
                     type="button"
+                    data-roving-item
                     disabled={Boolean(host.disabledReason) || opening !== null}
                     aria-busy={busy || undefined}
                     aria-current={current ? "page" : undefined}

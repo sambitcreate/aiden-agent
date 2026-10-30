@@ -60,6 +60,25 @@ test("--version answers before the runtime loads and agrees with pi's own answer
 	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
 });
 
+test("a deleted current folder gets one plain line instead of a crash", { skip: process.platform === "win32" }, () => {
+	const parent = mkdtempSync(path.join(tmpdir(), "aiden-deleted-cwd-"));
+	const doomed = path.join(parent, "gone");
+	mkdirSync(doomed);
+	try {
+		// The shell enters the folder, removes it, then starts the CLI there.
+		const result = spawnSync("/bin/sh", ["-c", 'cd "$1" && rmdir "$1" && exec "$2" "$3" --no-session -p hello', "sh", doomed, process.execPath, cli], {
+			encoding: "utf-8",
+			timeout: 60_000,
+			env: { ...process.env, AIDEN_CODING_AGENT_DIR: path.join(parent, "agent") },
+		});
+		assert.equal(result.status, 1, result.stderr || result.stdout);
+		assert.equal(result.stderr.trim(), "aiden: The current folder no longer exists. Change to an existing folder and try again.");
+		assert.doesNotMatch(result.stderr, /uv_cwd|at .*\.js:\d+/);
+	} finally {
+		rmSync(parent, { recursive: true, force: true });
+	}
+});
+
 test("aiden help lists the Aiden commands", () => {
 	const result = runCli(["help"]);
 	assert.equal(result.status, 0, result.stderr);

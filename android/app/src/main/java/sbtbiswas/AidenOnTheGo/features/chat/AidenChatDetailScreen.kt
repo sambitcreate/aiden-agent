@@ -2084,26 +2084,32 @@ private fun AidenChronologicalReasoningCard(
         }
         return
     }
-    var expanded by rememberSaveable(row.id) { mutableStateOf(active) }
-    var userControlled by rememberSaveable(row.id) { mutableStateOf(false) }
-    LaunchedEffect(row.id, active) {
-        if (active && !userControlled) {
-            kotlinx.coroutines.delay(1_000)
-            if (!userControlled) expanded = false
-        }
-    }
+    // The card never opens or closes on its own: a fast model's many short thoughts
+    // would otherwise move the transcript. Only the reader's tap expands it.
+    var expanded by rememberSaveable(row.id) { mutableStateOf(false) }
     val reduceMotion = aidenReduceMotion()
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "reasoning_chevron"
     )
+    // While thinking, the collapsed row rolls the latest finished line in place. It keeps
+    // its last text after thinking ends so it can fade out; stored reasoning shows none.
+    val liveLine = remember(row.text, active) { if (active) AidenReasoningLine.latest(row.text) else "" }
+    var lastLine by remember(row.id) { mutableStateOf("") }
+    SideEffect { if (liveLine.isNotEmpty()) lastLine = liveLine }
+    val shownLine = liveLine.ifEmpty { lastLine }
+    val lineAlpha by animateFloatAsState(
+        targetValue = if (liveLine.isNotEmpty() && !expanded) 1f else 0f,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "reasoning_line_alpha"
+    )
+    val lineRise = with(LocalDensity.current) { 4.dp.roundToPx() }
     Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
-                    userControlled = true
                     expanded = !expanded
                 }
             ) {
@@ -2111,9 +2117,39 @@ private fun AidenChronologicalReasoningCard(
                     label = if (active) stringResource(R.string.chat_reasoning_thinking) else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thought),
                     active = active,
                     style = MaterialTheme.typography.labelMedium,
-                    color = palette.secondary,
-                    modifier = Modifier.weight(1f)
+                    color = palette.secondary
                 )
+                // Always composed, one line tall, so the row's height never changes; only
+                // its opacity does. The label stays the accessible name.
+                AnimatedContent(
+                    targetState = shownLine,
+                    transitionSpec = {
+                        // A new line rises in as the old one goes; nothing resizes.
+                        val enter = if (reduceMotion) {
+                            EnterTransition.None
+                        } else {
+                            fadeIn(AidenMotion.nonSpatial(false)) +
+                                slideInVertically(AidenMotion.spatial(false)) { lineRise }
+                        }
+                        (enter togetherWith ExitTransition.None).using(null)
+                    },
+                    contentAlignment = Alignment.CenterStart,
+                    label = "reasoning_line",
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 10.dp)
+                        .graphicsLayer { alpha = lineAlpha }
+                        .clearAndSetSemantics {}
+                ) { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Normal,
+                        color = palette.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Icon(
                     imageVector = Icons.Default.ExpandMore,
                     contentDescription = if (expanded) stringResource(R.string.chat_reasoning_collapse) else stringResource(R.string.chat_reasoning_expand),

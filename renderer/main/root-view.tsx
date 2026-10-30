@@ -33,6 +33,8 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { KeyboardRegions } from "../components/keyboard-regions";
+import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
@@ -624,6 +626,8 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <KeyboardRegions />
+        <KeyboardShortcutsDialog />
         <PairingRequestSheet />
         {capabilities.bots ? <BotConnectionSetupHost /> : null}
       </div>
