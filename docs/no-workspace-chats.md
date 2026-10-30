@@ -33,7 +33,7 @@ The chat's header chip reads **No workspace**; its menu can still show the folde
 
 ## Deleting
 
-Deleting a No workspace chat moves its folder to the Trash (an empty folder is simply removed). Startup also clears away hidden folders left without a chat.
+Deleting a No workspace chat moves its folder to the Trash (an empty folder is simply removed). Startup also clears away hidden folders left without a chat. A new chat that was still aimed at the deleted chat's folder (a fork of it, or the new chat that opens after the delete) stays under Chats and gets a folder of its own when you send it.
 
 ## Older installs
 

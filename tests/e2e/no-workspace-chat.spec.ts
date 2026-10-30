@@ -106,6 +106,15 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   await expect.poll(async () => (await workspaces(page)).some((workspace) => workspace.id === secondHome!.id)).toBe(false);
   await expect.poll(() => isDirectory(secondHome!.folderPath!)).toBe(false);
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
+
+  // The new chat that opens after the delete stays in the Chats group and
+  // sends from a folder that still exists.
+  await expect(page.getByRole("button", { name: "Choose a workspace" })).toHaveText("No workspace");
+  await sendAndWaitForReply(page, "Suggest a book", userDataDir, 2);
+  const third = (await regularChats(userDataDir)).find((chat) => chat.id !== first.id)!;
+  const thirdHome = (await workspaces(page)).find((workspace) => workspace.id === third.workspaceId);
+  expect(thirdHome?.noWorkspace).toBe(true);
+  expect(await isDirectory(thirdHome!.folderPath!)).toBe(true);
 });
 
 test("an older install's folderless default workspace becomes the home of its chats on the next start", async ({ aiden }) => {
