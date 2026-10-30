@@ -1039,7 +1039,9 @@ test("after quit refuses `daemon stop`, the recorded daemon is still terminated,
     const daemon = await startDaemonFixture(daemonScript);
     const stranger = await startDaemonFixture(path.join(baseDir, "elsewhere", "daemon.js"));
     const reused = await startDaemonFixture(daemonScript);
-    const record = (pid: number, processStartTime: string) =>
+    const unrecorded = await startDaemonFixture(daemonScript);
+    const cli = await startDaemonFixture(deviceToolPaths(baseDir, AGENT_DEVICE).entryPath);
+    const record = (pid: number, processStartTime?: string) =>
       writeFile(
         path.join(stateDir, "daemon.json"),
         JSON.stringify({ httpPort: 61_700, token: "live", pid, processStartTime, stateDir }),
@@ -1060,9 +1062,17 @@ test("after quit refuses `daemon stop`, the recorded daemon is still terminated,
       // A pid whose start time differs from the recorded one was reused, so it is not signalled.
       await record(reused.pid, "Thu Jan  1 00:00:00 1970");
       await stopHost();
+      // Without a recorded start time the pid cannot be proven to be the daemon, so it is not signalled.
+      await record(unrecorded.pid);
+      await stopHost();
+      // agent-device's CLI runs from the same install but is not the daemon, so it is not signalled.
+      await record(cli.pid, cli.startTime);
+      await stopHost();
       await new Promise((resolve) => setTimeout(resolve, 300));
       assert.ok(isAlive(stranger.pid), "a process that is not the daemon survives");
       assert.ok(isAlive(reused.pid), "a reused pid survives");
+      assert.ok(isAlive(unrecorded.pid), "a daemon recorded without a start time survives");
+      assert.ok(isAlive(cli.pid), "the agent-device CLI survives");
 
       await record(daemon.pid, daemon.startTime);
       await stopHost();
@@ -1073,7 +1083,7 @@ test("after quit refuses `daemon stop`, the recorded daemon is still terminated,
       assert.equal(ended, "SIGTERM", "the daemon ended at quit");
     } finally {
       resetDeviceCommandCancellationForTests();
-      for (const fixture of [daemon, stranger, reused]) fixture.child.kill("SIGKILL");
+      for (const fixture of [daemon, stranger, reused, unrecorded, cli]) fixture.child.kill("SIGKILL");
     }
   });
 });

@@ -142,6 +142,19 @@ function parseHubStateFile(text: string): HubStateFile | null {
   }
 }
 
+/**
+ * Whether `command` runs agent-device's daemon entry (`dist/src/daemon.js` or
+ * `dist/src/internal/daemon.js`, as agent-device itself identifies its daemon)
+ * from one of `installDirs`, rather than its CLI or any other script there.
+ */
+function isInstalledDaemonCommand(command: string, installDirs: readonly string[]): boolean {
+  const normalized = command.replace(/\\/g, "/");
+  return installDirs.some((dir) => {
+    const prefix = `${dir.replace(/\\/g, "/")}/`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`${prefix}[^\\s"']*?/?dist/src/(?:internal/)?daemon\\.js(?:$|[\\s"'])`).test(normalized);
+  });
+}
+
 /** The identity agent-device records for its daemon: the pid and its `ps -o lstart=` start time. */
 function parseDaemonProcess(text: string): { pid: number; processStartTime: string | null } | null {
   try {
@@ -576,24 +589,23 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
 
   /**
    * Sends SIGTERM straight to the daemon `daemon.json` records, without a
-   * helper process, but only while that pid is still the daemon: its command
-   * line runs a script from Aiden's agent-device install, and its start time
-   * matches the one agent-device recorded (when it recorded one). A reused pid
-   * fails one of those checks and is left alone.
+   * helper process, but only while that pid is still the daemon: agent-device
+   * recorded a start time that the live process matches, and its command line
+   * runs the daemon entry from Aiden's agent-device install. A reused pid, a
+   * record without a start time, or any other process is left alone.
    */
   async function terminateRecordedDaemon(): Promise<void> {
     const recorded = parseDaemonProcess(
       await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(() => ""),
     );
-    if (!recorded || !deps.isProcessAlive(recorded.pid)) return;
+    // Without a recorded start time a reused pid cannot be told from the daemon, so fail closed.
+    if (!recorded?.processStartTime || !deps.isProcessAlive(recorded.pid)) return;
+    if (deps.readProcessField(recorded.pid, "lstart") !== recorded.processStartTime) return;
     const toolsDir = path.join(deps.baseDir, "tools", AGENT_DEVICE.name);
     // Node runs the daemon script by its real path, so accept either spelling of the install.
     const toolsDirs = [toolsDir, await realPath(toolsDir)].filter((dir): dir is string => !!dir);
     const command = deps.readProcessField(recorded.pid, "command");
-    if (!command || !toolsDirs.some((dir) => command.includes(`${dir}${path.sep}`))) return;
-    if (recorded.processStartTime !== null && deps.readProcessField(recorded.pid, "lstart") !== recorded.processStartTime) {
-      return;
-    }
+    if (!command || !isInstalledDaemonCommand(command, toolsDirs)) return;
     deps.kill(recorded.pid, "SIGTERM");
   }
 
