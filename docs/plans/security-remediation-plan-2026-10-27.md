@@ -400,6 +400,11 @@ The release gate is per slice: local source/tests, exact-head CI/reviews, packag
 
 After a slice lands, update this plan and its index row with the PR/head and outstanding acceptance. Move this plan into completed/ only when every item has a recorded disposition, selected fixes have shipped through their required gates, and remaining decisions/validation tasks have explicit owners or linked follow-ups. Do not mark a deferred task complete merely because the first four fixes shipped.
 
+## Execution record
+
+- W2 implementation candidate: foreground schedule consent, unchanged request/target/provider binding, cancellable expiring publication receipt, task revision checks and duplicate-submission refusal. CLI type-check, build, scoped lint and all 146 CLI tests passed. Three existing daemon tests now await explicit readiness instead of racing bounded filesystem polling. Fresh independent review found and closed Ask-mode read approval bypass, oversized existing-task confirmation and rejected-persistence cron restoration gaps. Desktop scheduling (238 tests), automation suites and root types passed. Exact-head hosted CI remains pending.
+- W2 consent-display follow-up (2026-10-27): save confirmation now presents frozen effective inputs, including defaults and an edited task's retained timezone; publication consumes that prepared input. Resume presents stored prompt/script, execution mode and connector/provider/workspace scope with enabled true. Undisplayable resumes fail before confirmation, while pause/removal and shortening a long old prompt remain available. Generic model-tool saves refuse specialized feature-owned edits; direct administration is unchanged. CLI type-check, fresh build, scoped lint and all 153 package tests passed, including eight focused cases/subcases. A separate offline Bot-routine probe also refused the generic edit before confirmation and preserved its stored bytes. README, PRODUCT, plan-index and schedule documentation claims were checked; only the CLI guide and plan index needed changes. Shared scheduling/native clients are unchanged. Fresh review and exact-head hosted CI remain pending; this is source/test evidence, not packaged or live acceptance.
+
 ## Completion checklist
 
 - [ ] Refresh source/configuration baselines and retain the original audit as history.

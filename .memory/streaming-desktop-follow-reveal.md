@@ -28,10 +28,10 @@ Plan: `docs/plans/live-cross-device-streaming-plan.md` (desktop lane D1–D4). B
 - The reveal renders the revealed source prefix as one Markdown document through `MarkdownContent` with `streaming`, so streamed and settled output match `<Markdown>` from history exactly: reference links, footnotes, and loose lists resolve across blocks. react-markdown keys elements as `tag-ordinal`, which is stable while text only appends, so earlier blocks keep their elements.
   - `streamingRevealVisibleEnd` maps a unit count to a source offset (each unit carries `end`).
   - While streaming, `remarkOpenFence` marks a trailing unclosed fence with `data-open-fence`, and `CodeBlock` renders it `plain`. Once the fence closes, the same element turns highlighting on in place.
-- The action row is laid out while streaming but kept `hidden` (aria-hidden). `MessageForkContextMenu` always wraps assistant rows, with a disabled trigger when there is no action.
+- The action row is laid out while streaming but kept `hidden` (aria-hidden). It is one slot at the end of the turn (`AssistantResponse` renders it after every row, media and visual), not under the newest paragraph, so a new paragraph never moves it. `MessageForkContextMenu` always wraps assistant rows, with a disabled trigger when there is no action.
 - The no-steps layout of `AssistantResponse` mirrors the step layout's slots (`text-0`), so the first tool step does not remount the text.
 - E2E specs wait for a settled reply with `getByRole("button", { name: "Fork from here" })`, because only the saved row can fork. Do not reintroduce `.streaming-reveal` count 0: the tree now persists.
-- Accepted risk: the reasoning block key differs between the two layouts.
+- Accepted risk: the reasoning block key differs between the two layouts. A remount now only loses a reader-opened state and replays the 220ms entrance; it no longer reopens a preview.
 
 ## Block reveal (D4, `renderer/lib/streaming-reveal.ts`)
 
