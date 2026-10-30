@@ -123,10 +123,22 @@ Control, then live mode on the winner) and 2a (live words in the pill, one paste
   shared with the transaction's own quiet-window restore). No target or unknown count → never confirmed, no read.
   The unconfirmed path no longer writes the transcript (the transaction already put it there; a write would clobber
   what the person copied during the ~2.5 s wait). The handlers are tested by running them under osascript.
+  Third review (2026-10-29, superseded the two above): even pinned to the pid, the confirm script read that app's
+  *currently* focused element, so moving focus to another field in the same app that holds the transcript (or text
+  that predated the paste) still authorized a restore a late ⌘V could paste. No AX read can prove that *this* ⌘V
+  landed in the *original* element, so the post-timeout restore is gone: after `PasteAfterKeystrokeError` the
+  transcript simply stays on the clipboard (no restore, no extra write), "Check the field — transcript copied."
+  Removed: `PASTE_CONFIRM_SCRIPT`, `confirmMacPasteDelivered`, `parseKeystrokeMarker`, `PasteTarget`,
+  `PasteDeps.saveClipboard/confirmDelivered/wait` and `saveClipboardForPaste` in dictation.ts. The marker is a bare
+  `KEYSTROKE_SENT_MARKER` line again. The transaction's own quiet-window restore (inside osascript, reading the
+  original `targetElement` reference and requiring the count to rise) is unchanged.
   Deferred: a "previous clipboard couldn't be restored" note for image/file clipboards needs the pill to render a
   message on `pasted`, which it does not today (UI change, needs screenshots).
 - Pill cap (24971dcc8): `PcmRecorder` keeps at most `PCM_MAX_RECORDING_SAMPLES` (30 min at 16 kHz, main's on-device
   limit), trims the crossing chunk, fires `onlimit` once; the pill stops and transcribes what was kept. No warning UI.
+  Review follow-up: the composer hook (`use-voice-recorder.ts`) now sets `onlimit` too: it marks a pending stop and
+  stops the recorder, so the kept audio is transcribed once and the mic/audio graph are released. The cap is
+  injectable via `VoiceRecorderOptions.maxRecordingSamples` (passed to `createVoiceRecorder`), used by tests.
 - Audio path (90015e20b): pill waveform writes a bar only when its rounded height changes and skips the analyser read
   while the live transcript or a hint hides the bars (scaleY/clip-path were rejected: they squash the rounded caps).
   The capture worklet and the PCM16 encoder fill preallocated chunks; the encoder keeps its fractional offset across

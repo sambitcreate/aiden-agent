@@ -7,21 +7,16 @@ import test from "node:test";
 import { promisify } from "node:util";
 import {
   ATOMIC_PASTE_SCRIPT,
-  confirmMacPasteDelivered,
   createSecureInputPrefetch,
   detectMacSecureInput,
   KEYSTROKE_SENT_MARKER,
-  PASTE_CONFIRM_DELAY_MS,
-  PASTE_CONFIRM_SCRIPT,
   PASTE_SCRIPT_HANDLERS,
-  parseKeystrokeMarker,
   PasteAfterKeystrokeError,
   pasteTranscript,
   runAtomicMacPaste,
   runJxa,
   SECURE_INPUT_PROBE_SCRIPT,
   type PasteDeps,
-  type PasteTarget,
 } from "./dictation-paste.js";
 
 const executeFile = promisify(execFile);
@@ -90,47 +85,12 @@ test(
 );
 
 test(
-  "the keystroke marker the transaction logs carries the target pid and prior count",
-  { skip: process.platform !== "darwin" },
-  async () => {
-    const marker = async (fieldValue: string | null) =>
-      (
-        await runPasteHandlers(
-          `set originalCount to "unknown"
-	if (count of argv) is 2 then set originalCount to my countOccurrences(item 2 of argv, item 1 of argv)
-	log my keystrokeMarker(4242, originalCount)
-	return "pasted"`,
-          fieldValue === null ? ["yes"] : ["yes", fieldValue],
-        )
-      ).stderr;
-    assert.deepEqual(parseKeystrokeMarker(await marker("yes, yes and Yes")), { pid: 4242, priorCount: 2 });
-    assert.deepEqual(parseKeystrokeMarker(await marker("")), { pid: 4242, priorCount: 0 });
-    assert.equal(parseKeystrokeMarker(await marker(null)), null, "an unreadable field can never be confirmed");
-    assert.equal(parseKeystrokeMarker(`${KEYSTROKE_SENT_MARKER}\n`), null, "a marker without a target is unconfirmable");
-  },
-);
-
-test(
-  "the delivery check refuses a missing or unreadable target before asking System Events",
-  { skip: process.platform !== "darwin" },
-  async () => {
-    const answer = async (args: string[]) =>
-      (await executeFile("/usr/bin/osascript", ["-e", PASTE_CONFIRM_SCRIPT, "--", ...args], { timeout: 5_000 })).stdout.trim();
-    assert.equal(await answer(["yes"]), "unconfirmed");
-    assert.equal(await answer(["yes", "4242", "unknown"]), "unconfirmed");
-    assert.equal(await answer(["yes", "0", "0"]), "unconfirmed");
-  },
-);
-
-test(
-  "native paste transaction and its delivery check are valid AppleScript",
+  "native paste transaction is valid AppleScript",
   { skip: process.platform !== "darwin" },
   async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "aiden-dictation-script-"));
     try {
-      for (const [name, script] of [["paste", ATOMIC_PASTE_SCRIPT], ["confirm", PASTE_CONFIRM_SCRIPT]]) {
-        await executeFile("/usr/bin/osacompile", ["-o", path.join(directory, `${name}.scpt`), "-e", script]);
-      }
+      await executeFile("/usr/bin/osacompile", ["-o", path.join(directory, "paste.scpt"), "-e", ATOMIC_PASTE_SCRIPT]);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -207,11 +167,17 @@ test("paste failures leave the transcript on the clipboard instead of throwing",
   assert.equal(subject.clipboard(), "hello world");
 });
 
-function killedAfterKeystroke(overrides: Partial<PasteDeps>, marker = `${KEYSTROKE_SENT_MARKER} pid=4242 count=0`) {
-  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: `${marker}\n` });
-  const restores: string[] = [];
-  const waits: number[] = [];
-  let releaseWait!: () => void;
+/**
+ * A paste transaction killed by its timeout after ⌘V, in an app that has not
+ * read the pasteboard yet. `lateCommandV` is that queued ⌘V landing later: it
+ * pastes whatever the clipboard holds by then.
+ */
+function killedAfterKeystroke() {
+  const timedOut = Object.assign(new Error("Command failed: osascript"), {
+    killed: true,
+    stderr: `${KEYSTROKE_SENT_MARKER}\n`,
+  });
+  const clipboardWrites: string[] = [];
   const subject = harness({
     // Like the real transaction: the transcript goes on the clipboard, ⌘V is sent, then the timeout kills it.
     pasteWithPreservedClipboard: (text) =>
@@ -219,122 +185,37 @@ function killedAfterKeystroke(overrides: Partial<PasteDeps>, marker = `${KEYSTRO
         subject.setClipboard(text);
         throw timedOut;
       }),
-    saveClipboard: (text) => () => restores.push(text),
-    wait: (ms) =>
-      new Promise<void>((resolve) => {
-        waits.push(ms);
-        releaseWait = resolve;
-      }),
-    ...overrides,
-  });
-  return { subject, restores, waits, releaseWait: () => releaseWait() };
-}
-
-test("a transaction killed after ⌘V restores the clipboard only once the targeted field shows the transcript", async () => {
-  const checked: Array<{ text: string; target: PasteTarget }> = [];
-  const killed = killedAfterKeystroke(
-    {
-      confirmDelivered: async (text, target) => {
-        checked.push({ text, target });
-        return true;
-      },
+    writeClipboard: (text) => {
+      clipboardWrites.push(text);
+      subject.setClipboard(text);
     },
-    `${KEYSTROKE_SENT_MARKER} pid=4242 count=1`,
-  );
-  const delivery = pasteTranscript("hello world", killed.subject.deps);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  // A queued ⌘V the app has not read yet must still find the transcript, not the previous clipboard.
-  assert.deepEqual(killed.restores, [], "nothing is restored while the paste may still be landing");
-  assert.deepEqual(checked, [], "the field is checked only after the wait");
-  assert.deepEqual(killed.waits, [PASTE_CONFIRM_DELAY_MS]);
-  killed.releaseWait();
-  assert.deepEqual(await delivery, { outcome: "pasted" });
-  assert.deepEqual(
-    checked,
-    [{ text: "hello world", target: { pid: 4242, priorCount: 1 } }],
-    "the check reads the process the ⌘V targeted and compares against the count seen before it",
-  );
-  assert.deepEqual(killed.restores, ["hello world"]);
-});
-
-for (const [name, confirmDelivered] of [
-  ["does not show a new copy of the transcript", async () => false],
-  ["cannot be read", async () => Promise.reject(new Error("System Events timed out"))],
-] as const) {
-  test(`a transaction killed after ⌘V leaves the transcript on the clipboard when the field ${name}`, async () => {
-    const killed = killedAfterKeystroke({ confirmDelivered });
-    const delivery = pasteTranscript("hello world", killed.subject.deps);
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    killed.releaseWait();
-    assert.deepEqual(await delivery, {
-      outcome: "copied",
-      reason: "paste-unavailable",
-      message: "Check the field — transcript copied.",
-    });
-    assert.deepEqual(killed.restores, [], "the previous clipboard, which a late ⌘V would paste, stays away");
-    assert.equal(killed.subject.clipboard(), "hello world");
   });
+  subject.setClipboard("hunter2 (a password the person copied)");
+  return { subject, clipboardWrites, lateCommandV: () => subject.clipboard() };
 }
 
-for (const [name, marker] of [
-  ["could not read the field before ⌘V", `${KEYSTROKE_SENT_MARKER} pid=4242 count=unknown`],
-  ["did not say which process it pasted into", KEYSTROKE_SENT_MARKER],
-] as const) {
-  test(`a transaction killed after ⌘V that ${name} is never confirmed`, async () => {
-    let checks = 0;
-    const killed = killedAfterKeystroke(
-      {
-        confirmDelivered: async () => {
-          checks += 1;
-          return true;
-        },
-      },
-      marker,
-    );
-    const result = await pasteTranscript("hello world", killed.subject.deps);
-    assert.equal(result.outcome, "copied");
-    assert.equal(checks, 0, "whatever is frontmost now is never read as proof of delivery");
-    assert.deepEqual(killed.restores, []);
-    assert.equal(killed.subject.clipboard(), "hello world");
+test("a transaction killed after ⌘V never puts the previous clipboard back, whatever the field shows", async () => {
+  // The delivery path reads no field: matching text that predated the paste,
+  // or focus moved to another field holding the transcript, would read as
+  // delivered while the ⌘V is still queued, so neither may restore.
+  const killed = killedAfterKeystroke();
+  assert.deepEqual(await pasteTranscript("hello world", killed.subject.deps), {
+    outcome: "copied",
+    reason: "paste-unavailable",
+    message: "Check the field — transcript copied.",
   });
-}
-
-test("a copy the person makes while an unconfirmed paste is checked survives", async () => {
-  const killed = killedAfterKeystroke({ confirmDelivered: async () => false });
-  const delivery = pasteTranscript("hello world", killed.subject.deps);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  killed.subject.setClipboard("a link the person copied");
-  killed.releaseWait();
-  assert.equal((await delivery).outcome, "copied");
-  assert.equal(killed.subject.clipboard(), "a link the person copied");
-});
-
-test("the delivery check sends the transcript and target as argv, confirms only on its answer, and never throws", async () => {
-  const calls: string[][] = [];
-  const answering = (answer: string) => async (_script: string, args: string[]) => {
-    calls.push(args);
-    return answer;
-  };
-  const target = { pid: 4242, priorCount: 2 };
-  assert.equal(await confirmMacPasteDelivered("hello world", target, answering("confirmed")), true);
-  assert.deepEqual(calls[0], ["hello world", "4242", "2"]);
-  assert.equal(await confirmMacPasteDelivered("hello world", target, answering("unconfirmed")), false);
-  assert.equal(await confirmMacPasteDelivered("hello world", target, answering("")), false);
-  const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true });
-  assert.equal(await confirmMacPasteDelivered("hello world", target, async () => Promise.reject(timedOut)), false);
+  assert.equal(killed.lateCommandV(), "hello world", "a late ⌘V pastes the transcript, never the previous clipboard");
+  assert.deepEqual(killed.clipboardWrites, [], "no write after the timeout, so a copy the person makes meanwhile survives");
 });
 
 test("a transaction killed before sending ⌘V still leaves the transcript on the clipboard", async () => {
   const timedOut = Object.assign(new Error("Command failed: osascript"), { killed: true, stderr: "" });
-  const restores: string[] = [];
   const subject = harness({
     pasteWithPreservedClipboard: (text) => runAtomicMacPaste(text, async () => Promise.reject(timedOut)),
-    saveClipboard: (text) => () => restores.push(text),
   });
   const result = await pasteTranscript("hello world", subject.deps);
   assert.equal(result.outcome, "copied");
   assert.equal(subject.clipboard(), "hello world");
-  assert.deepEqual(restores, []);
   await assert.rejects(runAtomicMacPaste("x", async () => Promise.reject(timedOut)), (error) => !(error instanceof PasteAfterKeystrokeError));
 });
 

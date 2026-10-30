@@ -175,10 +175,11 @@ export function recorderStopTailMs(recorder: object): number {
 export async function createVoiceRecorder(
   stream: MediaStream,
   provider: VoiceProvider,
+  maxPcmSamples: number = PCM_MAX_RECORDING_SAMPLES,
 ): Promise<MediaRecorder | PcmRecorder> {
   if (provider === "local") {
     try {
-      return await PcmRecorder.create(stream);
+      return await PcmRecorder.create(stream, maxPcmSamples);
     } catch {
       // The file recorder still works; it only costs a decode after stop.
     }

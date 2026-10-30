@@ -13,7 +13,6 @@ import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { dictationPlatformBehavior } from "./dictation-platform.js";
 import {
-  confirmMacPasteDelivered,
   createSecureInputPrefetch,
   detectMacSecureInput,
   pasteTranscript,
@@ -44,27 +43,6 @@ function canAutoPaste(): boolean {
   return dictationPlatformBehavior().accessibilityPaste && systemPreferences.isTrustedAccessibilityClient(false);
 }
 
-/**
- * The clipboard's text, HTML and RTF, saved before an auto-paste so a
- * transaction that dies after ⌘V can put them back once the field shows the
- * transcript. The native transaction restores the full pasteboard record
- * itself; this is only its fallback, and covers text only: images, file URLs
- * and app-specific types are not read (no image decode on every paste) and not
- * restored. A clipboard with none of the three keeps the transcript.
- */
-function saveClipboardForPaste(transcript: string): () => void {
-  const saved = { text: clipboard.readText(), html: clipboard.readHTML(), rtf: clipboard.readRTF() };
-  return () => {
-    if (!saved.text && !saved.html && !saved.rtf) return;
-    if (clipboard.readText() !== transcript) return;
-    clipboard.write({
-      ...(saved.text ? { text: saved.text } : {}),
-      ...(saved.html ? { html: saved.html } : {}),
-      ...(saved.rtf ? { rtf: saved.rtf } : {}),
-    });
-  };
-}
-
 function livePasteDeps(): PasteDeps {
   const behavior = dictationPlatformBehavior();
   return {
@@ -80,8 +58,6 @@ function livePasteDeps(): PasteDeps {
     pasteWithPreservedClipboard: behavior.accessibilityPaste
       ? (text) => runAtomicMacPaste(text)
       : async () => false,
-    saveClipboard: behavior.accessibilityPaste ? saveClipboardForPaste : undefined,
-    confirmDelivered: behavior.accessibilityPaste ? (text, target) => confirmMacPasteDelivered(text, target) : undefined,
     log: (message, error) => logger.warn("dictation", message, error),
   };
 }
