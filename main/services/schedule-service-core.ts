@@ -588,6 +588,12 @@ export function createScheduleServiceCore(
     pendingRetryAt.clear();
   }
 
+  async function rearmCurrentTask(previous: ScheduledTask | undefined): Promise<void> {
+    if (!previous?.enabled) return;
+    const current = await store.get(previous.id);
+    if (current?.enabled) await schedule(current);
+  }
+
   return {
     async start(): Promise<void> {
       if (started) return;
@@ -759,7 +765,13 @@ export function createScheduleServiceCore(
         if (options.signal?.aborted) {
           return rollbackCancellation(task.updatedAt);
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          // Cancellation can refuse the scheduling write after the save committed.
+          if (!options.signal?.aborted) throw error;
+          return rollbackCancellation((await store.get(task.id))?.updatedAt ?? task.updatedAt);
+        }
         const latest = (await store.get(task.id)) ?? task;
         if (options.signal?.aborted) {
           return rollbackCancellation(latest.updatedAt);
@@ -786,7 +798,12 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "removal");
         }
-        await store.remove(id);
+        try {
+          await store.remove(id);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         dependencies.broadcast({ taskId: id, removed: true });
       });
     },
@@ -807,7 +824,13 @@ export function createScheduleServiceCore(
           if (current?.enabled) await schedule(current);
           throwIfAborted(options.signal, "pause");
         }
-        const task = await store.setEnabled(id, false);
+        let task: ScheduledTask;
+        try {
+          task = await store.setEnabled(id, false);
+        } catch (error) {
+          await rearmCurrentTask(current);
+          throw error;
+        }
         if (options.signal?.aborted) {
           if (current) {
             const restored = await store.setEnabled(id, current.enabled);
@@ -842,7 +865,11 @@ export function createScheduleServiceCore(
           await restore();
           throwIfAborted(options.signal, "resume");
         }
-        await schedule(task);
+        try {
+          await schedule(task);
+        } catch (error) {
+          if (!options.signal?.aborted) throw error;
+        }
         if (options.signal?.aborted) {
           stopJob(id);
           await restore();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -35,6 +35,7 @@ import { createChatStore } from "./chat-store-core.js";
 import type { RegisteredSkill } from "./skill-registry.js";
 import type { VisualViewerAppearance, VisualViewerSource } from "./visual-viewer-document.js";
 import { HostRunRegistry } from "./host-run-registry.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 
 const ONE_PIXEL_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
@@ -69,6 +70,7 @@ function fixture(
     botTurnAuthorityPreflight?: AidenRemoteBotTurnAuthorityPreflight;
     botPaused?: (botId: string) => Promise<boolean>;
     spendingRefusal?: (chat: { id: string; botId?: string }) => Promise<string | undefined>;
+    workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
     modelSupportsImages?: () => boolean;
     imageArtifactRecoveryPending?: boolean;
     imageArtifactRecoveryUnavailable?: boolean;
@@ -287,6 +289,9 @@ function fixture(
       fixtureOptions.botTurnAuthorityPreflight ?? (async () => undefined),
     ...(fixtureOptions.botPaused ? { botPaused: fixtureOptions.botPaused } : {}),
     ...(fixtureOptions.spendingRefusal ? { spendingRefusal: fixtureOptions.spendingRefusal } : {}),
+    ...(fixtureOptions.workspaceFolderMissing
+      ? { workspaceFolderMissing: fixtureOptions.workspaceFolderMissing }
+      : {}),
     ...(fixtureOptions.attachments ? { attachments: fixtureOptions.attachments } : {}),
     ...(fixtureOptions.isTitlePending ? { isTitlePending: fixtureOptions.isTitlePending } : {}),
     notifyChanged: () => { notifications += 1; },
@@ -1754,6 +1759,41 @@ test("a chat over its spending limit refuses a phone turn with the limit's line,
   const accepted = await app.service.startTurn("device-1", "chat-1", "over-the-limit-turn-0001", { text: "one more thing" });
   assert.equal(accepted.status, "accepted");
   assert.equal(app.starts(), 1);
+});
+
+test("a phone turn in a workspace whose folder moved is refused before it is stored, and the same request runs once it is back", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aiden-remote-chat-folder-"));
+  const folderPath = join(root, "project");
+  const moved = join(root, "project-moved");
+  try {
+    await mkdir(folderPath);
+    const app = fixture(chat(), {
+      workspaceFolderMissing: async (workspaceId) =>
+        workspaceId === "workspace-1" &&
+        (await workspaceFolderMissing({ name: "Project", folderPath, permission: "ask" })),
+    });
+    await rename(folderPath, moved);
+
+    await assert.rejects(
+      app.service.startTurn("device-1", "chat-1", "missing-folder-turn-0001", { text: "still there?" }),
+      (error: unknown) =>
+        error instanceof AidenRemoteServiceError &&
+        error.code === "workspace_unavailable" &&
+        error.status === 409 &&
+        /folder is missing on your Mac/u.test(error.message) &&
+        // Remote errors never carry a path.
+        !error.message.includes(root),
+    );
+    assert.equal(app.appends(), 0);
+    assert.equal(app.starts(), 0, "no provider request");
+
+    await rename(moved, folderPath);
+    const accepted = await app.service.startTurn("device-1", "chat-1", "missing-folder-turn-0001", { text: "still there?" });
+    assert.equal(accepted.status, "accepted");
+    assert.equal(app.starts(), 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a pause that lands while a phone turn is being admitted refuses it before anything is written", async () => {

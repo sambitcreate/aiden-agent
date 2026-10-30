@@ -93,6 +93,7 @@ import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { isBotsPath } from "../lib/bot-routes";
+import { useRovingRows } from "../lib/roving-rows";
 import { BotSidebar } from "../main/bots/bot-sidebar";
 import {
   localSidebarChats,
@@ -646,6 +647,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     }),
     [expandedRemoteKeys, expandedWorkspaceIds, fullyRevealedWorkspaceIds, revealedRemoteKeys, search],
   );
+  // The chat list takes one Tab stop; arrow keys move between its rows.
+  const rovingRef = React.useRef<HTMLDivElement>(null);
+  useRovingRows(rovingRef);
   // Jump shortcuts and previous/next cover this Mac's chats only.
   const shortcutGroups = React.useMemo(
     () =>
@@ -1129,6 +1133,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const renderDraftRow = (draft: ChatMeta) => (
     <SidebarListItem
       key={`draft:${draft.id}`}
+      data-roving-item
       className="pl-8"
       data-draft-chat={draft.id}
       aria-description="Unsent draft"
@@ -1215,10 +1220,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       </>
     );
     return (
-      <div key={chat.id} className="group/chat-row relative">
+      <div key={chat.id} data-roving-row className="group/chat-row relative">
         <ContextMenu>
           <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
             <SidebarListItem
+              data-roving-item
               className={cn(
                 indented && "pl-8",
                 // Room for the ••• button while it shows, including while its menu is open.
@@ -1298,6 +1304,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const renderRemoteChatRow = (chat: RemoteSidebarChat, indented = false) => (
     <SidebarListItem
       key={chat.key}
+      data-roving-item
       className={indented ? "pl-8" : undefined}
       data-remote-chat={chat.stale ? "stale" : "live"}
       aria-busy={chat.rowState === "working"}
@@ -1349,12 +1356,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       <div
         key={projectKey}
         className="group/workspace relative"
+        data-roving-group
         data-remote-project={primary.stale ? "stale" : "live"}
         {...dropProps}
       >
         {dropIndicator}
-        <div className="flex min-w-0 items-center gap-0.5" {...dragProps}>
+        <div data-roving-row className="flex min-w-0 items-center gap-0.5" {...dragProps}>
           <SidebarListItem
+            data-roving-item
             className="min-w-0 flex-1"
             icon={
               <span className="flex items-center gap-1.5">
@@ -1410,10 +1419,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           <div className="flex flex-col gap-0.5">
             {visibleChats.map((summary) => renderSidebarChat(summary, true))}
             {group.chats.length === 0 ? (
-              <SidebarListItem className="pl-9 text-secondary" title="No chats yet" disabled />
+              <SidebarListItem data-roving-item className="pl-9 text-secondary" title="No chats yet" disabled />
             ) : null}
             {remainingChatCount > 0 ? (
               <SidebarListItem
+                data-roving-item
                 className="pl-9 text-secondary"
                 title={`Show ${remainingChatCount} more`}
                 onClick={() => setRevealedRemoteKeys((current) => new Set(current).add(projectKey))}
@@ -1552,7 +1562,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           />
         ) : null}
 
-        <SidebarList>
+        <SidebarList ref={rovingRef}>
           {view === "projects" ? (
             <SidebarListGroup
               title={
@@ -1703,12 +1713,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                   return (
                     <div
                       key={projectKey}
+                      data-roving-group
                       className="group/workspace relative"
                       {...dropProps}
                     >
                       {dropIndicator}
-                      <div className="flex min-w-0 items-center gap-0.5" {...dragProps}>
+                      <div data-roving-row className="flex min-w-0 items-center gap-0.5" {...dragProps}>
                         <SidebarListItem
+                          data-roving-item
                           className="min-w-0 flex-1"
                           icon={
                             <span className="flex items-center gap-1.5">
@@ -1807,6 +1819,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                           {group.chats.length === 0 &&
                           !draftsByWorkspace.has(workspace.id) ? (
                             <SidebarListItem
+                              data-roving-item
                               className="pl-9 text-secondary"
                               icon={<SquarePen />}
                               title="New chat"
@@ -1818,6 +1831,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                           ) : null}
                           {remainingChatCount > 0 ? (
                             <SidebarListItem
+                              data-roving-item
                               className="pl-9 text-secondary"
                               title={`Show ${remainingChatCount} more`}
                               onClick={() =>

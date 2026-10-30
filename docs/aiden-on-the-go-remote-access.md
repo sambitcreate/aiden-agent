@@ -126,6 +126,7 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Tailnet HTTPS unavailable:** complete Tailscale's HTTPS authorization flow, then retry Connect in Aiden. Aiden will not authorize it on your behalf.
 - **Serve conflict:** inspect the route shown in the error. Remove or relocate the conflicting handler yourself; Aiden will not take it over.
 - **A folder is missing:** add it from the Mac. The phone cannot submit an arbitrary path or approve a new browser root.
+- **A chat says its workspace folder is missing:** the folder was moved, renamed or deleted on the Mac, or its drive isn't connected. Nothing was sent; your message stays in the box. Put the folder back on the Mac, then send again.
 - **Paired-Mac speech is unavailable:** confirm Aiden Agent is running, Remote Access is reachable, and the paired Mac remains selected in mobile speech settings.
 - **Speech model needs setup:** open mobile speech settings and choose setup for the fixed local model, or complete the same setup in Aiden Agent on the Mac.
 - **Speech setup failed:** keep Aiden Agent online, retry once, and verify the Mac has enough free local storage. Aiden will discard an incomplete staged model.
