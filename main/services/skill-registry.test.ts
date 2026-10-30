@@ -127,6 +127,11 @@ test("disabled configured skills do not shadow discovered skills", async () => {
     snapshot.catalog.find((entry) => entry.source === "global")?.unavailableReason ?? "",
     /workspace skill/u,
   );
+  // Workspace settings offers the switch for the skill the model actually gets.
+  assert.deepEqual(
+    workspaceSkillChoices(snapshot).map(({ source, available }) => [source, available]),
+    [["workspace", true]],
+  );
 });
 
 test("same-source duplicate winners are stable and duplicate ids fail closed", async () => {

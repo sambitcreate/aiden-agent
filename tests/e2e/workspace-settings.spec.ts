@@ -51,7 +51,13 @@ test("a skill switched off in Workspace settings is gone from the next message",
   await page.getByRole("menuitem", { name: "Workspace settings…" }).click();
   const dialog = page.getByRole("dialog", { name: "Workspace settings" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("textbox", { name: "Workspace name" })).toHaveValue("Aiden E2E workspace");
+  const nameField = dialog.getByRole("textbox", { name: "Workspace name" });
+  await expect(nameField).toHaveValue("Aiden E2E workspace");
+  // The first Escape in an edited name undoes the edit and keeps the dialog open.
+  await nameField.fill("Renamed by mistake");
+  await nameField.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(nameField).toHaveValue("Aiden E2E workspace");
 
   await dialog.getByRole("tab", { name: "Skills" }).click();
   const releaseNotes = dialog.getByRole("switch", { name: "Use Release notes in this workspace" });

@@ -355,8 +355,9 @@ export interface WorkspaceSkillChoice {
 export function workspaceSkillChoices(
   snapshot: SkillRegistrySnapshot,
 ): WorkspaceSkillChoice[] {
-  const choices: WorkspaceSkillChoice[] = [];
-  const keys = new Set<string>();
+  // One row per name: the skill the model would actually get, else the first
+  // unavailable one so the row can say why.
+  const winners = new Map<string, RegisteredSkill>();
   for (const skill of snapshot.skills) {
     let key: string;
     try {
@@ -364,9 +365,11 @@ export function workspaceSkillChoices(
     } catch {
       continue;
     }
-    if (keys.has(key)) continue;
-    keys.add(key);
-    choices.push({
+    const current = winners.get(key);
+    if (!current || (!current.available && skill.available)) winners.set(key, skill);
+  }
+  return [...winners]
+    .map(([key, skill]) => ({
       key,
       name: skill.name,
       description: skill.description,
@@ -375,9 +378,8 @@ export function workspaceSkillChoices(
       ...(skill.available ? {} : { unavailableReason: skill.unavailableReason ?? "Unavailable." }),
       offHere: skill.workspaceOff === true,
       userOnly: skill.modelInvocable === false && skill.workspaceOff !== true,
-    });
-  }
-  return choices.sort((left, right) => left.name.localeCompare(right.name));
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function escapeSkillXml(value: string): string {

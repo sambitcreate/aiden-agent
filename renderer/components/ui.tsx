@@ -1450,6 +1450,8 @@ type DialogProps = React.PropsWithChildren<{
    * dialog, while confirm is visible, enabled, and not busy.
    */
   submitOnEnter?: boolean;
+  /** Runs before Escape dismisses the dialog; call `preventDefault()` to keep it open. */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }>;
 
 export function Dialog({
@@ -1474,6 +1476,7 @@ export function Dialog({
   size,
   layer = "default",
   submitOnEnter = false,
+  onEscapeKeyDown,
   children,
 }: DialogProps) {
   const dismissBlocked = Boolean(
@@ -1502,7 +1505,10 @@ export function Dialog({
               target.focus();
             }
           }}
-          onEscapeKeyDown={(event) => dismissBlocked && event.preventDefault()}
+          onEscapeKeyDown={(event) => {
+            onEscapeKeyDown?.(event);
+            if (dismissBlocked) event.preventDefault();
+          }}
           onPointerDownOutside={(event) => dismissBlocked && event.preventDefault()}
           onKeyDown={
             submitOnEnter

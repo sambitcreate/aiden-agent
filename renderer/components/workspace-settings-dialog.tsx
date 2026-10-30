@@ -169,6 +169,12 @@ export function WorkspaceSettingsDialog() {
       confirmHidden
       cancelLabel="Done"
       returnFocus={() => returnTo.current}
+      onEscapeKeyDown={(event) => {
+        // Escape in an edited name field undoes the edit instead of closing.
+        if (event.target instanceof HTMLElement && event.target.dataset.escapeReverts === "true") {
+          event.preventDefault();
+        }
+      }}
     >
       {workspace ? (
         <WorkspaceSettingsBody workspace={workspace} tab={tab} onTabChange={setTab} onClose={() => setOpen(false)} />
@@ -277,6 +283,7 @@ function GeneralTab({ workspace }: { workspace: Workspace }) {
       <Field label="Name">
         <Input
           aria-label="Workspace name"
+          data-escape-reverts={name !== workspace.name ? "true" : undefined}
           value={name}
           maxLength={120}
           onChange={(event) => setName(event.target.value)}
@@ -286,9 +293,7 @@ function GeneralTab({ workspace }: { workspace: Workspace }) {
               event.preventDefault();
               commitName();
             } else if (event.key === "Escape" && name !== workspace.name) {
-              // First Escape undoes the edit; the next one closes the dialog.
-              event.preventDefault();
-              event.stopPropagation();
+              // The dialog stays open for this Escape (see onEscapeKeyDown); the next one closes it.
               setName(workspace.name);
             }
           }}
