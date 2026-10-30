@@ -47,7 +47,17 @@ case "$SPACE_STATUS" in
 esac
 
 if [ "${1:-}" = "--reset" ]; then
-  exec "$CUA" sb exec -i "$REF" -- pkill -u cua -f "aiden-agent/node_modules|xvfb-run|Xvfb :9[0-9]" </dev/null
+  # pkill exits 1 when nothing matched, which is a clean Space rather than a failure.
+  set +e
+  "$CUA" sb exec -i "$REF" -- pkill -u cua -f "aiden-agent/node_modules|xvfb-run|Xvfb :9[0-9]" </dev/null
+  status=$?
+  set -e
+  case "$status" in
+    0) echo "Stopped leftover e2e processes in $SPACE." ;;
+    1) echo "No leftover e2e processes in $SPACE." ;;
+    *) exit "$status" ;;
+  esac
+  exit 0
 fi
 
 WORK="$(mktemp -d)"
