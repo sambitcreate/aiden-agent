@@ -32,8 +32,12 @@ if (command === "ls") {
 }
 `;
 
+// Ignore the developer's git config (signing, hooks) and Space choice, so the fixture behaves the same anywhere.
+const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+delete isolatedEnv.CUA_SPACE;
+
 async function git(cwd, ...args) {
-  await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd });
+  await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, env: isolatedEnv });
 }
 
 async function checkout() {
@@ -58,7 +62,7 @@ async function checkout() {
 async function run({ repo, fake }, args, env = {}) {
   try {
     const { stdout } = await execFileAsync("bash", [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args], {
-      env: { ...process.env, CUA_BIN: path.join(fake, "cua"), FAKE_CUA_DIR: fake, ...env },
+      env: { ...isolatedEnv, CUA_BIN: path.join(fake, "cua"), FAKE_CUA_DIR: fake, ...env },
     });
     return { status: 0, stdout };
   } catch (error) {
@@ -133,5 +137,7 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   assert.equal(stopped.status, 0);
   assert.match(stopped.stdout, /Stopped leftover e2e processes/);
   assert.equal((await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "2" })).status, 2);
-  assert.ok((await calls(space.fake)).every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
+  const recorded = await calls(space.fake);
+  assert.ok(recorded.every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
+  assert.deepEqual(recorded.find((call) => call[1] === "exec").slice(2, 6), ["-i", "local:aiden-e2e", "--", "bash"]);
 });

@@ -47,9 +47,26 @@ case "$SPACE_STATUS" in
 esac
 
 if [ "${1:-}" = "--reset" ]; then
-  # pkill exits 1 when nothing matched, which is a clean Space rather than a failure.
+  # Stop this user's processes that run in or from the synced checkout (npm, builds, Electron, xvfb-run/Xvfb) or
+  # hold the run lock. It matches on cwd, executable and open files, not command lines, so it cannot match itself.
+  # Exits 1 when nothing was found, which is a clean Space rather than a failure.
+  # shellcheck disable=SC2016
+  RESET_GUEST='cd / || exit 2
+    uid="$(id -u)"; found=""
+    for dir in /proc/[0-9]*; do
+      pid="${dir#/proc/}"
+      [ "$pid" = "$$" ] && continue
+      [ "$(stat -c %u "$dir" 2>/dev/null)" = "$uid" ] || continue
+      hit=0
+      case "$(readlink "$dir/cwd" 2>/dev/null)" in "$HOME/aiden-agent" | "$HOME/aiden-agent/"*) hit=1 ;; esac
+      case "$(readlink "$dir/exe" 2>/dev/null)" in "$HOME/aiden-agent/"*) hit=1 ;; esac
+      for fd in "$dir"/fd/*; do [ "$(readlink "$fd" 2>/dev/null)" = /tmp/aiden-e2e.lock ] && hit=1; done
+      [ "$hit" = 1 ] && found="$found $pid"
+    done
+    [ -n "$found" ] || exit 1
+    kill $found 2>/dev/null; sleep 2; kill -9 $found 2>/dev/null; exit 0'
   set +e
-  "$CUA" sb exec -i "$REF" -- pkill -u cua -f "aiden-agent/node_modules|xvfb-run|Xvfb :9[0-9]" </dev/null
+  "$CUA" sb exec -i "$REF" -- bash -c "$RESET_GUEST" </dev/null
   status=$?
   set -e
   case "$status" in
@@ -91,10 +108,11 @@ if ! flock -n 9; then
 fi
 
 # Run children in the background and wait, so Ctrl-C / a dropped host (SIGINT/TERM/HUP from `exec -i`)
-# stops the whole tree instead of orphaning Electron and Xvfb.
+# stops the whole tree instead of orphaning Electron and Xvfb. Children do not inherit the lock fd, so only this
+# script holds the lock and it is released when the script exits.
 kill_tree() { local child; for child in $(pgrep -P "$1"); do kill_tree "$child"; done; kill "$1" 2>/dev/null; }
 trap 'for c in $(pgrep -P $$); do kill_tree "$c"; done; exit 130' INT TERM HUP
-run_fg() { "$@" & wait $!; }
+run_fg() { "$@" 9>&- & wait $!; }
 
 NODE_VERSION=22.23.4
 case "$(uname -m)" in aarch64|arm64) NODE_ARCH=arm64 ;; *) NODE_ARCH=x64 ;; esac
