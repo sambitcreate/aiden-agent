@@ -629,6 +629,48 @@ test("reads and writes survive a restart of the whole store", async (t) => {
   });
 });
 
+test("analytics consent stays in machine-local settings.json, apart from app settings", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const saved = await h.store.updateAnalyticsState((state) => ({
+    ...state,
+    installId: "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b",
+    noticeShownAt: "2026-10-30T12:00:00.000Z",
+  }));
+  // An unrelated settings write must not drop the analytics state.
+  await h.store.setSettings({ exaEnabled: false });
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), saved);
+  assert.equal(saved.enabled, true);
+  assert.equal("analytics" in (await next.getSettings()), false);
+  const portableText = await fs.readFile(h.portableFile, "utf-8").catch(() => "");
+  assert.equal(portableText.includes("0b6f4a6e"), false);
+  assert.equal((await readJson<{ analytics?: { installId?: string } }>(h.settingsFile)).analytics?.installId, saved.installId);
+});
+
+test("damaged analytics state reads back as the default instead of failing", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const file = await readJson<Record<string, unknown>>(h.settingsFile);
+  await fs.writeFile(h.settingsFile, JSON.stringify({ ...file, analytics: { enabled: "nope", installId: 7 } }), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), { enabled: true });
+});
+
 test("hand-edited dictation preferences reach consumers only in supported shapes", async (t) => {
   const h = await harness(t);
   await h.store.setSettings({ exaEnabled: true });

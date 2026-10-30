@@ -75,6 +75,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { analyticsService } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -340,6 +341,7 @@ function cleanupApplication(): void {
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
   void mcpManager.closeAll({ final: true });
+  analyticsService().markCleanExit();
 }
 
 /** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
@@ -425,6 +427,8 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     Promise.all([spending.flush(), usageLimits.flush()]).catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
   ]);
+  // Send queued usage data, bounded (the service caps itself at 1.5 s).
+  await analyticsService().shutdown();
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =
@@ -1021,7 +1025,9 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    void analyticsService().onboardingFinished(outcome, selectedProviderId);
+    return result;
   },
 );
 
@@ -2316,6 +2322,7 @@ if (!ownsSingleInstanceLock) {
 
       openProcessStartupIpcAdmission();
       startupIpcAdmitted = true;
+      void analyticsService().start();
       writeDiagnosticEvent({
         level: "info",
         area: "app",

@@ -96,6 +96,7 @@ import {
   parseWebFetchSettings,
   type WebFetchSettingsV1,
 } from "../../renderer/shared/web-fetch-settings.js";
+import { parseAnalyticsState, type AnalyticsState } from "./analytics/analytics-consent.js";
 import type {
   AppSettings,
   McpServer,
@@ -906,6 +907,20 @@ export function createConfigStore(
       if (!id) return id;
       const config = await readPortable();
       return resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id);
+    },
+
+    /** Machine-local product-analytics consent, never exposed through settings:get. */
+    async getAnalyticsState(): Promise<AnalyticsState> {
+      await ensureSeeded();
+      return parseAnalyticsState((await settingsStore.load()).analytics);
+    },
+
+    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState): Promise<AnalyticsState> {
+      return mutateSettings((config) => {
+        const next = mutate(parseAnalyticsState(config.analytics));
+        config.analytics = { ...next };
+        return next;
+      });
     },
 
     async getSettings(): Promise<AppSettings> {
