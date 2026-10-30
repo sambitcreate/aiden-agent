@@ -6,13 +6,20 @@ Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-
 
 ## Build and run
 
+The CLI is not published to npm or attached to desktop releases; build it from a clone of this repository.
+
 ```bash
-npm run cli:install   # from the repo root; installs this package's own lockfile
-npm run cli:build     # generates themes + bundles dist/app/
+npm ci --ignore-scripts   # from the repo root; the bundle compiles shared code from main/ and renderer/
+npm run cli:install       # installs this package's own lockfile
+npm run cli:build         # generates themes + bundles dist/app/
 ./packages/cli/dist/app/cli.js          # the `aiden` TUI
 ```
 
-Or from this directory: `npm install && npm run build`. During development, `npm test` builds nothing — run `npm run build` first (tests exercise the built bundle).
+The root install is required: without it the build fails with `Could not resolve "@earendil-works/pi-ai"` and similar errors. A clone already set up for desktop development (`npm ci` at the root) can skip that step.
+
+To run it as `aiden` from any folder, link it once with `cd packages/cli && npm link`. The link points at this checkout, so later `git pull` plus `npm run cli:build` updates the command; `npm unlink -g aiden-cli` removes it. If npm's global folder is not writable (Node from the nodejs.org installer uses `/usr/local`), run the link with `sudo` or install Node with Homebrew. `aiden --version` prints the CLI package version (`0.1.0`), which is separate from the desktop app's version.
+
+Or from this directory: `npm install && npm run build` (after the root install). During development, `npm test` builds nothing — run `npm run build` first (tests exercise the built bundle).
 
 ## Modes
 
