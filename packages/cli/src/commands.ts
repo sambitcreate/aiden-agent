@@ -55,22 +55,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       }
       break;
     }
-    case "serve": {
-      const { daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
-      if (rest[0] === "stop" || rest[0] === "status") {
-        if (rest.length !== 1) throw new Error(`Usage: aiden serve ${rest[0]}`);
-        result = rest[0] === "stop" ? await stopDaemon(agentDir) : daemonStatus(agentDir);
-        break;
-      }
-      const unknown = rest.filter((arg) => arg !== "--remote" && arg !== "--daemon");
-      if (unknown.length) throw new Error("Usage: aiden serve [--remote] [--daemon] | serve stop | serve status");
-      const remote = rest.includes("--remote");
-      if (rest.includes("--daemon")) { result = await startDaemon(agentDir, { remote }); break; }
-      const controller = new AbortController(); const stop = () => controller.abort();
-      process.once("SIGINT", stop); process.once("SIGTERM", stop);
-      try { await (await import("./serve.ts")).serve(agentDir, controller.signal, { remote }); } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
-      return true;
-    }
+    case "serve": await (await import("./serve-command.ts")).serveCommand(agentDir, rest); return true;
     case "provider": {
       if ((rest[0] ?? "list") === "list") { result = (await (await import("./providers.ts")).createCliModelRuntime(agentDir)).getProviders().map(({ id, name }) => ({ id, name })); break; }
       if (rest[0] !== "import" || !rest[1]) throw new Error("Usage: provider list | import <models.json>");

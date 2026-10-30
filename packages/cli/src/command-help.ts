@@ -1,7 +1,8 @@
 // Kept free of imports: the entry prints this for `aiden help` (and bare
 // `aiden`) before any of the runtime is loaded.
 export const CLI_COMMAND_HELP = `Aiden commands:
-  serve [--remote] [--daemon] | stop | status   Headless server: Remote, scheduling, Bots, and Telegram
+  serve [--no-remote] [--pair lan|tailscale|--no-pair] [--daemon] | stop | status
+                                            Server for phones and other clients (Remote on by default)
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   auth list|login|logout                     Provider credentials (OAuth or API key)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
