@@ -21,7 +21,7 @@ function requestWith(lmStudio: LmStudioEndpoint, prompt: string): string {
   const matching = lmStudio.requests
     .map((request) => JSON.stringify(request.body ?? ""))
     .filter((body) => body.includes(prompt));
-  return matching.at(-1) ?? "";
+  return matching[matching.length - 1] ?? "";
 }
 
 async function send(page: Page, text: string): Promise<void> {
