@@ -12,7 +12,7 @@ import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
 
 /** Local control socket is private to the agent directory's owner. */
-export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean } = {}) {
+export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
   recoverStaleServeLease(agentDir);
   // startDaemon marks the background daemon so `serve stop` may force-kill its
   // whole process group; a foreground serve shares its group with the shell job.
@@ -22,7 +22,7 @@ export async function serve(agentDir: string, signal: AbortSignal, options: { re
   const stopRecording = recordServeMcpGroups(agentDir);
   try { await serveOwned(agentDir, signal, options); } finally { stopRecording(); release(); }
 }
-async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean }) {
+async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void }) {
   const runtime = createCliScheduler(agentDir);
   const chats = createDaemonChats(agentDir);
   const workspaceRuntime = createCliWorkspaceApplication(agentDir, {
@@ -67,6 +67,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     chmodSync(path, 0o600);
     await runtime.service.start();
     await telegram.start();
+    options.onReady?.();
     process.stderr.write(`Aiden scheduler listening at ${path}\n`);
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {

@@ -67,7 +67,27 @@ function settingsPaths(appDir: string): string[] {
 	return paths;
 }
 
+/** The one line printed when the CLI starts in a folder that was deleted. */
+export const DELETED_WORKING_DIRECTORY_MESSAGE =
+	"aiden: The current folder no longer exists. Change to an existing folder and try again.";
+
+/** The current folder, or undefined when it was deleted after the shell entered it. */
+function currentDirectory(): string | undefined {
+	try {
+		return process.cwd();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return undefined;
+	}
+}
+
 export async function runCli(argv: string[], appDir: string): Promise<void> {
+	// Everything below reads the current folder (settings, migrations, pi's
+	// own startup), so a deleted one gets one plain line instead of `uv_cwd`.
+	if (currentDirectory() === undefined) {
+		console.error(DELETED_WORKING_DIRECTORY_MESSAGE);
+		await exitAfterFlush(1);
+	}
 	try {
 		migrateCliAzureConfig(getAgentDir());
 		try {

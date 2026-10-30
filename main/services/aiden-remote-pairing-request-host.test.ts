@@ -16,9 +16,9 @@ async function tmpDir(t: test.TestContext): Promise<string> {
   return directory;
 }
 
-test("connection requests are accepted on first run and a saved choice survives a restart", async (t) => {
+test("connection requests are disabled on first run and a saved choice survives a restart", async (t) => {
   const directory = await tmpDir(t);
-  assert.equal(await createAidenPairingRequestSettingsStore(() => directory).load(), true);
+  assert.equal(await createAidenPairingRequestSettingsStore(() => directory).load(), false);
 
   await createAidenPairingRequestSettingsStore(() => directory).save(false);
   assert.equal(await createAidenPairingRequestSettingsStore(() => directory).load(), false);
