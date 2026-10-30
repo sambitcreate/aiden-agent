@@ -40,7 +40,7 @@ export async function buildSystemPromptWithSections(
   const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${aidenAppGuidance(availableToolNames)}` : "");
   const skillsText =
     skillsAvailable && skillSnapshot
-      ? formatAvailableSkills(skillSnapshot, availableToolNames)
+      ? formatAvailableSkills(skillSnapshot, availableToolNames, permission !== "none")
       : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   const browserSuffix = availableToolNames?.has("browser_open")
