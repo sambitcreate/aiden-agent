@@ -1165,6 +1165,14 @@ final class AidenWorkspaceChatsModel {
 }
 
 enum AidenDraftSendReconciliation {
+    /// A turn the Mac refused without running it: the phone drops the saved attempt and shows the
+    /// Mac's reason. A 409 is settled only for `workspace_unavailable` (a moved or deleted folder),
+    /// which the Mac sends before anything runs; other conflicts may have an unknown outcome.
+    static func refusalSettlesSend(status: Int, code: AidenRemoteErrorCode) -> Bool {
+        [400, 401, 403, 404, 413, 422, 429].contains(status)
+            || (status == 409 && code == AidenRemoteErrorCode(rawValue: "workspace_unavailable"))
+    }
+
     static func failedDraft(submitted: String, current: String) -> String {
         guard !current.isEmpty else { return submitted }
         guard current != submitted else { return current }
@@ -3156,8 +3164,9 @@ final class AidenChatViewModel {
                 current: pendingAttachments
             )
             streamState = nil
-            if case AidenRemoteClientError.server(let status, _) = error,
-               [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
+            if case AidenRemoteClientError.server(let status, let body) = error,
+               AidenDraftSendReconciliation.refusalSettlesSend(status: status, code: body.code),
+               let session = draftSession {
                 await draftStore.settlePendingSend(key: attempt.key, session: session)
                 pendingSend = nil
                 turnAttempts.reset()

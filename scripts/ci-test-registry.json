@@ -730,6 +730,7 @@
         "main/services/workspace-application-service.test.ts",
         "main/services/workspace-environment-application-service.test.ts",
         "main/services/workspace-intake.test.ts",
+        "main/services/workspace-folder-presence.test.ts",
         "main/services/workspace-worktree-application-service.test.ts",
         "main/services/first-message-worktree.test.ts",
         "renderer/shared/agents-instructions-notice.test.ts",

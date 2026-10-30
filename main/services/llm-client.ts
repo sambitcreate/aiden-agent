@@ -284,6 +284,7 @@ import {
 } from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
+import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -1149,7 +1150,11 @@ async function prepareGeneration(
     (params.workspaceId && !assistantPersonaMode
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
-  if (workspace && !botBound) await assertManagedWorktreeAdmission(workspace);
+  if (workspace && !botBound) {
+    // Name a moved or deleted folder before any tool fails without saying why.
+    await assertWorkspaceFolderPresent(workspace);
+    await assertManagedWorktreeAdmission(workspace);
+  }
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
   // Bot and Assistant prompts retain their exact, separately granted sources.

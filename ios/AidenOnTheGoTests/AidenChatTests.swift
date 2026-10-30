@@ -186,6 +186,55 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(restored.draft.contains("Later edit"))
     }
 
+    @MainActor
+    func testMissingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        final class Turns: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            var folderBack = false
+        }
+        let turns = Turns()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let folderBack = turns.lock.withLock { turns.count += 1; return turns.folderBack }
+                if folderBack {
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"folder-2","retryable":true}}"#.utf8))
+                }
+                return (409, "application/json", Data(#"{"error":{"code":"workspace_unavailable","message":"\#(refusal)","requestId":"folder-1","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Fix the header"
+        await model.send()
+        // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+        XCTAssertEqual(model.presentedError, refusal)
+        XCTAssertNil(model.pendingSend)
+        XCTAssertEqual(model.draft, "Fix the header")
+        XCTAssertTrue(model.canSend)
+        turns.lock.withLock { turns.folderBack = true }
+        await model.send()
+        XCTAssertEqual(turns.lock.withLock { turns.count }, 2)
+    }
+
+    func testOnlyAMissingFolderConflictCountsAsARefusedSend() {
+        let missing = AidenRemoteErrorCode(rawValue: "workspace_unavailable")
+        let conflict = AidenRemoteErrorCode(rawValue: "revision_conflict")
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: missing))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: conflict))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 503, code: missing))
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 422, code: conflict))
+    }
+
     func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
