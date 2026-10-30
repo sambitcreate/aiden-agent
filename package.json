@@ -247,7 +247,8 @@
     "build:electron:production": "node scripts/patch-pi-oauth-branding.mjs && node scripts/build-electron.mjs --production",
     "check:bundle-budget": "node scripts/check-renderer-bundle-budget.mjs",
     "test:e2e:workspace-panel": "npm run type-check:e2e && npm run build && playwright test tests/e2e/workspace-panel.spec.ts --config=playwright.config.ts --fail-on-flaky-tests",
-    "test:app-controls": "tsx --test main/services/app-controls-core.test.ts main/services/aiden-app-navigation.test.ts renderer/components/app-controls-panel.test.tsx"
+    "test:app-controls": "tsx --test main/services/app-controls-core.test.ts main/services/aiden-app-navigation.test.ts renderer/components/app-controls-panel.test.tsx",
+    "test:e2e:space": "bash scripts/cua-space-e2e.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.7.0",
