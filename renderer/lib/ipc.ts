@@ -997,6 +997,8 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /** A hidden workspace for one No workspace chat: its own managed folder, global settings. */
+  createNoWorkspace: () => invoke<Workspace>("workspaces:createNoWorkspace"),
   /**
    * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
    * given workspace's folder). Never creates anything.

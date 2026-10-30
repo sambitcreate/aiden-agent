@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import {
   assertWorkspaceFolderPresent,
   displayWorkspaceFolder,
+  restoreNoWorkspaceFolder,
   workspaceFolderMissing,
   workspaceFolderPresence,
 } from "./workspace-folder-presence.js";
@@ -74,4 +75,14 @@ test("the home folder is shown as ~ and other paths are left alone", () => {
   assert.equal(displayWorkspaceFolder("/Users/sam/projects/site", "/Users/sam"), "~/projects/site");
   assert.equal(displayWorkspaceFolder("/Users/samantha/site", "/Users/sam"), "/Users/samantha/site");
   assert.equal(displayWorkspaceFolder("/opt/site", "/Users/sam"), "/opt/site");
+});
+
+test("a No workspace chat's missing folder is made again; a project folder never is", async () => {
+  const chatFolder = path.join(root, "chat-folders", "kind-fern-hike");
+  await restoreNoWorkspaceFolder({ folderPath: chatFolder, noWorkspace: true });
+  assert.equal(await workspaceFolderPresence(chatFolder), "present");
+
+  const project = path.join(root, "gone-project");
+  await restoreNoWorkspaceFolder({ folderPath: project });
+  assert.equal(await workspaceFolderPresence(project), "missing");
 });

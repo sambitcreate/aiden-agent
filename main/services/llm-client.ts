@@ -284,7 +284,7 @@ import {
 } from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
-import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
+import { assertWorkspaceFolderPresent, restoreNoWorkspaceFolder } from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -1151,6 +1151,7 @@ async function prepareGeneration(
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
   if (workspace && !botBound) {
+    await restoreNoWorkspaceFolder(workspace);
     // Name a moved or deleted folder before any tool fails without saying why.
     await assertWorkspaceFolderPresent(workspace);
     await assertManagedWorktreeAdmission(workspace);
@@ -3234,6 +3235,7 @@ export const llmClient = {
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
+                workspace?.noWorkspace === true,
               ).then(({ systemPrompt, sections }) => {
                 hostPromptSkills = sections.skills;
                 return systemPrompt;
