@@ -1474,6 +1474,53 @@ enum AidenAgentActivityPresentation {
         return "Thought \(duration(durationMs > 0 ? durationMs : nil))"
     }
 
+    /// The line a collapsed, still-thinking reasoning row shows: the latest
+    /// sentence or line the model has finished, with Markdown markers removed.
+    /// Unfinished text is left out, so the row changes once per finished
+    /// thought instead of per token. Matches Aiden Agent's `latestReasoningLine`.
+    static func latestReasoningLine(_ text: String) -> String {
+        let scalars = Array(text.unicodeScalars)
+        var end = lastReasoningUnitEnd(scalars, before: scalars.count)
+        while end >= 0 {
+            let start = lastReasoningUnitEnd(scalars, before: end) + 1
+            var unit = String.UnicodeScalarView()
+            unit.append(contentsOf: scalars[start..<end])
+            let line = cleanReasoningLine(String(unit))
+            if !line.isEmpty { return line }
+            end = start - 1
+        }
+        return ""
+    }
+
+    private static let reasoningSentenceEnds: Set<Unicode.Scalar> = [".", "!", "?", "…"]
+    private static let reasoningClosers: Set<Unicode.Scalar> = ["\"", "'", ")", "]", "”", "’"]
+
+    /// The index of the whitespace that ends the last finished unit before
+    /// `before`, or -1. A unit ends at a line break, or at sentence punctuation
+    /// (and any closing quotes) that whitespace already follows.
+    private static func lastReasoningUnitEnd(_ scalars: [Unicode.Scalar], before: Int) -> Int {
+        var index = before - 1
+        while index >= 0 {
+            let scalar = scalars[index]
+            if scalar == "\n" { return index }
+            if scalar.properties.isWhitespace {
+                var mark = index - 1
+                while mark >= 0, reasoningClosers.contains(scalars[mark]) { mark -= 1 }
+                if mark >= 0, reasoningSentenceEnds.contains(scalars[mark]) { return index }
+            }
+            index -= 1
+        }
+        return -1
+    }
+
+    private static func cleanReasoningLine(_ line: String) -> String {
+        line
+            .replacingOccurrences(of: #"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|[0-9]+[.)]\s+)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\*\*|__|`"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func visualizingLabel(_ timeline: AidenGenerationTimeline?) -> String? {
         hasActiveToolStep(timeline, named: renderArtifactToolName) ? "Visualizing" : nil
     }
@@ -3548,6 +3595,13 @@ struct AidenQuestionComposerDraft {
     var customAnswers: [Int: String] = [:]
     var customOpen: Set<Int> = []
 
+    init() {}
+
+    /// Starts with the options the agent recommends already selected.
+    init(questions: [AidenRemoteQuestion]) {
+        selections = AidenQuestionAnswerDraft.recommendedSelections(for: questions)
+    }
+
     mutating func move(to index: Int, questions: [AidenRemoteQuestion]) {
         guard questions.indices.contains(index) else { return }
         activeIndex = index
@@ -3570,6 +3624,29 @@ struct AidenQuestionComposerDraft {
 /// draft wins over option selections for that question; questions left
 /// unaddressed are omitted so the host records them as skipped.
 enum AidenQuestionAnswerDraft {
+    /// The agent marks a recommended option by ending its label with
+    /// "(Recommended)". The full label stays the wire answer; the card shows
+    /// `text` with a separate tag. Desktop parity: parseRecommendedOptionLabel.
+    static func recommendedLabel(_ label: String) -> (text: String, recommended: Bool) {
+        guard let marker = label.range(
+            of: "(recommended)", options: [.caseInsensitive, .anchored, .backwards]
+        ) else { return (label, false) }
+        let text = String(label[..<marker.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? (label, false) : (text, true)
+    }
+
+    /// Starting selections: the first recommended option of a single choice,
+    /// or every recommended option of a multi-select.
+    static func recommendedSelections(for questions: [AidenRemoteQuestion]) -> [Int: Set<String>] {
+        var selections: [Int: Set<String>] = [:]
+        for (index, question) in questions.enumerated() {
+            let marked = question.options.map(\.label).filter { recommendedLabel($0).recommended }
+            guard let first = marked.first else { continue }
+            selections[index] = question.multiSelect ? Set(marked) : [first]
+        }
+        return selections
+    }
+
     static func answers(
         for questions: [AidenRemoteQuestion],
         selections: [Int: Set<String>],

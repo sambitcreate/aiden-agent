@@ -415,6 +415,55 @@ final class AidenChatTests: XCTestCase {
         model.stopProgressObservation()
     }
 
+    @MainActor
+    func testMissingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        final class Turns: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            var folderBack = false
+        }
+        let turns = Turns()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let folderBack = turns.lock.withLock { turns.count += 1; return turns.folderBack }
+                if folderBack {
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"folder-2","retryable":true}}"#.utf8))
+                }
+                return (409, "application/json", Data(#"{"error":{"code":"workspace_unavailable","message":"\#(refusal)","requestId":"folder-1","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Fix the header"
+        await model.send()
+        // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+        XCTAssertEqual(model.presentedError, refusal)
+        XCTAssertNil(model.pendingSend)
+        XCTAssertEqual(model.draft, "Fix the header")
+        XCTAssertTrue(model.canSend)
+        turns.lock.withLock { turns.folderBack = true }
+        await model.send()
+        XCTAssertEqual(turns.lock.withLock { turns.count }, 2)
+    }
+
+    func testOnlyAMissingFolderConflictCountsAsARefusedSend() {
+        let missing = AidenRemoteErrorCode(rawValue: "workspace_unavailable")
+        let conflict = AidenRemoteErrorCode(rawValue: "revision_conflict")
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: missing))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: conflict))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 503, code: missing))
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 422, code: conflict))
+    }
+
     func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -882,6 +931,31 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: stopped, reasoningVisible: false))
         XCTAssertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: nil, reasoningVisible: true))
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
+    }
+
+    func testLiveReasoningLineIsTheLatestFinishedSentenceNeverTheUnfinishedTail() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line(""), "")
+        XCTAssertEqual(line("Still forming the first thought"), "")
+        XCTAssertEqual(line("Read the diff. Then group the"), "Read the diff.")
+        XCTAssertEqual(line("Read the diff. Group the hunks by story! Check the style? "), "Check the style?")
+        // A sentence is finished only once whitespace follows its punctuation.
+        XCTAssertEqual(line("Read the diff. Group by story."), "Read the diff.")
+        XCTAssertEqual(line(#"He said "stage it first." Then "#), #"He said "stage it first.""#)
+        // Decimals and versions do not end a sentence.
+        XCTAssertEqual(line("Pin v4.1 before 2.5 ships. And"), "Pin v4.1 before 2.5 ships.")
+    }
+
+    func testLiveReasoningLineCountsFinishedLinesAndDropsMarkdownMarkers() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line("**Mapping hunk boundaries**\n\nREADME has"), "Mapping hunk boundaries")
+        XCTAssertEqual(line("## Plan the split\nStart"), "Plan the split")
+        XCTAssertEqual(line("- Stage `hunk 1` with the fix\n"), "Stage hunk 1 with the fix")
+        XCTAssertEqual(line("1. Check   the build\n\n\n"), "Check the build")
+        // Blank lines and bare markers never become the line.
+        XCTAssertEqual(line("Read the diff.\n\n**\n\n"), "Read the diff.")
+        // A Windows line break ends a line like a bare newline does.
+        XCTAssertEqual(line("Plan the split\r\nStart"), "Plan the split")
     }
 
     private func extractStepJSON(
@@ -12487,6 +12561,33 @@ extension AidenChatTests {
         XCTAssertEqual(draft.answers(for: questions), [
             .custom(questionIndex: 0, answer: "Make it 2 mm"),
             .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
+    }
+
+    func testRecommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended)") == ("(Recommended)", false))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres") == ("(Recommended) Postgres", false))
+
+        let questions = [
+            questionFixture(options: [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm (Recommended)", description: "Heavy."),
+                AidenRemoteQuestionOption(label: "2.0 mm (Recommended)", description: "Heavier."),
+            ]),
+            questionFixture(multiSelect: true, options: [
+                AidenRemoteQuestionOption(label: "Top (Recommended)", description: "Top edge."),
+                AidenRemoteQuestionOption(label: "Side", description: "Side edge."),
+                AidenRemoteQuestionOption(label: "Bottom (Recommended)", description: "Bottom edge."),
+            ]),
+            questionFixture(),
+        ]
+        let draft = AidenQuestionComposerDraft(questions: questions)
+        // Accepting them sends the full labels, which are the options' identities.
+        XCTAssertEqual(draft.answers(for: questions), [
+            .option(questionIndex: 0, answer: "1.0 mm (Recommended)"),
+            .multi(questionIndex: 1, selected: ["Top (Recommended)", "Bottom (Recommended)"]),
         ])
     }
 

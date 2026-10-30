@@ -332,6 +332,29 @@ object AidenPendingQuestionResolution {
  * are omitted so the host records them as skipped. iOS parity:
  * AidenQuestionAnswerDraft. */
 object AidenQuestionAnswerDraft {
+    private val recommendedMarker = Regex("""\s*\(recommended\)$""", RegexOption.IGNORE_CASE)
+
+    /** The agent marks a recommended option by ending its label with
+     * "(Recommended)". The full label stays the wire answer; the card shows
+     * the text before it with a separate tag. Desktop parity:
+     * parseRecommendedOptionLabel. */
+    fun recommendedLabel(label: String): Pair<String, Boolean> {
+        val text = label.replace(recommendedMarker, "")
+        return if (text.isNotEmpty() && text != label) text to true else label to false
+    }
+
+    /** Starting selections: the first recommended option of a single choice,
+     * or every recommended option of a multi-select. */
+    fun recommendedSelections(questions: List<AidenRemoteQuestion>): Map<Int, Set<String>> {
+        val selections = mutableMapOf<Int, Set<String>>()
+        questions.forEachIndexed { index, question ->
+            val marked = question.options.map { it.label }.filter { recommendedLabel(it).second }
+            if (marked.isEmpty()) return@forEachIndexed
+            selections[index] = if (question.multiSelect) marked.toSet() else setOf(marked.first())
+        }
+        return selections
+    }
+
     fun answers(
         questions: List<AidenRemoteQuestion>,
         selections: Map<Int, Set<String>>,

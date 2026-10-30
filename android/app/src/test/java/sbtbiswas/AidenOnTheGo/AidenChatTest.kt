@@ -2557,6 +2557,81 @@ class AidenChatTest {
     @Test fun selectedAttachmentPreparationKeepsMainResponsiveAndSendReservedThroughCancellation() =
         assertFailedSendDraft(checkPreparation = true)
 
+    @Test
+    fun missingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() {
+        val directory = kotlin.io.path.createTempDirectory("aiden-missing-folder-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val sendKeys = java.util.concurrent.CopyOnWriteArrayList<String?>()
+        val folderBack = java.util.concurrent.atomic.AtomicBoolean(false)
+        val refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        val server = MockWebServer()
+        val viewModels = ViewModelStore()
+        val initialChat = AidenChat(
+            id = "chat-folder", workspaceId = "workspace-folder", title = "Missing folder",
+            messages = emptyList(), createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH,
+            revision = "revision-folder"
+        )
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/aiden/v1/chats/chat-folder/turns" -> {
+                    sendKeys.add(request.getHeader("Idempotency-Key"))
+                    if (folderBack.get()) {
+                        MockResponse().setResponseCode(503).setBody("""{"error":{"code":"internal_error","message":"Try again","requestId":"request-folder-2","retryable":true}}""")
+                    } else {
+                        MockResponse().setResponseCode(409).setBody("""{"error":{"code":"workspace_unavailable","message":"$refusal","requestId":"request-folder","retryable":false}}""")
+                    }
+                }
+                "/api/aiden/v1/chats/chat-folder" -> MockResponse().setBody(json.encodeToString(initialChat))
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        server.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(
+                    AidenPairingExchange(
+                        instanceId = "instance-folder", deviceId = "device-folder",
+                        endpoint = server.url("/api/aiden/v1").toString(), serverSpkiSha256 = "sha256/test",
+                        credential = "synthetic-credential",
+                        capabilities = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+                    ), null
+                )
+                val drafts = AidenChatDraftStore(directory)
+                val cache = AidenChatCache(directory)
+                val coordinator = AidenRemoteCoordinator(
+                    installations, directory, cache, drafts,
+                    scope = CoroutineScope(dispatcher + Job().apply { cancel() })
+                )
+                coordinator.refreshClient()
+                val model = AidenChatViewModel(initialChat.id, coordinator, cache, drafts, initialChat)
+                viewModels.put("chat", model)
+                yield()
+                withTimeout(5_000) { model.isLoading.first { !it } }
+                model.updateDraft("Fix the header")
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+                assertEquals(refusal, model.presentedError.value)
+                assertNull(model.pendingSend.value)
+                assertEquals("Fix the header", model.draft.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+                assertTrue(model.canSend)
+                folderBack.set(true)
+                model.send()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                assertEquals(2, sendKeys.size)
+            }
+        } finally {
+            runBlocking(dispatcher) { viewModels.clearAndJoin() }
+            Dispatchers.resetMain()
+            dispatcher.close()
+            server.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun assertFailedSendDraft(newerText: String = "", purgeWhileSending: Boolean = false, checkPreparation: Boolean = false) {
         val directory = kotlin.io.path.createTempDirectory("aiden-failed-send-").toFile()
         val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
