@@ -708,6 +708,11 @@ export function terminateRunningDeviceCommands(): number {
   return children.length;
 }
 
+/** Test-only: clears the quit cancellation so one test's deadline cleanup cannot refuse another test's commands. */
+export function resetDeviceCommandCancellationForTests(): void {
+  commandsCancelledForQuit = false;
+}
+
 export function runChildCommand(
   command: string,
   args: readonly string[],

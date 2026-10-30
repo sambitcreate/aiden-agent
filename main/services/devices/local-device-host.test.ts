@@ -23,6 +23,7 @@ import {
   findAndroidSdk,
   findAndroidStudioJava,
   findDeviceHostHelpers,
+  resetDeviceCommandCancellationForTests,
   runChildCommand,
   terminateRunningDeviceCommands,
   nextHubRestartDelay,
@@ -964,16 +965,19 @@ test("quit ends a helper command still running before its own timeout, and only 
     env: process.env,
     timeoutMs: 60_000,
   });
-  // Give the child a moment to spawn so the signal reaches a live process.
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(terminateRunningDeviceCommands(), 1);
-  const result = await held;
-  assert.notEqual(result.code, 0);
-  assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
-  assert.equal(terminateRunningDeviceCommands(), 0);
+  try {
+    // Give the child a moment to spawn so the signal reaches a live process.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(terminateRunningDeviceCommands(), 1);
+    const result = await held;
+    assert.notEqual(result.code, 0);
+    assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
+    assert.equal(terminateRunningDeviceCommands(), 0);
+  } finally {
+    resetDeviceCommandCancellationForTests();
+  }
 });
 
-// Quit's cancellation is permanent for the process, so this stays the last test that runs a real command.
 test("after quit's deadline cleanup, a helper command the shutdown chain starts later never runs", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "aiden-device-quit-"));
   try {
@@ -993,6 +997,7 @@ test("after quit's deadline cleanup, a helper command the shutdown chain starts 
     await assert.rejects(readFile(marker), { code: "ENOENT" });
     assert.equal(terminateRunningDeviceCommands(), 0);
   } finally {
+    resetDeviceCommandCancellationForTests();
     await rm(dir, { recursive: true, force: true });
   }
 });
