@@ -75,7 +75,9 @@ export async function showStartupPairing(agentDir: string, transport: PairTransp
   try {
     pairing = await remoteDaemonCommand(agentDir, "remote", ["pair", transport]) as AidenRemoteDesktopPairing;
   } catch (error) {
-    if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window: ${error instanceof Error ? error.message : String(error)} Run \`aiden remote pair lan|tailscale\` when Remote is ready.\n`);
+    // Tailscale failures already name the setup step and the command to retry with.
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
+    if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${transport === "lan" ? " Run `aiden remote pair lan` to try again." : ""}\n`);
     return;
   }
   if (signal.aborted) return;

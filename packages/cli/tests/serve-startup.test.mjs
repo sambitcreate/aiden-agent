@@ -136,3 +136,77 @@ test("aiden serve in a terminal shows a LAN pairing code that the server is wait
   assert.equal(pairing.state, "awaiting_scan");
   assert.match(pairing.sessionId, /^pairing_/);
 });
+
+/** A Remote service double that records the transport operations Tailscale pairing performs. */
+function tailscalePairingDouble({ connectionMode = "lan", tailscaleConnected = false, node, connectError, deniedAfterConnect = false }) {
+  const calls = [];
+  let mode = connectionMode, connected = tailscaleConnected, denied = false;
+  const service = {
+    async status() { return { connectionMode: mode, tailscaleConnected: connected, ...(denied ? { tailscaleErrorCode: "permission_denied" } : {}) }; },
+    async setConnectionMode(next) { calls.push(["mode", next]); mode = next; },
+    async connectTailscale() {
+      calls.push(["connect"]);
+      if (connectError) throw new Error(connectError);
+      if (deniedAfterConnect) { denied = true; return; }
+      connected = true;
+    },
+    async beginPairing(transport) {
+      calls.push(["pair", transport]);
+      if (!connected) throw new Error("Connect the Aiden Tailscale Serve route before pairing.");
+      return { sessionId: "pairing_test", transport };
+    },
+  };
+  const tailscale = { async status() { calls.push(["node"]); return node ?? { installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: true }; } };
+  return { service, tailscale, calls, mode: () => mode };
+}
+
+test("Tailscale pairing on a fresh LAN profile adds Tailscale and connects Serve before opening the window", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const fresh = tailscalePairingDouble({});
+  assert.deepEqual(await api.beginTailscalePairing(fresh.service, fresh.tailscale), { sessionId: "pairing_test", transport: "tailscale" });
+  assert.deepEqual(fresh.calls, [["node"], ["mode", "both"], ["connect"], ["pair", "tailscale"]]);
+  assert.equal(fresh.mode(), "both", "LAN keeps working next to Tailscale");
+
+  const ready = tailscalePairingDouble({ connectionMode: "tailscale", tailscaleConnected: true });
+  await api.beginTailscalePairing(ready.service, ready.tailscale);
+  assert.deepEqual(ready.calls, [["pair", "tailscale"]], "a connected route is used as is");
+});
+
+test("Tailscale pairing leaves foreign routes alone and names the setup step instead of a bare retry", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const conflict = tailscalePairingDouble({ connectError: "tailscale_route_conflict" });
+  await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
+  assert.deepEqual(conflict.calls, [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]], "no pairing window, and the added mode is put back");
+
+  const denied = tailscalePairingDouble({ deniedAfterConnect: true });
+  await assert.rejects(api.beginTailscalePairing(denied.service, denied.tailscale), /sudo tailscale set --operator=\$USER.*aiden remote pair tailscale/s);
+  assert.equal(denied.mode(), "lan");
+
+  for (const [node, message] of [
+    [{ installed: false, errorCode: "not_installed" }, /not installed.*sudo tailscale up.*aiden remote pair tailscale/s],
+    [{ installed: true }, /sudo tailscale up.*aiden remote pair tailscale/s],
+    [{ installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: false }, /HTTPS.*aiden remote pair tailscale/s],
+  ]) {
+    const blocked = tailscalePairingDouble({ node });
+    await assert.rejects(api.beginTailscalePairing(blocked.service, blocked.tailscale), message);
+    assert.deepEqual(blocked.calls, [["node"]], "nothing changes before the node is ready");
+  }
+});
+
+// Never let a test touch a developer's real Tailscale Serve configuration.
+const tailscaleInstalled = !!(await (await import("../dist/parity-test-api.js")).resolveTailscaleBinary());
+
+test("aiden serve --pair tailscale without Tailscale says how to set it up and keeps LAN mode", { skip: (!hasScript && "needs util-linux script for a pseudo-terminal") || (tailscaleInstalled && "Tailscale is installed on this host") }, async (t) => {
+  const { env } = sandbox(t);
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --pair tailscale`, "/dev/null"], env, /Could not open a Tailscale pairing window[^\n]*\n/);
+  const text = output.stdout + output.stderr;
+  assert.match(text, /Tailscale is not installed on this server\. Install it .*sudo tailscale up.*aiden remote pair tailscale/);
+  assert.doesNotMatch(text, /Manual code/);
+  const again = runCli(["remote", "pair", "tailscale"], env);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /Tailscale is not installed on this server/);
+  const status = json(runCli(["remote", "status"], env));
+  assert.equal(status.connectionMode, "lan");
+  assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
+});
