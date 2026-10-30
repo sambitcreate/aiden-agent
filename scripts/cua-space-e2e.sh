@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run Aiden's Electron e2e suite inside a local Cua Spaces Linux sandbox so test windows never take over
-# this Mac's display. It follows CI's Linux E2E job (Node 22.22.3, CI's apt packages, xvfb-run, CI=1), but on
+# this Mac's display. It follows CI's Linux E2E job (Node 22.23.4, CI's apt packages, xvfb-run, CI=1), but on
 # Apple silicon the Space is Linux arm64, and specs that branch on darwin take their Linux path here.
 #
 #   scripts/cua-space-e2e.sh                                     # full suite
@@ -70,7 +70,8 @@ RUN_ID="$(basename "$WORK")"
 (cd "$ROOT" && {
   git ls-files -c -z
   git ls-files -o --exclude-standard -z -- . ':(exclude,glob)**/.env*' ':(exclude,glob)**/.npmrc' \
-    ':(exclude,glob)**/*.pem' ':(exclude,glob)**/*.key' ':(exclude,glob)**/*.p12'
+    ':(exclude,glob)**/*.pem' ':(exclude,glob)**/*.key' ':(exclude,glob)**/*.p12' ':(exclude,glob)**/*.p8' \
+    ':(exclude,glob)**/*.pfx' ':(exclude,glob)**/*.jks' ':(exclude,glob)**/*.keystore'
 } | while IFS= read -r -d '' path; do if [ -e "$path" ] || [ -L "$path" ]; then printf '%s\0' "$path"; fi; done \
   | COPYFILE_DISABLE=1 tar --null -T - -czf "$WORK/src.tgz" --no-xattrs)
 LOCK_HASH="$(shasum -a 256 "$ROOT/package-lock.json" | cut -d' ' -f1)"
@@ -95,7 +96,7 @@ kill_tree() { local child; for child in $(pgrep -P "$1"); do kill_tree "$child";
 trap 'for c in $(pgrep -P $$); do kill_tree "$c"; done; exit 130' INT TERM HUP
 run_fg() { "$@" & wait $!; }
 
-NODE_VERSION=22.22.3
+NODE_VERSION=22.23.4
 case "$(uname -m)" in aarch64|arm64) NODE_ARCH=arm64 ;; *) NODE_ARCH=x64 ;; esac
 if ! /opt/node22/bin/node --version 2>/dev/null | grep -qx "v$NODE_VERSION"; then
   { curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz" -o /tmp/node.tar.xz &&

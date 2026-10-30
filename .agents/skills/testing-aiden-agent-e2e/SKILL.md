@@ -1,6 +1,6 @@
 ---
 name: testing-aiden-agent-e2e
-description: How to write, list, type-check, and run the Playwright Electron e2e tests for Aiden Agent — which parts work on a Linux VM (authoring, type-checking, listing), why the Electron suite itself only runs on macOS, and the harness APIs and locators the specs rely on.
+description: How to write, list, type-check, and run the Playwright Electron e2e tests for Aiden Agent — how to run the Electron suite off-screen on a Mac through the Cua Space runner (npm run test:e2e:space) or on Linux with xvfb-run, when a spec still needs the macOS host, and the harness APIs and locators the specs rely on.
 ---
 
 # Testing Aiden Agent e2e (Playwright + Electron)
@@ -9,21 +9,29 @@ description: How to write, list, type-check, and run the Playwright Electron e2e
 None for the mock harness. `tests/e2e/fixtures.ts` runs a deterministic mock LM Studio on a random localhost port. You only need a real LM Studio for `npm run test:e2e:live:lmstudio` (`AIDEN_E2E_LIVE_LMSTUDIO=1`, optional `AIDEN_E2E_LMSTUDIO_BASE_URL`).
 
 ## Where the suite can run
-The Electron suite only runs on macOS. CI runs it on `macos-26` (the `e2e` job in `.github/workflows/ci.yml`, sharded by `scripts/ci-e2e-shards.mjs`). A Linux VM cannot launch the app from this checkout, and a fixture patch will not fix that:
+CI runs the Electron suite in two places, both from `.github/workflows/ci.yml`: the main gate on `macos-26` (the `e2e` job, sharded by `scripts/ci-e2e-shards.mjs`), and the `Run deterministic Electron E2E gate` step of the Linux x64 job (`xvfb-run --auto-servernum npm run test:e2e`).
 
-- `npm run build` builds the native helpers (`build:worktree-remover`, `build:worktree-file-io`, `build:bot-inbox-writer`, `build:subagent-run-store`, `build:subagent-file-mutator`, `build:subagent-shell-runner`). Every one of those scripts (`scripts/build-*.mjs`) prints a skip message and exits 0 when `process.platform !== "darwin"`, so the build "succeeds" on Linux without producing `build/native/*`.
-- The helper sources in `native/` use macOS-only APIs (`st_birthtimespec`, `renameatx_np`, `arc4random_buf`, and others). The development app resolves `build/native/aiden-subagent-run-store`, and `main/index.ts` initializes the subagent run store during startup. Without a working helper, startup fails before any spec gets a window.
-- Do not hand-port the helpers for a test run. The run-store generation tokens that `main/services/subagents/subagent-run-store-io.ts` validates include birth-time fields, and a partial port that drops them breaks the read/write handshake. A Linux helper port has to land as a reviewed repo change with its own tests, not as a VM-local workaround.
-- `tests/e2e/fixtures.ts` launches Electron with an isolated environment. `APP_ENV_PASSTHROUGH` does not forward `DISPLAY`/`XAUTHORITY`, and `assertRuntimeIsolation` only exempts the macOS-injected `__CF_USER_TEXT_ENCODING`. Supporting Linux would also need a reviewed fixture change.
+### On a Mac: run it in a Cua Space
+Do not run window-opening tests on the Mac's own display. Use the Cua Space runner, which syncs the checkout (including uncommitted files) into a local Linux sandbox and runs it like CI's Linux E2E step:
 
-### What does work on a Linux VM
-- Install: `npm ci` (Node `>=22.19`, per `package.json` `engines`).
+- Full suite: `npm run test:e2e:space`
+- One spec or any Playwright args: `npm run test:e2e:space -- tests/e2e/<spec>.spec.ts`
+- Watch it on the Space desktop: `npm run test:e2e:space -- --watch tests/e2e/<spec>.spec.ts`
+- Any other window-opening command (Electron smoke scripts): `npm run test:e2e:space -- --run <command> [args]`
+- Artifacts come back to `test-results/cua-space-<space>/`. A busy Space exits 75; concurrent sessions set a distinct `CUA_SPACE`, and `--reset` stops processes an interrupted run left behind.
+
+It needs the `cua` CLI (`curl -fsSL https://cua.ai/install.sh | DO_NOT_TRACK=1 sh -s -- --only spaces --no-onboarding`). The Space is Linux (arm64 on Apple silicon), so specs take their non-darwin branches there. When you change a spec's darwin branch (iOS Simulator environment tabs, Computer Use and Apple models in guided setup, This Mac settings, Meta-modifier shortcuts) or macOS-only behavior (Keychain, packaging, computer-use, packaged diagnostics), also run that spec on the host with the commands below, or rely on the macOS CI gate.
+
+### On a Linux machine
+Follow CI's Linux E2E step: install its apt packages (`xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11`), then `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `ulimit -c 0`, and `xvfb-run --auto-servernum npm run test:e2e`. Without the sysctl, Ubuntu 24.04 leaves Electron with no usable sandbox and it aborts.
+
+### Checks that need no window
+- Install: `npm ci` (Node `>=22.19`, per `package.json` `engines`; CI pins 22.23.4).
 - Type-check specs: `npm run type-check:e2e`.
 - Confirm new specs and titles are collected: `npm run test:e2e:list`.
 - Non-Electron unit suites and lint (see the `test:*` scripts in `package.json`).
-- Then push and let the macOS `Deterministic Electron E2E` CI job run the specs, or run them on a Mac.
 
-### Running on macOS
+### Running on the host (macOS-specific behavior only)
 - Full suite: `npm run test:e2e` (type-checks, runs `npm run build`, then `playwright test --fail-on-flaky-tests`).
 - One spec after a build: `npx playwright test tests/e2e/<spec>.spec.ts --config=playwright.config.ts`.
 - The fixture refuses to launch unless `build/main/index.js` and `build/renderer/main-window.html` exist.

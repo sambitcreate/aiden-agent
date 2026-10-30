@@ -308,6 +308,7 @@
         "scripts/check-ci-policy.test.mjs",
         "scripts/ci-changes.test.mjs",
         "scripts/ci-e2e-shards.test.mjs",
+        "scripts/cua-space-e2e.test.mjs",
         "scripts/ci-required.test.mjs",
         "scripts/safe-test-reporter.test.mjs",
         "scripts/ci-test-registry.test.mjs",

@@ -6,11 +6,20 @@ a test-owned LM Studio-compatible server bound to a random loopback port. It
 does not read or contact a developer's Aiden profile, credentials, or LM Studio
 server.
 
-Run the complete deterministic suite locally with:
+On a Mac, run it in a local Cua Spaces Linux sandbox so test windows stay off your
+display (needs the `cua` CLI; see `scripts/cua-space-e2e.sh`):
 
 ```sh
-npm run test:e2e
+npm run test:e2e:space                                   # full suite
+npm run test:e2e:space -- tests/e2e/<spec>.spec.ts       # any Playwright args
+npm run test:e2e:space -- --run <command> [args]         # other window-opening commands
 ```
+
+The Space is Linux, so specs take their non-darwin branches there. Changes to a spec's
+darwin branch or to macOS-only behavior still need `npm run test:e2e` on the host (or
+the macOS CI gate). On Linux, follow CI's Linux E2E step: its apt packages,
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, `ulimit -c 0`, then
+`xvfb-run --auto-servernum npm run test:e2e`.
 
 Hosted CI splits deterministic spec files across three isolated macOS runners, each with
 one Playwright worker. `scripts/ci-e2e-shards.mjs` balances files using recorded hosted
