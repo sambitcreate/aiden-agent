@@ -862,6 +862,7 @@
         "renderer/components/device-features.test.tsx",
         "renderer/components/device-mini-player.test.tsx",
         "renderer/components/onboarding-flow.test.tsx",
+        "renderer/components/usage-data.test.tsx",
         "renderer/components/onboarding-bots-step.test.tsx",
         "renderer/components/remote-connection-popover.test.tsx",
         "renderer/components/remote-pairing-request-sheet.test.tsx",
