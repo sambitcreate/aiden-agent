@@ -73,6 +73,7 @@ export const queryKeys = {
   botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
+  workspaceFolderPresence: (workspaceId: string) => ["workspace-folder-presence", workspaceId] as const,
   settings: ["settings"] as const,
   shortcuts: ["shortcuts"] as const,
   assistantConfig: ["assistantConfig"] as const,
