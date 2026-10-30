@@ -1,6 +1,6 @@
 # Anonymous Usage Analytics and Crash Reporting (PostHog)
 
-Status: Active (PR 1, core with nothing sending, in review)
+Status: Active (PR 1, core with nothing sending, in review; PR 2, consent and lifecycle, in review)
 Date: 2026-10-28
 Base: `origin/main` at `8504c773c` (0.62.0 + #625–#628)
 Scope: Electron desktop app (macOS and Linux) first, then the `aiden` CLI. iOS and Android are out of scope.
@@ -286,7 +286,7 @@ Behavioural, per `AGENTS.md` house style; every new file registered in the root 
 ## Delivery (one PR each, stacked)
 
 1. **Core, no sending.** `main/services/analytics/*` (registry, consent, sanitizer, core with fake transport, client wrapper, crash sink), `posthog-node` pinned exactly, tests. No key, no UI, nothing wired. Safe to merge on its own. Because nothing in main imports the client yet, `posthog-node` sits in `devDependencies` (as `scripts/main-runtime-dependencies.test.mjs` requires); PR 2 moves it to `dependencies` when main starts importing it.
-2. **Consent, lifecycle and "who's using it".** Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
+2. **Consent, lifecycle and "who's using it".** (In review, stacked on PR 1.) Settings group, onboarding row, existing-user notice, "What's sent" sheet, IPC, release-key injection, `app_opened` / `app_active` / `onboarding_finished` / `app_updated` / `analytics_disabled`. All docs and policy changes above. Screenshots in the PR.
 3. **Feature events.** Wire the core-use and big-feature tables at service level.
 4. **Crashes and errors.** Journal sink (including rejections via the existing monitor), widened renderer IPC with main-side sanitizing, process-gone events, run marker, pending-crash file, flood control.
 5. **CLI.** Consent store, notice, `aiden telemetry`, `cli_started`, shared events, crash capture, `packages/cli/README.md`.
@@ -297,9 +297,11 @@ Each PR runs the narrow suites locally before CI; PR 2 onwards also checks a pac
 
 1. Create one PostHog project in the US cloud.
 2. Project settings: **Discard client IP data** on; session replay, autocapture, heatmaps, surveys and web analytics off; data retention left at PostHog's default.
-3. Add the project API key as a release CI secret (name to be chosen in PR 2).
+3. Add the project API key as the `AIDEN_POSTHOG_PROJECT_KEY` release CI secret.
 4. Dashboards: DAU/WAU/MAU from `app_opened` + `app_active` by unique `distinct_id`; feature adoption (% of weekly actives firing each feature event); version and platform split; opt-out rate; Error Tracking issues list.
 5. Update the published privacy policy.
+
+Done 2026-10-30: project "aiden" (id 619947) in the US cloud with client IP discarded; session replay, autocapture, heatmaps, surveys, console log capture and performance capture off; the `AIDEN_POSTHOG_PROJECT_KEY` repository secret added. Dashboards and the privacy policy remain.
 
 ## Cost
 

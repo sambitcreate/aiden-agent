@@ -47,6 +47,7 @@ Avoid a generic web dashboard inside a desktop shell, ornamental cards, feature-
 
 - Keep the conversation primary; navigation and configuration should remain available without competing for attention.
 - Show essential context at the point of action, especially workspace, model, permission, privacy, and error state.
+- Measure only what is listed: anonymous usage data and crash reports come from a closed event list, never include content, are on by default with a visible switch and a one-time notice, and the app shows exactly what is sent ([`docs/analytics.md`](docs/analytics.md)).
 - Prefer familiar macOS and high-quality AI-tool conventions over novel controls.
 - Use progressive disclosure so simple workflows stay simple while advanced capabilities remain discoverable.
 - Refine the existing product vocabulary before introducing another visual or interaction pattern.

@@ -76,6 +76,8 @@ Aiden stores chats, settings, workspace metadata, and downloaded speech models l
 
 Network access happens only when the selected feature needs it: hosted models receive the conversation content sent to them, cloud transcription receives selected audio, Exa receives search queries, sites the agent reads receive a plain page request (never one to this computer or a private network), Cloudflare receives the page text and field names when extract mode is on, remote MCP servers receive tool requests, model downloads contact their upstream host, and a pull request that a chat follows is read from GitHub every few minutes until the follow ends. A fully local session can use a local model, on-device voice, no remote MCP servers, and web search disabled.
 
+Release builds of the desktop app send anonymous usage data and crash reports to PostHog: app launches, the features used, and sanitized crash details, with a random install ID and never chats, files, paths, or keys. It is on by default; turn it off in Settings → About → Usage data or with `DO_NOT_TRACK=1`, and see exactly what is sent under **What's sent**. Development builds never send. See [Usage data and crash reports](docs/analytics.md).
+
 On macOS, Computer Use is an opt-in beta with a global switch, permission checks, and exact target binding. The model's first Computer Use call in a chat raises one access card (Deny, Allow for this chat, or Always allow); an allowed chat then acts without per-action cards, and Settings can turn off Always allow or reset chat permissions. It is omitted from Linux builds. See the [Computer Use security design](docs/computer-use-integration.md) for the complete boundary.
 
 ## Architecture
