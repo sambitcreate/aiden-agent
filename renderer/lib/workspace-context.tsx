@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { listChatDrafts, updateChatDraft } from "./chat-draft";
+import { getChatDraft, listChatDrafts, updateChatDraft } from "./chat-draft";
 import { workspacesApi } from "./ipc";
 import { isNoWorkspace, noWorkspaceHome } from "./no-workspace";
 import { rehomeStrandedNoWorkspaceDrafts, releasedNoWorkspaceIds } from "./no-workspace-send";
@@ -41,13 +41,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // and any draft still aimed at it stay in the Chats group.
   const qc = useQueryClient();
   const hiddenIdsRef = React.useRef<ReadonlySet<string>>(new Set());
+  const activeIdRef = React.useRef(activeId);
+  activeIdRef.current = activeId;
   React.useEffect(() => {
     if (list.length === 0) return;
     const released = releasedNoWorkspaceIds(hiddenIdsRef.current, list);
     hiddenIdsRef.current = new Set(list.filter(isNoWorkspace).map((workspace) => workspace.id));
     const activeReleased = Boolean(activeId && released.has(activeId));
+    let fallbackId: string | undefined;
     if (!activeId || !list.some((w) => w.id === activeId)) {
-      select((activeReleased ? noWorkspaceHome(list)?.id : undefined) ?? list[0].id);
+      fallbackId = (activeReleased ? noWorkspaceHome(list)?.id : undefined) ?? list[0].id;
+      select(fallbackId);
     }
     if (released.size === 0) return;
     const moveDraft = (draftId: string, workspaceId: string) => {
@@ -57,8 +61,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         // Its first message is already saving.
       }
     };
+    const draftWorkspaceId = (draftId: string) => {
+      const draft = getChatDraft(draftId);
+      return draft && !draft.sending ? draft.chat.workspaceId : undefined;
+    };
     void rehomeStrandedNoWorkspaceDrafts(
-      { createNoWorkspace: workspacesApi.createNoWorkspace, moveDraft },
+      { createNoWorkspace: workspacesApi.createNoWorkspace, draftWorkspaceId, moveDraft },
       listChatDrafts(),
       released,
       list,
@@ -66,7 +74,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       .then(async (home) => {
         if (!home || list.some((workspace) => workspace.id === home)) return;
         await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
-        if (activeReleased) select(home);
+        // Unless a workspace was picked meanwhile.
+        if (activeReleased && activeIdRef.current === fallbackId) select(home);
       })
       .catch(() => undefined);
   }, [list, activeId, qc, select]);

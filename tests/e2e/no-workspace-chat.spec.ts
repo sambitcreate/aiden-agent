@@ -97,9 +97,13 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   await expect(page.locator("[data-sidebar]").getByRole("button", { name: /^(Collapse|Expand) Chats$/u })).toHaveCount(1);
   await expect(page.locator("[data-sidebar]").getByRole("button", { name: /No workspace/u })).toHaveCount(0);
 
+  // A new chat opened from the soup chat starts in its hidden workspace.
+  const secondRow = (await page.locator('aside button[aria-current="page"]').elementHandle())!;
+  await page.getByRole("button", { name: "New Agent", exact: true }).click();
+  await expect(page.getByText("What’s on your mind?")).toBeVisible();
+
   // Deleting a chat releases its folder; the other chat keeps its own.
-  const row = page.locator('aside button[aria-current="page"]');
-  await row.focus();
+  await secondRow.focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menu").getByRole("menuitem", { name: "Delete", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
@@ -107,8 +111,8 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   await expect.poll(() => isDirectory(secondHome!.folderPath!)).toBe(false);
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 
-  // The new chat that opens after the delete stays in the Chats group and
-  // sends from a folder that still exists.
+  // The open new chat stays in the Chats group and sends from a folder that
+  // still exists.
   await expect(page.getByRole("button", { name: "Choose a workspace" })).toHaveText("No workspace");
   await sendAndWaitForReply(page, "Suggest a book", userDataDir, 2);
   const third = (await regularChats(userDataDir)).find((chat) => chat.id !== first.id)!;

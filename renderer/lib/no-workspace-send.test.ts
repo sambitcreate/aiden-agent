@@ -46,22 +46,30 @@ test("the Chats group is represented by the default home, else the oldest hidden
   assert.deepEqual(workspaceChoices([project, record("a", 5, true)]).map((entry) => entry.id), ["project"]);
 });
 
-function draftMover() {
+type TestDraft = { chat: { id: string; workspaceId: string }; sending: boolean };
+
+/** A draft store fake: moves are applied to the drafts so later reads see them. */
+function draftMover(drafts: TestDraft[], createNoWorkspace?: () => Promise<{ id: string }>) {
   const moves: Record<string, string> = {};
   let created = 0;
   return {
     moves,
     created: () => created,
     api: {
-      createNoWorkspace: async () => ({ id: `fresh-${++created}` }),
+      createNoWorkspace: createNoWorkspace ?? (async () => ({ id: `fresh-${++created}` })),
+      draftWorkspaceId: (draftId: string) => {
+        const found = drafts.find((entry) => entry.chat.id === draftId);
+        return found && !found.sending ? found.chat.workspaceId : undefined;
+      },
       moveDraft: (draftId: string, workspaceId: string) => {
         moves[draftId] = workspaceId;
+        drafts.find((entry) => entry.chat.id === draftId)!.chat.workspaceId = workspaceId;
       },
     },
   };
 }
 
-const draft = (id: string, workspaceId: string, sending = false) => ({ chat: { id, workspaceId }, sending });
+const draft = (id: string, workspaceId: string, sending = false): TestDraft => ({ chat: { id, workspaceId }, sending });
 
 test("deleting a No workspace chat moves drafts aimed at its released folder to the Chats home", async () => {
   const before = new Set(["default", "hidden-a"]);
@@ -69,13 +77,9 @@ test("deleting a No workspace chat moves drafts aimed at its released folder to 
   const released = releasedNoWorkspaceIds(before, after);
   assert.deepEqual([...released], ["hidden-a"]);
 
-  const mover = draftMover();
-  const home = await rehomeStrandedNoWorkspaceDrafts(
-    mover.api,
-    [draft("fork-of-deleted", "hidden-a"), draft("project-draft", "project"), draft("saving", "hidden-a", true)],
-    released,
-    after,
-  );
+  const drafts = [draft("fork-of-deleted", "hidden-a"), draft("project-draft", "project"), draft("saving", "hidden-a", true)];
+  const mover = draftMover(drafts);
+  const home = await rehomeStrandedNoWorkspaceDrafts(mover.api, drafts, released, after);
   assert.equal(home, "default");
   assert.deepEqual(mover.moves, { "fork-of-deleted": "default" }, "other drafts and a saving draft stay put");
   assert.equal(mover.created(), 0);
@@ -84,15 +88,33 @@ test("deleting a No workspace chat moves drafts aimed at its released folder to 
 test("a stranded draft gets a new hidden folder when no Chats home is left", async () => {
   const after = [record("project", 1)];
   const released = releasedNoWorkspaceIds(new Set(["hidden-a"]), after);
-  const mover = draftMover();
-  assert.equal(await rehomeStrandedNoWorkspaceDrafts(mover.api, [draft("d", "hidden-a")], released, after), "fresh-1");
+  const drafts = [draft("d", "hidden-a")];
+  const mover = draftMover(drafts);
+  assert.equal(await rehomeStrandedNoWorkspaceDrafts(mover.api, drafts, released, after), "fresh-1");
   assert.deepEqual(mover.moves, { d: "fresh-1" });
 });
 
 test("releasing a folder no draft uses makes nothing new", async () => {
   const after = [record("project", 1)];
-  const mover = draftMover();
+  const drafts = [draft("d", "project")];
+  const mover = draftMover(drafts);
   const released = releasedNoWorkspaceIds(new Set(["hidden-a"]), after);
-  assert.equal(await rehomeStrandedNoWorkspaceDrafts(mover.api, [draft("d", "project")], released, after), undefined);
+  assert.equal(await rehomeStrandedNoWorkspaceDrafts(mover.api, drafts, released, after), undefined);
   assert.equal(mover.created(), 0);
+});
+
+test("a draft moved to a project while its new Chats folder is being made keeps the project", async () => {
+  const after = [record("project", 1)];
+  const released = releasedNoWorkspaceIds(new Set(["hidden-a"]), after);
+  const drafts = [draft("picked", "hidden-a"), draft("left", "hidden-a")];
+  let finishCreate!: (workspace: { id: string }) => void;
+  const mover = draftMover(drafts, () => new Promise((resolve) => (finishCreate = resolve)));
+  const rehoming = rehomeStrandedNoWorkspaceDrafts(mover.api, drafts, released, after);
+  drafts[0]!.chat.workspaceId = "project";
+  finishCreate({ id: "replacement" });
+  assert.equal(await rehoming, "replacement");
+  assert.deepEqual(
+    drafts.map((entry) => entry.chat.workspaceId),
+    ["project", "replacement"],
+  );
 });

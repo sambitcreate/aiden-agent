@@ -33,6 +33,8 @@ export function releasedNoWorkspaceIds(
 
 export interface StrandedDraftApi {
   createNoWorkspace(): Promise<Pick<Workspace, "id">>;
+  /** The draft's workspace now, or undefined once it is sending or gone. */
+  draftWorkspaceId(draftId: string): string | undefined;
   moveDraft(draftId: string, workspaceId: string): void;
 }
 
@@ -40,7 +42,8 @@ export interface StrandedDraftApi {
  * Deleting a No workspace chat releases its hidden folder, but a draft can
  * still aim at it (a fork of that chat, a new agent opened in it). Those drafts
  * move to the Chats group's home, made when none is left, so their first send
- * reaches a real folder. Returns that home, or undefined when no draft moved.
+ * reaches a real folder. A draft moved elsewhere while the home was being
+ * made keeps that choice. Returns the home, or undefined when no draft moved.
  */
 export async function rehomeStrandedNoWorkspaceDrafts(
   api: StrandedDraftApi,
@@ -53,6 +56,12 @@ export async function rehomeStrandedNoWorkspaceDrafts(
   );
   if (stranded.length === 0) return undefined;
   const home = noWorkspaceHome(workspaces)?.id ?? (await api.createNoWorkspace()).id;
-  for (const draft of stranded) api.moveDraft(draft.chat.id, home);
-  return home;
+  let moved = false;
+  for (const draft of stranded) {
+    const current = api.draftWorkspaceId(draft.chat.id);
+    if (current === undefined || !released.has(current)) continue;
+    api.moveDraft(draft.chat.id, home);
+    moved = true;
+  }
+  return moved ? home : undefined;
 }
