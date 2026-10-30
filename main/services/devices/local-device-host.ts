@@ -6,7 +6,7 @@
  * daemon in HTTP mode under an Aiden-owned state directory. Both are lazy:
  * the device service asks for explicit consent before calling `ensureReady`.
  */
-import { spawn as nodeSpawn } from "node:child_process";
+import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { access, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -50,6 +50,7 @@ const HUB_RESTART_MIN_DELAY_MS = 1_000;
 const DEFAULT_RUN_TIMEOUT_MS = 20_000;
 const DAEMON_HEALTH_TIMEOUT_MS = 2_000;
 const DAEMON_STOP_TIMEOUT_MS = 10_000;
+const PROCESS_FIELD_TIMEOUT_MS = 2_000;
 
 export const NPM_REQUIRED_REASON =
   "Node.js 22 or newer and npm are needed to install the simulator helpers. Install Node.js, then try again.";
@@ -83,6 +84,11 @@ export interface LocalDeviceHostDeps {
   now(): number;
   isProcessAlive(pid: number): boolean;
   kill(pid: number, signal: NodeJS.Signals): void;
+  /**
+   * One `ps -o <field>=` value for a pid, or null. Synchronous and bounded, so
+   * it works after quit has refused helper commands and cannot outlive Aiden.
+   */
+  readProcessField(pid: number, field: "command" | "lstart"): string | null;
   /** Resolves the user's npm only when an install is needed; null means npm was not found. */
   resolveNpmRunner(): Promise<NpmRunner | null>;
   /** Filesystem probes for Android SDK discovery. Default to the real filesystem. */
@@ -130,6 +136,21 @@ function parseHubStateFile(text: string): HubStateFile | null {
       Number.isInteger(value.port) &&
       typeof value.entryPath === "string"
       ? { pid: value.pid!, port: value.port!, entryPath: value.entryPath }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The identity agent-device records for its daemon: the pid and its `ps -o lstart=` start time. */
+function parseDaemonProcess(text: string): { pid: number; processStartTime: string | null } | null {
+  try {
+    const value = JSON.parse(text) as { pid?: unknown; processStartTime?: unknown };
+    return Number.isInteger(value.pid) && (value.pid as number) > 0
+      ? {
+          pid: value.pid as number,
+          processStartTime: typeof value.processStartTime === "string" ? value.processStartTime.trim() : null,
+        }
       : null;
   } catch {
     return null;
@@ -554,8 +575,34 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
   }
 
   /**
+   * Sends SIGTERM straight to the daemon `daemon.json` records, without a
+   * helper process, but only while that pid is still the daemon: its command
+   * line runs a script from Aiden's agent-device install, and its start time
+   * matches the one agent-device recorded (when it recorded one). A reused pid
+   * fails one of those checks and is left alone.
+   */
+  async function terminateRecordedDaemon(): Promise<void> {
+    const recorded = parseDaemonProcess(
+      await readFile(path.join(agentStateDir, "daemon.json"), "utf8").catch(() => ""),
+    );
+    if (!recorded || !deps.isProcessAlive(recorded.pid)) return;
+    const toolsDir = path.join(deps.baseDir, "tools", AGENT_DEVICE.name);
+    // Node runs the daemon script by its real path, so accept either spelling of the install.
+    const toolsDirs = [toolsDir, await realPath(toolsDir)].filter((dir): dir is string => !!dir);
+    const command = deps.readProcessField(recorded.pid, "command");
+    if (!command || !toolsDirs.some((dir) => command.includes(`${dir}${path.sep}`))) return;
+    if (recorded.processStartTime !== null && deps.readProcessField(recorded.pid, "lstart") !== recorded.processStartTime) {
+      return;
+    }
+    deps.kill(recorded.pid, "SIGTERM");
+  }
+
+  /**
    * Stops the daemon, including one a previous Aiden left running: it has no
-   * idle timeout, so a leftover `daemon.json` means a live token.
+   * idle timeout, so a leftover `daemon.json` means a live token. When
+   * `daemon stop` fails, or quit refuses or ends it, the daemon is signalled
+   * directly instead: a healthy leftover daemon is otherwise reused on the
+   * next launch, never stopped.
    */
   async function stopAgent(): Promise<void> {
     const endpoint = agentDevice;
@@ -567,17 +614,20 @@ export function createLocalDeviceHost(deps: LocalDeviceHostDeps): DeviceHost {
       if (!(await isToolInstalled(deps.baseDir, AGENT_DEVICE))) return;
       entryPath = deviceToolPaths(deps.baseDir, AGENT_DEVICE).entryPath;
     }
+    let stoppedByHelper = false;
     try {
       const runtime = nodePath ?? await deps.resolveNodePath();
       nodePath = runtime;
-      await deps.runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
+      const result = await deps.runCommand(runtime, [entryPath, "daemon", "stop", "--state-dir", agentStateDir], {
         timeoutMs: DAEMON_STOP_TIMEOUT_MS,
         env: agentEnv(),
       });
+      stoppedByHelper = result.code === 0;
     } catch {
       // Discovery and daemon stop are both best effort. Revocation/removal must
       // still clear token configs, close the proxy and remove installed files.
     }
+    if (!stoppedByHelper) await terminateRecordedDaemon().catch(() => undefined);
   }
 
   return {
@@ -682,6 +732,19 @@ export function defaultLocalDeviceHostDeps(
         // Already gone.
       }
     },
+    readProcessField: (pid, field) => {
+      try {
+        const value = execFileSync("/bin/ps", ["-p", String(pid), "-o", `${field}=`], {
+          encoding: "utf8",
+          env: options.env ?? process.env,
+          stdio: ["ignore", "pipe", "ignore"],
+          timeout: PROCESS_FIELD_TIMEOUT_MS,
+        }).trim();
+        return value || null;
+      } catch {
+        return null;
+      }
+    },
   };
 }
 
@@ -698,8 +761,9 @@ let commandsCancelledForQuit = false;
  * afterwards. Quit calls it when the Devices budget runs out first: the
  * shutdown chain keeps running past the deadline (recording waits, SSH, then
  * `daemon stop`), so a command it starts later would otherwise outlive the app.
- * A refused `daemon stop` leaves `daemon.json` behind, which the next launch's
- * stop reaps. Returns how many running commands were signalled.
+ * When `daemon stop` is refused or ended this way, the host's `stopAgent`
+ * signals the recorded daemon itself after checking its identity. Returns how
+ * many running commands were signalled.
  */
 export function terminateRunningDeviceCommands(): number {
   commandsCancelledForQuit = true;

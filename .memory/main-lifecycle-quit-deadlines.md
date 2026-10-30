@@ -18,8 +18,15 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   helper command `runChildCommand` still has running (the same fallback their
   own timeouts apply) and refuses every later one (code 124, never spawned):
   the shutdown chain keeps going past the deadline and could otherwise start
-  `daemon stop` ~9 s in, after the scan. A refused `daemon stop` leaves
-  `daemon.json`, which the next launch's `stopAgent` reaps. Raising the budget
+  `daemon stop` ~9 s in, after the scan. A refused (or signalled) `daemon
+  stop` is not left to the next launch: that launch reuses a healthy daemon
+  and never stops it, and the daemon has no idle timeout. Instead `stopAgent`
+  then SIGTERMs the pid in `daemon.json` directly from main, with no helper
+  process, only after a synchronous, 2 s-bounded `/bin/ps` check that its
+  command line runs a script under Aiden's `tools/agent-device` install and
+  its `lstart` matches the recorded `processStartTime` (agent-device 0.21.12's
+  own identity check). No SIGKILL escalation. This only helps if the shutdown
+  chain reaches `stopAgent` before the process exits. Raising the budget
   instead would push the hard ceiling past ~54.5 s.
 - Parent generations share 8 s between the 6 s generation grace and Gemini
   context-cache deletes (8 s request timeout each). A slow delete reports the
