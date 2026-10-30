@@ -30,13 +30,17 @@ export function KeyCombo({
   range?: boolean;
   platform?: KeyboardPlatform;
 }) {
-  const chips = (list: readonly string[], separator: string) =>
-    list.map((key, index) => (
-      <React.Fragment key={`${key}-${index}`}>
-        {index > 0 ? <span aria-hidden="true">{separator}</span> : null}
-        <Kbd className="text-primary">{prettyAcceleratorForPlatform(key, platform)}</Kbd>
-      </React.Fragment>
-    ));
+  // Each key group stays on one line; only the "or" alternative wraps.
+  const chips = (list: readonly string[], separator: string) => (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      {list.map((key, index) => (
+        <React.Fragment key={`${key}-${index}`}>
+          {index > 0 ? <span aria-hidden="true">{separator}</span> : null}
+          <Kbd className="text-primary">{prettyAcceleratorForPlatform(key, platform)}</Kbd>
+        </React.Fragment>
+      ))}
+    </span>
+  );
   // Long combos wrap onto a second line rather than widen a narrow window.
   return (
     <span className="inline-flex max-w-[60%] flex-wrap items-center justify-end gap-1 text-mini text-tertiary">
