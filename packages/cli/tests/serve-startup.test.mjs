@@ -175,7 +175,7 @@ test("Tailscale pairing on a fresh LAN profile adds Tailscale and connects Serve
 test("Tailscale pairing leaves foreign routes alone and names the setup step instead of a bare retry", async () => {
   const api = await import("../dist/parity-test-api.js");
   const conflict = tailscalePairingDouble({ connectError: "tailscale_route_conflict" });
-  await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
+  await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote mode both.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
   assert.deepEqual(conflict.calls, [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]], "no pairing window, and the added mode is put back");
 
   const denied = tailscalePairingDouble({ deniedAfterConnect: true });
