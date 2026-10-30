@@ -1,6 +1,6 @@
 # Usage data and crash reports
 
-Aiden's desktop app sends anonymous usage data and crash reports so we can see how many people use it, which big features they use, and what breaks. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
+Aiden's desktop app sends anonymous usage data so we can see how many people use it. This release sends only the app lifecycle events below; feature-use events and crash reports, which show which big features people use and what breaks, arrive in later releases. This page is the reference for what is sent and how to turn it off. The design and rollout plan is [`plans/posthog-product-analytics-plan.md`](plans/posthog-product-analytics-plan.md).
 
 ## What is sent
 

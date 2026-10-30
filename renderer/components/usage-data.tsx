@@ -80,7 +80,7 @@ function describeProperty(property: AnalyticsPropertyView): string {
           ? "a number"
           : property.kind === "version"
             ? "a version number"
-            : "a built-in Aiden id, otherwise “custom”";
+            : "an id from Aiden’s built-in lists, or “custom” for anything you added";
   return property.optional ? `${value}, when it applies` : value;
 }
 
@@ -156,7 +156,7 @@ export function UsageDataSheet({
       open={open}
       onOpenChange={onOpenChange}
       title="What’s sent"
-      description="Aiden sends only these events and fields, with a random install ID that isn’t tied to you. Your IP address is discarded."
+      description="Aiden can send only these events and fields, with a random install ID that isn’t tied to you. This release sends the app lifecycle events; feature use and crash reports arrive later. Your IP address is discarded."
       confirmHidden
       size="large"
       layer={layer}
@@ -318,8 +318,8 @@ export function UsageDataSettings() {
         label={USAGE_DATA_LABEL}
         description={
           <>
-            Counts of app launches and the features you use, plus crash reports, with a random install ID. Never your
-            chats, files, keys or paths.
+            App launches, daily use, setup and updates, with a random install ID. Feature use and crash reports arrive
+            in later releases. Never your chats, files, keys or paths.
             {caption ? <span className="mt-1 block text-tertiary">{caption}</span> : null}
           </>
         }
