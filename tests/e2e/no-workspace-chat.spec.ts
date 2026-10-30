@@ -6,8 +6,14 @@ import { expect, finishLmStudioOnboarding, test } from "./fixtures";
 type StoredWorkspace = { id: string; name: string; folderPath?: string; permission?: string; noWorkspace?: true };
 type ChatIndexEntry = { id: string; title: string; workspaceId?: string; botId?: string };
 
-async function workspaces(userDataDir: string): Promise<StoredWorkspace[]> {
-  return (JSON.parse(await readFile(path.join(userDataDir, "config.json"), "utf8")) as { workspaces: StoredWorkspace[] }).workspaces;
+async function workspaces(page: Page): Promise<StoredWorkspace[]> {
+  return page.evaluate(() =>
+    (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc.invoke<StoredWorkspace[]>("workspaces:list"),
+  );
 }
 
 async function regularChats(userDataDir: string): Promise<ChatIndexEntry[]> {
@@ -16,6 +22,18 @@ async function regularChats(userDataDir: string): Promise<ChatIndexEntry[]> {
     return index.filter((chat) => !chat.botId && chat.workspaceId !== "assistant");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function savedReplies(userDataDir: string, chatId: string): Promise<number> {
+  try {
+    const saved = JSON.parse(await readFile(path.join(userDataDir, "chats", `${chatId}.json`), "utf8")) as {
+      messages: Array<{ role: string }>;
+    };
+    return saved.messages.filter((message) => message.role === "assistant").length;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw error;
   }
 }
@@ -43,23 +61,18 @@ test("No workspace chats each run in their own hidden folder and share one Chats
 
   await sendAndWaitForReply(page, "Plan a weekend trip", userDataDir, 1);
   const [first] = await regularChats(userDataDir);
-  const firstHome = (await workspaces(userDataDir)).find((workspace) => workspace.id === first.workspaceId);
+  const firstHome = (await workspaces(page)).find((workspace) => workspace.id === first.workspaceId);
   expect(firstHome?.noWorkspace).toBe(true);
   expect(path.dirname(firstHome!.folderPath!)).toBe(path.join(userDataDir, "chat-folders"));
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 
   // A hidden folder that went missing is made again on the next message.
+  // Wait for the first reply to finish: removing the folder mid-reply stops it.
+  await expect.poll(() => savedReplies(userDataDir, first.id), { timeout: 20_000 }).toBe(1);
   await rm(firstHome!.folderPath!, { recursive: true });
   await page.locator("textarea").fill("And a packing list");
   await page.locator("textarea").press("Enter");
-  await expect
-    .poll(async () => {
-      const saved = JSON.parse(await readFile(path.join(userDataDir, "chats", `${first.id}.json`), "utf8")) as {
-        messages: Array<{ role: string }>;
-      };
-      return saved.messages.filter((message) => message.role === "assistant").length;
-    }, { timeout: 20_000 })
-    .toBe(2);
+  await expect.poll(() => savedReplies(userDataDir, first.id), { timeout: 20_000 }).toBe(2);
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 
   // A new chat from the Chats group gets a folder of its own, and the access
@@ -74,11 +87,11 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   await expect(page.getByRole("button", { name: /^Workspace access: No access/u })).toBeVisible();
   await sendAndWaitForReply(page, "Draft a soup recipe", userDataDir, 2);
   const second = (await regularChats(userDataDir)).find((chat) => chat.id !== first.id)!;
-  const secondHome = (await workspaces(userDataDir)).find((workspace) => workspace.id === second.workspaceId);
+  const secondHome = (await workspaces(page)).find((workspace) => workspace.id === second.workspaceId);
   expect(secondHome?.noWorkspace).toBe(true);
   expect(secondHome!.folderPath).not.toBe(firstHome!.folderPath);
   expect(secondHome!.permission).toBe("none");
-  expect((await workspaces(userDataDir)).find((workspace) => workspace.id === firstHome!.id)?.permission).toBe("ask");
+  expect((await workspaces(page)).find((workspace) => workspace.id === firstHome!.id)?.permission).toBe("ask");
 
   // One Chats group lists both, and the hidden folders never show as workspace rows.
   await expect(page.locator("[data-sidebar]").getByRole("button", { name: /^(Collapse|Expand) Chats$/u })).toHaveCount(1);
@@ -90,7 +103,7 @@ test("No workspace chats each run in their own hidden folder and share one Chats
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menu").getByRole("menuitem", { name: "Delete", exact: true }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
-  await expect.poll(async () => (await workspaces(userDataDir)).some((workspace) => workspace.id === secondHome!.id)).toBe(false);
+  await expect.poll(async () => (await workspaces(page)).some((workspace) => workspace.id === secondHome!.id)).toBe(false);
   await expect.poll(() => isDirectory(secondHome!.folderPath!)).toBe(false);
   expect(await isDirectory(firstHome!.folderPath!)).toBe(true);
 });
@@ -109,8 +122,8 @@ test("an older install's folderless default workspace becomes the home of its ch
     );
     await writeFile(configPath, JSON.stringify(config));
   });
-  await expect.poll(async () => (await workspaces(aiden.userDataDir)).find((workspace) => workspace.id === "default")?.noWorkspace).toBe(true);
-  const home = (await workspaces(aiden.userDataDir)).find((workspace) => workspace.id === "default")!;
+  await expect.poll(async () => (await workspaces(page)).find((workspace) => workspace.id === "default")?.noWorkspace).toBe(true);
+  const home = (await workspaces(page)).find((workspace) => workspace.id === "default")!;
   expect(await isDirectory(home.folderPath!)).toBe(true);
   expect((await regularChats(aiden.userDataDir)).map((entry) => entry.workspaceId)).toEqual(["default"]);
   await expect(page.locator("[data-sidebar]").getByRole("button", { name: /^(Collapse|Expand) Chats$/u })).toBeVisible();
