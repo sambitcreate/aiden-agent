@@ -170,7 +170,8 @@ export async function shutdownDevices(): Promise<void> {
 /**
  * Quit's Devices budget is shorter than the recordings, SSH and `daemon stop`
  * timeouts added together. When it runs out first, this applies the helpers'
- * own timeout fallback (SIGTERM) at once, so none is left running after quit.
+ * own timeout fallback (SIGTERM) at once and refuses any the still-running
+ * shutdown chain starts afterwards, so none is left running after quit.
  */
 export function terminateDeviceHelperCommands(): void {
   terminateRunningDeviceCommands();

@@ -972,3 +972,27 @@ test("quit ends a helper command still running before its own timeout, and only 
   assert.ok(Date.now() - startedAt < 10_000, "the held command ended long before its 60 s timeout");
   assert.equal(terminateRunningDeviceCommands(), 0);
 });
+
+// Quit's cancellation is permanent for the process, so this stays the last test that runs a real command.
+test("after quit's deadline cleanup, a helper command the shutdown chain starts later never runs", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "aiden-device-quit-"));
+  try {
+    terminateRunningDeviceCommands();
+    const marker = path.join(dir, "daemon-stop-ran");
+    const startedAt = Date.now();
+    // Stands in for the `daemon stop` that device-service reaches only after the recordings and SSH waits.
+    const late = await runChildCommand(
+      process.execPath,
+      ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran"); setInterval(() => {}, 1000)`],
+      { env: process.env, timeoutMs: 60_000 },
+    );
+    assert.notEqual(late.code, 0);
+    assert.ok(Date.now() - startedAt < 5_000, "the late command was refused rather than left running until its timeout");
+    // Wait past a process start so a spawned child would have written the marker.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
+    assert.equal(terminateRunningDeviceCommands(), 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

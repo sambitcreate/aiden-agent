@@ -16,8 +16,11 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   8 s (recordings 2 s + SSH 5 s + local `daemon stop` 10 s exceed it). When the
   devices step times out, `terminateDeviceHelperCommands()` SIGTERMs every
   helper command `runChildCommand` still has running (the same fallback their
-  own timeouts apply), so none outlives quit. Raising the budget instead would
-  push the hard ceiling past ~54.5 s.
+  own timeouts apply) and refuses every later one (code 124, never spawned):
+  the shutdown chain keeps going past the deadline and could otherwise start
+  `daemon stop` ~9 s in, after the scan. A refused `daemon stop` leaves
+  `daemon.json`, which the next launch's `stopAgent` reaps. Raising the budget
+  instead would push the hard ceiling past ~54.5 s.
 - Parent generations share 8 s between the 6 s generation grace and Gemini
   context-cache deletes (8 s request timeout each). A slow delete reports the
   step unsettled, which skips the soak receipt; cache entries expire on their

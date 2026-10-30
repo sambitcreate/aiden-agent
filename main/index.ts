@@ -392,7 +392,8 @@ const SHUTDOWN_BUDGET_MS = {
   botComputers: 5_000,
   // Recordings get 2 s, SSH hosts 5 s and the local `daemon stop` helper 10 s.
   // This deadline caps the total; helper commands still running when it
-  // expires get their timeout's SIGTERM at once (terminateDeviceHelperCommands).
+  // expires get their timeout's SIGTERM at once, and later ones are refused
+  // (terminateDeviceHelperCommands).
   devices: 8_000,
   mcpServers: 3_000,
   // flushSubagentRuntimeDiagnostics + flushDiagnosticJournal + flushDiagnosticHealth.

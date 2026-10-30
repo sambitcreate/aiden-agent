@@ -689,13 +689,20 @@ const OUTPUT_LIMIT = 4 * 1024 * 1024;
 
 /** Commands still running, so quit can end them when its deadline arrives before their own timeouts. */
 const runningCommands = new Set<ReturnType<typeof nodeSpawn>>();
+/** Set once quit's Devices deadline has passed: no helper command starts after that. */
+let commandsCancelledForQuit = false;
 
 /**
  * Sends SIGTERM to every helper command still running, the same fallback each
- * command's own timeout applies. Quit calls it when the Devices budget runs out
- * first, so a held `daemon stop` never outlives the app. Returns how many were signalled.
+ * command's own timeout applies, and refuses every helper command started
+ * afterwards. Quit calls it when the Devices budget runs out first: the
+ * shutdown chain keeps running past the deadline (recording waits, SSH, then
+ * `daemon stop`), so a command it starts later would otherwise outlive the app.
+ * A refused `daemon stop` leaves `daemon.json` behind, which the next launch's
+ * stop reaps. Returns how many running commands were signalled.
  */
 export function terminateRunningDeviceCommands(): number {
+  commandsCancelledForQuit = true;
   const children = [...runningCommands];
   for (const child of children) child.kill("SIGTERM");
   return children.length;
@@ -706,6 +713,9 @@ export function runChildCommand(
   args: readonly string[],
   options: Omit<DeviceCommandOptions, "env"> & { env: NodeJS.ProcessEnv },
 ): Promise<DeviceCommandResult> {
+  if (commandsCancelledForQuit) {
+    return Promise.resolve({ stdout: "", stderr: "Aiden is quitting, so the device helper command did not start.", code: 124 });
+  }
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
