@@ -1063,7 +1063,11 @@ test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show
       },
       [menu, label] as const,
     );
-  expect(await menuItem("Help", "Keyboard Shortcuts")).toEqual({ enabled: true, accelerator: "CommandOrControl+/" });
+  // The menu shows Aiden's ⌘/ (Ctrl+/ off a Mac).
+  expect(await menuItem("Help", "Keyboard Shortcuts")).toEqual({
+    enabled: true,
+    accelerator: process.platform === "darwin" ? "Command+/" : "CommandOrControl+/",
+  });
   expect(await menuItem("Go", "Back")).not.toBeNull();
   await expect.poll(async () => (await menuItem("Chat", "Find in Chat"))?.enabled).toBe(true);
   // No reply is coming, so there's nothing to stop.
