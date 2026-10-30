@@ -48,7 +48,7 @@ import {
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
-import { NO_WORKSPACE_LABEL, noWorkspaceHome } from "../lib/no-workspace";
+import { NO_WORKSPACE_LABEL, isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { useOpenWorkspacePathRow, useWorkspacePathIntake } from "../lib/use-workspace-path-intake";
 import type { WorkspacePathRow } from "../lib/workspace-menu";
 import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
@@ -274,6 +274,7 @@ export function AppCommandPalette({
     [activeId, allChats.data, workspaces],
   );
   const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
+  const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
   const noWorkspaceResult = staticPaletteResult("No workspace just chat global settings");
   const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
   const cloneResult = staticPaletteResult("Clone repository… git url github");
@@ -900,6 +901,7 @@ export function AppCommandPalette({
                     <PaletteResultItem
                       result={noWorkspaceResult}
                       onSelect={() => startChatIn(noWorkspaceHomeId)}
+                      aria-current={noWorkspaceCurrent ? "true" : undefined}
                       className="mt-1 min-h-11 px-3"
                     >
                       <MessageCircle className="size-4 shrink-0 text-secondary" />
@@ -909,6 +911,9 @@ export function AppCommandPalette({
                           Just chat, with your global settings
                         </span>
                       </span>
+                      {noWorkspaceCurrent ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
                     </PaletteResultItem>
                   ) : null}
                   <PaletteResultItem
