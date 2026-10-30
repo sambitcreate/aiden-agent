@@ -2073,11 +2073,31 @@ async function requestConnection(
   return { created: created.body, keys, requesterNonce, hostNonce: revealed.body.hostNonce, secret };
 }
 
+test("unknown LAN requesters need a current host-opened window and old requests cannot survive renewal", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const port = app.persisted().lanPort;
+    const body = { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey };
+    const refused = await insecureJson<{ error: { code: string } }>(port, "/api/aiden/v1/pairing/requests", { method: "POST", body });
+    assert.equal(refused.body.error.code, "pairing_closed");
+    const first = await app.service.beginPairing("lan");
+    const request = await requestConnection(insecureJson, port, "Desk Mac");
+    await app.service.closePairing(first.sessionId);
+    await app.service.beginPairing("lan");
+    assert.equal((await app.service.respondPairingRequest(request.created.requestId, "allow"))?.state, "cancelled");
+    assert.equal((await app.state.listDevices()).length, 0);
+    assert.deepEqual(app.service.listPairingRequests(), []);
+  } finally { await app.cleanup(); }
+});
+
 test("an approved LAN connection request seals a pinned credential that authenticates /server", async () => {
   const app = await fixture({ pairingRequests: {} });
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     assert.equal((await app.service.status()).acceptPairingRequests, true);
     const port = app.persisted().lanPort;
     const identity = await loadOrCreateAidenRemoteTlsIdentity({
@@ -2141,6 +2161,7 @@ test("turning connection requests off persists, cancels open requests and refuse
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     const port = app.persisted().lanPort;
     const open = await requestConnection(insecureJson, port, "Desk Mac");
     assert.equal(app.service.listPairingRequests().length, 1);
@@ -2192,6 +2213,7 @@ test("turning Remote access off revokes an approval nobody collected", async () 
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     const request = await requestConnection(insecureJson, app.persisted().lanPort, "Desk Mac");
     await app.service.respondPairingRequest(request.created.requestId, "allow");
     const [issued] = await app.state.listDevices();
@@ -2226,6 +2248,7 @@ test("Tailscale connection requests seal the Serve identity and reuse a recent p
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("tailscale");
     const loopback = app.persisted().lanPort + 1;
     const first = await requestConnection(plainJson, loopback, "Travel MacBook");
     await requestConnection(plainJson, loopback, "Travel MacBook");

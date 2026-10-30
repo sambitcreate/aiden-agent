@@ -60,6 +60,8 @@ async function flush(): Promise<void> {
 
 function harness(options: {
   accepting?: () => boolean;
+  admission?: () => { id: string; expiresAt: number } | undefined;
+  resolveTransport?: () => Promise<AidenPairingRequestTransportIdentity>;
   displayName?: () => string;
   hostCapabilities?: boolean;
 } = {}) {
@@ -91,7 +93,8 @@ function harness(options: {
     instanceId: stored.instanceId,
     devices: registry,
     accepting: options.accepting ?? (() => true),
-    resolveTransport: async () => IDENTITY,
+    admission: options.admission ?? (() => ({ id: "test-host-window", expiresAt: clock.now() + 300_000 })),
+    resolveTransport: options.resolveTransport ?? (async () => IDENTITY),
     displayName: options.displayName ?? (() => "Studio Mac"),
     botCapabilitiesSupported: () => true,
     hostCapabilitiesSupported: () => options.hostCapabilities ?? true,
@@ -158,6 +161,84 @@ function assertRemoteError(code: string, status?: number) {
     return true;
   };
 }
+
+test("a host window is required and renewal cannot admit an in-flight create", async () => {
+  let window: string | undefined;
+  let resume!: () => void;
+  const transport = new Promise<void>((resolve) => { resume = resolve; });
+  const { service, liveDevices } = harness({
+    admission: () => window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined,
+    resolveTransport: async () => { await transport; return IDENTITY; },
+  });
+  assert.equal(service.accepting(), false);
+  const body = { deviceName: "Desk", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey };
+  await assert.rejects(service.create(body, DEFAULT_CONTEXT), assertRemoteError("pairing_closed", 403));
+  window = "first";
+  const creating = service.create(body, DEFAULT_CONTEXT);
+  window = "second";
+  resume();
+  await assert.rejects(creating, assertRemoteError("pairing_closed", 403));
+  assert.deepEqual(service.list(), []);
+  assert.equal(liveDevices().length, 0);
+});
+
+for (const boundary of ["close", "renew", "expire"] as const) {
+  test(`host window ${boundary} fences reveal, Allow and pending credential publication`, async () => {
+    let window: string | undefined = "first";
+    const { service, holdSaves, clock, liveDevices } = harness({ admission: () => window ? { id: window, expiresAt: Number.MAX_SAFE_INTEGER } : undefined });
+    const { created } = await open(service);
+    const release = holdSaves();
+    const deciding = service.respond(created.requestId, "allow");
+    await flush();
+    if (boundary === "expire") {
+      // The Add device window expires earlier than this request's own TTL.
+      window = undefined;
+      await clock.advance(1);
+    } else window = boundary === "renew" ? "second" : undefined;
+    assert.deepEqual(service.list(), []);
+    release();
+    assert.equal((await deciding)?.state, "cancelled");
+    assert.equal(liveDevices().length, 0);
+    assert.equal((await service.poll(created.requestId, created.pollSecret)).envelope, undefined);
+    await assert.rejects(Promise.resolve().then(() => service.reveal(created.requestId, created.pollSecret, {
+      requesterNonce: randomBytes(32).toString("base64url"),
+    })));
+  });
+}
+
+test("the request expires with its host window even during long polling", async () => {
+  let expiresAt = Number.MAX_SAFE_INTEGER;
+  const { service, clock, liveDevices } = harness({ admission: () => ({ id: "first", expiresAt }) });
+  expiresAt = clock.now() + 100;
+  const { created } = await open(service);
+  assert.equal(Date.parse(created.expiresAt), expiresAt);
+  const polling = service.poll(created.requestId, created.pollSecret);
+  await clock.advance(100);
+  assert.equal((await polling).state, "expired");
+  assert.deepEqual(service.list(), []);
+  assert.equal((await service.respond(created.requestId, "allow"))?.state, "expired");
+  assert.equal(liveDevices().length, 0);
+});
+
+test("expiry during envelope construction rolls back the credential before publishing a grant", async () => {
+  let expiresAt = Number.MAX_SAFE_INTEGER;
+  let advanceDuringSeal = false;
+  const { service, clock, liveDevices } = harness({
+    admission: () => ({ id: "first", expiresAt }),
+    displayName: () => {
+      if (advanceDuringSeal) clock.current = expiresAt;
+      return "Studio Mac";
+    },
+  });
+  expiresAt = clock.now() + 100;
+  const { created } = await open(service);
+  advanceDuringSeal = true;
+  assert.equal((await service.respond(created.requestId, "allow"))?.state, "cancelled");
+  assert.equal(liveDevices().length, 0);
+  const status = await service.poll(created.requestId, created.pollSecret);
+  assert.equal(status.state, "cancelled");
+  assert.equal(status.envelope, undefined);
+});
 
 test("an allowed request delivers the desktop exchange grants, sealed, and the credential authenticates", async () => {
   const { service, registry, stored } = harness();
