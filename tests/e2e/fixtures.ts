@@ -805,8 +805,14 @@ export async function chooseFolderlessWorkspace(page: Page, name = "Notes"): Pro
   await page.reload();
   const picker = page.getByRole("button", { name: "Choose a workspace" });
   await picker.click();
-  await page.getByRole("option", { name: new RegExp(`^${name}`, "u") }).click();
+  const option = page.getByRole("option", { name: new RegExp(`^${name}`, "u") });
+  await option.click();
   await expect(picker).toHaveText(name);
+  // Let the menu finish closing and the composer settle before the caller moves on.
+  await expect(option).toHaveCount(0);
+  await expect(page.getByText(`What should we build in ${name}?`)).toBeVisible();
+  await page.locator("textarea").focus();
+  await expect(page.locator("textarea")).toBeFocused();
 }
 
 /**
