@@ -106,12 +106,17 @@ fi
 export PATH=/opt/node22/bin:$PATH
 if [ "$(node --version)" != "v$NODE_VERSION" ]; then echo "NODE_VERSION_MISMATCH: $(node --version)"; exit 2; fi
 
-if [ ! -f /var/lib/aiden-e2e-apt-done ]; then
+APT_PACKAGES="xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11 build-essential python3 libnss3
+  libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 libxss1 libdrm2"
+APT_PACKAGES="$(echo $APT_PACKAGES)"
+# The marker records the installed list, so editing the list reinstalls in warm Spaces too.
+APT_MARKER=/var/lib/aiden-e2e-apt-packages
+if [ "$(cat "$APT_MARKER" 2>/dev/null)" != "$APT_PACKAGES" ]; then
   export DEBIAN_FRONTEND=noninteractive
+  # shellcheck disable=SC2086
   { run_fg sudo -E apt-get update -qq &&
-    run_fg sudo -E apt-get install -y -qq xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11 \
-      build-essential python3 libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64 libxss1 libdrm2 >/dev/null &&
-    sudo touch /var/lib/aiden-e2e-apt-done; } || { echo "APT_INSTALL_FAILED"; exit 2; }
+    run_fg sudo -E apt-get install -y -qq $APT_PACKAGES >/dev/null &&
+    echo "$APT_PACKAGES" | sudo tee "$APT_MARKER" >/dev/null; } || { echo "APT_INSTALL_FAILED"; exit 2; }
 fi
 
 mkdir -p ~/aiden-agent && cd ~/aiden-agent
