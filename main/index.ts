@@ -362,11 +362,13 @@ async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  llmClient.setQuitInProgress(true);
   if (!settingsPrepared) {
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
       shutdownStarted = false;
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
         "main",
@@ -780,8 +782,11 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       return false;
     }
     protectedAction = "quit";
+    // Set before the window closes, so a question or approval it withdraws stays saved for the next launch.
+    llmClient.setQuitInProgress(true);
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
     }

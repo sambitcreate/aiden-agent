@@ -9,6 +9,7 @@ import {
   mintSkillInvocationId,
   projectSkillCatalogEntry,
   resolveSkillCandidates,
+  SKILL_TOOL_NAME,
   skillToolKey,
   type ResolvedSkillCandidate,
   type SkillRegistryCandidate,
@@ -406,17 +407,58 @@ export function withoutSkills(
   });
 }
 
+/** The skills the model may load: the prompt listing and the `skill` tool share this set. */
+export function modelInvocableSkills(
+  snapshot: SkillRegistrySnapshot,
+  allowWorkspaceSkills = true,
+): RegisteredSkill[] {
+  return snapshot.available.filter(
+    (skill) => skill.modelInvocable !== false && (allowWorkspaceSkills || skill.source !== "workspace"),
+  );
+}
+
+/**
+ * The skill the `skill` tool's `name` argument means: its listed name (any
+ * case or Unicode form), else its internal tool key. A listed name always
+ * wins, so another skill's key can never shadow it. Undefined when none matches.
+ */
+export function findSkillByName<T extends Pick<RegisteredSkill, "name" | "toolKey">>(
+  skills: readonly T[],
+  requested: string,
+): T | undefined {
+  const value = requested.trim();
+  let canonical: string | undefined;
+  try {
+    canonical = canonicalSkillIdentity(value);
+  } catch {
+    canonical = undefined;
+  }
+  const byName = canonical === undefined ? undefined : skills.find((skill) => {
+    try {
+      return canonicalSkillIdentity(skill.name) === canonical;
+    } catch {
+      return false;
+    }
+  });
+  return byName ?? skills.find((skill) => skill.toolKey === value);
+}
+
+/** The internal key of the model-invocable skill `requested` names, if any. */
+export function skillToolKeyForName(snapshot: SkillRegistrySnapshot, requested: string): string | undefined {
+  return findSkillByName(modelInvocableSkills(snapshot), requested)?.toolKey;
+}
+
 export function formatAvailableSkills(
   snapshot: SkillRegistrySnapshot,
   allowedToolNames?: ReadonlySet<string>,
+  allowWorkspaceSkills = true,
 ): string | undefined {
-  const available = snapshot.available.filter(
-    (skill) => skill.modelInvocable !== false && (!allowedToolNames || allowedToolNames.has(skill.toolKey)),
-  );
+  if (allowedToolNames && !allowedToolNames.has(SKILL_TOOL_NAME)) return undefined;
+  const available = modelInvocableSkills(snapshot, allowWorkspaceSkills);
   if (available.length === 0) return undefined;
   return [
     "Skills provide specialized instructions and workflows for specific tasks.",
-    "When a request matches a skill's description, call its skill tool to load the instructions.",
+    `When a request matches a skill's description, call the ${SKILL_TOOL_NAME} tool with its name to load the instructions.`,
     "<available_skills>",
     ...available.flatMap((skill) => [
       "  <skill>",
@@ -424,7 +466,6 @@ export function formatAvailableSkills(
       ...(skill.description
         ? [`    <description>${escapeSkillXml(skill.description)}</description>`]
         : []),
-      `    <tool>${skill.toolKey}</tool>`,
       `    <source>${skill.source}</source>`,
       "  </skill>",
     ]),

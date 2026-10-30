@@ -68,7 +68,8 @@ import { botApplicationService } from "../services/bot-application-service-main.
 import { hostPlatformCapabilities } from "../services/host-platform-capabilities.js";
 import { piCompactionSessionStore } from "../services/pi-compaction-session-store.js";
 import { piRuntimeEffectStore } from "../services/pi-runtime-effect-store.js";
-import { chatReplyInterrupted } from "../services/interrupted-reply.js";
+import { chatReplyInterrupted, latestInterruptedRun } from "../services/interrupted-reply.js";
+import { interruptedWaits } from "../services/interrupted-waits-main.js";
 import { loadDurableTodoSnapshot } from "../services/rpiv-todo/snapshot.js";
 import {
   chatContextPressure,
@@ -200,6 +201,26 @@ export function registerChatHistoryHandlers(): void {
       // Unreadable run history only hides the Resume offer.
       return false;
     }
+  });
+
+  // Saved waits too old to offer leave the disk at launch.
+  void interruptedWaits.prune().catch(() => undefined);
+
+  // The questions or approvals the interrupted reply was waiting on, questions first.
+  ipcMain.handle("chats:interruptedWaits", async (_event, id: unknown) => {
+    const chatId = asString(id, "id");
+    try {
+      await piRuntimeEffectStore.initialize();
+      const run = await latestInterruptedRun(piRuntimeEffectStore, chatId);
+      return run ? await interruptedWaits.forRun(chatId, run.startedAt) : [];
+    } catch {
+      // Unreadable history only leaves the plain Resume card.
+      return [];
+    }
+  });
+
+  ipcMain.handle("chats:dismissInterruptedWait", async (_event, id: unknown, waitId: unknown) => {
+    await interruptedWaits.forget(asString(waitId, "waitId"), asString(id, "id"));
   });
 
   ipcMain.handle("chats:todoSnapshot", async (event, id: unknown) => {

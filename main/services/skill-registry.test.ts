@@ -3,12 +3,29 @@ import test from "node:test";
 import { SkillInvocationError } from "../../renderer/shared/slash-commands.js";
 import {
   formatAvailableSkills,
+  modelInvocableSkills,
   SkillRegistry,
   withoutSkills,
   workspaceSkillChoices,
   type SkillRegistryDependencies,
 } from "./skill-registry.js";
 import { buildSkillTools, piResourcesForSkillSnapshot } from "./skill-tools.js";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+
+/** Which of `names` the model can load through the one `skill` tool, by trying each. */
+async function loadableNames(tools: readonly AgentTool[], names: readonly string[]): Promise<string[]> {
+  const loaded: string[] = [];
+  for (const name of names) {
+    if (tools.length === 0) break;
+    try {
+      await tools[0]!.execute("probe", { name });
+      loaded.push(name);
+    } catch {
+      // Not loadable here.
+    }
+  }
+  return loaded;
+}
 import type { DiscoveredSkill, Skill, Workspace } from "./types.js";
 
 function workspace(id: string, folderPath = `/trusted/${id}`): Workspace {
@@ -213,7 +230,7 @@ test("the renderer catalog cap never suppresses internal tools or resolution", a
   assert.ok(snapshot.catalog.some((entry) => entry.name === "Workspace winner"));
   const winner = snapshot.available.find((skill) => skill.name === "Workspace winner");
   assert.ok(winner);
-  assert.ok(buildSkillTools(snapshot).some((tool) => tool.name === winner.toolKey));
+  assert.deepEqual(await loadableNames(buildSkillTools(snapshot), ["Workspace winner"]), ["Workspace winner"]);
   assert.equal(await h.registry.resolve("one", winner.invocationId), winner);
   assert.match(formatAvailableSkills(snapshot) ?? "", /Workspace winner/u);
 });
@@ -290,7 +307,6 @@ test("catalog projection and prompt never expose instructions or paths", async (
   assert.match(prompt, /Review &lt;carefully&gt;/u);
   assert.match(prompt, /Check A &amp; B/u);
   assert.doesNotMatch(prompt, /TOP SECRET|\/private\/secret/u);
-  assert.match(prompt, new RegExp(snapshot.available[0]!.toolKey, "u"));
   assert.equal(formatAvailableSkills(snapshot, new Set()), undefined);
 });
 
@@ -336,9 +352,12 @@ test("an effective per-generation No Access override withholds workspace skill t
   ]);
   const snapshot = await h.registry.snapshot("one");
   assert.deepEqual(
-    buildSkillTools(snapshot, false).map((tool) => tool.label),
+    await loadableNames(buildSkillTools(snapshot, false), ["Workspace only", "Global helper"]),
     ["Global helper"],
   );
+  const prompt = formatAvailableSkills(snapshot, undefined, false) ?? "";
+  assert.match(prompt, /Global helper/u);
+  assert.doesNotMatch(prompt, /Workspace only/u);
 });
 
 test("tool, prompt, catalog, and explicit resolution share one collision-heavy snapshot", async () => {
@@ -354,9 +373,11 @@ test("tool, prompt, catalog, and explicit resolution share one collision-heavy s
   const toolNames = new Set(tools.map((tool) => tool.name));
   const prompt = formatAvailableSkills(snapshot, toolNames) ?? "";
 
-  assert.deepEqual(toolNames, new Set(snapshot.available.map((skill) => skill.toolKey)));
+  // One model-facing tool loads every skill the prompt lists, by its listed name.
+  assert.equal(tools.length, 1);
   for (const skill of snapshot.available) {
-    assert.match(prompt, new RegExp(skill.toolKey, "u"));
+    assert.match(prompt, new RegExp(`<name>${skill.name}</name>`, "u"));
+    assert.deepEqual(await loadableNames(tools, [skill.name]), [skill.name]);
     assert.equal(await h.registry.resolve("one", skill.invocationId), skill);
   }
   for (const entry of snapshot.catalog.filter((candidate) => !candidate.available)) {
@@ -417,7 +438,10 @@ test("invocation policies independently gate catalogs, tools, and authoritative 
   ]);
   const snapshot = await h.registry.snapshot("one");
   assert.deepEqual(snapshot.catalog.map(({ name }) => name).sort(), ["Both", "User"]);
-  assert.deepEqual(buildSkillTools(snapshot).map(({ name }) => name).sort(), ["skill_both", "skill_model"]);
+  assert.deepEqual(
+    await loadableNames(buildSkillTools(snapshot), ["Both", "User", "Model", "Neither"]),
+    ["Both", "Model"],
+  );
   assert.deepEqual(piResourcesForSkillSnapshot(snapshot).skills?.map(({ name }) => name).sort(), ["Both", "Model"]);
   const prompt = formatAvailableSkills(snapshot)!;
   assert.match(prompt, /<name>Model<\/name>/u);
@@ -445,7 +469,10 @@ test("policy edits expire user selections while existing model tools retain thei
   assert.notEqual(after.fingerprint, before.fingerprint);
   assert.equal(after.catalog.length, 0);
   assert.equal(buildSkillTools(after).length, 0);
-  assert.match(JSON.stringify(await tools[0]!.execute("in-flight", {})), /global instructions/u);
+  assert.match(
+    JSON.stringify(await tools[0]!.execute("in-flight", { name: before.available[0]!.name })),
+    /global instructions/u,
+  );
 });
 
 test("an invocation opt-out never reveals a shadowed lower-priority skill", async () => {
@@ -482,7 +509,11 @@ test("a surface can drop a built-in skill it cannot use from the prompt, tools a
   const full = await h.registry.snapshot("one");
   const phone = withoutSkills(full, new Set(["builtin:desktop-only"]));
   assert.deepEqual(phone.catalog.map(({ name }) => name), ["aiden-app"]);
-  assert.equal(buildSkillTools(phone).length, buildSkillTools(full).length - 1);
+  assert.deepEqual(await loadableNames(buildSkillTools(phone), ["aiden-app", "desktop-only"]), ["aiden-app"]);
+  assert.deepEqual(
+    await loadableNames(buildSkillTools(full), ["aiden-app", "desktop-only"]),
+    ["aiden-app", "desktop-only"],
+  );
   assert.doesNotMatch(formatAvailableSkills(phone) ?? "", /desktop-only/u);
   assert.match(formatAvailableSkills(full) ?? "", /desktop-only/u);
   assert.equal(withoutSkills(full, new Set(["builtin:missing"])), full);
@@ -500,7 +531,9 @@ test("a skill switched off for a workspace leaves the model's view but still run
   const after = await h.registry.snapshot("one");
 
   assert.notEqual(after.fingerprint, before.fingerprint, "a changed off-list replaces the cached snapshot");
-  assert.deepEqual(buildSkillTools(after).map(({ name }) => name), ["skill_deploy"]);
+  assert.deepEqual(modelInvocableSkills(after).map(({ name }) => name), ["Deploy"]);
+  const [skillTool] = buildSkillTools(after);
+  await assert.rejects(skillTool!.execute("call", { name: "Review" }), /No skill named "Review"/u);
   assert.deepEqual(piResourcesForSkillSnapshot(after).skills?.map(({ name }) => name), ["Deploy"]);
   assert.doesNotMatch(formatAvailableSkills(after) ?? "", /<name>Review<\/name>/u);
   const review = after.catalog.find(({ name }) => name === "Review")!;
@@ -516,5 +549,5 @@ test("a skill switched off for a workspace leaves the model's view but still run
   );
   // Other workspaces keep the skill.
   h.workspaces.set("two", workspace("two"));
-  assert.ok(buildSkillTools(await h.registry.snapshot("two")).some(({ name }) => name === "skill_review"));
+  assert.ok(modelInvocableSkills(await h.registry.snapshot("two")).some(({ name }) => name === "Review"));
 });

@@ -42,7 +42,7 @@ test("a skill switched off in Workspace settings is gone from the next message",
 
   await send(page, "Workspace settings check one");
   await expect(page.locator("[data-chat-title-menu]")).toBeVisible({ timeout: 20_000 });
-  await expect.poll(() => requestWith(lmStudio, "Workspace settings check one")).toContain("skill_release_notes");
+  await expect.poll(() => requestWith(lmStudio, "Workspace settings check one")).toContain("<name>Release notes</name>");
   await waitForToastsToClear(page);
 
   // The row's ⋯ button shows on hover.
@@ -78,7 +78,7 @@ test("a skill switched off in Workspace settings is gone from the next message",
 
   await send(page, "Workspace settings check two");
   await expect.poll(() => requestWith(lmStudio, "Workspace settings check two")).not.toBe("");
-  expect(requestWith(lmStudio, "Workspace settings check two")).not.toContain("skill_release_notes");
+  expect(requestWith(lmStudio, "Workspace settings check two")).not.toContain("<name>Release notes</name>");
 
   // The shortcut opens the same settings for the workspace in use.
   await page.locator("textarea").first().click();
