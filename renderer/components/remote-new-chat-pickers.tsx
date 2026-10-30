@@ -22,6 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 
 /**
  * Pickers for a new chat that can run on another Mac: which machine, which of
@@ -245,9 +246,8 @@ export function RemoteModelPicker({
     );
     return models.length > 0 ? [{ ...provider, models }] : [];
   });
-  const model = selected
-    ? providers.find((provider) => provider.id === selected.providerId)?.models.find((entry) => entry.id === selected.modelId)
-    : undefined;
+  const selectedProvider = selected ? providers.find((provider) => provider.id === selected.providerId) : undefined;
+  const model = selected ? selectedProvider?.models.find((entry) => entry.id === selected.modelId) : undefined;
   const label = model?.label ?? (loading ? "Loading models…" : "Host default");
   const byValue = new Map(
     providers.flatMap((provider) =>
@@ -264,7 +264,16 @@ export function RemoteModelPicker({
           disabled={disabled || providers.length === 0}
           aria-label={`Model on ${hostLabel}: ${label}`}
         >
-          {loading ? <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" /> : null}
+          {loading ? (
+            <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+          ) : selectedProvider && model && selected ? (
+            <ProviderIcon
+              providerId={selectedProvider.id}
+              providerLabel={selectedProvider.label}
+              modelId={selected.modelId}
+              className="size-3.5"
+            />
+          ) : null}
           <span className="truncate">{label}</span>
           <ChevronDown className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
         </Button>
@@ -283,6 +292,12 @@ export function RemoteModelPicker({
               <DropdownMenuLabel>{provider.label}</DropdownMenuLabel>
               {provider.models.map((entry) => (
                 <DropdownMenuRadioItem key={entry.id} value={choiceValue({ providerId: provider.id, modelId: entry.id })}>
+                  <ProviderIcon
+                    providerId={provider.id}
+                    providerLabel={provider.label}
+                    modelId={entry.id}
+                    className="size-4 text-secondary"
+                  />
                   <span className="truncate">{entry.label}</span>
                 </DropdownMenuRadioItem>
               ))}

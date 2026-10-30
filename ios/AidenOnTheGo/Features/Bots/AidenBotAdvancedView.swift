@@ -721,7 +721,7 @@ struct AidenBotModelRow: View {
                 Text(title).foregroundStyle(palette.foreground)
                 Spacer(minLength: 8)
                 if let current {
-                    AidenProviderIcon(providerID: current.provider.id, providerLabel: current.provider.label, size: 18)
+                    AidenProviderIcon(providerID: current.provider.id, providerLabel: current.provider.label, modelID: current.model.id, size: 18)
                     Text(current.model.label).foregroundStyle(palette.secondary).lineLimit(1)
                 } else {
                     Text("Choose").foregroundStyle(palette.secondary)

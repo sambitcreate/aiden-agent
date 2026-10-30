@@ -3,11 +3,16 @@ import type { Chat } from "../lib/types";
 import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/context-pressure";
 import { parseAssistantTurnStatsV1 } from "../shared/assistant-turn-stats";
 import { ContextBreakdown } from "./context-breakdown";
+import { ProviderIcon } from "./provider-icon";
+import type { ProviderArtwork } from "../shared/provider-artwork";
 import { Text } from "./ui";
 
 export interface ChatContextDetails {
   chat: Chat;
+  providerId?: string;
   providerLabel: string;
+  providerArtwork?: ProviderArtwork;
+  modelId?: string;
   modelLabel: string;
   pressure: ChatContextPressureV1 | null;
   compacting: boolean;
@@ -59,9 +64,10 @@ function formatUsageTokens(value: number): string {
     : formatContextTokenCount(value);
 }
 
-function Chip({ children }: React.PropsWithChildren) {
+function Chip({ children, icon }: React.PropsWithChildren<{ icon?: React.ReactNode }>) {
   return (
-    <span className="inline-flex max-w-full items-center rounded-control bg-control px-2.5 py-0.5 text-small text-secondary">
+    <span className="inline-flex max-w-full items-center gap-1.5 rounded-control bg-control px-2.5 py-0.5 text-small text-secondary">
+      {icon}
       <span className="truncate">{children}</span>
     </span>
   );
@@ -211,7 +217,19 @@ export function ChatContextPanel({
               {chat.title || "Untitled chat"}
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              <Chip>{details.providerLabel || "Unknown provider"}</Chip>
+              <Chip
+                icon={details.providerId ? (
+                  <ProviderIcon
+                    providerId={details.providerId}
+                    providerLabel={details.providerLabel}
+                    modelId={details.modelId}
+                    artwork={details.providerArtwork}
+                    className="size-3.5"
+                  />
+                ) : undefined}
+              >
+                {details.providerLabel || "Unknown provider"}
+              </Chip>
               <Chip>{details.modelLabel || "Unknown model"}</Chip>
               <Chip>{`${count(usage.userMessages)} user · ${count(usage.assistantMessages)} assistant`}</Chip>
             </div>

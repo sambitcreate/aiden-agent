@@ -18,6 +18,9 @@ import {
 } from "./ui";
 import { scheduleApi } from "../lib/ipc";
 import { isUsable } from "../lib/model-picker-data";
+import { resolveModelDisplay } from "../lib/model-display";
+import { ProviderIcon } from "./provider-icon";
+import { useProvidersModelInfo } from "../lib/queries";
 import {
   cronFromScheduleDraft,
   formatSchedule,
@@ -71,6 +74,7 @@ const WEEKDAYS = [
 ] as const;
 
 const APP_DEFAULT_PROVIDER_CHOICE = "__app_default__";
+const NO_PROVIDERS: Provider[] = [];
 
 /** The soft inline warning under the Provider select when an LLM task may not be able to run. */
 /**
@@ -288,6 +292,10 @@ export function ScheduledTaskEditor({
   // Agent harnesses need someone watching to answer approvals; schedules run unattended.
   const usableProviders = providers.filter((provider) => isUsable(provider) && !isAcpHarnessProvider(provider.id));
   const pinnedProvider = usableProviders.find((provider) => provider.id === draft.providerId);
+  // The same cached model names the chat model picker shows.
+  const pinnedModelInfo = useProvidersModelInfo(pinnedProvider ? [pinnedProvider] : NO_PROVIDERS).data[
+    pinnedProvider?.id ?? ""
+  ];
   const providerModelOptions = pinnedProvider
     ? scheduledTaskProviderModelOptions(
         pinnedProvider,
@@ -643,7 +651,15 @@ export function ScheduledTaskEditor({
                 </SelectItem>
                 {usableProviders.map((provider) => (
                   <SelectItem value={provider.id} key={provider.id}>
-                    {provider.label}
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <ProviderIcon
+                        providerId={provider.id}
+                        providerLabel={provider.label}
+                        artwork={provider.artwork}
+                        className="size-4 text-secondary"
+                      />
+                      <span className="truncate">{provider.label}</span>
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -662,11 +678,24 @@ export function ScheduledTaskEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {providerModelOptions.models.map((model) => (
-                  <SelectItem value={model} key={model}>
-                    {model}
-                  </SelectItem>
-                ))}
+                {providerModelOptions.models.map((model) => {
+                  const display = resolveModelDisplay(model, pinnedModelInfo?.[model]);
+                  return (
+                    <SelectItem value={model} key={model}>
+                      <span className="inline-flex min-w-0 items-center gap-2">
+                        <ProviderIcon
+                          providerId={pinnedProvider.id}
+                          providerLabel={pinnedProvider.label}
+                          modelId={model}
+                          artwork={pinnedProvider.artwork}
+                          className="size-4 text-secondary"
+                        />
+                        <span className="truncate">{display.label}</span>
+                        {display.format ? <span className="text-tertiary">{display.format}</span> : null}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </Field>

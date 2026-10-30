@@ -14,6 +14,7 @@ import {
   PopoverTrigger,
 } from "../../components/ui";
 import { ProviderIcon } from "../../components/provider-icon";
+import { useProviders } from "../../lib/queries";
 import type { BotCapabilityCatalog } from "../../shared/bot-capabilities";
 import { findBotModel } from "./bot-model-choice";
 
@@ -58,6 +59,9 @@ export function BotModelPicker({
   onSelect(providerId: string, modelId: string): void;
 }) {
   const [open, setOpen] = React.useState(false);
+  // The Bot catalog carries no artwork; a custom connection's picture comes from the providers list.
+  const providers = useProviders();
+  const artworkFor = (id: string) => providers.data?.find((provider) => provider.id === id)?.artwork;
   const selected = findBotModel(catalog, providerId, modelId);
   const isRecommended = Boolean(
     selected && recommended
@@ -85,6 +89,8 @@ export function BotModelPicker({
             <ProviderIcon
               providerId={selected.provider.id}
               providerLabel={selected.provider.label}
+              modelId={selected.model.id}
+              artwork={artworkFor(selected.provider.id)}
               className="size-4 shrink-0 text-tertiary"
             />
           ) : null}
@@ -126,7 +132,13 @@ export function BotModelPicker({
                       }}
                       className="gap-2"
                     >
-                      <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 shrink-0 text-tertiary" />
+                      <ProviderIcon
+                        providerId={provider.id}
+                        providerLabel={provider.label}
+                        modelId={model.id}
+                        artwork={artworkFor(provider.id)}
+                        className="size-4 shrink-0 text-tertiary"
+                      />
                       <span className="min-w-0 flex-1 truncate">{model.label}</span>
                       <InlineMetadata className="shrink-0">{botModelCapabilityLabel(model.supportsImages)}</InlineMetadata>
                       {isSelected ? <Check className="size-4 shrink-0" role="img" aria-label="Selected" /> : null}
