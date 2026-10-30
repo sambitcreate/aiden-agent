@@ -5,11 +5,9 @@ import { join } from "node:path";
 import { EXCEPTION_PROPERTIES, isValidPropValue } from "./analytics-events.js";
 import {
   MAX_CAUSE_DEPTH,
-  MAX_EXCEPTION_FRAMES,
-  MAX_EXCEPTION_MESSAGE_LENGTH,
+  parseSanitizedError,
   type SanitizedError,
   type SanitizedException,
-  type SanitizedFrame,
 } from "./analytics-sanitize.js";
 import type { ExceptionContext } from "./analytics-core.js";
 
@@ -30,50 +28,11 @@ export interface PendingCrash {
   readonly context: ExceptionContext;
 }
 
-const SAFE_FILENAME = /^(?:app:\/\/\/[A-Za-z0-9_@+][A-Za-z0-9._@+/-]*|node:[a-z_/]{1,80}|<external>|<anonymous>)$/u;
-const SAFE_ERROR_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
-const SAFE_FUNCTION_NAME = /^(?:[A-Za-z0-9_$.<>[\] ]{1,100}|\?)$/u;
 const FINGERPRINT = /^[0-9a-f]{32}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-}
-
-function lineNumber(value: unknown): boolean {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-function parseFrame(raw: unknown): SanitizedFrame | undefined {
-  const frame = record(raw);
-  if (!frame) return undefined;
-  const { filename, function: fn, lineno, colno, inApp } = frame;
-  if (typeof filename !== "string" || !SAFE_FILENAME.test(filename) || filename.includes("..")) return undefined;
-  if (typeof fn !== "string" || !SAFE_FUNCTION_NAME.test(fn)) return undefined;
-  if (typeof inApp !== "boolean") return undefined;
-  const hasPosition = lineno !== undefined || colno !== undefined;
-  if (hasPosition && !(lineNumber(lineno) && lineNumber(colno))) return undefined;
-  return {
-    filename,
-    function: fn,
-    ...(hasPosition ? { lineno: lineno as number, colno: colno as number } : {}),
-    inApp,
-  };
-}
-
-function parseError(raw: unknown): SanitizedError | undefined {
-  const error = record(raw);
-  if (!error) return undefined;
-  if (typeof error.type !== "string" || !SAFE_ERROR_NAME.test(error.type)) return undefined;
-  if (typeof error.value !== "string" || error.value.length > MAX_EXCEPTION_MESSAGE_LENGTH) return undefined;
-  if (!Array.isArray(error.frames) || error.frames.length > MAX_EXCEPTION_FRAMES) return undefined;
-  const frames: SanitizedFrame[] = [];
-  for (const rawFrame of error.frames) {
-    const frame = parseFrame(rawFrame);
-    if (!frame) return undefined;
-    frames.push(frame);
-  }
-  return { type: error.type, value: error.value, frames };
 }
 
 function parseContext(raw: unknown): ExceptionContext | undefined {
@@ -90,7 +49,10 @@ function parseContext(raw: unknown): ExceptionContext | undefined {
     if (value === undefined && "optional" in spec) continue;
     if (!isValidPropValue(spec, value)) return undefined;
   }
-  if (context.uptimeSeconds !== undefined && !lineNumber(context.uptimeSeconds)) return undefined;
+  // Process uptime is fractional seconds, so any finite nonnegative number is valid.
+  if (context.uptimeSeconds !== undefined && !(typeof context.uptimeSeconds === "number" && Number.isFinite(context.uptimeSeconds) && context.uptimeSeconds >= 0)) {
+    return undefined;
+  }
   if (context.appVersion !== undefined && !isValidPropValue({ kind: "version" }, context.appVersion)) return undefined;
   return {
     source: context.source as ExceptionContext["source"],
@@ -137,7 +99,7 @@ export function parsePendingCrash(text: string): PendingCrash | undefined {
   }
   const errors: SanitizedError[] = [];
   for (const rawError of exception.errors) {
-    const error = parseError(rawError);
+    const error = parseSanitizedError(rawError);
     if (!error) return undefined;
     errors.push(error);
   }

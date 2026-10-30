@@ -19,6 +19,12 @@ const SAFE_RELATIVE_PATH = /^[A-Za-z0-9_@+][A-Za-z0-9._@+-]*(?:\/[A-Za-z0-9_@+][
 const SAFE_NODE_MODULE = /^node:[a-z_/]{1,80}$/u;
 const SAFE_FUNCTION_NAME = /^[A-Za-z0-9_$.<>[\] ]{1,100}$/u;
 const V8_FRAME = /^\s*at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?\s*$/u;
+// What a sanitized frame or error may contain, checked again wherever one
+// is read back (a pending-crash file, the outgoing guard).
+const SAFE_FILENAME = /^(?:app:\/\/\/[A-Za-z0-9_@+][A-Za-z0-9._@+/-]*|node:[a-z_/]{1,80}|<external>|<anonymous>)$/u;
+const SAFE_FRAME_FUNCTION = /^(?:[A-Za-z0-9_$.<>[\] ]{1,100}|\?)$/u;
+// Any address-shaped token, including ones inside otherwise harmless text.
+const EMAIL_ADDRESS = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.\p{L}{2,}/gu;
 const V8_LOCATIONLESS_FRAME = /^\s*at (?:(.+?) \()?(native|<anonymous>)\)?\s*$/u;
 
 export interface SanitizedFrame {
@@ -56,10 +62,17 @@ function safeErrorName(value: unknown): string {
   return typeof value === "string" && SAFE_ERROR_NAME.test(value) ? value : "Error";
 }
 
+// The diagnostics redactor handles secrets, URLs, paths and ids; email
+// addresses are removed here first so they never depend on another pattern
+// happening to swallow them.
+export function redactExceptionMessage(value: string): string {
+  return sanitizeDiagnosticText(value.normalize("NFKC").replace(EMAIL_ADDRESS, "[REDACTED EMAIL]"), MAX_EXCEPTION_MESSAGE_LENGTH);
+}
+
 // Thrown non-errors keep only a type label, except strings, which are
 // redacted like messages. Object contents are never stringified.
 function safeMessage(value: unknown): string {
-  if (typeof value === "string") return sanitizeDiagnosticText(value, MAX_EXCEPTION_MESSAGE_LENGTH);
+  if (typeof value === "string") return redactExceptionMessage(value);
   if (value === undefined || value === null) return "";
   return `[non-string ${typeof value}]`;
 }
@@ -160,6 +173,48 @@ function sanitizeOne(value: unknown, appRoots: readonly string[]): SanitizedErro
     value: safeMessage(error.message),
     frames: parseStackFrames(error.stack, appRoots),
   };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+function position(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+export function parseSanitizedFrame(raw: unknown): SanitizedFrame | undefined {
+  const frame = record(raw);
+  if (!frame) return undefined;
+  const { filename, function: fn, lineno, colno, inApp } = frame;
+  if (typeof filename !== "string" || !SAFE_FILENAME.test(filename) || filename.includes("..")) return undefined;
+  if (typeof fn !== "string" || !SAFE_FRAME_FUNCTION.test(fn)) return undefined;
+  if (typeof inApp !== "boolean") return undefined;
+  const hasPosition = lineno !== undefined || colno !== undefined;
+  if (hasPosition && !(position(lineno) && position(colno))) return undefined;
+  return {
+    filename,
+    function: fn,
+    ...(hasPosition ? { lineno: lineno as number, colno: colno as number } : {}),
+    inApp,
+  };
+}
+
+// Accepts only what sanitizeOne could have produced; the message is
+// redacted again so a record that bypassed sanitizing still cannot leak.
+export function parseSanitizedError(raw: unknown): SanitizedError | undefined {
+  const error = record(raw);
+  if (!error) return undefined;
+  if (typeof error.type !== "string" || !SAFE_ERROR_NAME.test(error.type)) return undefined;
+  if (typeof error.value !== "string" || error.value.length > MAX_EXCEPTION_MESSAGE_LENGTH) return undefined;
+  if (!Array.isArray(error.frames) || error.frames.length > MAX_EXCEPTION_FRAMES) return undefined;
+  const frames: SanitizedFrame[] = [];
+  for (const rawFrame of error.frames) {
+    const frame = parseSanitizedFrame(rawFrame);
+    if (!frame) return undefined;
+    frames.push(frame);
+  }
+  return { type: error.type, value: redactExceptionMessage(error.value), frames };
 }
 
 export function exceptionFingerprint(primary: SanitizedError): string {

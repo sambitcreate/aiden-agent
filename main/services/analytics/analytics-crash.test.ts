@@ -47,6 +47,14 @@ test("a fatal crash written during one run is read back once on the next", (t) =
   assert.equal(existsSync(join(dir, PENDING_CRASH_FILE)), false);
 });
 
+test("a crash with fractional process uptime survives the round trip", () => {
+  const fractional = { ...context, uptimeSeconds: 12.345 };
+  const pending = parsePendingCrash(serializePendingCrash(crash(), fractional, { now: NOW }));
+
+  assert.ok(pending);
+  assert.equal(pending.context.uptimeSeconds, 12.345);
+});
+
 test("a write that cannot reach the disk reports failure without throwing", () => {
   assert.equal(writePendingCrashSync("/nonexistent/aiden/analytics", crash(), context, NOW), false);
 });

@@ -23,18 +23,38 @@ export interface PostHogTransportOptions {
   readonly apiKey: string;
   // Tests inject a fake fetch so nothing reaches the network.
   readonly fetch?: PostHogOptions["fetch"];
+  // Tests shorten the SDK's delay between retries of a failed send.
+  readonly retryDelayMs?: number;
   readonly onError?: (error: unknown) => void;
 }
 
 class AidenPostHog extends PostHog {
+  private readonly revocation = new AbortController();
+
+  // Every request the SDK makes, including retries of a flush that started
+  // before discard, passes through here. Once revoked, nothing more is
+  // dispatched and requests still in flight are aborted. Bytes already on
+  // the wire cannot be recalled.
+  override fetch(url: string, options: Parameters<PostHog["fetch"]>[1]): ReturnType<PostHog["fetch"]> {
+    if (this.revocation.signal.aborted) {
+      return Promise.reject(new Error("Analytics sending was stopped."));
+    }
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, this.revocation.signal])
+      : this.revocation.signal;
+    return super.fetch(url, { ...options, signal });
+  }
+
   // `disabled` short-circuits capture, flush and shutdown in the SDK, so
-  // setting it drops the in-memory queue without a final request.
+  // setting it drops the in-memory queue without a final request; revoking
+  // stops any flush or retry loop that is already running.
   stopWithoutFlushing(): void {
     this.disabled = true;
+    this.revocation.abort();
   }
 }
 
-export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"]): PostHogOptions {
+export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"], retryDelayMs?: number): PostHogOptions {
   return {
     host: ANALYTICS_HOST,
     flushAt: 20,
@@ -51,11 +71,12 @@ export function postHogClientOptions(fetchImpl?: PostHogOptions["fetch"]): PostH
     featureFlagsPollingInterval: null,
     before_send: (event) => validateOutgoingEvent(event),
     ...(fetchImpl ? { fetch: fetchImpl } : {}),
+    ...(retryDelayMs === undefined ? {} : { fetchRetryDelay: retryDelayMs }),
   };
 }
 
 export function createPostHogTransport(options: PostHogTransportOptions): PostHogTransport {
-  const client = new AidenPostHog(options.apiKey, postHogClientOptions(options.fetch));
+  const client = new AidenPostHog(options.apiKey, postHogClientOptions(options.fetch, options.retryDelayMs));
   let stopped = false;
   // The SDK reports every failed send here, including background flushes.
   client.on("error", (error: unknown) => options.onError?.(error));

@@ -47,6 +47,21 @@ test("secrets, personal paths and contact details never survive sanitizing", () 
   }
 });
 
+test("each kind of sensitive value is redacted on its own", () => {
+  for (const secret of [
+    "jane.doe@example.com",
+    "Jane.Doe+aiden@mail.example.co.uk",
+    "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+    "/Users/jane.doe/Projects/secret-plan",
+  ]) {
+    const error = new Error(`Account rejected: ${secret}`);
+    (error as Error & { cause?: unknown }).cause = new Error(`because ${secret}`);
+    const serialized = JSON.stringify(sanitizeException(error, { appRoots }));
+    assert.equal(serialized.includes(secret), false, `leaked ${secret}`);
+    assert.equal(serialized.includes("Account rejected"), true);
+  }
+});
+
 test("frames inside the app bundle keep a relative path, function and position", () => {
   const error = errorWithStack("boom", [
     `    at async handleTurn (${APP_ROOT}/dist/main/chat.js:42:7)`,

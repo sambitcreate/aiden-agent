@@ -188,13 +188,15 @@ If analytics is off at next launch, the pending file is deleted unsent.
 
 Before an error reaches `captureException`, the sink rebuilds it as a new `Error`:
 - `name`: kept if it matches `/^[A-Za-z][A-Za-z0-9_]{0,63}$/`, else `Error`.
-- `message`: run through the existing `sanitizeDiagnosticText` (`main/services/diagnostics-contract.ts:403`), which already redacts credentials, tokens, authorization values, URLs, POSIX/Windows paths, UUIDs and long IDs, then capped at 300 characters.
+- `message`: email addresses are redacted first, then the text runs through the existing `sanitizeDiagnosticText` (`main/services/diagnostics-contract.ts:403`), which already redacts credentials, tokens, authorization values, URLs, POSIX/Windows paths, UUIDs and long IDs, then capped at 300 characters.
 - `stack`: each frame's file path rewritten to an app-relative virtual path (e.g. `app:///main/services/foo.js`). Frames outside the app bundle become `<external>` (user workspace scripts, Pi extensions in the user's folders, node internals keep `node:` prefix). Function names are kept. Max 30 frames.
 - `cause` chains: sanitized the same way, max depth 3.
 
 Rewriting file paths to `app:///…` has a second purpose: `posthog-node` error tracking reads source context lines from disk for frames it can resolve. Virtual paths cannot resolve, so the SDK never reads files from the user's disk. The implementer must confirm this against the pinned SDK version and, if the SDK exposes an option to disable context lines, set it as well. SDK exception autocapture (`enableExceptionAutocapture`) stays **off**; all capture goes through our sanitizing sink.
 
 Extra properties on exceptions: `source` (`main`/`renderer`/`cli`), `level`, `process_type`, `uptime_bucket` (`<1m`, `1-10m`, `10-60m`, `1h+`). No IPC channel arguments, no route, no window title.
+
+The SDK's `before_send` guard is the last check on every message. It drops every `$`-prefixed property a caller supplies except, on `$exception` only, `$exception_list` (rebuilt from scratch and rejected unless it matches what the sanitizer produces), `$exception_level` and `$exception_fingerprint`; it then forces `$process_person_profile: false`. Turning analytics off revokes the transport's fetch, so a flush or retry already in progress dispatches nothing further; a request already on the wire cannot be recalled.
 
 ### Flood control
 

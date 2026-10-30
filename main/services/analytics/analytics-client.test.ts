@@ -61,6 +61,25 @@ test("batched events reach the US host with person and undeclared data stripped"
   await transport.shutdown();
 });
 
+test("undeclared dollar-prefixed properties never reach the request", async () => {
+  const { fetch, requests } = fakeFetch(200);
+  const transport = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never });
+
+  transport.capture({
+    distinctId: INSTALL_ID,
+    event: "terminal_opened",
+    properties: { ...SUPER, $email: "jane.doe@example.com", $ip: "192.0.2.1", $secret: "private content" },
+  });
+  await transport.flush();
+
+  const body = JSON.stringify(requests);
+  assert.equal(requests.flatMap((request) => request.events).length, 1);
+  for (const leaked of ["jane.doe@example.com", "192.0.2.1", "private content", "$email", "$secret"]) {
+    assert.equal(body.includes(leaked), false, `leaked ${leaked}`);
+  }
+  await transport.shutdown();
+});
+
 test("a batch the server rejects is dropped, not retried or thrown", async () => {
   const { fetch, requests } = fakeFetch(400);
   const errors: unknown[] = [];
@@ -85,6 +104,30 @@ test("discarding drops queued events without sending them", async () => {
   await transport.flush();
 
   assert.deepEqual(requests, []);
+});
+
+test("discarding during a flush stops its retries from reaching the network", async () => {
+  let dispatched = 0;
+  let releaseFirst!: (response: unknown) => void;
+  const fetch = (_url: string, init?: { signal?: AbortSignal }) => {
+    dispatched += 1;
+    if (dispatched > 1) return Promise.resolve({ status: 200, text: async () => "", json: async () => ({}) });
+    return new Promise((resolve, reject) => {
+      releaseFirst = resolve;
+      init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+    });
+  };
+  const transport = createPostHogTransport({ apiKey: "phc_test", fetch: fetch as never, retryDelayMs: 1 });
+
+  transport.capture({ distinctId: INSTALL_ID, event: "terminal_opened", properties: { ...SUPER } });
+  const flushing = transport.flush();
+  while (dispatched === 0) await new Promise((resolve) => setImmediate(resolve));
+  await transport.discard();
+  releaseFirst({ status: 500, text: async () => "", json: async () => ({}) });
+  await flushing;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(dispatched, 1);
 });
 
 test("an immediate send goes out on its own", async () => {

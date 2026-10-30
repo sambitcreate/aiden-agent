@@ -12,7 +12,14 @@ import {
   type AnalyticsExceptionProps,
   type AnalyticsSuperProperties,
 } from "./analytics-events.js";
-import { sanitizeException, uptimeBucket, type SanitizedException } from "./analytics-sanitize.js";
+import {
+  MAX_CAUSE_DEPTH,
+  parseSanitizedError,
+  sanitizeException,
+  uptimeBucket,
+  type SanitizedError,
+  type SanitizedException,
+} from "./analytics-sanitize.js";
 
 // The transport-agnostic heart of product analytics: validate against the
 // registry, attach super properties, apply flood control, and hand a finished
@@ -66,15 +73,24 @@ export interface AnalyticsCore {
 }
 
 const PERSONLESS = { $process_person_profile: false } as const;
-const STRIPPED_SDK_KEYS = new Set(["$set", "$set_once", "$unset", "$groups", "$group_set", "$anon_distinct_id"]);
+const EXCEPTION_PLATFORMS = new Set(["node:javascript", "web:javascript"]);
+const EXCEPTION_LEVELS = new Set(["fatal", "error"]);
+const FINGERPRINT = /^[0-9a-f]{32}$/u;
 
 function exceptionList(exception: SanitizedException, context: ExceptionContext): Record<string, unknown>[] {
-  const platform = context.source === "renderer" ? "web:javascript" : "node:javascript";
-  return exception.errors.map((error, index) => ({
+  return buildExceptionList(
+    exception.errors,
+    context.source === "renderer" ? "web:javascript" : "node:javascript",
+    context.level !== "fatal",
+  );
+}
+
+function buildExceptionList(errors: readonly SanitizedError[], platform: string, handled: boolean): Record<string, unknown>[] {
+  return errors.map((error, index) => ({
     type: error.type,
     value: error.value,
     mechanism: index === 0
-      ? { type: "generic", handled: context.level !== "fatal", synthetic: false, exception_id: 0 }
+      ? { type: "generic", handled, synthetic: false, exception_id: 0 }
       : { type: "chained", source: "cause", synthetic: false, exception_id: index, parent_id: index - 1 },
     stacktrace: {
       type: "raw",
@@ -186,9 +202,45 @@ export function createAnalyticsCore(options: AnalyticsCoreOptions): AnalyticsCor
   };
 }
 
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+// Rebuilds a `$exception_list` from scratch, admitting only what
+// exceptionList could have produced from a sanitized exception.
+function validExceptionList(value: unknown, fallbackPlatform: string): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CAUSE_DEPTH + 1) return undefined;
+  let platform: string | undefined;
+  let handled = true;
+  const errors: SanitizedError[] = [];
+  for (const [index, raw] of value.entries()) {
+    const entry = recordOf(raw);
+    const frames = recordOf(entry?.stacktrace)?.frames;
+    if (!entry || !Array.isArray(frames)) return undefined;
+    if (index === 0) {
+      const mechanismHandled = recordOf(entry.mechanism)?.handled;
+      if (typeof mechanismHandled !== "boolean") return undefined;
+      handled = mechanismHandled;
+    }
+    const v8Frames: unknown[] = [];
+    for (const rawFrame of [...frames].reverse()) {
+      const frame = recordOf(rawFrame);
+      if (!frame || typeof frame.platform !== "string" || !EXCEPTION_PLATFORMS.has(frame.platform)) return undefined;
+      if (platform !== undefined && frame.platform !== platform) return undefined;
+      platform = frame.platform;
+      v8Frames.push({ filename: frame.filename, function: frame.function, lineno: frame.lineno, colno: frame.colno, inApp: frame.in_app });
+    }
+    const error = parseSanitizedError({ type: entry.type, value: entry.value, frames: v8Frames });
+    if (!error) return undefined;
+    errors.push(error);
+  }
+  return buildExceptionList(errors, platform ?? fallbackPlatform, handled);
+}
+
 // The last line of defence, run by the SDK on every outgoing message: only
-// registry events, only their declared properties plus super properties and
-// the SDK's own `$` metadata, and never person or group data.
+// registry events, only their declared properties plus super properties,
+// validated exception fields on `$exception`, and never person, group or any
+// other `$` data. The SDK adds its own library metadata after this runs.
 export function validateOutgoingEvent<M extends { event: string; properties?: Record<string, unknown> }>(
   message: M,
 ): M | null {
@@ -199,13 +251,18 @@ export function validateOutgoingEvent<M extends { event: string; properties?: Re
       : undefined;
   if (!allowed) return null;
   const properties: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(message.properties ?? {})) {
-    if (key.startsWith("$")) {
-      if (STRIPPED_SDK_KEYS.has(key) || key.startsWith("$feature")) continue;
-      if (key.startsWith("$exception") && message.event !== EXCEPTION_EVENT) continue;
-      properties[key] = value;
-      continue;
-    }
+  const source = message.properties ?? {};
+  if (message.event === EXCEPTION_EVENT) {
+    const list = validExceptionList(source.$exception_list, source.source === "renderer" ? "web:javascript" : "node:javascript");
+    if (!list) return null;
+    if (typeof source.$exception_level !== "string" || !EXCEPTION_LEVELS.has(source.$exception_level)) return null;
+    if (typeof source.$exception_fingerprint !== "string" || !FINGERPRINT.test(source.$exception_fingerprint)) return null;
+    properties.$exception_list = list;
+    properties.$exception_level = source.$exception_level;
+    properties.$exception_fingerprint = source.$exception_fingerprint;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (key.startsWith("$")) continue;
     const spec: AnalyticsPropSpec | undefined = Object.prototype.hasOwnProperty.call(allowed, key)
       ? (allowed as Record<string, AnalyticsPropSpec>)[key]
       : Object.prototype.hasOwnProperty.call(SUPER_PROPERTIES, key)

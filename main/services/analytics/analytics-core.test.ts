@@ -203,13 +203,44 @@ test("the outgoing guard strips person, group and undeclared data", () => {
     os_major: 26,
     surface: "desktop",
     channel: "release",
-    $lib: "posthog-node",
     $process_person_profile: false,
   });
+});
+
+test("the outgoing guard admits a real exception unchanged and drops undeclared dollar fields", () => {
+  const { core, sent } = harness();
+  core.captureException(failing("disk full"), { source: "renderer", level: "error" });
+  const [message] = sent;
+
+  const cleaned = validateOutgoingEvent({
+    event: message!.event,
+    properties: { ...message!.properties, $email: "jane.doe@example.com", $ip: "192.0.2.1", $exception_secret: "private" },
+  });
+
+  assert.ok(cleaned);
+  assert.deepEqual(cleaned.properties, message!.properties);
+});
+
+test("the outgoing guard rejects an exception whose fields were not built by the sanitizer", () => {
+  const { core, sent } = harness();
+  core.captureException(failing("disk full"), { source: "main", level: "error" });
+  const valid = sent[0]!.properties;
+  const [entry] = valid.$exception_list as { stacktrace: { frames: Record<string, unknown>[] } }[];
+  const withFrame = (frame: Record<string, unknown>) => [{ ...entry, stacktrace: { type: "raw", frames: [frame] } }];
+
+  for (const properties of [
+    { ...valid, $exception_list: withFrame({ platform: "node:javascript", filename: "/Users/jane/secret.js", function: "f", in_app: false }) },
+    { ...valid, $exception_list: [{ ...entry, extra: "private content" }, { nope: true }] },
+    { ...valid, $exception_level: "private" },
+    { ...valid, $exception_fingerprint: "jane.doe@example.com" },
+    { ...valid, $exception_list: undefined },
+  ]) {
+    assert.equal(validateOutgoingEvent({ event: "$exception", properties }), null);
+  }
 });
 
 test("the outgoing guard rejects events outside the registry", () => {
   assert.equal(validateOutgoingEvent({ event: "$identify", properties: {} }), null);
   assert.equal(validateOutgoingEvent({ event: "$pageview", properties: {} }), null);
-  assert.ok(validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }));
+  assert.equal(validateOutgoingEvent({ event: "$exception", properties: { source: "main", level: "error" } }), null);
 });
