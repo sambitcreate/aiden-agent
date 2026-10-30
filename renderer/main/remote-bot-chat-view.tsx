@@ -41,6 +41,7 @@ import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
 import { useChatFind } from "../components/chat-find-bar";
+import { useRemoteBotImages } from "../lib/hosts/remote-images";
 
 /** Text files ride along in the message, as in a local Bot chat. */
 function attachmentText(attachments: readonly Attachment[]): string {
@@ -146,6 +147,9 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const view = live.view;
   const snapshot = view?.snapshot ?? null;
+  // Revision 45 (`bot:images`): shared images draw once their bytes are read from the host.
+  // Images are read only while the host's stream is up; a read cut off by a drop is asked again once it is back.
+  const entries = useRemoteBotImages(hostId, botId, snapshot?.entries, live.stream === "streaming");
   const state = snapshot?.state;
   const running = state?.kind === "running";
   const features = new Set(host?.features ?? []);
@@ -653,7 +657,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
       <MessageAttachmentPreviewProvider>
         <TranscriptEntries
           name={name}
-          entries={snapshot.entries}
+          entries={entries ?? snapshot.entries}
           partial={snapshot.partial}
           running={running}
           level={chatActivity.level}
