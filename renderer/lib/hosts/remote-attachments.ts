@@ -1,4 +1,8 @@
-import { isCanonicalRasterImageMimeType, MAX_INLINE_IMAGE_BYTES } from "../../shared/attachment-contract";
+import {
+  isCanonicalRasterImageMimeType,
+  MAX_ATTACHMENT_INLINE_BYTES,
+  MAX_INLINE_IMAGE_BYTES,
+} from "../../shared/attachment-contract";
 import { bytesToBase64 } from "../live-pcm-capture";
 import type { Attachment } from "../types";
 import type { HostChatAttachmentUpload } from "./host-chat-adapter";
@@ -102,12 +106,19 @@ function renamed(name: string, mimeType: RemoteImageType): string {
   return `${stem || "image"}${extension}`;
 }
 
+const TOO_LARGE_TOGETHER = "These attachments are too large to send to another Mac together. Send fewer at a time.";
+
+/** What the host counts against a turn's attachment limit: image bytes and text as UTF-8. */
+function inlineBytes(attachment: Attachment): number {
+  return attachment.kind === "image" ? attachment.size : new TextEncoder().encode(attachment.text ?? "").byteLength;
+}
+
 /**
- * The image as a PNG or JPEG within the host's limit. A photo becomes a JPEG;
- * a picture that may be transparent stays a PNG unless, at that size, only a
- * JPEG fits.
+ * The image as a PNG or JPEG within `limit` bytes (at most the host's image
+ * limit). A JPEG photo stays JPEG; a picture that may be transparent stays a
+ * PNG unless, at that size, only a JPEG fits.
  */
-async function remoteReadyImage(attachment: Attachment, decode: RemoteImageDecoder): Promise<Attachment> {
+async function remoteReadyImage(attachment: Attachment, decode: RemoteImageDecoder, limit: number): Promise<Attachment> {
   const mimeType = attachment.mimeType.toLowerCase();
   const fits = attachment.size <= MAX_INLINE_IMAGE_BYTES;
   if ((mimeType === "image/png" || mimeType === "image/jpeg") && fits) return attachment;
@@ -130,7 +141,7 @@ async function remoteReadyImage(attachment: Attachment, decode: RemoteImageDecod
         const width = Math.max(1, Math.round(image.width * scale));
         const height = Math.max(1, Math.round(image.height * scale));
         const bytes = await image.encode(width, height, target);
-        if (bytes && bytes.byteLength > 0 && bytes.byteLength <= MAX_INLINE_IMAGE_BYTES) {
+        if (bytes && bytes.byteLength > 0 && bytes.byteLength <= limit) {
           return {
             ...attachment,
             name: renamed(attachment.name, target),
@@ -176,7 +187,7 @@ export const browserImageDecoder: RemoteImageDecoder = async (bytes, mimeType) =
 /**
  * The uploads a paired host accepts, after redrawing any image it would refuse
  * (WebP, GIF, BMP, or over its size limit) as a PNG or JPEG, as the phones
- * do before they send. A HEIC photo, or a picture this Mac cannot decode, is
+ * do before they send, keeping the whole message within the host's limit. A HEIC photo, or a picture this Mac cannot decode, is
  * explained instead.
  */
 export async function prepareRemoteAttachmentUploads(
@@ -184,9 +195,20 @@ export async function prepareRemoteAttachmentUploads(
   decode: RemoteImageDecoder = browserImageDecoder,
 ): Promise<HostChatAttachmentUpload[]> {
   if (attachments.length > MAX_REMOTE_ATTACHMENTS_PER_TURN) return remoteAttachmentUploads(attachments);
-  const ready: Attachment[] = [];
-  for (const attachment of attachments) {
-    ready.push(attachment.kind === "image" ? await remoteReadyImage(attachment, decode) : attachment);
+  // A redrawn picture can be larger than the file it came from, so each one
+  // gets what is left of the turn's limit after the others.
+  const ready = [...attachments];
+  for (const [index, attachment] of ready.entries()) {
+    if (attachment.kind !== "image") continue;
+    const others = ready.reduce((total, other, at) => (at === index ? total : total + inlineBytes(other)), 0);
+    const limit = Math.min(MAX_INLINE_IMAGE_BYTES, MAX_ATTACHMENT_INLINE_BYTES - others);
+    ready[index] = await remoteReadyImage(attachment, decode, limit).catch((error: unknown) => {
+      if (limit < MAX_INLINE_IMAGE_BYTES && error instanceof RemoteAttachmentError && /too large/.test(error.message))
+        throw new RemoteAttachmentError(TOO_LARGE_TOGETHER);
+      throw error;
+    });
   }
+  if (ready.reduce((total, attachment) => total + inlineBytes(attachment), 0) > MAX_ATTACHMENT_INLINE_BYTES)
+    throw new RemoteAttachmentError(TOO_LARGE_TOGETHER);
   return remoteAttachmentUploads(ready);
 }

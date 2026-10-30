@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_INLINE_IMAGE_BYTES } from "../../shared/attachment-contract";
+import { MAX_ATTACHMENT_INLINE_BYTES, MAX_INLINE_IMAGE_BYTES } from "../../shared/attachment-contract";
 import type { Attachment } from "../types";
 import {
   HostResourceShapeError,
@@ -156,20 +156,20 @@ const pixels = (kilobytes: number) => btoa("x".repeat(kilobytes * 1024));
 
 test("images another Mac would refuse are redrawn as PNG or JPEG before they are sent", async () => {
   const { decode } = fakeDecoder({ width: 40, height: 30 });
-  const [gif, photo, png] = await prepareRemoteAttachmentUploads(
+  const [gif, bitmap, png] = await prepareRemoteAttachmentUploads(
     [
       attachment({ kind: "image", mimeType: "image/gif", name: "wave.gif", data: pixels(1), size: 1024 }),
-      attachment({ kind: "image", mimeType: "image/jpeg", name: "IMG_0042.jpeg", data: pixels(1), size: MAX_INLINE_IMAGE_BYTES + 1 }),
+      attachment({ kind: "image", mimeType: "image/bmp", name: "scan.bmp", data: pixels(1), size: 1024 }),
       attachment({ kind: "image", mimeType: "image/png", name: "shot.png", data: "iVBORw0KGgo=", size: 8 }),
     ],
     decode,
   );
-  // A picture that may be transparent stays PNG; a photo stays JPEG; a PNG or JPEG that fits goes as it is.
+  // A picture that may be transparent becomes a PNG; a PNG or JPEG that fits goes as it is.
   assert.deepEqual(
-    [gif, photo].map((upload) => upload?.kind === "image" && [upload.name, upload.mimeType, atob(upload.data).length]),
+    [gif, bitmap].map((upload) => upload?.kind === "image" && [upload.name, upload.mimeType, atob(upload.data).length]),
     [
       ["wave.png", "image/png", 40 * 30 * 4],
-      ["IMG_0042.jpg", "image/jpeg", 40 * 30],
+      ["scan.png", "image/png", 40 * 30 * 4],
     ],
   );
   assert.deepEqual(png, { name: "shot.png", mimeType: "image/png", kind: "image", data: "iVBORw0KGgo=" });
@@ -186,6 +186,24 @@ test("a picture too large for another Mac is sent at the largest size that fits,
   assert.equal(upload.mimeType, "image/jpeg");
   assert.equal(upload.name, "board.jpg");
   assert.equal(atob(upload.data).length, 2250 * 1500 * 2);
+});
+
+test("pictures that grow when redrawn still go together within the host's limit for one message", async () => {
+  // Each small WebP redraws as a 6 MiB PNG; three of those would be 18 MiB, over the 16 MiB a message may carry.
+  const { decode } = fakeDecoder({ width: 1024, height: 1536 }, { "image/png": 4, "image/jpeg": 1 });
+  const uploads = await prepareRemoteAttachmentUploads(
+    ["a", "b", "c"].map((name) =>
+      attachment({ kind: "image", mimeType: "image/webp", name: `${name}.webp`, data: pixels(1), size: 1024 }),
+    ),
+    decode,
+  );
+  const sizes = uploads.map((upload) => (upload.kind === "image" ? atob(upload.data).length : 0));
+  assert.ok(sizes.reduce((total, size) => total + size, 0) <= MAX_ATTACHMENT_INLINE_BYTES);
+  assert.deepEqual(
+    uploads.map((upload) => upload.kind === "image" && upload.mimeType),
+    ["image/png", "image/png", "image/jpeg"],
+    "the last picture is drawn as a JPEG so all three fit",
+  );
 });
 
 test("a picture this Mac cannot decode is explained instead of sent", async () => {
