@@ -133,6 +133,16 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   let generation = 0;
   // Set only while analytics_disabled is tracked, so it goes out on its own.
   let sendNow: ((message: AnalyticsMessage) => void) | undefined;
+  // Consent changes run one at a time, in the order they were asked for, so
+  // a slow opt-out (waiting on its final request) cannot finish after a
+  // newer opt-in and overwrite it.
+  let consentQueue: Promise<unknown> = Promise.resolve();
+
+  function inOrder<T>(work: () => Promise<T>): Promise<T> {
+    const run = consentQueue.then(work, work);
+    consentQueue = run.catch(() => undefined);
+    return run;
+  }
 
   function log(message: string, error?: unknown): void {
     try {
@@ -296,31 +306,35 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
 
     status,
 
-    async setEnabled(enabled) {
-      try {
-        if (enabled) {
-          await options.store.update(enableAnalytics);
-          await activateIfAllowed();
-        } else {
-          await turnOff();
+    setEnabled(enabled) {
+      return inOrder(async () => {
+        try {
+          if (enabled) {
+            await options.store.update(enableAnalytics);
+            await activateIfAllowed();
+          } else {
+            await turnOff();
+          }
+        } catch (error) {
+          log("The analytics setting could not be saved.", error);
+          throw new Error("The usage data setting could not be saved.");
         }
-      } catch (error) {
-        log("The analytics setting could not be saved.", error);
-        throw new Error("The usage data setting could not be saved.");
-      }
-      return status();
+        return status();
+      });
     },
 
-    async markNoticeShown(choice) {
-      try {
-        if (choice?.enabled === false) await turnOff();
-        await options.store.update((state) => markNoticeShown(state, now()));
-        await activateIfAllowed();
-      } catch (error) {
-        log("The analytics notice could not be recorded.", error);
-        throw new Error("The usage data notice could not be saved.");
-      }
-      return status();
+    markNoticeShown(choice) {
+      return inOrder(async () => {
+        try {
+          if (choice?.enabled === false) await turnOff();
+          await options.store.update((state) => markNoticeShown(state, now()));
+          await activateIfAllowed();
+        } catch (error) {
+          log("The analytics notice could not be recorded.", error);
+          throw new Error("The usage data notice could not be saved.");
+        }
+        return status();
+      });
     },
 
     async onboardingFinished(outcome, providerId) {

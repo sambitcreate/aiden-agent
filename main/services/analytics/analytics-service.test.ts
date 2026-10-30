@@ -233,6 +233,41 @@ test("turning off says so once, drops the queue, and forgets the install id and 
   assert.equal(second.queued[0]!.distinctId, h.stored().installId);
 });
 
+test("switching off then back on while the opt-out is still sending leaves it on", async (t) => {
+  let releaseDisabled!: () => void;
+  const created: ReturnType<typeof fakeTransport>[] = [];
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => {
+      const fake = fakeTransport();
+      if (created.length === 0) {
+        fake.transport.captureNow = (message) => new Promise((resolve) => {
+          fake.immediate.push(message);
+          releaseDisabled = () => resolve();
+        });
+      }
+      created.push(fake);
+      return fake.transport;
+    },
+  });
+  t.after(h.cleanup);
+  await h.service.start();
+
+  const turningOff = h.service.setEnabled(false);
+  const turningOn = h.service.setEnabled(true);
+  while (!releaseDisabled) await new Promise((resolve) => setImmediate(resolve));
+  releaseDisabled();
+  const [off, on] = await Promise.all([turningOff, turningOn]);
+
+  assert.equal(off.enabled, false);
+  assert.equal(on.enabled, true);
+  assert.equal(h.stored().enabled, true);
+  assert.equal((await h.service.status()).enabled, true);
+  assert.equal(created.length, 2);
+  assert.equal(created[0]!.state(), "discarded");
+  assert.equal(created[1]!.state(), "open");
+});
+
 test("the notice's Turn off records the notice as seen and sends nothing", async (t) => {
   const h = harness();
   t.after(h.cleanup);
