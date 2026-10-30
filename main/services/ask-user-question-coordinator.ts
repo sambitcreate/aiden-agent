@@ -12,8 +12,14 @@ interface PendingQuestionnaire {
   prompt: AskUserQuestionPromptV1;
   ownerDocumentId: string;
   deadline?: number;
-  settle(response: AskUserQuestionResponseV1): void;
+  settle(response: AskUserQuestionResponseV1, by?: AskUserQuestionSettledBy): void;
 }
+
+/**
+ * Who settled a prompt: its owner answered or closed it, or the host ended it
+ * (deadline, Stop, a closed window, quit).
+ */
+export type AskUserQuestionSettledBy = "owner" | "host";
 
 /**
  * Prompts that stopped waiting at their deadline. Kept briefly so an owner's
@@ -32,7 +38,11 @@ export class AskUserQuestionCoordinator {
   constructor(
     private readonly publish: (prompt: AskUserQuestionPromptV1) => void,
     /** Called once when a published prompt settles for any reason. */
-    private readonly withdraw?: (promptId: string, response: AskUserQuestionResponseV1) => void,
+    private readonly withdraw?: (
+      promptId: string,
+      response: AskUserQuestionResponseV1,
+      settledBy: AskUserQuestionSettledBy,
+    ) => void,
   ) {}
 
   request(
@@ -71,7 +81,7 @@ export class AskUserQuestionCoordinator {
       let published = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const aborted = () => finish(cancelled());
-      const finish = (response: AskUserQuestionResponseV1) => {
+      const finish = (response: AskUserQuestionResponseV1, by: AskUserQuestionSettledBy = "host") => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
@@ -80,7 +90,7 @@ export class AskUserQuestionCoordinator {
         if (response.timedOut) this.rememberExpired(prompt.promptId, ownerDocumentId);
         if (published) {
           try {
-            this.withdraw?.(prompt.promptId, response);
+            this.withdraw?.(prompt.promptId, response, by);
           } catch {
             // Withdrawal is advisory row-state bookkeeping; the prompt still settles.
           }
@@ -132,7 +142,7 @@ export class AskUserQuestionCoordinator {
     }
     const response = parseAskUserQuestionResponse(value, entry.prompt);
     if (!response) return "rejected";
-    entry.settle(response);
+    entry.settle(response, "owner");
     return "answered";
   }
 

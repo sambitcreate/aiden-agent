@@ -606,6 +606,8 @@ export type InterruptedReplyActions = {
   onResume: () => void;
   /** True while Resume is sending. */
   busy?: boolean;
+  /** What the reply was waiting for approval to do. Approvals are never carried over a restart. */
+  approvalSummaries?: readonly string[];
 };
 
 /** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
@@ -613,9 +615,27 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
   return (
     <Callout role="status" data-interrupted-reply="true">
       <Text variant="small-strong">This reply was interrupted</Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block">
-        Aiden closed before it finished. Resume to pick up where it stopped.
-      </Text>
+      {actions.approvalSummaries?.length ? (
+        <>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Aiden closed while waiting for your approval, so this didn’t run:
+          </Text>
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+            {actions.approvalSummaries.map((summary, index) => (
+              <li key={index} className="break-words text-small text-primary">
+                {summary}
+              </li>
+            ))}
+          </ul>
+          <Text variant="small" color="secondary" className="mt-1 block">
+            Resume to pick up where it stopped.
+          </Text>
+        </>
+      ) : (
+        <Text variant="small" color="secondary" className="mt-0.5 block">
+          Aiden closed before it finished. Resume to pick up where it stopped.
+        </Text>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
           Resume
