@@ -314,6 +314,9 @@ import { DEFAULT_SUBAGENT_CANCELLATION_GRACE_MS } from "./subagents/subagent-chi
 import { assistantSettingsSections } from "../../renderer/lib/settings-section.js";
 import { SubagentSupervisor } from "./subagents/subagent-supervisor.js";
 import { chatActivityRegistry } from "./chat-activity.js";
+import { interruptedWaits } from "./interrupted-waits-main.js";
+import { clipInterruptedWaitSummary } from "./interrupted-reply.js";
+import { interruptedWaitSettled } from "../../renderer/shared/interrupted-reply.js";
 import { createSubagentTool } from "./subagents/subagent-tool.js";
 import {
   parseSubagentModelSettings,
@@ -878,6 +881,28 @@ function endLoadMonitor(
   }
 }
 
+// What a foreground reply is waiting on is saved so a restart can offer it
+// again. A crash never settles the card; a quit withdraws it while
+// `quitInProgress` is set, before any window closes, so it stays saved. Any
+// other settlement removes it. It is offered only when the chat's latest run
+// was cut short by that quit or crash.
+let quitInProgress = false;
+function rememberInterruptedWait(
+  streamId: string,
+  wait: Parameters<typeof interruptedWaits.remember>[1],
+): void {
+  const chatId = active.get(streamId)?.chatId;
+  if (!chatId) return;
+  void interruptedWaits.remember(chatId, wait).catch((error: unknown) => {
+    logger.warn("pi", "Could not save what the reply is waiting on.", error);
+  });
+}
+function forgetInterruptedWait(waitId: string): void {
+  void interruptedWaits.forget(waitId).catch((error: unknown) => {
+    logger.warn("pi", "Could not clear what the reply was waiting on.", error);
+  });
+}
+
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -885,8 +910,19 @@ const approvals = new ToolApprovalCoordinator(
     }
     chatActivityRegistry.requestAttention(prompt.approvalId, prompt.streamId, "approval");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:approval", prompt);
+    rememberInterruptedWait(prompt.streamId, {
+      kind: "approval",
+      waitId: prompt.approvalId,
+      askedAt: Date.now(),
+      summary: clipInterruptedWaitSummary(prompt.summary),
+    });
   },
   (approvalId, outcome) => {
+    if (
+      interruptedWaitSettled({ byPerson: outcome === "allowed" || outcome === "denied", quitting: quitInProgress })
+    ) {
+      forgetInterruptedWait(approvalId);
+    }
     chatActivityRegistry.resolveAttention(approvalId);
     recordRunAttentionResolved(hostRunRegistry, approvalId, {
       kind: "approval",
@@ -901,8 +937,19 @@ const questionnaires = new AskUserQuestionCoordinator(
     }
     chatActivityRegistry.requestAttention(prompt.promptId, prompt.streamId, "input");
     recordRunNotification(hostRunRegistry, prompt.streamId, "chat:questionnaire", prompt);
+    rememberInterruptedWait(prompt.streamId, {
+      kind: "question",
+      waitId: prompt.promptId,
+      askedAt: Date.now(),
+      questions: prompt.questions,
+    });
   },
-  (promptId, response) => {
+  (promptId, response, settledBy) => {
+    if (
+      interruptedWaitSettled({ byPerson: settledBy === "owner", timedOut: response.timedOut, quitting: quitInProgress })
+    ) {
+      forgetInterruptedWait(promptId);
+    }
     chatActivityRegistry.resolveAttention(promptId);
     recordRunAttentionResolved(hostRunRegistry, promptId, {
       kind: "question",
@@ -2257,6 +2304,14 @@ async function acpScratchDir(chatId: string): Promise<string> {
 }
 
 export const llmClient = {
+  /**
+   * Aiden is about to quit (or the quit was called off): cards withdrawn from
+   * now on stay saved, so the next launch can offer them again.
+   */
+  setQuitInProgress(value: boolean): void {
+    quitInProgress = value;
+  },
+
   async start(
     streamId: string,
     params: ChatStartParams,

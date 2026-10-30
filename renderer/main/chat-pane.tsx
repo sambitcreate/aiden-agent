@@ -190,7 +190,11 @@ import {
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
-import { INTERRUPTED_REPLY_FOLLOW_UP } from "../shared/interrupted-reply";
+import {
+  formatRecoveredAskUserQuestionAnswers,
+  INTERRUPTED_REPLY_FOLLOW_UP,
+  type InterruptedWaitV1,
+} from "../shared/interrupted-reply";
 import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
@@ -252,6 +256,7 @@ import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
+  ASK_USER_QUESTION_VERSION,
   askUserQuestionMsUntilExpiry,
   formatLateAskUserQuestionFollowUp,
   retainExpiredAskUserQuestionForLateAnswer,
@@ -3251,13 +3256,84 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     }
   }, [chatId, handleSend]);
-  const interruptedReply = React.useMemo(
+  const replyInterrupted = transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
+  // What the interrupted reply was waiting on. A question is offered again in
+  // place of Resume; an approval is only named on the Resume card.
+  const interruptedWaitsQuery = useQuery({
+    queryKey: ["chat-interrupted-waits", chatId, messages.length],
+    queryFn: () => chatsApi.interruptedWaits(chatId),
+    enabled: replyInterruptedQuery.data === true,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const interruptedWaits = React.useMemo(
     () =>
-      transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true
-        ? { busy: resumeBusy, onResume: () => void resumeInterruptedReply() }
-        : undefined,
-    [draft, failedReplyId, replyInterruptedQuery.data, resumeBusy, resumeInterruptedReply, transcriptIdle],
+      replyInterrupted ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId)) : [],
+    [dismissedWaitIds, interruptedWaitsQuery.data, replyInterrupted],
   );
+  const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(() => {
+    const wait = interruptedWaits.find((item) => item.kind === "question");
+    return wait?.kind === "question" && !questionnaire
+      ? {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: wait.waitId,
+          streamId: "s-recovered",
+          toolCallId: "recovered",
+          questions: wait.questions,
+        }
+      : undefined;
+  }, [interruptedWaits, questionnaire]);
+  // Like Resume, sending a recovered answer is busy only in its own chat.
+  const recoveredAnswerTokenRef = React.useRef(0);
+  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const recoveredAnswerSending = recoveredAnswerOwners[chatId] !== undefined;
+  const answerRecoveredQuestion = React.useCallback(
+    async (response: AskUserQuestionResponseV1) => {
+      if (!recoveredQuestion || recoveredAnswerSending) return;
+      const waitId = recoveredQuestion.promptId;
+      const token = ++recoveredAnswerTokenRef.current;
+      setRecoveredAnswerOwners((owners) => ({ ...owners, [chatId]: token }));
+      try {
+        // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
+        if (!response.cancelled) {
+          await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
+        }
+        setDismissedWaitIds((ids) => new Set(ids).add(waitId));
+        // Once the host forgets the wait, drop it from the cached reads too, so
+        // the card stays gone when the pane opens this chat again.
+        void chatsApi
+          .dismissInterruptedWait(chatId, waitId)
+          .then(() =>
+            qc.setQueriesData<InterruptedWaitV1[]>({ queryKey: ["chat-interrupted-waits", chatId] }, (waits) =>
+              waits?.filter((wait) => wait.waitId !== waitId),
+            ),
+          )
+          .catch(() => undefined);
+      } catch (answerError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(userFacingErrorMessage(answerError, "Couldn’t send your answers."));
+      } finally {
+        setRecoveredAnswerOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
+      }
+    },
+    [chatId, handleSend, qc, recoveredAnswerSending, recoveredQuestion],
+  );
+  // Held until the saved waits are read, so Resume never shows in front of a question it would orphan.
+  const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;
+  const interruptedReply = React.useMemo(() => {
+    if (!replyInterrupted || !interruptedWaitsRead || recoveredQuestion) return undefined;
+    const approvalSummaries = interruptedWaits.flatMap((wait) => (wait.kind === "approval" ? [wait.summary] : []));
+    return {
+      busy: resumeBusy,
+      onResume: () => void resumeInterruptedReply(),
+      ...(approvalSummaries.length ? { approvalSummaries } : {}),
+    };
+  }, [interruptedWaits, interruptedWaitsRead, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply]);
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -3531,6 +3607,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 expiresAt={questionnaire.expiresAt}
               />
             ) : null}
+            {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
@@ -3545,6 +3622,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 prompt={questionnaire}
                 submitting={questionnaireSubmitting}
                 onRespond={answerQuestionnaire}
+              />
+            ) : recoveredQuestion ? (
+              <AskUserQuestionComposer
+                key={recoveredQuestion.promptId}
+                prompt={recoveredQuestion}
+                submitting={recoveredAnswerSending}
+                onRespond={answerRecoveredQuestion}
               />
             ) : (
               <Composer
