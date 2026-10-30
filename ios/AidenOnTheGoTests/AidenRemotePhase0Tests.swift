@@ -1203,6 +1203,40 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(bootstrap.handle(challenge).0, .cancelAuthenticationChallenge)
     }
 
+    func testTrustDelegatesMatchHostsCaseInsensitively() throws {
+        // Nearby discovery yields the Bonjour name with its case
+        // ("Office-Mac.local"), but URLSession reports the challenge
+        // host in lowercase. A case-sensitive match cancelled every challenge.
+        let ca = try XCTUnwrap(SecCertificateCreateWithData(nil, try XCTUnwrap(Data(base64Encoded: caCertificateDER)) as CFData))
+        let leaf = try XCTUnwrap(SecCertificateCreateWithData(nil, try XCTUnwrap(Data(base64Encoded: originalCertificateDER)) as CFData))
+        let space = AidenTrustedProtectionSpace(
+            serverTrust: try trust(for: leaf, ca: ca, host: "aiden-phase0.example.test"),
+            host: "aiden-phase0.example.test",
+            port: 7443
+        )
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: space,
+            proposedCredential: nil,
+            previousFailureCount: 0,
+            failureResponse: nil,
+            error: nil,
+            sender: AidenNoopChallengeSender()
+        )
+        let bootstrap = AidenSealedBootstrapSessionDelegate(
+            endpoint: try XCTUnwrap(URL(string: "https://Aiden-Phase0.Example.Test:7443/api/aiden/v1"))
+        )
+        XCTAssertEqual(bootstrap.handle(challenge).0, .useCredential)
+
+        let pinned = AidenPinnedServerSessionDelegate(
+            expectedHost: "Aiden-Phase0.Example.Test",
+            expectedPort: 7443,
+            expectedFingerprint: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            trustPolicy: .system
+        )
+        XCTAssertTrue(pinned.allowsRedirect(to: try XCTUnwrap(URL(string: "https://aiden-phase0.example.test:7443/api/aiden/v1/health"))))
+        XCTAssertFalse(pinned.allowsRedirect(to: try XCTUnwrap(URL(string: "https://other.example.test:7443/api/aiden/v1/health"))))
+    }
+
     func testStreamEnvelopeRejectsInvalidIdentityAndSequence() throws {
         let invalidEvents = [
             #"{"protocolVersion":2,"streamId":"stream-1","sequence":1,"timestamp":"2026-08-18T19:00:00Z","type":"heartbeat","terminal":false,"payload":{}}"#,
@@ -1872,6 +1906,25 @@ final class AidenRemotePhase0Tests: XCTestCase {
             XCTAssertEqual(wrongPinDelegate.lastTrustError, .publicKeyPinMismatch)
         }
     }
+}
+
+private final class AidenTrustedProtectionSpace: URLProtectionSpace, @unchecked Sendable {
+    private let trust: SecTrust
+
+    init(serverTrust: SecTrust, host: String, port: Int) {
+        trust = serverTrust
+        super.init(
+            host: host,
+            port: port,
+            protocol: NSURLProtectionSpaceHTTPS,
+            realm: nil,
+            authenticationMethod: NSURLAuthenticationMethodServerTrust
+        )
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    override var serverTrust: SecTrust? { trust }
 }
 
 private final class AidenNoopChallengeSender: NSObject, URLAuthenticationChallengeSender {
