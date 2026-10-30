@@ -60,6 +60,12 @@ jobs:
             echo "$release_tag already exists; skipping release without changing its version."
           fi
 
+      - name: Require the analytics project key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
+
       - name: Install locked dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: npm ci
@@ -141,6 +147,7 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_ENABLE_AUTO_UPDATES: "1"
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -226,6 +233,12 @@ jobs:
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
 
+      - name: Require the analytics project key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
+
       - name: Install Linux package dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev
@@ -240,6 +253,10 @@ jobs:
 
       - name: Build and verify Linux distributions
         if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+          # The version checks below launch the release build.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run models:refresh
@@ -263,6 +280,7 @@ jobs:
           smoke_root="$RUNNER_TEMP/aiden-linux-release-smoke-${{ matrix.arch }}"
           mkdir -p "$smoke_root/home" "$smoke_root/config" "$smoke_root/cache" "$smoke_root/data"
           set +e
+          AIDEN_ANALYTICS=0 \
           HOME="$smoke_root/home" \
           XDG_CONFIG_HOME="$smoke_root/config" \
           XDG_CACHE_HOME="$smoke_root/cache" \
