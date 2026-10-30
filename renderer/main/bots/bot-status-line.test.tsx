@@ -1,7 +1,7 @@
 import "./test-dom";
 import assert from "node:assert/strict";
 import { afterEach, mock, test } from "node:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import type { BotLiveActivity } from "../../shared/bot-live";
 import { BotStatusAnnouncer, BotStatusLine } from "./bot-status-line";
 
@@ -43,16 +43,12 @@ test("waiting keeps its word under Always Thinking, and an unknown phase reads a
   assert.equal(said(), "Working");
 });
 
-test("after 20 seconds the line shows elapsed time and Stop; after 2 minutes, a still-going note", () => {
-  const calls: string[] = [];
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 19_000} onStop={() => calls.push("stop")} />);
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true);
+test("after 20 seconds the line shows elapsed time; after 2 minutes, a still-going note", () => {
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 19_000} />);
   assert.equal(screen.queryByText(/19s/u) === null, true);
   cleanup();
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} onStop={() => calls.push("stop")} />);
+  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} />);
   assert.ok(screen.getByText("· 1m 12s"));
-  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-  assert.deepEqual(calls, ["stop"]);
   assert.equal(screen.queryByRole("note") === null, true);
   cleanup();
   render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 121_000} />);
@@ -60,15 +56,10 @@ test("after 20 seconds the line shows elapsed time and Stop; after 2 minutes, a 
   assert.ok(screen.getByText("Still going. I'll message you when it's done."));
 });
 
-test("Stop needs a handler, and goes away while the Bot is already stopping", () => {
-  render(<BotStatusLine activity={reading} wording="follows" now={1_000 + 72_000} />);
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true, "no handler, no Stop");
-  cleanup();
-  render(
-    <BotStatusLine activity={{ phase: "stopping", startedAt: 1_000 }} wording="follows" now={1_000 + 72_000} onStop={() => {}} />,
-  );
-  assert.equal(said(), "Stopping");
-  assert.equal(screen.queryByRole("button", { name: "Stop" }) === null, true, "already stopping");
+test("the line itself offers no actions: Stop stays in the composer", () => {
+  render(<BotStatusLine activity={reading} wording="thinking" now={1_000 + 125_000} />);
+  assert.equal(said(), "Thinking");
+  assert.equal(screen.queryAllByRole("button").length, 0);
 });
 
 test("the still-going note is only for work in progress, not while it waits on you or stops", () => {

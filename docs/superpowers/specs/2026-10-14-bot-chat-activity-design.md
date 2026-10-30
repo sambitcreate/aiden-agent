@@ -159,7 +159,7 @@ When a new tool kind ships (a browser, image generation), it gets its own phase 
 - **Always "Thinking".** With this wording, every phase except `waiting`, `stopping` and `reconnecting` shows `thinking`'s word and mark. Those three stay because they change what the person should do.
 - **Unknown ids.** Clients render an unknown phase id as `working`, for forward compatibility.
 - **Elapsed time.** After 20 seconds in a turn, the line adds the elapsed time ("· 1m 12s"), measured from `activity.startedAt`. After 2 minutes, a centred note adds "Still going. I'll message you when it's done." The finish already posts a notification through the existing paths.
-- **No Stop on the line on phones.** On the Mac, the line shows Stop after 20 seconds as well. Phones keep Stop in the composer.
+- **No Stop on the line.** Every app keeps Stop in the composer, beside Queue. (Until 2026-10-30 the Mac also showed Stop on the line after 20 seconds; it was removed as a duplicate of the composer's Stop.)
 
 ## 6. Desktop chat rendering
 
