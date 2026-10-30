@@ -5,6 +5,8 @@ import {
   requestChatDraftComposerFocus,
   subscribeChatDrafts,
 } from "../lib/chat-draft";
+import { openWorkspaceSettings } from "./workspace-settings-dialog";
+import { workspaceHasOwnSettings } from "../lib/workspace-settings-view";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { HistoryNavButtons } from "./history-nav";
 import { forkedFromLabel } from "../lib/chat-copy-view";
@@ -1769,6 +1771,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                             >
                               New chat
                             </DropdownMenuItem>
+                            {workspaceHasOwnSettings(workspace) ? (
+                              <DropdownMenuItem onSelect={() => openWorkspaceSettings(workspace.id)}>
+                                Workspace settings…
+                              </DropdownMenuItem>
+                            ) : null}
                             <DropdownMenuItem
                               disabled={workspaceSwitchBlocked || group.chats.length === 0}
                               title={

@@ -253,6 +253,10 @@ export interface Workspace {
   permission: WorkspacePermission;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
   memoryEnabled?: boolean;
+  /** Skills (by canonical name) switched off for this workspace's chats. */
+  disabledSkills?: string[];
+  /** Connector (MCP server) ids this workspace's chats can't use. */
+  disabledMcpServerIds?: string[];
   managedWorktree?: ManagedWorktree;
   /**
    * Set when the workspace was created by Scratch chat (a generated

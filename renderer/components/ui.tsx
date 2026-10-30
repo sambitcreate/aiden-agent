@@ -1442,8 +1442,8 @@ type DialogProps = React.PropsWithChildren<{
   busy?: boolean;
   onConfirm?: () => void | Promise<void>;
   returnFocus?: () => HTMLElement | null;
-  /** "full" fills the window (an image's full view). */
-  size?: "large" | "full";
+  /** "wide" fits a two-pane dialog with its own tab list; "full" fills the window (an image's full view). */
+  size?: "large" | "wide" | "full";
   layer?: DialogLayer;
   /**
    * Run the confirm action on Enter in a single-line field, or Mod+Enter anywhere in the
@@ -1530,6 +1530,7 @@ export function Dialog({
             "fixed left-1/2 top-1/2 flex max-h-[85vh] w-[min(92vw,440px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-dialog bg-popover px-6 py-5 outline-none",
             layer === "onboarding" ? "z-[70] shadow-onboarding" : "z-50 shadow-modal",
             size === "large" && "w-[min(92vw,680px)]",
+            size === "wide" && "w-[min(92vw,860px)]",
             size === "full" && "h-[94vh] max-h-[94vh] w-[96vw]",
           )}
         >

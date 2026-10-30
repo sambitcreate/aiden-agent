@@ -119,6 +119,28 @@ test("shared workspace permission updates preserve cancellation and schedule res
   assert.equal(application.saved[application.saved.length - 1]?.name, "Again");
 });
 
+test("switching skills and connectors off for a workspace applies from the next message", async () => {
+  const application = fixture();
+  const updated = await application.service.update("workspace-1", {
+    disabledSkills: ["Review", " review ", 42, ""],
+    disabledMcpServerIds: ["notion", "notion"],
+  });
+  assert.deepEqual(updated.disabledSkills, ["review"]);
+  assert.deepEqual(updated.disabledMcpServerIds, ["notion"]);
+  // A running reply keeps its tools: nothing is cancelled or paused.
+  assert.deepEqual(application.events, ["save"]);
+
+  const renamed = await application.service.update("workspace-1", { name: "Renamed" });
+  assert.deepEqual(renamed.disabledSkills, ["review"], "an unrelated edit keeps the off-lists");
+
+  const cleared = await application.service.update("workspace-1", {
+    disabledSkills: [],
+    disabledMcpServerIds: "not a list",
+  });
+  assert.equal("disabledSkills" in cleared, false);
+  assert.equal("disabledMcpServerIds" in cleared, false);
+});
+
 test("shared workspace mutations assert the current revision inside their mutation lease", async () => {
   const application = fixture();
   await assert.rejects(

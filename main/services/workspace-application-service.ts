@@ -9,6 +9,7 @@ import type { workspaceMutationGate } from "./workspace-mutation-gate.js";
 import type { workspaceOperationRegistry } from "./workspace-operation-registry.js";
 import { assertWorkspaceRecordRemovalAllowed } from "./workspace-record-removal.js";
 import { withWorkspaceScheduleRestoration } from "./workspace-schedule-restoration.js";
+import { normalizeDisabledMcpServerIds, normalizeDisabledSkills } from "./workspace-capabilities.js";
 
 const PERMISSIONS: readonly WorkspacePermission[] = ["full", "ask", "none"];
 
@@ -209,7 +210,18 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             typeof fields.memoryEnabled === "boolean"
               ? fields.memoryEnabled
               : existing.memoryEnabled,
+          // Off-lists apply from the next message, so they never stop a reply.
+          disabledSkills:
+            "disabledSkills" in fields
+              ? normalizeDisabledSkills(fields.disabledSkills)
+              : existing.disabledSkills,
+          disabledMcpServerIds:
+            "disabledMcpServerIds" in fields
+              ? normalizeDisabledMcpServerIds(fields.disabledMcpServerIds)
+              : existing.disabledMcpServerIds,
         };
+        if (!next.disabledSkills) delete next.disabledSkills;
+        if (!next.disabledMcpServerIds) delete next.disabledMcpServerIds;
         const authorityChanged =
           next.permission !== existing.permission ||
           next.memoryEnabled !== existing.memoryEnabled;

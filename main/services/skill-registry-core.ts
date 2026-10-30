@@ -24,6 +24,8 @@ export interface SkillRegistryCandidate {
 export interface ResolvedSkillCandidate extends SkillRegistryCandidate {
   available: boolean;
   unavailableReason?: string;
+  /** Switched off for this workspace: hidden from the model, still runnable by name. */
+  workspaceOff?: boolean;
 }
 
 export interface SkillCatalogProjectionContext {

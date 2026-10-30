@@ -661,6 +661,12 @@ export const skillsApi = {
   catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
   /** @deprecated Compatibility alias for the renderer-safe catalog. */
+  /** Every skill a workspace could switch off, with whether it is off there. */
+  workspaceChoices: (workspaceId: string) =>
+    invoke<import("../../main/services/skill-registry").WorkspaceSkillChoice[]>(
+      "skills:workspaceChoices",
+      workspaceId,
+    ),
   discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
@@ -1022,7 +1028,13 @@ export const workspacesApi = {
     onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
-    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+    patch: {
+      name?: string;
+      permission?: WorkspacePermission;
+      memoryEnabled?: boolean;
+      disabledSkills?: string[];
+      disabledMcpServerIds?: string[];
+    },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
