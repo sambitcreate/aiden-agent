@@ -3595,6 +3595,13 @@ struct AidenQuestionComposerDraft {
     var customAnswers: [Int: String] = [:]
     var customOpen: Set<Int> = []
 
+    init() {}
+
+    /// Starts with the options the agent recommends already selected.
+    init(questions: [AidenRemoteQuestion]) {
+        selections = AidenQuestionAnswerDraft.recommendedSelections(for: questions)
+    }
+
     mutating func move(to index: Int, questions: [AidenRemoteQuestion]) {
         guard questions.indices.contains(index) else { return }
         activeIndex = index
@@ -3617,6 +3624,29 @@ struct AidenQuestionComposerDraft {
 /// draft wins over option selections for that question; questions left
 /// unaddressed are omitted so the host records them as skipped.
 enum AidenQuestionAnswerDraft {
+    /// The agent marks a recommended option by ending its label with
+    /// "(Recommended)". The full label stays the wire answer; the card shows
+    /// `text` with a separate tag. Desktop parity: parseRecommendedOptionLabel.
+    static func recommendedLabel(_ label: String) -> (text: String, recommended: Bool) {
+        guard let marker = label.range(
+            of: "(recommended)", options: [.caseInsensitive, .anchored, .backwards]
+        ) else { return (label, false) }
+        let text = String(label[..<marker.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? (label, false) : (text, true)
+    }
+
+    /// Starting selections: the first recommended option of a single choice,
+    /// or every recommended option of a multi-select.
+    static func recommendedSelections(for questions: [AidenRemoteQuestion]) -> [Int: Set<String>] {
+        var selections: [Int: Set<String>] = [:]
+        for (index, question) in questions.enumerated() {
+            let marked = question.options.map(\.label).filter { recommendedLabel($0).recommended }
+            guard let first = marked.first else { continue }
+            selections[index] = question.multiSelect ? Set(marked) : [first]
+        }
+        return selections
+    }
+
     static func answers(
         for questions: [AidenRemoteQuestion],
         selections: [Int: Set<String>],
