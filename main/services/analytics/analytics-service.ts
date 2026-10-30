@@ -337,20 +337,24 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
       });
     },
 
-    async onboardingFinished(outcome, providerId) {
-      if (outcome !== "completed" && outcome !== "deferred") return;
-      try {
-        // The final onboarding step shows the usage-data row, so finishing
-        // onboarding is the new-install notice.
-        await options.store.update((state) => markNoticeShown(state, now()));
-        await activateIfAllowed();
-        const provider = providerId === undefined
-          ? undefined
-          : options.isBuiltinProvider(providerId) ? providerId : "custom";
-        core?.track("onboarding_finished", { outcome, ...(provider ? { provider_id: provider } : {}) });
-      } catch (error) {
-        log("Onboarding analytics could not be recorded.", error);
-      }
+    onboardingFinished(outcome, providerId) {
+      if (outcome !== "completed" && outcome !== "deferred") return Promise.resolve();
+      // Marking the notice seen and starting to send is a consent change too,
+      // so it waits behind any switch change already in progress.
+      return inOrder(async () => {
+        try {
+          // The final onboarding step shows the usage-data row, so finishing
+          // onboarding is the new-install notice.
+          await options.store.update((state) => markNoticeShown(state, now()));
+          await activateIfAllowed();
+          const provider = providerId === undefined
+            ? undefined
+            : options.isBuiltinProvider(providerId) ? providerId : "custom";
+          core?.track("onboarding_finished", { outcome, ...(provider ? { provider_id: provider } : {}) });
+        } catch (error) {
+          log("Onboarding analytics could not be recorded.", error);
+        }
+      });
     },
 
     async shutdown(timeoutMs = 1_500) {
