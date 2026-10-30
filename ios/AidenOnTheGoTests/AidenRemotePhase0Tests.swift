@@ -1203,6 +1203,74 @@ final class AidenRemotePhase0Tests: XCTestCase {
         XCTAssertEqual(bootstrap.handle(challenge).0, .cancelAuthenticationChallenge)
     }
 
+    func testTrustCallbacksCompleteThroughThePinCheck() throws {
+        let ca = try XCTUnwrap(SecCertificateCreateWithData(nil, try XCTUnwrap(Data(base64Encoded: caCertificateDER)) as CFData))
+        let leaf = try XCTUnwrap(SecCertificateCreateWithData(nil, try XCTUnwrap(Data(base64Encoded: originalCertificateDER)) as CFData))
+        func challenge(host: String) throws -> URLAuthenticationChallenge {
+            URLAuthenticationChallenge(
+                protectionSpace: AidenTrustedProtectionSpace(
+                    serverTrust: try trust(for: leaf, ca: ca, host: "aiden-phase0.example.test"),
+                    host: host,
+                    port: 7443
+                ),
+                proposedCredential: nil,
+                previousFailureCount: 0,
+                failureResponse: nil,
+                error: nil,
+                sender: AidenNoopChallengeSender()
+            )
+        }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let task = session.dataTask(with: try XCTUnwrap(URL(string: "https://aiden-phase0.example.test:7443/api/aiden/v1/health")))
+
+        // Drives one callback and returns the disposition it completed with.
+        func complete(
+            _ delegate: URLSessionTaskDelegate,
+            taskLevel: Bool,
+            _ challenge: URLAuthenticationChallenge
+        ) -> URLSession.AuthChallengeDisposition? {
+            let box = AidenDispositionBox()
+            if taskLevel {
+                delegate.urlSession?(session, task: task, didReceive: challenge) { disposition, _ in box.value = disposition }
+            } else {
+                delegate.urlSession?(session, didReceive: challenge) { disposition, _ in box.value = disposition }
+            }
+            return box.value
+        }
+
+        for taskLevel in [false, true] {
+            // The bootstrap delegate accepts the matching host and refuses others.
+            let bootstrap = AidenSealedBootstrapSessionDelegate(
+                endpoint: try XCTUnwrap(URL(string: "https://aiden-phase0.example.test:7443/api/aiden/v1"))
+            )
+            XCTAssertEqual(complete(bootstrap, taskLevel: taskLevel, try challenge(host: "aiden-phase0.example.test")), .useCredential)
+            XCTAssertEqual(complete(bootstrap, taskLevel: taskLevel, try challenge(host: "other.example.test")), .cancelAuthenticationChallenge)
+
+            // The pinned delegate runs the real pin check: a wrong pin is
+            // recorded and cancelled, never handed to default system trust.
+            let pinned = AidenPinnedServerSessionDelegate(
+                expectedHost: "aiden-phase0.example.test",
+                expectedPort: 7443,
+                expectedFingerprint: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                trustPolicy: .privateCA(SecCertificateCopyData(ca) as Data)
+            )
+            XCTAssertEqual(complete(pinned, taskLevel: taskLevel, try challenge(host: "aiden-phase0.example.test")), .cancelAuthenticationChallenge)
+            XCTAssertNotNil(pinned.lastTrustError, "taskLevel: \(taskLevel)")
+
+            // The simulator stream forwards both callbacks to the same check.
+            let routedPin = AidenPinnedServerSessionDelegate(
+                expectedHost: "aiden-phase0.example.test",
+                expectedPort: 7443,
+                expectedFingerprint: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                trustPolicy: .privateCA(SecCertificateCopyData(ca) as Data)
+            )
+            let router = AidenSimulatorSessionRouter(trust: routedPin)
+            XCTAssertEqual(complete(router, taskLevel: taskLevel, try challenge(host: "aiden-phase0.example.test")), .cancelAuthenticationChallenge)
+            XCTAssertNotNil(routedPin.lastTrustError, "taskLevel: \(taskLevel)")
+        }
+    }
+
     func testTrustDelegatesMatchHostsCaseInsensitively() throws {
         // Nearby discovery yields the Bonjour name with its case
         // ("Office-Mac.local"), but URLSession reports the challenge
@@ -1925,6 +1993,10 @@ private final class AidenTrustedProtectionSpace: URLProtectionSpace, @unchecked 
     required init?(coder: NSCoder) { return nil }
 
     override var serverTrust: SecTrust? { trust }
+}
+
+private final class AidenDispositionBox: @unchecked Sendable {
+    var value: URLSession.AuthChallengeDisposition?
 }
 
 private final class AidenNoopChallengeSender: NSObject, URLAuthenticationChallengeSender {
