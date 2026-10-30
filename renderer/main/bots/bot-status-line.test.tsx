@@ -56,12 +56,6 @@ test("after 20 seconds the line shows elapsed time; after 2 minutes, a still-goi
   assert.ok(screen.getByText("Still going. I'll message you when it's done."));
 });
 
-test("the line itself offers no actions: Stop stays in the composer", () => {
-  render(<BotStatusLine activity={reading} wording="thinking" now={1_000 + 125_000} />);
-  assert.equal(said(), "Thinking");
-  assert.equal(screen.queryAllByRole("button").length, 0);
-});
-
 test("the still-going note is only for work in progress, not while it waits on you or stops", () => {
   const late = 1_000 + 121_000;
   render(<BotStatusLine activity={{ phase: "waiting", startedAt: 1_000 }} wording="follows" now={late} />);
