@@ -638,7 +638,14 @@ test("a failed coalesced save is reported and retried without waiting for anothe
   });
 
   await store.record(record({ providerId: "openai", modelId: "gpt-test" }));
-  await saved;
+  // The store's save timer is unref'd so it never holds the app open; hold
+  // the test's event loop open until the retried save lands.
+  const keepAlive = setInterval(() => undefined, 1_000);
+  try {
+    await saved;
+  } finally {
+    clearInterval(keepAlive);
+  }
 
   assert.match(String(failures[0]), /disk full/u);
   assert.equal(
