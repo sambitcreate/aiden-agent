@@ -33,20 +33,37 @@ interface QueueSnapshot {
 /** The subset of a compaction result that decides whether held follow-ups may proceed. */
 export type CompactionHoldOutcome = { compacted: true } | { compacted: false; reason: string };
 
+/** Keeps a chat's queue in the module map only while a view watches it or it holds work. */
+interface QueueRetention {
+  observed(queue: ChatMessageQueue): void;
+  /** No view watches the queue any more, or a change left an unwatched queue. */
+  unobserved(queue: ChatMessageQueue): void;
+}
+
 /** Unsent, document-local drafts. Never write attachment contents to browser storage. */
 export class ChatMessageQueue {
   private snapshot: QueueSnapshot = { messages: [], paused: false };
   private listeners = new Set<() => void>();
+  private readonly retention: QueueRetention | undefined;
+  constructor(retention?: QueueRetention) {
+    this.retention = retention;
+  }
   getSnapshot = (): QueueSnapshot => this.snapshot;
+  get observed(): boolean {
+    return this.listeners.size > 0;
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
+    this.retention?.observed(this);
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) this.retention?.unobserved(this);
     };
   };
   private publish(next: QueueSnapshot) {
     this.snapshot = next;
     for (const listener of this.listeners) listener();
+    if (this.listeners.size === 0) this.retention?.unobserved(this);
   }
   private validate(message: QueuedChatMessage) {
     if (!message.text.trim() && message.attachments.length === 0) {
@@ -193,11 +210,37 @@ export class ChatMessageQueue {
   }
 }
 
+/** Nothing queued, held, paused or in flight: a fresh queue would be identical. */
+function holdsNothing(snapshot: QueueSnapshot): boolean {
+  return snapshot.messages.length === 0
+    && !snapshot.paused
+    && !snapshot.sendingId
+    && !snapshot.editingId
+    && !snapshot.holdReason
+    && !snapshot.forkSummaryHeld;
+}
+
 const queues = new Map<string, ChatMessageQueue>();
 export function chatMessageQueue(chatId: string): ChatMessageQueue {
   let queue = queues.get(chatId);
   if (!queue) {
-    queue = new ChatMessageQueue();
+    queue = new ChatMessageQueue({
+      observed: (subscribed) => {
+        if (!queues.has(chatId)) queues.set(chatId, subscribed);
+      },
+      // Every visited chat would otherwise leave a record behind. Wait a task
+      // so an immediate resubscribe (a remount) keeps the same queue.
+      // A mutation on an unwatched queue reruns the check, so a send that
+      // settles after its view left does not strand an empty queue.
+      unobserved: (released) => {
+        if (!holdsNothing(released.getSnapshot())) return;
+        setTimeout(() => {
+          if (queues.get(chatId) === released && !released.observed && holdsNothing(released.getSnapshot())) {
+            queues.delete(chatId);
+          }
+        }, 0);
+      },
+    });
     queues.set(chatId, queue);
   }
   return queue;

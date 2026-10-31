@@ -2066,6 +2066,9 @@ export function startGeneration(
         }
         return { ok: true as const };
       }
+      // Main never took the turn, so nothing will ever arrive on this stream.
+      fallbackDetachedLifecycleStream(streamId);
+      dispose();
       return {
         ok: false as const,
         error: new Error("Generation was rejected before it accepted this message."),

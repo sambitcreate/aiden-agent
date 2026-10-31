@@ -359,21 +359,49 @@ test("a tail with no boundary waits, then joins after the longest wait", () => {
   assert.equal(nextAt, null);
 });
 
-test("the end of the text and reduced motion release everything at once", () => {
+test("the end of the text releases everything at once", () => {
   const first = advanceStreamingRevealGate(
     INITIAL_STREAMING_REVEAL_GATE,
     { content: "One.\n\nTwo", ...streaming },
     0,
   ).gate;
   const content = "One.\n\nTwo.\n\n```ts\nopen";
-  for (const input of [
+  const { gate, nextAt } = advanceStreamingRevealGate(
+    first,
     { content, complete: true, reducedMotion: false },
-    { content, complete: false, reducedMotion: true },
-  ]) {
-    const { gate, nextAt } = advanceStreamingRevealGate(first, input, 1);
-    assert.equal(gate.text, content, JSON.stringify(input));
-    assert.equal(nextAt, null);
-  }
+    1,
+  );
+  assert.equal(gate.text, content);
+  assert.equal(nextAt, null);
+});
+
+test("reduced motion releases unfinished text whole, but no more often than the reveal", () => {
+  const reduced = { complete: false, reducedMotion: true };
+  let { gate, nextAt } = advanceStreamingRevealGate(
+    INITIAL_STREAMING_REVEAL_GATE,
+    { content: "One.\n\nTwo", ...reduced },
+    0,
+  );
+  assert.equal(gate.text, "One.\n\nTwo", "the first text shows at once, unfinished tail included");
+  assert.equal(nextAt, null);
+
+  const grown = "One.\n\nTwo.\n\n```ts\nopen";
+  ({ gate, nextAt } = advanceStreamingRevealGate(gate, { content: grown, ...reduced }, 50));
+  assert.equal(gate.text, "One.\n\nTwo", "a token right after a release waits for the cadence");
+  assert.equal(nextAt, STREAMING_REVEAL_RELEASE_MS);
+
+  ({ gate, nextAt } = advanceStreamingRevealGate(gate, { content: grown, ...reduced }, nextAt!));
+  assert.equal(gate.text, grown, "the wait ends with all the text, unclosed code fence included");
+  assert.equal(nextAt, null);
+
+  const finished = `${grown}\n\`\`\``;
+  ({ gate, nextAt } = advanceStreamingRevealGate(
+    gate,
+    { content: finished, complete: true, reducedMotion: true },
+    STREAMING_REVEAL_RELEASE_MS + 1,
+  ));
+  assert.equal(gate.text, finished, "the end of the turn never waits");
+  assert.equal(nextAt, null);
 });
 
 test("a reply that is replaced rather than extended starts the gate over", () => {

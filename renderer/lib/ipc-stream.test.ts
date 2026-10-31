@@ -266,6 +266,28 @@ test("generation exposes a non-rejecting authoritative start result", async () =
   } finally {
     rejected.restore();
   }
+
+  const unaccepted = installFakeBridge({ startResponse: { accepted: false, started: false } });
+  const errors: string[] = [];
+  try {
+    const handle = startGeneration(
+      {
+        chatId: "chat-unaccepted",
+        workspaceId: "workspace-1",
+        providerId: "provider-1",
+        model: "model-1",
+      },
+      { ...callbacks(), onError: (message) => errors.push(message) },
+      "turn-unaccepted",
+    );
+    const result = await handle.started;
+    assert.equal(result.ok, false);
+    // Nothing will stream for a turn main never took, so no listeners stay attached.
+    assert.equal(listenerCount(unaccepted.bridge), 0);
+    assert.deepEqual(errors, []);
+  } finally {
+    unaccepted.restore();
+  }
 });
 
 test("a post-handoff setup failure reports the error but keeps the committed send accepted", async () => {
@@ -638,8 +660,11 @@ test("approval details are forwarded only to their owning stream", () => {
   }
 });
 
-test("a lifecycle-detached start rejection clears through authoritative fallback", async () => {
-  const { bridge, restore } = installFakeBridge({ rejectStart: true });
+for (const [label, options] of [
+  ["rejection", { rejectStart: true }],
+  ["unaccepted result", { startResponse: { accepted: false, started: false } }],
+] as const) test(`a lifecycle-detached start ${label} clears through authoritative fallback`, async () => {
+  const { bridge, restore } = installFakeBridge(options);
   const fallbacks: string[] = [];
   const unsubscribe = subscribeDetachedTerminalChats(
     (channel, handler) => {

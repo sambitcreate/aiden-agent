@@ -66,6 +66,8 @@ export function reportRendererDiagnostic(
   const currentTime = Date.now();
   let state = rates.get(key);
   if (!state || currentTime - state.startedAt >= policy.windowMs) {
+    // The old window's timer would otherwise flush the new window early.
+    if (state?.timer != null) window.clearTimeout(state.timer);
     if (state?.suppressed) flushSuppressed(key);
     const referenceId = createReferenceId();
     const sample = { kind, errorType: type, context, referenceId };

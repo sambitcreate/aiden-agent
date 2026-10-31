@@ -1,7 +1,8 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
+import { STREAMING_REVEAL_RELEASE_MS } from "../lib/streaming-reveal.js";
 import { StreamingMarkdownReveal } from "./streaming-markdown-reveal.js";
 
 const STREAMING = "First paragraph.\n\nSecond paragraph still streaming";
@@ -23,6 +24,24 @@ test("reduced motion shows a streaming reply as written, unfinished prose includ
   const text = renderReveal(STREAMING, false, true).textContent ?? "";
   assert.match(text, /First paragraph\./u);
   assert.match(text, /Second paragraph still streaming/u);
+});
+
+test("reduced motion shows new tokens at the reveal cadence rather than on every token", async () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const { container, rerender } = render(
+    <StreamingMarkdownReveal content={STREAMING} complete={false} />,
+  );
+  const surface = () => container.querySelector(".streaming-reveal")?.textContent ?? "";
+  assert.match(surface(), /Second paragraph still streaming/u);
+
+  rerender(<StreamingMarkdownReveal content={`${STREAMING} and more`} complete={false} />);
+  assert.doesNotMatch(surface(), /and more/u, "a token right after a release waits");
+
+  await act(() => new Promise((resolve) => setTimeout(resolve, STREAMING_REVEAL_RELEASE_MS + 50)));
+  assert.match(surface(), /still streaming and more/u, "the waiting text shows once the cadence allows");
+
+  rerender(<StreamingMarkdownReveal content={`${STREAMING} and more. Done`} complete />);
+  assert.match(surface(), /and more\. Done/u, "the end of the turn shows at once");
 });
 
 test("without reduced motion a finished paragraph shows while the unfinished one waits", () => {

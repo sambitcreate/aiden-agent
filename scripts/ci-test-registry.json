@@ -868,6 +868,7 @@
         "renderer/components/onboarding-flow.test.tsx",
         "renderer/components/usage-data.test.tsx",
         "renderer/components/onboarding-bots-step.test.tsx",
+        "renderer/components/onboarding-feature-gallery.test.tsx",
         "renderer/components/remote-connection-popover.test.tsx",
         "renderer/components/remote-pairing-request-sheet.test.tsx",
         "renderer/components/settings/about-settings.test.tsx",

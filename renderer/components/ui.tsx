@@ -158,6 +158,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(fun
 });
 
 type TextProps = React.HTMLAttributes<HTMLElement> & {
+  ref?: React.Ref<HTMLElement>;
   as?: keyof React.JSX.IntrinsicElements;
   variant?: "heading1" | "strong" | "regular" | "small" | "small-strong";
   color?: "primary" | "secondary" | "tertiary" | "quaternary" | "red" | "status-red";

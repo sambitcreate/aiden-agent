@@ -106,7 +106,7 @@ function RootContent() {
   const reconcileChatCacheAfterIdle = React.useCallback(
     async (chatId: string) => {
       const chatKey = queryKeys.chat(chatId);
-      await reconcileChatReadUntilAuthoritative({
+      const outcome = await reconcileChatReadUntilAuthoritative({
         isDeleted: () => isChatCacheDeleted(chatId),
         waitUntilIdle: () => chatsApi.waitUntilIdle(chatId),
         refreshChat: async () => {
@@ -128,6 +128,12 @@ function RootContent() {
           });
         },
       });
+      if (outcome === "failed" && !isChatCacheDeleted(chatId)) {
+        // The read kept failing, so stop polling and drop the provisional
+        // transcript. An open pane reloads it and shows its "couldn't be
+        // loaded / Try again" state; a later visit reads it afresh.
+        await queryClient.resetQueries({ queryKey: chatKey, exact: true }).catch(() => undefined);
+      }
     },
     [queryClient],
   );
