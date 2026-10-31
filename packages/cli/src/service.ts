@@ -135,6 +135,26 @@ export interface InstallResult {
   file: string;
   /** Something the person still has to do, such as enabling lingering. */
   warning?: string;
+  /** The service file this install replaced, kept until the new server is known to start. */
+  previous?: string;
+}
+
+/**
+ * Put back the service file a failed reinstall replaced, and start it again
+ * in place of the replacement. Best effort: the original failure is what the
+ * person needs to see.
+ */
+export function restoreService(host: ServiceHost, previous: string): void {
+  const file = serviceFile(host);
+  if (manager(host) === "systemd") {
+    writeFileSync(file, previous, { mode: 0o644 });
+    host.run("systemctl", ["--user", "daemon-reload"]);
+    host.run("systemctl", ["--user", "restart", SYSTEMD_UNIT]);
+    return;
+  }
+  host.run("launchctl", ["bootout", `gui/${host.uid}/${LAUNCHD_LABEL}`]);
+  writeFileSync(file, previous, { mode: 0o644 });
+  host.run("launchctl", ["bootstrap", `gui/${host.uid}`, file]);
 }
 
 /** Write the service file, then (re)start the service so it runs the new file. */
@@ -154,9 +174,7 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
       must(host, "systemctl", ["--user", "restart", SYSTEMD_UNIT], "Could not start the Aiden service");
     } catch (error) {
       if (previous !== undefined) {
-        writeFileSync(file, previous, { mode: 0o644 });
-        host.run("systemctl", ["--user", "daemon-reload"]);
-        host.run("systemctl", ["--user", "restart", SYSTEMD_UNIT]);
+        restoreService(host, previous);
         throw error;
       }
       // Leave nothing half-installed: a later status or boot must not find this unit.
@@ -167,9 +185,10 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
     }
     // Without lingering, user services stop at logout and do not start at boot.
     const linger = host.run("loginctl", ["show-user", host.user, "--property=Linger", "--value"]);
-    if (linger.status === 0 && linger.stdout.trim() === "yes") return { manager: kind, file };
-    if (host.run("loginctl", ["enable-linger", host.user]).status === 0) return { manager: kind, file };
-    return { manager: kind, file, warning: "The server stops when you log out and does not start at boot until you run `sudo loginctl enable-linger $USER` once." };
+    const kept = previous !== undefined ? { previous } : {};
+    if (linger.status === 0 && linger.stdout.trim() === "yes") return { manager: kind, file, ...kept };
+    if (host.run("loginctl", ["enable-linger", host.user]).status === 0) return { manager: kind, file, ...kept };
+    return { manager: kind, file, ...kept, warning: "The server stops when you log out and does not start at boot until you run `sudo loginctl enable-linger $USER` once." };
   }
   writeFileSync(file, launchdPlist(launch), { mode: 0o644 });
   const target = `gui/${host.uid}`;
@@ -181,13 +200,10 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
     must(host, "launchctl", ["bootstrap", target, file], "Could not load the Aiden service. Run `aiden service install` from a session logged in to this Mac's desktop");
   } catch (error) {
     if (previous === undefined) rmSync(file, { force: true });
-    else {
-      writeFileSync(file, previous, { mode: 0o644 });
-      host.run("launchctl", ["bootstrap", target, file]);
-    }
+    else restoreService(host, previous);
     throw error;
   }
-  return { manager: kind, file, warning: "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups." };
+  return { manager: kind, file, ...(previous !== undefined ? { previous } : {}), warning: "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups." };
 }
 
 /** The manager's answer when the service is simply not loaded, which uninstall treats as already stopped. */
@@ -304,7 +320,7 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
 }
 
 /** `aiden service ...`. Prints its own output. */
-export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost()): Promise<void> {
+export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost(), options: { readyTimeoutMs?: number } = {}): Promise<void> {
   const [action, ...rest] = args;
   const out = (line: string) => process.stdout.write(`${line}\n`);
   if (action === "status" && rest.length === 0) {
@@ -334,17 +350,23 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     await stopDaemon(agentDir);
     out("Stopped the server that was already running; the service runs it from now on.");
   }
-  let installed: InstallResult;
+  let installed: InstallResult | undefined;
   try {
     installed = installService(host, { node: process.execPath, entry, agentDir: resolve(agentDir), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" });
     out(`Installed ${installed.file}.`);
     const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
-    if (!await waitForServer(agentDir)) throw new Error(`The service did not start the server within 30s. See ${logs}.`);
+    const readyMs = options.readyTimeoutMs ?? 30_000;
+    if (!await waitForServer(agentDir, readyMs)) throw new Error(`The service did not start the server within ${Math.round(readyMs / 1000)}s. See ${logs}.`);
   } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
+    // The replacement never served: put back the service it replaced (installService already did when the manager refused).
+    if (installed?.previous !== undefined) {
+      restoreService(host, installed.previous);
+      throw new Error(`${message} Put back the service that was installed before.`, { cause: error });
+    }
     // Say how to get back the server this install stopped, unless something is already serving again.
     if (!stopped || daemonStatus(agentDir).running) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${message.replace(/\.*$/u, ".")} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`, { cause: error });
+    throw new Error(`${message} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`, { cause: error });
   }
   const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
 
