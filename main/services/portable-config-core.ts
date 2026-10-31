@@ -736,6 +736,8 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
   if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
+  // Only a literal true lets routines go ahead; anything else hand-edited reads as off.
+  if (settings.botRoutinesGoAhead !== undefined && settings.botRoutinesGoAhead !== true) delete runtime.botRoutinesGoAhead;
   if (settings.spendingLimits !== undefined) {
     const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
     if (spendingLimits === undefined) delete runtime.spendingLimits;

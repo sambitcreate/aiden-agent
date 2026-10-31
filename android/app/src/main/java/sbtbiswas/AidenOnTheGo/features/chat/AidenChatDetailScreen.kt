@@ -259,7 +259,6 @@ fun AidenChatDetailScreen(
     var selectTextFor by remember { mutableStateOf<String?>(null) }
     var visualViewerRequest by remember(chatId) { mutableStateOf<AidenVisualViewerRequest?>(null) }
     var visualSnapshotGallery by remember(chatId) { mutableStateOf<AidenMessageAttachment?>(null) }
-    val currentDraft by rememberUpdatedState(draft)
     val currentVoiceMode by rememberUpdatedState(voiceInputMode)
 
     LaunchedEffect(isStreaming, chat?.messages?.lastOrNull()?.id) {
@@ -377,7 +376,9 @@ fun AidenChatDetailScreen(
         readAloud.stop()
         voiceInput.start(
             mode = currentVoiceMode,
-            currentDraft = currentDraft,
+            // Snapshot when voice actually starts, including after permission returns.
+            // Keeping it in screen-level rememberUpdatedState would recompose the screen per edit.
+            currentDraft = viewModel.draft.value,
             client = coordinator.client.value,
             updateDraft = viewModel::updateDraft
         )
