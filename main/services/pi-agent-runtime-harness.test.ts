@@ -43,6 +43,7 @@ import { markPiRuntimePrivateFailure } from "./pi-runtime-failure.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { createPiCodemodeTool } from "./pi-codemode.js";
+import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools } from "./on-demand-tools.js";
 import { executeMcpAgentTool } from "./mcp-tool-result.js";
 import { chatContextPressureFromProjection, createGenerationContextTransform } from "./generation-context.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
@@ -4242,6 +4243,51 @@ test("an MCP server that finished discovery after the turn started is searchable
   assert.deepEqual(outputs[0].tools.map((entry: { name: string }) => entry.name), ["late_docs"]);
   assert.equal(outputs[1].isError, false);
   assert.match(JSON.stringify(outputs[1]), /late document/u);
+});
+
+test("a loaded held-back tool a script can call runs and the reply finishes", async () => {
+  let ran = 0;
+  const classify = Object.assign<AgentTool, object>({
+    name: "classify", label: "Classify", description: "Classify text.", replay: "safe",
+    parameters: Type.Object({ text: Type.String() }),
+    async execute() {
+      ran += 1;
+      return { content: [{ type: "text", text: "positive" }], details: null };
+    },
+  }, { codemode: true });
+  const read = Object.assign<AgentTool, object>({
+    name: "read_file", label: "Read", description: "Read a file.", replay: "safe",
+    parameters: Type.Object({}),
+    async execute() {
+      return { content: [{ type: "text", text: "" }], details: null };
+    },
+  }, {});
+  const loading = createOnDemandTools([read, classify], new Set(["classify"]))!;
+  let harness!: PiAgentRuntimeHarness;
+  const callable: string[][] = [];
+  const prepared = await managedTestHarness([
+    fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["classify"] })], { stopReason: "toolUse" }),
+    fauxAssistantMessage([fauxToolCall("classify", { text: "great" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("It reads as positive."),
+  ], {
+    tools: loading.initialTools([]),
+    // Callable held-back tools join the inventory late, as llm-client wires them.
+    lateDeferredTools: () => loading.onDemand,
+    prepareNextTurnWithContext: async ({ context }) => {
+      // The MCP section refresher reads the callable inventory on every step.
+      callable.push(harness.getCallableTools().map(({ name }) => name));
+      return { context: await loading.prepare(context) };
+    },
+  });
+  harness = prepared.harness;
+  const outcome = await harness.runManaged({ kind: "append-and-run", message: { role: "user", content: "Classify great", timestamp: 1 } });
+  assert.equal(outcome.kind, "completed");
+  assert.equal(ran, 1);
+  assert.deepEqual(harness.getCallableTools().map(({ name }) => name), ["read_file", LOAD_TOOLS_TOOL_NAME, "classify"]);
+  assert.ok(callable.every((names) => names.filter((name) => name === "classify").length === 1));
+  const last = harness.state.messages[harness.state.messages.length - 1];
+  assert.equal(last?.role, "assistant");
+  assert.match(JSON.stringify(last?.content), /positive/u);
 });
 
 test("real command process receipts never promote tool success or model claims to task acceptance", async (t) => {

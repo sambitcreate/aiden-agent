@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
+import { chooseFolderlessWorkspace, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -27,6 +27,7 @@ async function pasteImage(page: Parameters<typeof finishLmStudioOnboarding>[0]):
 test("chat shell keeps local interactions isolated and keyboard-accessible", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
 
   const composer = page.locator("textarea");
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
@@ -1278,6 +1279,57 @@ test("command palette selects same-named models from distinct provider identitie
   await expect.poll(() => page.evaluate(() => localStorage.getItem("aiden-agent.model"))).toBe("repeated-model");
 });
 
+test("command palette shows each model's and provider's own logo", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ ipcMain }) => {
+    // A 1x1 PNG stands in for a custom connection's own picture.
+    const artwork = {
+      mimeType: "image/png",
+      dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    };
+    const providers = [
+      { id: "zai", kind: "openai", label: "Z.AI", models: ["glm-5.3"], needsKey: true, hasKey: true, isBuiltin: true },
+      { id: "anthropic", kind: "openai", label: "Anthropic", models: ["claude-opus-4-1"], needsKey: true, hasKey: true, isBuiltin: true },
+      { id: "deepseek", kind: "openai", label: "DeepSeek", models: ["deepseek-chat"], needsKey: true, hasKey: false, isBuiltin: true },
+      {
+        id: "custom:studio-box",
+        kind: "openai",
+        label: "Studio Box",
+        baseUrl: "http://127.0.0.1:1234/v1",
+        models: ["box-model"],
+        needsKey: false,
+        hasKey: false,
+        artwork,
+      },
+    ];
+    ipcMain.removeHandler("providers:list");
+    ipcMain.handle("providers:list", () => providers);
+    ipcMain.removeHandler("providers:refreshIfStale");
+    ipcMain.handle("providers:refreshIfStale", () => ({ providers, errors: [] }));
+  });
+  await page.reload();
+  await expect(page.locator("textarea")).toBeVisible();
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
+  const palette = page.locator("[data-command-palette-content]");
+  await palette.getByRole("option", { name: "Change model" }).click();
+  await expect(palette.getByRole("combobox", { name: "Search models" })).toBeVisible();
+  const row = (name: RegExp) => palette.getByRole("option", { name });
+  await expect(row(/^GLM.5\.3/u).locator('[data-provider-icon="zai"]')).toBeVisible();
+  // A Claude model wears Claude's mark, as in the chat's own model picker.
+  await expect(row(/^Claude Opus/u).locator('[data-provider-icon="claude"]')).toBeVisible();
+  await expect(row(/^Box Model/u).locator('[data-provider-icon="custom"]')).toBeVisible();
+  // A provider that still needs setup is listed with its own logo too.
+  await expect(row(/^DeepSeek models/u).locator('[data-provider-icon="deepseek"]')).toBeVisible();
+
+  // Escape steps back to the command list.
+  await page.keyboard.press("Escape");
+  await palette.getByRole("option", { name: "Manage providers" }).click();
+  await expect(palette.getByRole("combobox", { name: "Search providers" })).toBeVisible();
+  await expect(row(/^Z\.AI/u).locator('[data-provider-icon="zai"]')).toBeVisible();
+  await expect(row(/^Studio Box/u).locator('[data-provider-icon="custom"]')).toBeVisible();
+});
+
 for (const field of ["title", "timestamp"] as const) {
   test(`command palette preserves selected chat on live ${field} change`, async ({ aiden }) => {
     const { app, page } = aiden;
@@ -1357,6 +1409,7 @@ for (const mode of [
 test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   const search = palette.getByRole("combobox");

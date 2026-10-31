@@ -1,5 +1,7 @@
 # Aiden CLI — pi-based headless Aiden Agent
 
+**2026-10-30: interactive CLI retired.** The owner chose not to maintain an interactive terminal app. `packages/cli` is now a serve-only headless server for phones and paired Macs: `aiden serve` plus admin commands. Pi's TUI, print/JSON/RPC modes, `--list-models`, slash commands, terminal themes and the appearance playground were removed. See [the serve-only plan](aiden-serve-only-cli.md). Everything below is the historical record; its TUI, theme and print-mode parts no longer apply.
+
 Current baseline clarification (2026-10-19): the 0.87.1 implementation record below is historical. Desktop and CLI active Pi packages are now exactly 1.4.0 (2026-10-26); only the frozen desktop legacy harness remains 0.87.1. Durable Bot-session parity is owned by H3 in [the harness upgrade plan](aiden-harness-quality-upgrade-plan.md). Physical acceptance remains separate.
 
 Build `aiden`, a standalone CLI/TUI inside this repo (`packages/cli/`) that runs the Aiden feature set on any machine — including headless Linux servers — on top of the pi coding agent (`@earendil-works/pi-coding-agent`, MIT, pinned to the same line as the desktop app's `pi-agent-core`/`pi-ai`: 1.3.0 since #505, 1.4.0 since #589).

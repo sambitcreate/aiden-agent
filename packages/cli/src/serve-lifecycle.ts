@@ -279,7 +279,10 @@ function acquireStartLease(agentDir: string): () => void {
   }
 }
 
-/** Spawn `aiden serve [--remote]` detached and wait for its control socket. */
+/**
+ * Spawn `aiden serve` detached and wait for its control socket. Remote is on
+ * unless `remote` is false; the child never opens a startup pairing window.
+ */
 export async function startDaemon(agentDir: string, options: { remote?: boolean; timeoutMs?: number } = {}): Promise<{ pid: number; log: string }> {
   // The control socket is a filesystem path — on Windows it becomes a named
   // pipe with no file, so readiness polling and PID classification cannot work.
@@ -302,7 +305,8 @@ export async function startDaemon(agentDir: string, options: { remote?: boolean;
         ...(entry.endsWith(".ts") || entry.endsWith(".mts") ? ["--experimental-strip-types"] : []),
         resolve(entry),
         "serve",
-        ...(options.remote ? ["--remote"] : []),
+        ...(options.remote === false ? ["--no-remote"] : []),
+        "--no-pair",
       ], { detached: true, stdio: ["ignore", logFd, logFd], env: { ...process.env, [DETACHED_SERVE_ENV]: "1" } });
     } catch (error) {
       closeSync(logFd);

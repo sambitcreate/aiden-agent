@@ -2,7 +2,8 @@
 /**
  * Aiden Agent CLI entry.
  *
- * Thin launcher over the pi coding agent SDK. Bundling pi's code into this
+ * A headless server (`aiden serve`) and its administration commands, built on
+ * the pi coding agent SDK. Bundling pi's code into this
  * package is what activates the rebrand: pi's config resolution walks up from
  * the bundle location to the nearest package.json (dist/app/package.json) and
  * reads its `piConfig`, so the CLI identifies as "aiden", stores state under
@@ -35,16 +36,16 @@ process.env.PI_TELEMETRY = "0";
 
 /**
  * The answer for requests that need nothing beyond the bundle's own files, or
- * undefined. `--version` matches pi's own answer (the version in the nearest
- * package.json, which is dist/app/package.json) unless PI_PACKAGE_DIR points
- * pi somewhere else, in which case pi answers.
+ * undefined. `--version` reads the version in the nearest package.json
+ * (dist/app/package.json); bare `aiden`, `aiden help` and `--help` print the
+ * command list.
  */
 function staticAnswer(argv: string[], appDir: string): string | undefined {
-	if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v") && !process.env.PI_PACKAGE_DIR) {
+	if (argv.length === 1 && (argv[0] === "--version" || argv[0] === "-v")) {
 		const pkg = JSON.parse(readFileSync(join(appDir, "package.json"), "utf-8")) as { version?: string };
 		return `${pkg.version || "0.0.0"}\n`;
 	}
-	if (argv[0] === "help") return CLI_COMMAND_HELP;
+	if (argv.length === 0 || argv[0] === "help" || (argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h"))) return CLI_COMMAND_HELP;
 	return undefined;
 }
 

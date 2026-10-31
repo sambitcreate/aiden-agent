@@ -6,7 +6,7 @@ import type Bonjour from "bonjour-service";
 import { createHash, X509Certificate } from "node:crypto";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
-import { createServer as createNetServer, type Server as NetServer } from "node:net";
+import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import os from "node:os";
 import { peerLanInterfaceAddresses } from "./peer-routes.js";
 import type { Duplex } from "node:stream";
@@ -67,6 +67,10 @@ import {
 
 const MAX_CONNECTIONS = 64;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** First keepalive probe after this much silence; the kernel then probes and drops a dead peer. */
+const SOCKET_KEEPALIVE_MS = 30_000;
+/** The certificate renews 7 days before expiry, so a daily check has days of slack. */
+const TLS_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 /**
  * How long a probed Tailscale Serve certificate pin is reused for incoming
  * connection requests, so unauthenticated requests cannot drive one TLS probe
@@ -135,6 +139,11 @@ export interface AidenRemoteServiceOptions {
   botCapabilitiesSupported?: () => boolean;
   hostname?: string;
   loadTlsIdentity(): Promise<AidenRemoteTlsIdentity>;
+  /**
+   * How often a running LAN listener reloads its TLS identity so a renewed
+   * certificate is served without restarting Remote. Defaults to daily.
+   */
+  tlsRefreshIntervalMs?: number;
   resolveTlsEndpointPin?: (hostname: string, port?: number) => Promise<string>;
   tailscale: Pick<AidenRemoteTailscaleController, "status" | "connect" | "disconnect">
     & Partial<Pick<AidenRemoteTailscaleController, "inspectRoute" | "assessRoute" | "reviewTakeover" | "takeOver" | "reconcilePendingOutcome">>;
@@ -289,6 +298,12 @@ function configureServer(server: HttpServer | HttpsServer): void {
   server.headersTimeout = REQUEST_TIMEOUT_MS;
   server.requestTimeout = REQUEST_TIMEOUT_MS;
   server.keepAliveTimeout = 5_000;
+  // Event streams and sockets stay open for hours. A phone that sleeps or
+  // changes networks never sends a FIN; TCP keepalive lets the kernel notice
+  // a silent peer and release its connection slot.
+  server.on("connection", (socket: Socket) => {
+    if (!socket.destroyed) socket.setKeepAlive(true, SOCKET_KEEPALIVE_MS);
+  });
 }
 
 async function listen(
@@ -533,6 +548,8 @@ export class AidenRemoteService {
   private setupInFlight = false;
   private operationTail: Promise<void> = Promise.resolve();
   private settleRemoteApi: (() => Promise<void>) | undefined;
+  private tlsRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private tlsRefresh: Promise<void> | null = null;
   private readonly now: () => number;
   private readonly hostname: string;
 
@@ -757,7 +774,16 @@ export class AidenRemoteService {
           configureServer(lanServer);
           // macOS Bonjour commonly resolves both A and AAAA records. The IPv6
           // wildcard is dual-stack by default, so one listener serves both.
-          await listen(lanServer, candidate, "::");
+          // Hosts without IPv6 fall back to the IPv4 wildcard: a kernel built
+          // without it cannot open the socket (EAFNOSUPPORT), and one with it
+          // turned off by sysctl cannot bind "::" (EADDRNOTAVAIL).
+          try {
+            await listen(lanServer, candidate, "::");
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException | undefined)?.code;
+            if (code !== "EAFNOSUPPORT" && code !== "EADDRNOTAVAIL") throw error;
+            await listen(lanServer, candidate, "0.0.0.0");
+          }
           await this.options.afterListenerBound?.({ transport: "lan", port: candidate });
 
           const tailscaleHandler = createAidenRemoteRequestHandler({
@@ -839,6 +865,7 @@ export class AidenRemoteService {
       this.lanServer = selectedLanServer;
       this.tailscaleServer = selectedTailscaleServer;
       this.tlsIdentity = tlsIdentity;
+      this.scheduleTlsRefresh();
       this.pairing = pairing;
       this.pairingRequests = pairingRequests;
       this.activeState = structuredClone(committedState);
@@ -899,7 +926,56 @@ export class AidenRemoteService {
     }
   }
 
+  private scheduleTlsRefresh(): void {
+    if (this.tlsRefreshTimer) clearInterval(this.tlsRefreshTimer);
+    const interval = this.options.tlsRefreshIntervalMs ?? TLS_REFRESH_INTERVAL_MS;
+    this.tlsRefreshTimer = setInterval(() => {
+      if (this.tlsRefresh) return;
+      const refresh = this.refreshTlsIdentity().catch((error: unknown) => {
+        this.options.log?.({
+          level: "warn",
+          event: "tls_refresh_failed",
+          details: { message: error instanceof Error ? error.message : String(error) },
+        });
+      }).finally(() => {
+        if (this.tlsRefresh === refresh) this.tlsRefresh = null;
+      });
+      this.tlsRefresh = refresh;
+    }, interval);
+    this.tlsRefreshTimer.unref?.();
+  }
+
+  /**
+   * Serves a renewed certificate on the running LAN listener. Renewal keeps
+   * the server key, so paired devices' SPKI pins stay valid; a changed key is
+   * left for the next restart, where the pairing endpoint is republished too.
+   */
+  private async refreshTlsIdentity(): Promise<void> {
+    const server = this.lanServer;
+    const current = this.tlsIdentity;
+    if (!server || !current) return;
+    // Renewal may run openssl. It writes through unique temporary files and an
+    // atomic rename, so it runs outside the lifecycle queue and a start or
+    // pairing change never waits on it; only the swap is serialized.
+    const next = await this.options.loadTlsIdentity();
+    await this.serialized(async () => {
+      if (this.lanServer !== server || this.tlsIdentity !== current) return;
+      if (next.certificateChain === current.certificateChain) return;
+      if (next.serverSpkiSha256 !== current.serverSpkiSha256) {
+        this.options.log?.({ level: "warn", event: "tls_key_changed_restart_required" });
+        return;
+      }
+      server.setSecureContext({ key: next.privateKey, cert: next.certificateChain });
+      this.tlsIdentity = next;
+      this.options.log?.({ level: "info", event: "tls_certificate_reloaded", details: { validUntil: next.validUntil } });
+    });
+  }
+
   private async stopListeners(): Promise<void> {
+    if (this.tlsRefreshTimer) {
+      clearInterval(this.tlsRefreshTimer);
+      this.tlsRefreshTimer = null;
+    }
     this.pairing?.close();
     this.pairing = null;
     const pairingRequests = this.pairingRequests;
@@ -927,16 +1003,18 @@ export class AidenRemoteService {
 
   async stopAndSettle(): Promise<void> {
     await this.serialized(() => this.stopListeners());
+    // A renewal already running finishes its files; its swap then sees the
+    // stopped listener and does nothing. Awaited outside the queue, since the
+    // swap itself waits for the queue.
+    await this.tlsRefresh;
   }
 
+  /**
+   * Fire-and-forget form of `stopAndSettle`: the same serialized teardown, so
+   * listeners are released and the API settles even when nobody awaits it.
+   */
   stop(): void {
-    this.pairing?.close();
-    void this.pairingRequests?.close().catch(() => undefined);
-    this.options.bonjour.stop();
-    this.destroyConnections(this.lanConnections);
-    this.destroyConnections(this.tailscaleConnections);
-    this.lanServer?.close();
-    this.tailscaleServer?.close();
+    void this.stopAndSettle().catch(() => undefined);
   }
 
   keepsApplicationAlive(): boolean {

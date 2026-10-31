@@ -24,6 +24,8 @@ export interface SkillRegistryCandidate {
 export interface ResolvedSkillCandidate extends SkillRegistryCandidate {
   available: boolean;
   unavailableReason?: string;
+  /** Switched off for this workspace: hidden from the model, still runnable by name. */
+  workspaceOff?: boolean;
 }
 
 export interface SkillCatalogProjectionContext {
@@ -58,6 +60,13 @@ function toolSlug(value: string): string {
     .slice(0, 40);
 }
 
+/** The one model-facing tool that loads any available skill by name. */
+export const SKILL_TOOL_NAME = "skill";
+
+/**
+ * Internal per-skill identity: Bot grants and collision checks use it. The
+ * model sees one `skill` tool and passes the skill's name instead.
+ */
 export function skillToolKey(candidate: Pick<SkillRegistryCandidate, "name" | "stableId">): string {
   const slug = toolSlug(candidate.name);
   const fallback = createHash("sha256")

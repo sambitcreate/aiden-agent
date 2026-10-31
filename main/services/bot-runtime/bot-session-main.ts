@@ -25,7 +25,7 @@
 // its summary.
 
 import * as path from "node:path";
-import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
@@ -47,10 +47,11 @@ import type { ModelRef } from "@earendil-works/pi-durable";
 import type { BotDefinition } from "../../../renderer/shared/bots.js";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { connectionSourceIdFor, resolveConnectCardStatus } from "../bot-runtime-tools/suggest-connection.js";
-import { defaultBotRules } from "../../../renderer/shared/bot-rules.js";
+import { botRoutinesGoAhead, defaultBotRules } from "../../../renderer/shared/bot-rules.js";
 import { botApplicationService } from "../bot-application-service-main.js";
 import { botCapabilityStore, botManagedWorkspace, botServiceRoot } from "../bot-capability-services-main.js";
 import { botServiceProtectedRoot } from "../bot-protected-settings.js";
+import { configStore } from "../config-store.js";
 import { createBotConnectionDismissalStore } from "../bot-connection-dismissals.js";
 import { botPauses, isBotPaused } from "../bot-pause-main.js";
 import type { BotPauseRecord } from "../bot-pause-store.js";
@@ -240,6 +241,7 @@ const tools = createBotToolAssembly({
   sources: toolSources,
   rules: (botId) => botRules.rules(botId),
   botName: async (botId) => (await botStore.get(botId))?.name,
+  routinesGoAhead: async () => botRoutinesGoAhead(await configStore.getSettings()),
 });
 
 /** The Bot's rules for its prompt; the defaults when the file can't be read (calls still fail closed). */
@@ -847,6 +849,9 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
 }
 
 let initialized: Promise<void> | undefined;
+/** Time asleep is not a stall; subscribed once Bots are open (the app is ready by then). */
+const resumeRunWatchdog = (): void => runWatchdog.resume();
+let watchingResume = false;
 
 /** Startup: after Bot storage is ready, sweep orphaned sessions and record interrupted Bots. */
 export function initializeBotSessionRuntime(): Promise<void> {
@@ -855,6 +860,10 @@ export function initializeBotSessionRuntime(): Promise<void> {
       const { removedOrphans, interrupted } = await service.initialize();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
+      if (!watchingResume) {
+        powerMonitor.on("resume", resumeRunWatchdog);
+        watchingResume = true;
+      }
       // Pre-fire checks arm only once Bots are open, never during onboarding.
       void import("../bot-health/health-main.js")
         .then(({ startBotHealth }) => startBotHealth())
@@ -875,6 +884,10 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   await liveProjection?.close();
   memoryReview.shutdown();
   runWatchdog.dispose();
+  if (watchingResume) {
+    powerMonitor.removeListener("resume", resumeRunWatchdog);
+    watchingResume = false;
+  }
   await import("../bot-health/health-main.js").then(({ stopBotHealth }) => stopBotHealth()).catch(() => undefined);
   await service?.shutdown();
   await toolSources.shutdown();

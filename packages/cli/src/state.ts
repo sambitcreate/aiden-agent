@@ -112,20 +112,3 @@ export class JsonStore<T> {
     return operation;
   }
 }
-
-/** Shell-like quoting for slash commands, without expansion or execution. */
-export function splitArgs(input: string): string[] {
-  const output: string[] = [];
-  let token = "", quote = "", escaped = false, started = false;
-  for (const char of input) {
-    if (escaped) { token += char; escaped = false; started = true; }
-    else if (char === "\\" && quote !== "'") { escaped = true; started = true; }
-    else if (quote) { if (char === quote) quote = ""; else token += char; }
-    else if (char === "'" || char === '"') { quote = char; started = true; }
-    else if (/\s/.test(char)) { if (started) output.push(token); token = ""; started = false; }
-    else { token += char; started = true; }
-  }
-  if (quote || escaped) throw new Error("Unfinished quote or escape.");
-  if (started) output.push(token);
-  return output;
-}

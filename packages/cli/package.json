@@ -1,7 +1,7 @@
 {
   "name": "aiden-cli",
   "version": "0.1.0",
-  "description": "Aiden Agent CLI \u2014 a pi-based headless coding agent with a full TUI",
+  "description": "Aiden Agent CLI \u2014 a pi-based headless server for paired Aiden clients",
   "type": "module",
   "private": true,
   "piConfig": {
@@ -13,13 +13,11 @@
   },
   "files": [
     "dist/app",
-    "themes",
     "README.md"
   ],
   "scripts": {
-    "build": "node --experimental-strip-types scripts/generate-themes.ts && node scripts/patch-branding.mjs && node scripts/build.mjs",
-    "themes": "node --experimental-strip-types scripts/generate-themes.ts",
-    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/themes.test.mjs tests/extensions.test.mjs tests/skill-paths.test.mjs tests/parity.test.mjs",
+    "build": "node scripts/patch-branding.mjs && node scripts/build.mjs",
+    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/extensions.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs tests/service.test.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

@@ -11,6 +11,20 @@ import { createCliWorkspaceApplication } from "./workspace-application.ts";
 import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
 
+type CliRemote = Awaited<ReturnType<typeof createCliRemote>>;
+
+/** What `aiden serve status` reports about Remote: whether it is on, and where clients reach it. */
+async function serveStatus(remote: CliRemote | undefined, args: string[]) {
+  if (args.length !== 1 || args[0] !== "status") throw new Error("Usage: serve status");
+  if (!remote) return { remote: { on: false } };
+  const status = await remote.service.status();
+  return { remote: { on: status.running, connectionMode: status.connectionMode, lanPort: status.lanPort,
+    ...(status.lanEndpoint ? { lanEndpoint: status.lanEndpoint } : {}),
+    ...(status.tailscaleEndpoint ? { tailscaleEndpoint: status.tailscaleEndpoint } : {}),
+    tailscaleConnected: status.tailscaleConnected, pairedDeviceCount: status.pairedDeviceCount,
+    ...(status.error ? { error: status.error } : {}) } };
+}
+
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
   recoverStaleServeLease(agentDir);
@@ -31,7 +45,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   });
   const telegram = createCliTelegram(agentDir, chats);
   const bots = await createCliBots(agentDir, chats); chats.setBots(bots); bots.setScheduler(runtime);
-  let remote: Awaited<ReturnType<typeof createCliRemote>> | undefined;
+  let remote: CliRemote | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
   let closing = false;
@@ -52,23 +66,30 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
         try {
           if (closing) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer);
-          if (!["schedule", "remote", "bots", "workspace"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
-          if (request.command === "remote" && !remote) throw new Error("Start aiden serve --remote to use Remote controls.");
-          const result = request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
+          if (!["schedule", "remote", "bots", "workspace", "serve"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
+          if (request.command === "remote" && !remote) throw new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls.");
+          const result = request.command === "serve" ? await serveStatus(remote, request.args) : request.command === "workspace" ? await workspaceCommand(agentDir, request.args, (remote?.workspaces ?? workspaceRuntime).application) : request.command === "bots" ? await bots.command(request.args) : request.command === "remote" ? await remote!.command(request.args) : await runtime.command(request.args);
           socket.end(JSON.stringify({ result }) + "\n");
         } catch (error) { socket.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) + "\n"); }
       })();
     });
   });
   try {
-    if (options.remote) { remote = await createCliRemote(agentDir, chats, runtime, { bots }); await remote.start(); }
+    if (options.remote) {
+      try { remote = await createCliRemote(agentDir, chats, runtime, { bots }); await remote.start(); }
+      catch (error) { throw new Error(`Remote could not start: ${(error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".")} Run \`aiden serve --no-remote\` to serve without Remote.`, { cause: error }); }
+    }
     rmSync(path, { force: true });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(path, () => { server.removeListener("error", reject); resolve(); }); });
     chmodSync(path, 0o600);
     await runtime.service.start();
     await telegram.start();
-    options.onReady?.();
     process.stderr.write(`Aiden scheduler listening at ${path}\n`);
+    if (remote) {
+      const status = await remote.service.status().catch(() => undefined);
+      process.stderr.write(`Aiden Remote listening${status ? ` on port ${status.lanPort}${status.lanEndpoint ? ` (${status.lanEndpoint})` : ""}` : ""}. Pair a device with \`aiden remote pair lan|tailscale\`.\n`);
+    } else process.stderr.write("Aiden Remote is off.\n");
+    options.onReady?.();
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {
     // Refuse new control requests and stop accepting connections before draining.

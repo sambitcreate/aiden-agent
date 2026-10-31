@@ -1,3 +1,4 @@
+import { withoutWorkspaceDisabledMcpServers } from "./workspace-capabilities.js";
 import { configuredCompactionReserveTokens } from "../../renderer/shared/compaction.js";
 // Composer context meter: exposes the runtime's own next-request projection
 // (projectChatContextUsage over the Pi journal + the generation's static
@@ -150,14 +151,18 @@ async function ambientContextOptions(
   const { workspaceId, workspace, folderPath, permission, instructionRoots } =
     await currentInstructionScope(chat.workspaceId);
   const instructionFingerprint = await agentsInstructionFingerprint(instructionRoots);
-  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}`;
+  const key = `${contextWindow}:${supportsImages}:${workspaceId ?? ""}:${folderPath ?? ""}:${permission}:${instructionFingerprint}:${JSON.stringify(workspace?.disabledSkills ?? [])}`;
   // Codemode turns declare codemode/tool_search instead of MCP tools (except
   // "Always visible" servers); other turns declare the MCP tools this process
   // already built (never connecting).
   const codemode = Boolean(workspaceId && folderPath) && permission !== "none";
   const withRuntimeTools = async (options: GenerationContextOptions): Promise<GenerationContextOptions> => {
     const mcpTools = await configStore.listMcpServers()
-      .then((servers) => mcpManager.peekBuiltTools(servers.filter((server) => server.enabled && mcpServerOffersTools(server)).map((server) => server.id)))
+      .then((servers) => mcpManager.peekBuiltTools(
+        withoutWorkspaceDisabledMcpServers(servers, workspace?.disabledMcpServerIds)
+          .filter((server) => server.enabled && mcpServerOffersTools(server))
+          .map((server) => server.id),
+      ))
       .catch(() => []);
     const extra = ambientRuntimeToolEstimate({ codemode, mcpTools });
     if (!extra.length) return options;
@@ -198,6 +203,7 @@ async function ambientContextOptions(
     skillsEnabled,
     skillSnapshot,
     new Set(tools.map((tool) => tool.name)),
+    workspace?.noWorkspace === true,
   );
   const systemPrompt = await withAgentsInstructionsEstimate(hostPrompt, instructionRoots);
   const options: GenerationContextOptions = {

@@ -20,6 +20,9 @@ const code = (expected: JobError["code"]) => (error: unknown) =>
 
 test("admission is durable, deduplicated, profile-bound and reserves one unresolved chat", (t) => {
   const f = fixture(t);
+  const raw = new DatabaseSync(path.join(f.root, "jobs-v1.sqlite"));
+  assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+  raw.close();
   const job = f.store.enqueue(input, "actor", "key");
   const other = f.open();
   assert.deepEqual(other.enqueue({ ...input }, "actor", "key"), job);
