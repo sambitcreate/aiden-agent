@@ -22,9 +22,11 @@ function fakeHost(t, platform, answers = {}) {
     const line = [command, ...args].join(" ");
     calls.push(line);
     const answer = Object.entries(answers).find(([prefix]) => line.startsWith(prefix))?.[1];
-    return { status: 0, stdout: "", stderr: "", ...answer };
+    return { status: 0, stdout: "", stderr: "", ...(typeof answer === "function" ? answer(calls) : answer) };
   };
-  return { host: { platform, home, uid: 501, user: "sam", run }, calls, home };
+  // A profile that does not exist yet, as on a first install.
+  const local = { ...launch, agentDir: join(home, "fresh profile", "agent") };
+  return { host: { platform, home, uid: 501, user: "sam", run }, calls, home, local };
 }
 
 test("the systemd unit runs serve --no-pair with every value quoted and escaped for systemd", () => {
@@ -48,11 +50,11 @@ test("the launchd job escapes XML and logs to serve.log in the agent directory",
 });
 
 test("Linux install writes a user unit, enables and restarts it, and turns on lingering", (t) => {
-  const { host, calls, home } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "no\n" } });
-  const result = api.installService(host, launch);
+  const { host, calls, home, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "no\n" } });
+  const result = api.installService(host, local);
   const file = join(home, ".config", "systemd", "user", "aiden.service");
   assert.equal(result.file, file);
-  assert.equal(readFileSync(file, "utf8"), api.systemdUnit(launch));
+  assert.equal(readFileSync(file, "utf8"), api.systemdUnit(local));
   assert.deepEqual(calls, [
     "systemctl --user daemon-reload",
     "systemctl --user enable aiden.service",
@@ -64,20 +66,20 @@ test("Linux install writes a user unit, enables and restarts it, and turns on li
 });
 
 test("Linux install says how to keep the server running after logout when lingering cannot be turned on", (t) => {
-  const { host } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "no\n" }, "loginctl enable-linger": { status: 1, stderr: "Access denied" } });
-  assert.match(api.installService(host, launch).warning, /sudo loginctl enable-linger \$USER/);
+  const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "no\n" }, "loginctl enable-linger": { status: 1, stderr: "Access denied" } });
+  assert.match(api.installService(host, local).warning, /sudo loginctl enable-linger \$USER/);
 });
 
 test("Linux install without a systemd user session names the fix instead of half-installing", (t) => {
-  const { host, calls } = fakeHost(t, "linux", { "systemctl --user daemon-reload": { status: 1, stderr: "Failed to connect to bus: No medium found" } });
-  assert.throws(() => api.installService(host, launch), /not available in this session.*over SSH.*aiden serve --daemon.*No medium found/s);
+  const { host, calls, local } = fakeHost(t, "linux", { "systemctl --user daemon-reload": { status: 1, stderr: "Failed to connect to bus: No medium found" } });
+  assert.throws(() => api.installService(host, local), /not available in this session.*over SSH.*aiden serve --daemon.*No medium found/s);
   assert.deepEqual(calls.slice(0, 1), ["systemctl --user daemon-reload"], "nothing is enabled or started");
   assert.equal(api.serviceStatus(host).installed, false, "the unit written for the attempt is removed again");
 });
 
 test("Linux uninstall stops the service and removes the unit; a second uninstall reports nothing to remove", (t) => {
-  const { host, calls } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
-  const { file } = api.installService(host, launch);
+  const { host, calls, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
+  const { file } = api.installService(host, local);
   calls.length = 0;
   assert.equal(api.uninstallService(host), true);
   assert.equal(existsSync(file), false);
@@ -86,18 +88,46 @@ test("Linux uninstall stops the service and removes the unit; a second uninstall
 });
 
 test("macOS install replaces any loaded job with a LaunchAgent in the person's login session", (t) => {
-  const { host, calls, home } = fakeHost(t, "darwin", { "launchctl print": { stdout: "state = running\n" } });
-  const result = api.installService(host, launch);
+  const { host, calls, home, local } = fakeHost(t, "darwin", { "launchctl print": { stdout: "state = running\n" } });
+  const result = api.installService(host, local);
   const file = join(home, "Library", "LaunchAgents", "com.sambitcreate.aiden-agent.serve.plist");
   assert.equal(result.file, file);
-  assert.equal(readFileSync(file, "utf8"), api.launchdPlist(launch));
+  assert.equal(readFileSync(file, "utf8"), api.launchdPlist(local));
+  assert.ok(existsSync(local.agentDir), "launchd opens serve.log there before Node can create the directory");
   assert.deepEqual(calls, [
     "launchctl bootout gui/501/com.sambitcreate.aiden-agent.serve",
-    `launchctl bootstrap gui/501 ${file}`,
     "launchctl enable gui/501/com.sambitcreate.aiden-agent.serve",
+    `launchctl bootstrap gui/501 ${file}`,
   ]);
   assert.match(result.warning, /automatic login/);
   assert.deepEqual({ ...api.serviceStatus(host), logs: undefined }, { installed: true, manager: "launchd", file, active: true, logs: undefined });
+});
+
+test("macOS reinstall loads a label the person disabled earlier", (t) => {
+  // launchd keeps a disabled label disabled across boots and refuses to load it until enabled.
+  const { host, local } = fakeHost(t, "darwin", {
+    "launchctl bootstrap": (calls) => calls.includes("launchctl enable gui/501/com.sambitcreate.aiden-agent.serve") ? {} : { status: 5, stderr: "Bootstrap failed: 5: Input/output error" },
+  });
+  assert.doesNotThrow(() => api.installService(host, local));
+  assert.equal(api.serviceStatus(host).installed, true);
+});
+
+test("uninstall keeps the service file and says so when the manager cannot stop a loaded service", (t) => {
+  for (const [platform, stop, failure] of [
+    ["linux", "systemctl --user disable", "Failed to connect to bus: No medium found"],
+    ["darwin", "launchctl bootout", "Boot-out failed: 5: Input/output error"],
+  ]) {
+    let failing = false;
+    const { host, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" }, [stop]: () => failing ? { status: 5, stderr: failure } : {} });
+    const { file } = api.installService(host, local);
+    failing = true;
+    assert.throws(() => api.uninstallService(host), new RegExp(`Could not stop the Aiden service.*${failure.split(":")[0]}.*still installed`, "s"), platform);
+    assert.equal(existsSync(file), true, `${platform}: the file stays so uninstall can be retried`);
+  }
+  const { host, local } = fakeHost(t, "darwin", { "launchctl bootout": { status: 113, stderr: "Boot-out failed: 113: Could not find specified service" } });
+  const { file } = api.installService(host, local);
+  assert.equal(api.uninstallService(host), true, "a job that is not loaded counts as stopped");
+  assert.equal(existsSync(file), false);
 });
 
 test("other systems are told to use serve --daemon", (t) => {

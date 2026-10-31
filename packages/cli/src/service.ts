@@ -142,6 +142,8 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
   const kind = manager(host);
   const file = serviceFile(host);
   mkdirSync(dirname(file), { recursive: true });
+  // launchd opens serve.log in the agent directory before Node starts, so it must exist.
+  mkdirSync(launch.agentDir, { recursive: true, mode: 0o700 });
   if (kind === "systemd") {
     writeFileSync(file, systemdUnit(launch), { mode: 0o644 });
     try {
@@ -150,7 +152,9 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
       must(host, "systemctl", ["--user", "restart", SYSTEMD_UNIT], "Could not start the Aiden service");
     } catch (error) {
       // Leave nothing half-installed: a later status or boot must not find this unit.
-      uninstallService(host);
+      host.run("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT]);
+      rmSync(file, { force: true });
+      host.run("systemctl", ["--user", "daemon-reload"]);
       throw error;
     }
     // Without lingering, user services stop at logout and do not start at boot.
@@ -161,32 +165,42 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
   }
   writeFileSync(file, launchdPlist(launch), { mode: 0o644 });
   const target = `gui/${host.uid}`;
-  // A reinstall replaces the loaded job; bootout fails harmlessly when none is loaded.
-  host.run("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`]);
   try {
+    // A reinstall replaces the loaded job; bootout fails harmlessly when none is loaded.
+    host.run("launchctl", ["bootout", `${target}/${LAUNCHD_LABEL}`]);
+    // A disabled label stays disabled across boots and refuses to load until enabled.
+    must(host, "launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], "Could not enable the Aiden service");
     must(host, "launchctl", ["bootstrap", target, file], "Could not load the Aiden service. Run `aiden service install` from a session logged in to this Mac's desktop");
   } catch (error) {
     rmSync(file, { force: true });
     throw error;
   }
-  host.run("launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`]);
   return { manager: kind, file, warning: "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups." };
 }
 
-/** Stop the service and remove its file. Returns false when nothing was installed. */
+/** The manager's answer when the service is simply not loaded, which uninstall treats as already stopped. */
+const NOT_LOADED = /not loaded|not found|does not exist|no such process|could not find/iu;
+
+/**
+ * Stop the service and remove its file. Returns false when nothing was
+ * installed. When the manager cannot stop a loaded service, the file stays so
+ * the uninstall can be retried, and the error says why.
+ */
 export function uninstallService(host: ServiceHost): boolean {
   const kind = manager(host);
   const file = serviceFile(host);
-  const installed = existsSync(file);
-  if (kind === "systemd") {
-    host.run("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT]);
-    rmSync(file, { force: true });
-    host.run("systemctl", ["--user", "daemon-reload"]);
-  } else {
-    host.run("launchctl", ["bootout", `gui/${host.uid}/${LAUNCHD_LABEL}`]);
-    rmSync(file, { force: true });
+  if (!existsSync(file)) return false;
+  const [command, args] = kind === "systemd"
+    ? ["systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT]]
+    : ["launchctl", ["bootout", `gui/${host.uid}/${LAUNCHD_LABEL}`]];
+  const stopped = host.run(command, args);
+  const output = `${stopped.stderr}\n${stopped.stdout}`.trim();
+  if (stopped.status !== 0 && !(stopped.status !== null && NOT_LOADED.test(output))) {
+    throw new Error(`Could not stop the Aiden service (${command} ${args.join(" ")}: ${output || `exit ${stopped.status}`}). It is still installed; fix that and run \`aiden service uninstall\` again.`);
   }
-  return installed;
+  rmSync(file, { force: true });
+  if (kind === "systemd") host.run("systemctl", ["--user", "daemon-reload"]);
+  return true;
 }
 
 export function serviceStatus(host: ServiceHost): { installed: boolean; manager: Manager; file: string; active: boolean; logs: string } {
