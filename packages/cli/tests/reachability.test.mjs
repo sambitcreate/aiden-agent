@@ -56,12 +56,20 @@ test("each missing Tailscale step is named with its own fix, and the install que
   }
 });
 
-test("the operator step is a Linux non-root concern, and unreadable settings are not reported as a failure", async () => {
+test("the operator step is a Linux non-root concern, and unreadable settings leave it unverified rather than ready", async () => {
   assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "" } }), { ...linux, uid: 0, user: "root" })).operatorNeeded, false);
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), { ...linux, uid: 0, user: "root" })).operatorNeeded, false);
   assert.equal((await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "" } }), { platform: "darwin", uid: 501, user: "sam" })).operatorNeeded, undefined);
   const unreadable = await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), linux);
   assert.equal(unreadable.operatorNeeded, undefined);
-  assert.equal(api.tailscaleReady(unreadable), true);
+  assert.equal(api.tailscaleReady(unreadable), false);
+  assert.equal(api.recommendNetwork(unreadable, false), "local");
+  const checklist = api.tailscaleChecklist(unreadable, "linux");
+  assert.equal(checklist.filter((item) => item.state === "fail").length, 0);
+  assert.match(checklist.find((item) => item.state === "warn").text, /sudo tailscale set --operator=\$USER/);
+  assert.match(api.networkQuestion(unreadable, false, "linux").text, /could not check/);
+  const unreadableMac = await api.readTailscaleFacts(tailscaleRunner({ prefs: new Error("access denied") }), { platform: "darwin", uid: 501, user: "sam" });
+  assert.equal(api.tailscaleReady(unreadableMac), true);
   assert.match(api.tailscaleChecklist({ ...unreadable, signedIn: false }, "darwin").at(-1).text, /Open the Tailscale app and sign in/);
 });
 

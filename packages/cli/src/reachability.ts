@@ -8,7 +8,8 @@ import {
 } from "../../../main/services/aiden-remote-tailscale.js";
 import { aidenTailscaleFunnelOn443 } from "../../../main/services/aiden-remote-tailscale-route.js";
 import { remoteDaemonCommand } from "./daemon-control.ts";
-import { tailscaleSetupMessage, type RemoteNetwork } from "./remote.ts";
+import type { RemoteNetwork } from "./remote.ts";
+import { tailscaleSetupMessage } from "./tailscale-setup-message.ts";
 
 /** What this machine's Tailscale can do for the Aiden server, read without changing anything. */
 export interface TailscaleFacts {
@@ -17,8 +18,10 @@ export interface TailscaleFacts {
   dnsName?: string;
   httpsCertificates: boolean;
   funnelOn443: boolean;
-  /** Linux only: Serve changes need root or the Tailscale operator. Absent when Tailscale's settings could not be read. */
+  /** Linux only: Serve changes need root or the Tailscale operator. Absent off Linux, or when Tailscale's settings could not be read. */
   operatorNeeded?: boolean;
+  /** Linux, not root, and Tailscale's settings could not be read, so whether this user may change Serve is unknown. */
+  operatorUnverified?: boolean;
   /** An exit node is on without local network access, which can cut off phones on the same Wi-Fi. */
   exitNodeWithoutLan?: boolean;
 }
@@ -55,8 +58,12 @@ export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | n
     funnelOn443,
   };
   const prefs = await runner.run(["debug", "prefs"]).then(jsonRecord, () => undefined);
+  if (host.platform === "linux") {
+    if (host.uid === 0) facts.operatorNeeded = false;
+    else if (prefs) facts.operatorNeeded = prefs.OperatorUser !== host.user;
+    else facts.operatorUnverified = true;
+  }
   if (!prefs) return facts;
-  if (host.platform === "linux") facts.operatorNeeded = host.uid !== 0 && prefs.OperatorUser !== host.user;
   const exitNode = (typeof prefs.ExitNodeID === "string" && prefs.ExitNodeID !== "") || (typeof prefs.ExitNodeIP === "string" && prefs.ExitNodeIP !== "");
   facts.exitNodeWithoutLan = exitNode && prefs.ExitNodeAllowLANAccess !== true;
   return facts;
@@ -64,7 +71,7 @@ export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | n
 
 /** Tailscale can carry the Aiden route right now, with nothing for the person to fix first. */
 export function tailscaleReady(facts: TailscaleFacts): boolean {
-  return facts.installed && facts.signedIn && facts.httpsCertificates && !facts.funnelOn443 && facts.operatorNeeded !== true;
+  return facts.installed && facts.signedIn && facts.httpsCertificates && !facts.funnelOn443 && facts.operatorNeeded !== true && facts.operatorUnverified !== true;
 }
 
 /**
@@ -100,6 +107,7 @@ export function tailscaleSummary(facts: TailscaleFacts, platform: NodeJS.Platfor
   if (!facts.httpsCertificates) return `Tailscale: signed in as ${facts.dnsName}, but HTTPS certificates are off. Turn them on at ${ADMIN_DNS_URL}.`;
   if (facts.operatorNeeded) return `Tailscale: signed in as ${facts.dnsName}. Run \`sudo tailscale set --operator=$USER\` once so Aiden can add its route.`;
   if (facts.funnelOn443) return `Tailscale: signed in as ${facts.dnsName}, but public Funnel is on for HTTPS port 443. Turn it off first.`;
+  if (facts.operatorUnverified) return `Tailscale: signed in as ${facts.dnsName}, but Aiden could not check whether this user may change Tailscale Serve settings. If Tailscale setup fails, run \`sudo tailscale set --operator=$USER\` once.`;
   return `Tailscale: ready as ${facts.dnsName}.`;
 }
 
@@ -135,6 +143,8 @@ export function tailscaleChecklist(facts: TailscaleFacts, platform: NodeJS.Platf
     items.push(facts.operatorNeeded
       ? { state: "fail", text: "This user may not change Tailscale Serve settings. Run `sudo tailscale set --operator=$USER` once." }
       : { state: "ok", text: "This user may change Tailscale Serve settings" });
+  } else if (facts.operatorUnverified) {
+    items.push({ state: "warn", text: "Could not read Tailscale's settings to check whether this user may change Serve. If Tailscale setup fails, run `sudo tailscale set --operator=$USER` once." });
   }
   items.push(facts.funnelOn443
     ? { state: "fail", text: "Public Funnel is on for HTTPS port 443, and Aiden will not put its private route behind it. Turn that Funnel off." }
