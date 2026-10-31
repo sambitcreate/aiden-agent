@@ -39,8 +39,10 @@ if (command === "ls") {
 `;
 
 // Ignore the developer's git config (signing, hooks) and Space choice and sizing, so the fixture behaves the same anywhere.
-const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
-for (const name of ["CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_MEMORY"]) delete isolatedEnv[name];
+// Run in a UTF-8 locale like a normal Mac shell (and CI): macOS's bash 3.2 then reads non-ASCII bytes after `$NAME`
+// as part of the variable name, which `set -u` turns into an abort.
+const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LANG: "en_US.UTF-8" };
+for (const name of ["CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_MEMORY", "LC_ALL", "LC_CTYPE"]) delete isolatedEnv[name];
 
 async function git(cwd, ...args) {
   await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, env: isolatedEnv });
@@ -77,6 +79,11 @@ async function run({ repo, fake }, args, env = {}) {
   }
 }
 
+// Status checks carry the script's own output, so a failure (on CI especially) shows where it stopped.
+function assertStatus(result, expected, message = "") {
+  assert.equal(result.status, expected, `${message}\n--- stdout\n${result.stdout}\n--- stderr\n${result.stderr ?? ""}`);
+}
+
 async function calls(fake) {
   return (await readFile(path.join(fake, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
 }
@@ -97,7 +104,7 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
   const result = await run(space, ["--run", "echo", "a b", "$HOME;x"], {
     FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"ready"}]',
   });
-  assert.equal(result.status, 0);
+  assertStatus(result, 0);
 
   const archive = (await readdir(fake)).find((name) => name.startsWith("aiden-src-"));
   assert.ok(archive, "the source archive was copied into the Space");
@@ -129,7 +136,7 @@ test("creates a missing Space and reports the guest's exit status", async (t) =>
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
   const result = await run(space, ["tests/e2e/example.spec.ts"], { CUA_SPACE: "aiden-e2e-2", FAKE_CUA_EXEC_STATUS: "3" });
-  assert.equal(result.status, 3);
+  assertStatus(result, 3);
   const recorded = await calls(space.fake);
   assert.deepEqual(recorded.find((call) => call[1] === "create"), [
     "sb", "create", "linux", "--on", "local", "--name", "aiden-e2e-2", "--cpu", "4", "--memory", "8GB", "--wait", "desktop",
@@ -142,7 +149,7 @@ test("resumes a stopped Space instead of creating another", async (t) => {
   t.after(() => rm(space.root, { recursive: true, force: true }));
 
   const result = await run(space, ["--run", "true"], { FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"stopped"}]' });
-  assert.equal(result.status, 0);
+  assertStatus(result, 0);
   const recorded = await calls(space.fake);
   assert.deepEqual(recorded.find((call) => call[1] === "resume"), ["sb", "resume", "local:aiden-e2e"]);
   assert.ok(recorded.every((call) => call[1] !== "create"));
@@ -155,7 +162,7 @@ test("--reset leaves a missing or stopped Space alone", async (t) => {
 
   for (const listing of ["[]", '[{"id":"local:aiden-e2e","status":"stopped"}]']) {
     const result = await run(space, ["--reset"], { FAKE_CUA_LS: listing });
-    assert.equal(result.status, 0);
+    assertStatus(result, 0);
     assert.match(result.stdout, /nothing to reset/);
   }
   assert.deepEqual([...new Set((await calls(space.fake)).map((call) => call[1]))], ["ls"]);
@@ -167,12 +174,12 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   const ready = { FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"ready"}]' };
 
   const clean = await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "1" });
-  assert.equal(clean.status, 0);
+  assertStatus(clean, 0);
   assert.match(clean.stdout, /No leftover e2e processes/);
   const stopped = await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "0" });
-  assert.equal(stopped.status, 0);
+  assertStatus(stopped, 0);
   assert.match(stopped.stdout, /Stopped leftover e2e processes/);
-  assert.equal((await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "2" })).status, 2);
+  assertStatus(await run(space, ["--reset"], { ...ready, FAKE_CUA_EXEC_STATUS: "2" }), 2);
   const recorded = await calls(space.fake);
   assert.ok(recorded.every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
   assert.deepEqual(recorded.find((call) => call[1] === "exec").slice(2, 6), ["-i", "local:aiden-e2e", "--", "bash"]);
@@ -191,14 +198,14 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   const archive = path.join(root, "results.tgz");
   await execFileAsync("tar", ["-czf", archive, "-C", staged, "playwright-report"]);
   const good = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: archive });
-  assert.equal(good.status, 0);
+  assertStatus(good, 0);
   assert.match(good.stdout, /Artifacts copied to/);
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
 
   const corrupt = path.join(root, "corrupt.tgz");
   await writeFile(corrupt, "not a gzip archive");
   const bad = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: corrupt });
-  assert.equal(bad.status, 0, "the tests' own result still decides the exit status");
+  assertStatus(bad, 0, "the tests' own result still decides the exit status");
   assert.doesNotMatch(bad.stdout, /Artifacts copied to/);
   assert.match(bad.stderr, /artifacts were unreadable or empty/);
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
@@ -213,7 +220,7 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
 
   // No archive at all: a Playwright run warns, while --run (which never writes one) stays quiet.
   const missing = await run(space, ["tests/e2e/example.spec.ts"], ready);
-  assert.equal(missing.status, 0);
+  assertStatus(missing, 0);
   assert.match(missing.stderr, /This run left no artifacts/);
   assert.doesNotMatch((await run(space, ["--run", "true"], ready)).stderr, /artifacts/);
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
@@ -254,7 +261,7 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
 test("the guest refuses a busy Space and cleans up its copied files", async (t) => {
   const busy = await guestRun({ flockStatus: 1 });
   t.after(() => rm(busy.root, { recursive: true, force: true }));
-  assert.equal(busy.status, 75);
+  assertStatus(busy, 75);
   assert.match(busy.stdout, /SPACE_BUSY/);
   assert.deepEqual(busy.leftovers, [], "the run script and source archive are removed");
   assert.equal(busy.provisioning, "", "no sudo or apt-get ran");
@@ -263,7 +270,7 @@ test("the guest refuses a busy Space and cleans up its copied files", async (t) 
 test("the guest stops at a failed Node install instead of running on", async (t) => {
   const failed = await guestRun({ flockStatus: 0 });
   t.after(() => rm(failed.root, { recursive: true, force: true }));
-  assert.equal(failed.status, 2);
+  assertStatus(failed, 2);
   assert.match(failed.stdout, /NODE_INSTALL_FAILED/);
   assert.doesNotMatch(failed.stdout, /APT_|NPM_|E2E_BUILD/);
   assert.deepEqual(failed.leftovers, [], "the run script and source archive are removed");

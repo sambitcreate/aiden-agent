@@ -43,11 +43,11 @@ if [ "${1:-}" = "--reset" ] && [ "$SPACE_STATUS" != ready ]; then
 fi
 case "$SPACE_STATUS" in
   missing)
-    echo "Creating Space $SPACE…"
+    echo "Creating Space $SPACE..."
     "$CUA" sb create linux --on local --name "$SPACE" --cpu "${CUA_SPACE_CPUS:-4}" --memory "${CUA_SPACE_MEMORY:-8GB}" --wait desktop ;;
   ready) ;;
   *)
-    echo "Space $SPACE is $SPACE_STATUS; resuming…"
+    echo "Space $SPACE is $SPACE_STATUS; resuming..."
     "$CUA" sb resume "$REF" ;;
 esac
 
