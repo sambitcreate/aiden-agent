@@ -28,7 +28,48 @@ export interface PasteDeps {
 
 export const SECURE_INPUT_COPIED_MESSAGE = "Transcript copied — press ⌘V to paste.";
 
-export const ATOMIC_PASTE_SCRIPT = `on run argv
+/**
+ * Written to stderr (AppleScript `log`, unbuffered) right after ⌘V is sent, so
+ * a transaction killed by its timeout says whether the paste may have landed.
+ */
+export const KEYSTROKE_SENT_MARKER = "aiden-paste:keystroke-sent";
+
+/**
+ * The paste transaction failed after it sent ⌘V: the text may already be in
+ * the field, or a busy app may still read the pasteboard later.
+ */
+export class PasteAfterKeystrokeError extends Error {
+  constructor(readonly original: unknown) {
+    super(`The paste transaction failed after sending the keystroke: ${String(original)}`);
+  }
+}
+
+/**
+ * AppleScript handlers used by the paste transaction. `countOccurrences`
+ * counts case-sensitive, non-overlapping copies of the transcript in a field
+ * value. `deliveryVerdict` confirms a paste only when the field the ⌘V targeted
+ * holds more copies than before it, so text that was already there never
+ * counts.
+ */
+export const PASTE_SCRIPT_HANDLERS = `on countOccurrences(haystack, needle)
+	if haystack is "" or needle is "" then return 0
+	set savedDelimiters to AppleScript's text item delimiters
+	considering case
+		set AppleScript's text item delimiters to needle
+		set itemCount to count of text items of haystack
+	end considering
+	set AppleScript's text item delimiters to savedDelimiters
+	return itemCount - 1
+end countOccurrences
+
+on deliveryVerdict(fieldValue, transcriptText, originalCount)
+	if (my countOccurrences(fieldValue, transcriptText)) is greater than originalCount then return "confirmed"
+	return "unconfirmed"
+end deliveryVerdict`;
+
+export const ATOMIC_PASTE_SCRIPT = `${PASTE_SCRIPT_HANDLERS}
+
+on run argv
 	set transcriptText to item 1 of argv
 	set previousClipboard to the clipboard as record
 	set originalValue to missing value
@@ -50,6 +91,8 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 		set the clipboard to transcriptText
 		return "copied"
 	end if
+	set originalCount to "unknown"
+	if originalValue is not missing value then set originalCount to my countOccurrences(originalValue, transcriptText)
 	delay 0.08
 	tell application "System Events"
 		try
@@ -71,6 +114,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 			return "copied"
 		end try
 	end tell
+	log "${KEYSTROKE_SENT_MARKER}"
 	set quietWindow to 0.2
 	set elapsed to 0
 	repeat while elapsed is less than 8
@@ -87,7 +131,7 @@ export const ATOMIC_PASTE_SCRIPT = `on run argv
 				tell application "System Events"
 					set deliveredValue to value of attribute "AXValue" of targetElement as text
 				end tell
-				if deliveredValue is originalValue or deliveredValue does not contain transcriptText then return "copied"
+				if (my deliveryVerdict(deliveredValue, transcriptText, originalCount)) is not "confirmed" then return "copied"
 				on error
 				return "copied"
 			end try
@@ -173,22 +217,36 @@ export function createSecureInputPrefetch(deps: {
 }
 
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
-export function runOsascript(script: string, args: string[] = []): Promise<string> {
+export function runOsascript(script: string, args: string[] = [], timeoutMs = 5_000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "/usr/bin/osascript",
       ["-e", script, "--", ...args],
-      { timeout: 5_000 },
-      (error, stdout) => {
-        if (error) reject(error);
+      { timeout: timeoutMs },
+      (error, stdout, stderr) => {
+        if (error) reject(Object.assign(error, { stderr: String(stderr ?? "") }));
         else resolve(stdout.trim());
       },
     );
   });
 }
 
-export async function runAtomicMacPaste(text: string): Promise<boolean> {
-  return (await runOsascript(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
+export type RunOsascript = (script: string, args: string[]) => Promise<string>;
+
+/**
+ * Runs the paste transaction. A failure after ⌘V was sent (the timeout killed
+ * osascript before its restore step) becomes PasteAfterKeystrokeError.
+ */
+export async function runAtomicMacPaste(text: string, run: RunOsascript = runOsascript): Promise<boolean> {
+  try {
+    return (await run(ATOMIC_PASTE_SCRIPT, [text])) === "pasted";
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown } | null)?.stderr;
+    if (typeof stderr === "string" && stderr.includes(KEYSTROKE_SENT_MARKER)) {
+      throw new PasteAfterKeystrokeError(error);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -230,6 +288,21 @@ export async function pasteTranscript(text: string, deps: PasteDeps): Promise<Pa
           message: "Check the field — transcript copied.",
         };
   } catch (error) {
+    if (error instanceof PasteAfterKeystrokeError) {
+      // ⌘V was posted, but nothing shows whether it landed in the field it
+      // targeted: a busy app may read the pasteboard only later, and whatever
+      // field holds focus now may have held the transcript already or be a
+      // different field. Putting the previous clipboard back would let that
+      // late ⌘V paste it (maybe a password), so the transcript stays. The
+      // transaction already put it there before ⌘V; writing it again would
+      // overwrite anything the person copied since.
+      deps.log?.("Dictation paste timed out after the keystroke; the transcript stays on the clipboard.", error.original);
+      return {
+        outcome: "copied",
+        reason: "paste-unavailable",
+        message: "Check the field — transcript copied.",
+      };
+    }
     deps.writeClipboard(text);
     deps.log?.("Dictation paste failed; transcript left on the clipboard.", error);
     return {

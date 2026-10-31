@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { FakeRfbServer } from "./rfb-fake-server.js";
-import { createRfbScreenFactory } from "./rfb-screen-main.js";
+import { createRfbScreenFactory, nativeImageEncoder } from "./rfb-screen-main.js";
 import type { BotComputerImageEncoder } from "./rfb-screen.js";
 import type { BotComputerConnection } from "./types.js";
 
@@ -106,4 +106,35 @@ test("a recording the disk refuses ends the recording, and the screen keeps work
     await server.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+/** Stands in for Electron's nativeImage: `createFromBitmap` copies the pixels, as Electron's does. */
+function copyingNativeImage() {
+  return {
+    createFromBitmap(buffer: Buffer, { width, height }: { width: number; height: number }) {
+      const pixels = Buffer.from(buffer);
+      let size = { width, height };
+      const image = {
+        resize({ width: next }: { width: number }) {
+          size = { width: next, height: Math.round((height * next) / width) };
+          return image;
+        },
+        getSize: () => size,
+        toJPEG: () => pixels,
+        toPNG: () => pixels,
+      };
+      return image as unknown as Electron.NativeImage;
+    },
+  };
+}
+
+test("the production encoder takes the framebuffer's pixels before it yields, so later paints never reach a frame", async () => {
+  const encode = nativeImageEncoder(copyingNativeImage());
+  const framebuffer = Buffer.alloc(8 * 4, 200);
+  const pending = encode(framebuffer, 8, 1, "jpeg", 70, 4);
+  // The next RFB update paints into the same live buffer while the frame is being encoded.
+  framebuffer.fill(7);
+  const frame = await pending;
+  assert.deepEqual([...frame.image.subarray(0, 4)], [200, 200, 200, 200]);
+  assert.deepEqual([frame.width, frame.height], [4, 1]);
 });

@@ -87,7 +87,11 @@ export class LinuxDictationPortal {
             if (!this.pressed) { this.pressed = true; this.callbacks.activated(); }
           } else if (event.type === "deactivated" && this.bound) {
             if (this.pressed) { this.pressed = false; this.callbacks.deactivated(); }
-          } else { fail("Desktop shortcut session ended or became unavailable."); return; }
+          } else if (event.type === "bound" || event.type === "activated" || event.type === "deactivated" || event.type === "error" || event.type === "closed") {
+            // An explicit end, or a known event out of order, fails closed.
+            fail("Desktop shortcut session ended or became unavailable."); return;
+          }
+          // Any other event type is informational (a newer helper or portal); it must not drop the shortcut.
         }
       });
       child.stdin?.on("error", () => fail("Desktop shortcut session closed."));
