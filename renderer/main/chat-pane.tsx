@@ -3775,7 +3775,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
-                      onAddProject={effectiveWorkspace?.folderPath ? () => setCloningProject(true) : undefined}
+                      // Only a project folder can be cloned; a No workspace chat has none to offer.
+                      onAddProject={effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) ? () => setCloningProject(true) : undefined}
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
