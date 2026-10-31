@@ -153,6 +153,6 @@ test("each model shows the same mark as the chat model picker, found from the op
   const twin = screen.getByRole("option", { name: /^Twin Model/u });
   assert.ok(claude.querySelector('[data-provider-icon="claude"]'), "a Claude model shows the Claude mark");
   assert.ok(local.querySelector('[data-provider-icon="custom"]'), "a custom connection shows its picture");
-  assert.equal(twin.querySelector("[data-provider-icon]"), null, "an ambiguous name never borrows another service's mark");
+  assert.ok(!twin.querySelector("[data-provider-icon]"), "an ambiguous name never borrows another service's mark");
   assert.ok(twin.querySelector("[data-provider-icon-fallback]"), "an ambiguous name keeps the neutral initial");
 });
