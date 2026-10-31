@@ -89,6 +89,22 @@ test("a Tailscale that does not answer is reported as such instead of holding up
   assert.equal((await api.readTailscaleFacts(tailscaleRunner(), linux, 5_000)).unresponsive, undefined, "a prompt answer is read as usual");
 });
 
+test("a Tailscale command still running at the deadline is killed, so the CLI leaves nothing behind", { skip: process.platform === "win32" }, async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aiden-wedged-tailscale-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const pidFile = join(dir, "pid");
+  const binary = join(dir, "tailscale");
+  // A Tailscale that never answers: it records its process id, then sleeps as that same process.
+  writeFileSync(binary, `#!/bin/sh\necho $$ > "${pidFile}"\nexec sleep 30\n`, { mode: 0o755 });
+  const facts = await api.readSystemTailscaleFacts(linux, 300, async () => binary);
+  assert.equal(facts.unresponsive, true);
+  const pid = Number(readFileSync(pidFile, "utf8"));
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let waited = 0; alive() && waited < 2_000; waited += 50) await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  if (alive()) process.kill(pid, "SIGKILL");
+  assert.equal(alive(), false, "the stalled tailscale command was stopped at the deadline");
+});
+
 test("an exit node without local network access is a warning, not a failure", async () => {
   const facts = await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "sam", ExitNodeID: "nExit1", ExitNodeAllowLANAccess: false } }), linux);
   assert.equal(api.tailscaleReady(facts), true);

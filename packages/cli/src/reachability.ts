@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { connect } from "node:net";
 import { get as httpsGet } from "node:https";
 import { userInfo } from "node:os";
@@ -54,16 +55,35 @@ function jsonRecord(text: string): Record<string, unknown> | undefined {
  * an unreadable fact is left out. A Tailscale that has not answered within
  * `timeoutMs` is reported as unresponsive rather than holding up the caller.
  */
-export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS): Promise<TailscaleFacts> {
+export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS, cancel?: AbortController): Promise<TailscaleFacts> {
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<TailscaleFacts>((resolveLate) => {
-    timer = setTimeout(() => resolveLate({ installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true }), timeoutMs);
+    timer = setTimeout(() => {
+      // Stop the Tailscale command still running, so a CLI that exits next leaves nothing behind.
+      cancel?.abort();
+      resolveLate({ installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true });
+    }, timeoutMs);
   });
   try {
     return await Promise.race([readTailscaleFactsNow(runner, host), late]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Reads this machine's Tailscale through its own CLI, with every command
+ * tied to the deadline: a command still running when it passes is killed.
+ */
+export async function readSystemTailscaleFacts(host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS, resolveBinary?: () => Promise<string | null>): Promise<TailscaleFacts> {
+  const cancel = new AbortController();
+  const runner = await createSystemTailscaleCommandRunner({
+    ...(resolveBinary ? { resolveBinary } : {}),
+    execute: (command, args, options) => new Promise((resolveRun, rejectRun) => {
+      execFile(command, [...args], { ...options, signal: cancel.signal }, (error, stdout) => error ? rejectRun(error) : resolveRun({ stdout: String(stdout) }));
+    }),
+  });
+  return readTailscaleFacts(runner, host, timeoutMs, cancel);
 }
 
 async function readTailscaleFactsNow(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost): Promise<TailscaleFacts> {
@@ -365,9 +385,8 @@ export interface RemoteCheckDependencies {
 /** `aiden remote check`: every step between a phone and this server, with the fix for each one that fails. */
 export async function remoteCheckCommand(agentDir: string, dependencies: RemoteCheckDependencies = {}): Promise<boolean> {
   const host = dependencies.host ?? systemTailscaleHost();
-  const runner = dependencies.runner === undefined ? await createSystemTailscaleCommandRunner() : dependencies.runner;
   const [facts, cloud, server] = await Promise.all([
-    readTailscaleFacts(runner, host),
+    dependencies.runner === undefined ? readSystemTailscaleFacts(host) : readTailscaleFacts(dependencies.runner, host),
     (dependencies.cloud ?? (() => looksLikeCloudServer()))(),
     remoteServerStatus(agentDir, dependencies.statusTimeoutMs ?? 20_000),
   ]);

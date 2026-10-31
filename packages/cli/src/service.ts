@@ -291,11 +291,8 @@ export interface NetworkChoiceSources {
  * unattended install never picks a network that cannot work yet.
  */
 export async function chooseNetwork(host: ServiceHost, interactive: boolean, sources: NetworkChoiceSources = {}): Promise<RemoteNetwork> {
-  const { looksLikeCloudServer, networkQuestion, readTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
-  const readFacts = sources.facts ?? (async () => {
-    const { createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
-    return readTailscaleFacts(await createSystemTailscaleCommandRunner(), { platform: host.platform, uid: host.uid, user: host.user });
-  });
+  const { looksLikeCloudServer, networkQuestion, readSystemTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
+  const readFacts = sources.facts ?? (() => readSystemTailscaleFacts({ platform: host.platform, uid: host.uid, user: host.user }));
   const [facts, cloud] = await Promise.all([readFacts(), (sources.cloud ?? (() => looksLikeCloudServer()))()]);
   const question = networkQuestion(facts, cloud, host.platform);
   if (interactive) return (sources.ask ?? askNetwork)(question);
