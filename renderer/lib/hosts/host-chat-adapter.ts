@@ -272,6 +272,11 @@ export function isOutcomeUnknown(error: unknown): error is HostChatControlError 
   return error instanceof HostChatControlError && error.code === "outcome_unknown";
 }
 
+/** The host refused a guarded change because the chat moved past the named revision. */
+export function isRevisionConflict(error: unknown): error is HostChatControlError {
+  return error instanceof HostChatControlError && (error.remoteCode === "revision_conflict" || error.status === 409);
+}
+
 export interface HostChatAdapter {
   readonly hostId: string;
   capabilities(): ReadonlySet<HostChatCapability>;

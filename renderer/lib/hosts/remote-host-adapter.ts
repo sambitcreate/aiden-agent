@@ -211,6 +211,13 @@ export function mapHostContextPressure(value: unknown, chatId: string): RemoteCo
 }
 
 /**
+ * Every adapter not yet disposed. A change one adapter makes or learns of
+ * reaches the others for the same host, so a chat renamed from a sidebar row
+ * rereads in the pane that has it open.
+ */
+const liveAdapters = new Set<RemoteHostAdapter>();
+
+/**
  * `HostChatAdapter` for a paired host, over the peer IPC. It never holds or
  * sees host credentials; main signs and sends every request.
  */
@@ -229,6 +236,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
     this.hostId = host.id;
     this.transport = transport;
     this.granted = remoteHostCapabilities(host);
+    liveAdapters.add(this);
     this.offHostState = transport.onHostState((status) => this.acceptStatus(status));
     this.initial = transport.statuses().then(
       (statuses) => {
@@ -262,6 +270,11 @@ export class RemoteHostAdapter implements HostChatAdapter {
   }
 
   private chatChanged(chatId: string): void {
+    if (this.disposed) return;
+    for (const adapter of [...liveAdapters]) if (adapter.hostId === this.hostId) adapter.notifyChatChanged(chatId);
+  }
+
+  private notifyChatChanged(chatId: string): void {
     if (this.disposed) return;
     for (const listener of [...this.chatListeners]) listener(chatId);
   }
@@ -686,6 +699,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
 
   dispose(): void {
     this.disposed = true;
+    liveAdapters.delete(this);
     this.offHostState();
     this.listeners.clear();
     this.chatListeners.clear();

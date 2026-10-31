@@ -81,8 +81,9 @@ import { ChatRow, type ChatRowMenu } from "./sidebar/chat-row";
 import { RowGroup } from "./sidebar/row-group";
 import { SectionHeader } from "./sidebar/section-header";
 import { SidebarOverflowMenu } from "./sidebar/sidebar-overflow-menu";
+import { remoteChatRowMenu } from "./sidebar/remote-chat-row-menu";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
-import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
+import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
@@ -152,6 +153,17 @@ interface ChatSidebarProps {
 
 type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
 type SidebarRow = LocalSidebarChat | RemoteSidebarChat;
+
+/**
+ * The remote chat a rename dialog is for. It names the chat, not a revision:
+ * the host moves the revision on every write (a Working chat moves it often),
+ * so the rename reads it from the newest feed row when it is saved.
+ */
+interface RemoteRenameTarget {
+  hostId: string;
+  chatId: string;
+  hostLabel: string;
+}
 
 function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePathPreferences, workspaces: readonly Workspace[]): string {
   // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
@@ -471,7 +483,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renamingWithAppleId, setRenamingWithAppleId] = React.useState<string | null>(null);
-  const [remoteRenaming, setRemoteRenaming] = React.useState<RemoteSidebarChat | null>(null);
+  const [remoteRenaming, setRemoteRenaming] = React.useState<RemoteRenameTarget | null>(null);
   const [remoteRenameBusy, setRemoteRenameBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
@@ -512,6 +524,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     [activeRemoteChat, peerHosts.feeds, peerHosts.hosts],
   );
+  // Read by an in-flight remote rename, which outlives the render that started it.
+  const remoteRowsRef = React.useRef(remoteRows);
+  remoteRowsRef.current = remoteRows;
   const combined = React.useMemo(
     () =>
       combineSidebarRows({
@@ -702,19 +717,47 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     [peerHosts.views],
   );
   const commitRemoteRename = React.useCallback(async () => {
-    const chat = remoteRenaming;
+    const target = remoteRenaming;
     const title = renameValue.trim();
-    const view = chat ? peerHosts.views.get(chat.hostId) : undefined;
-    if (!chat || !title || !view) return;
+    if (!target || !title) return;
+    const view = peerHosts.views.get(target.hostId);
+    if (!view) {
+      setRemoteRenaming(null);
+      toast.error(`${target.hostLabel} is no longer paired with this Mac.`);
+      return;
+    }
+    const currentRevision = () =>
+      remoteRowsRef.current
+        .flatMap((rows) => rows.chats)
+        .find((chat) => chat.hostId === target.hostId && chat.chatId === target.chatId)?.revision;
+    const revision = currentRevision();
+    if (!revision) {
+      setRemoteRenaming(null);
+      toast.error(`That chat is no longer on ${target.hostLabel}.`);
+      return;
+    }
     setRemoteRenameBusy(true);
     const adapter = new RemoteHostAdapter(view);
     try {
       await adapter.ready();
-      // The host's feed broadcasts the new title; the row updates from it.
-      await adapter.rename(chat.chatId, { title, revision: chat.revision });
+      try {
+        // The host's feed broadcasts the new title; the row updates from it.
+        await adapter.rename(target.chatId, { title, revision });
+      } catch (error) {
+        // The chat moved on the host since the row was read; one retry against its newer row.
+        const newer = isRevisionConflict(error) ? currentRevision() : undefined;
+        if (!newer || newer === revision) throw error;
+        await adapter.rename(target.chatId, { title, revision: newer });
+      }
       setRemoteRenaming(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Aiden could not rename that chat.");
+      toast.error(
+        isRevisionConflict(error)
+          ? `This chat changed on ${target.hostLabel}. Try again.`
+          : error instanceof Error
+            ? error.message
+            : "Aiden could not rename that chat.",
+      );
     } finally {
       adapter.dispose();
       setRemoteRenameBusy(false);
@@ -1208,37 +1251,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // Remote rows offer only what this Mac's client for that host supports; stale rows look muted.
   const renderRemoteChatRow = (chat: RemoteSidebarChat, indented = false) => {
     const actions = remoteChatRowActions(chat, remoteCapabilities.get(chat.hostId) ?? NO_REMOTE_CAPABILITIES);
-    const menuItems: ChatRowMenu = (Item) =>
-      actions.map((action) => {
-        switch (action.id) {
-          case "open":
-            return (
-              <Item key="open" onSelect={() => void openRemoteChat(chat)}>
-                Open
-              </Item>
-            );
-          case "markRead":
-            return (
-              <Item key="markRead" disabled={action.disabled} onSelect={() => void markRemoteChatRead(chat)}>
-                Mark read
-              </Item>
-            );
-          case "rename":
-            return (
-              <Item
-                key="rename"
-                icon="pencil"
-                disabled={action.disabled}
-                onSelect={() => {
-                  setRenameValue(chat.title);
-                  setRemoteRenaming(chat);
-                }}
-              >
-                Rename
-              </Item>
-            );
-        }
-      });
+    const menuItems = remoteChatRowMenu(actions, {
+      onOpen: () => void openRemoteChat(chat),
+      onMarkRead: () => void markRemoteChatRead(chat),
+      onRename: () => {
+        setRenameValue(chat.title);
+        setRemoteRenaming({ hostId: chat.hostId, chatId: chat.chatId, hostLabel: chat.hostLabel });
+      },
+    });
     return (
       <ChatRow
         key={chat.key}
@@ -1864,6 +1884,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         }
         confirmLabel="Save"
         confirmDisabled={!renameValue.trim() || remoteRenameBusy}
+        busy={remoteRenameBusy}
         onConfirm={commitRemoteRename}
       >
         <Input

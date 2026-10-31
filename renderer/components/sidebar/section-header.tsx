@@ -17,9 +17,7 @@ export interface SectionHeaderProps {
 export function SectionHeader({ label, count, accessory, actions, collapse }: SectionHeaderProps) {
   const countBadge =
     count === undefined ? null : (
-      <span className="tabular-nums text-quaternary" data-section-count="true">
-        {count}
-      </span>
+      <span className="tabular-nums text-quaternary">{count}</span>
     );
   const heading = collapse ? (
     <button

@@ -140,7 +140,7 @@ Moves animate with FLIP for 150 ms, capped at 40 px. There's no animation under 
 
 `chat-sidebar.tsx` keeps state, data reads and view switching.
 
-**0b. One row for local and remote chats.** `remoteSidebarRows` output renders through the same `ChatRow`. Remote rows gain the ••• menu, limited to actions the Remote API already supports and the host grants: Open; Mark read where the host serves a messages window; Rename where `chat:write` is granted. This is the only visible change in Phase 0, and the PR description calls it out.
+**0b. One row for local and remote chats.** `remoteSidebarRows` output renders through the same `ChatRow`. Remote rows gain the ••• menu, limited to actions the Remote API already supports and the host grants: Open; Mark read on unread rows where the host reports the `chat-read-state-v1` feature and grants `chat:read`; Rename where `chat:write` is granted and the row carries the host's revision. A rename reads that revision from the newest feed row when it is saved, retries once against a newer row if the host refused it, and makes the open remote chat reread its transcript. This is the only visible change in Phase 0, and the PR description calls it out.
 
 **Tests.** `renderToStaticMarkup` tests for `ChatRow` cover these behaviours, without locking class strings:
 

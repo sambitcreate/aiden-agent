@@ -109,7 +109,6 @@ test("workspace outline expands groups without creating or opening chats", () =>
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
   assert.match(sidebar, /expandedWorkspaceIds\.has\(workspace\.id\)/u);
-  assert.match(sidebar, /onToggle=\{\(\) => toggleWorkspace\(workspace\.id\)\}/u);
   assert.doesNotMatch(
     between(sidebar, "const toggleWorkspace", "const revealWorkspace"),
     /chatsApi\.create|navigate\(/u,
@@ -136,29 +135,9 @@ test("workspace actions and destructive confirmations disambiguate duplicate nam
   assert.match(sidebar, /removingWorkspace\.folderPath \?\? removingWorkspace\.name/u);
 });
 
-test("sidebar overflow menus open beyond the sidebar's right edge", () => {
+// Placement past the sidebar's edge is covered by sidebar/sidebar-overflow-menu.test.ts.
+test("sidebar overflow menus name what they act on", () => {
   const sidebar = source("./chat-sidebar.tsx");
-  const overflowMenu = between(
-    source("./sidebar/sidebar-overflow-menu.tsx"),
-    "function SidebarOverflowMenu",
-    "\n}\n",
-  );
-
-  assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
-  assert.match(overflowMenu, /Math\.ceil\(sidebarBounds\.right - triggerBounds\.right\) \+ 8/u);
-  assert.match(
-    overflowMenu,
-    /triggerBounds\.bottom > window\.innerHeight \/ 2 \? "end" : "start"/u,
-  );
-  assert.match(overflowMenu, /triggerBounds\.bottom - \(window\.innerHeight - viewportPadding\)/u);
-  assert.match(overflowMenu, /viewportPadding - triggerBounds\.top/u);
-  assert.match(overflowMenu, /alignOffset=\{contentAlignOffset\}/u);
-  assert.match(overflowMenu, /window\.addEventListener\("resize", positionOutsideSidebar\)/u);
-  assert.match(overflowMenu, /window\.removeEventListener\("resize", positionOutsideSidebar\)/u);
-  assert.match(overflowMenu, /side="right"/u);
-  assert.match(overflowMenu, /align=\{contentAlign\}/u);
-  assert.match(overflowMenu, /avoidCollisions=\{false\}/u);
-  assert.match(overflowMenu, /maxHeight: contentMaxHeight, overflowY: "auto"/u);
   assert.match(sidebar, /ariaLabel="Organize sidebar"/u);
   assert.match(sidebar, /ariaLabel="Add workspace"[\s\S]{0,240}triggerIcon=\{<FolderPlus \/>\}/u);
   assert.match(

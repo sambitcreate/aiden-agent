@@ -27,7 +27,8 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
   - `chat-row.tsx`: `ChatRow` for local and remote rows. Status pill, context slot, ⌘ hint, the context menu and ••• menu from one `menu: ChatRowMenu` builder. `layout: ChatRowLayout` is `"standard"` only; the Inbox two-line row joins that union rather than forking the component. The rule "the open chat never shows unread" (`selected`) lives here. `aria-busy` is `busy || state === "working"`.
   - `row-group.tsx`: `RowGroup`, the disclosure group used by workspace and remote project groups.
   - `section-header.tsx`: `SectionHeader` (label, count, accessory, actions, optional collapse button).
-  - `sidebar-overflow-menu.tsx`: moved out of `chat-sidebar.tsx`.
+  - `sidebar-overflow-menu.tsx`: moved out of `chat-sidebar.tsx`. Placement maths is the pure `overflowMenuPlacement(trigger, sidebar, viewportHeight)`.
+  - `remote-chat-row-menu.tsx`: `remoteChatRowMenu(actions, handlers)` builds the remote row's menu items.
 - `chat-sidebar.tsx` keeps state, data reads and view switching.
 - Remote ••• menu: `remoteChatRowActions(chat, remoteHostCapabilities(view))` in `sidebar-remote-groups.ts`.
   - Open is always shown.
@@ -35,8 +36,10 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
   - Rename needs `rename` (`chat:write`) and the row's `revision`.
   - On stale hosts, Mark read and Rename are disabled.
   - The calls go through a short-lived `RemoteHostAdapter`, and the host feed refreshes the rows.
+  - Rename stores only `{hostId, chatId, hostLabel}`. On Save it reads the revision from the newest feed row, because the host bumps the summary revision on every write and a Working chat moves often. On `revision_conflict` it retries once if the row moved, otherwise it toasts "This chat changed on <host>. Try again." A host unpaired while the dialog is open closes it with an error toast.
+  - `RemoteHostAdapter.chatChanged` now reaches every live adapter for the same host (module-level `liveAdapters`), so a sidebar rename makes the open remote pane's `RemoteChatSession` reread. Invalidating `hostQueryKeys.messagesWindow` would do nothing: the session reads and writes that cache directly and it has no `useQuery` observer.
   - Delete and other control actions are omitted.
 - `usePeerHostSidebar` now also returns `views`.
-- Tests: `renderer/components/sidebar/chat-row.test.tsx`, run by `test:chat-row-states`.
+- Tests: `renderer/components/sidebar/chat-row.test.tsx` (happy-dom: menu rendering, RowGroup toggle) and `sidebar-overflow-menu.test.ts`, run by `test:chat-row-states`; the cross-adapter reread is in `main/services/peer-remote-chat-control.test.ts`.
 
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

@@ -405,6 +405,22 @@ test("malformed feed rows fall back to safe titles and drop unusable dates", () 
   assert.equal(rows.chats[0].rowState, "idle");
 });
 
+test("a chat row carries the host's revision for a rename, and an older host's row carries none", () => {
+  const legacy = summaryRow("old", "w");
+  delete legacy.revision;
+  const rows = remoteSidebarRows(
+    host("studio", "Studio"),
+    snapshot("studio", {
+      workspaces: [workspaceRow("w", "App")],
+      summaries: [summaryRow("current", "w", { revision: "r2" }), legacy],
+    }),
+  );
+  const byId = new Map(rows.chats.map((chat) => [chat.chatId, chat]));
+  assert.equal(byId.get("current")?.revision, "r2");
+  assert.ok(byId.has("old"));
+  assert.equal("revision" in byId.get("old")!, false);
+});
+
 /**
  * The sidebar re-organizes on every applied feed frame, so its cost must stay
  * near-linear in the rows it shows. Work is counted, not timed: each read of a

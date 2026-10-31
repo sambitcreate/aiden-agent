@@ -352,6 +352,34 @@ test("a chat renamed from this Mac can be deleted from it next, and a stale dele
   }
 });
 
+test("a chat renamed from its sidebar row rereads in the open pane, so the pane's next change is not refused", async () => {
+  const host = new FakeHost("host_b", numbered(2));
+  const harness = await setup(host);
+  try {
+    await harness.open();
+    const control = controlFor(harness);
+    const shown = () => harness.session.getSnapshot().transcript.revision ?? undefined;
+    const before = shown();
+
+    // The sidebar renames through its own short-lived adapter for the same host.
+    const sidebar = await harness.adapterFor();
+    try {
+      await sidebar.rename("chat-1", { title: "From the sidebar", revision: before });
+    } finally {
+      sidebar.dispose();
+    }
+    assert.equal(host.chat.title, "From the sidebar");
+    await settle();
+    await harness.session.idle();
+    assert.notEqual(shown(), before, "the open pane reread the renamed chat's revision");
+
+    await control.rename("From the pane", shown());
+    assert.equal(host.chat.title, "From the pane");
+  } finally {
+    harness.close();
+  }
+});
+
 test("an unreachable host refuses every mutation, and nothing is sent once it is back", async () => {
   const host = new FakeHost("host_b", numbered(2));
   const harness = await setup(host);

@@ -1,11 +1,17 @@
+// Installs happy-dom for the Testing Library cases; must stay the first import.
+import "../../main/bots/test-dom";
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRow, type ChatRowMenu, type ChatRowProps } from "./chat-row.js";
 import { RowGroup } from "./row-group.js";
 import { SectionHeader } from "./section-header.js";
+import { remoteChatRowMenu } from "./remote-chat-row-menu.js";
 import { remoteChatRowActions, type RemoteSidebarChat } from "../../lib/sidebar-remote-groups.js";
 import type { HostChatCapability } from "../../lib/hosts/host-chat-adapter.js";
+
+afterEach(cleanup);
 
 function labels(markup: string): string[] {
   return [...markup.matchAll(/aria-label="([^"]+)"/gu)].map((match) => match[1]!);
@@ -133,6 +139,74 @@ test("an offline host's rows keep Open but disable the actions that need the hos
   ]);
 });
 
+test("a remote row's menu lists the granted actions, keeps disabled ones unselectable, and runs the chosen one", async () => {
+  const chosen: string[] = [];
+  const actions = remoteChatRowActions(remoteChat({ stale: true }), new Set(["markRead", "rename"]));
+  render(
+    <ChatRow
+      title="Fix the build"
+      status={{ state: "idle", unread: true }}
+      remote={{ hostLabel: "Studio Mac", stale: true }}
+      menu={remoteChatRowMenu(actions, {
+        onOpen: () => void chosen.push("open"),
+        onMarkRead: () => void chosen.push("markRead"),
+        onRename: () => void chosen.push("rename"),
+      })}
+      onOpen={() => {}}
+    />,
+  );
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^Fix the build/u }));
+  const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+  assert.deepEqual(
+    items.map((item) => [item.textContent, item.getAttribute("aria-disabled") === "true"]),
+    [
+      ["Open", false],
+      ["Mark read", true],
+      ["Rename", true],
+    ],
+  );
+  fireEvent.click(items[2]!);
+  fireEvent.click(items[0]!);
+  assert.deepEqual(chosen, ["open"], "a disabled item never runs its action");
+});
+
+test("a remote row's live menu runs Mark read and Rename", async () => {
+  for (const [label, expected] of [
+    ["Mark read", "markRead"],
+    ["Rename", "rename"],
+  ] as const) {
+    const chosen: string[] = [];
+    const actions = remoteChatRowActions(remoteChat(), new Set(["markRead", "rename"]));
+    render(
+      <ChatRow
+        title="Fix the build"
+        status={{ state: "idle", unread: true }}
+        menu={remoteChatRowMenu(actions, {
+          onOpen: () => void chosen.push("open"),
+          onMarkRead: () => void chosen.push("markRead"),
+          onRename: () => void chosen.push("rename"),
+        })}
+        onOpen={() => {}}
+      />,
+    );
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Fix the build/u }));
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: label }));
+    assert.deepEqual(chosen, [expected], label);
+    cleanup();
+  }
+});
+
+test("clicking a row group's header asks to toggle it", () => {
+  let toggles = 0;
+  render(
+    <RowGroup expanded={false} icon={null} title="aiden-agent" accessibleName="aiden-agent workspace" onToggle={() => void toggles++}>
+      <span>child</span>
+    </RowGroup>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Expand aiden-agent workspace" }));
+  assert.equal(toggles, 1);
+});
+
 test("a row group shows its rows only while expanded and names the toggle for the next step", () => {
   const render = (expanded: boolean) =>
     renderToStaticMarkup(
@@ -152,10 +226,12 @@ test("a row group shows its rows only while expanded and names the toggle for th
 });
 
 test("a section header shows its count and only becomes a button when collapsible", () => {
-  const plain = renderToStaticMarkup(<SectionHeader label="Today" count={3} />);
-  assert.match(plain, /Today/u);
-  assert.match(plain, /<span[^>]*data-section-count="true"[^>]*>3<\/span>/u);
-  assert.doesNotMatch(plain, /<button/u);
+  const plain = render(<SectionHeader label="Today" count={3} />);
+  assert.equal(plain.container.textContent, "Today3");
+  assert.ok(screen.getByText("3"));
+  assert.equal(screen.queryByRole("button"), null);
+  plain.unmount();
+  assert.equal(render(<SectionHeader label="Today" />).container.textContent, "Today");
 
   const collapsible = renderToStaticMarkup(
     <SectionHeader label="Done" collapse={{ expanded: false, onToggle: () => {} }} />,
