@@ -217,8 +217,21 @@ export function ChatContextPanel({
               {chat.title || "Untitled chat"}
             </p>
             <div className="mt-2 flex flex-wrap gap-1.5">
+              {/* The provider chip wears the provider's mark; the model chip wears the model's own (Claude, Grok). */}
               <Chip
                 icon={details.providerId ? (
+                  <ProviderIcon
+                    providerId={details.providerId}
+                    providerLabel={details.providerLabel}
+                    artwork={details.providerArtwork}
+                    className="size-3.5"
+                  />
+                ) : undefined}
+              >
+                {details.providerLabel || "Unknown provider"}
+              </Chip>
+              <Chip
+                icon={details.providerId && details.modelId ? (
                   <ProviderIcon
                     providerId={details.providerId}
                     providerLabel={details.providerLabel}
@@ -228,9 +241,8 @@ export function ChatContextPanel({
                   />
                 ) : undefined}
               >
-                {details.providerLabel || "Unknown provider"}
+                {details.modelLabel || "Unknown model"}
               </Chip>
-              <Chip>{details.modelLabel || "Unknown model"}</Chip>
               <Chip>{`${count(usage.userMessages)} user · ${count(usage.assistantMessages)} assistant`}</Chip>
             </div>
             <dl className="mt-3 flex flex-wrap gap-x-8 gap-y-3 text-small">
