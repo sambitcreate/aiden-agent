@@ -1,0 +1,32 @@
+# Images across machines (paired Macs, then image files, then raw uploads)
+
+Plan (owner chose 2026-10-30, all three steps in order, one PR each):
+1. Paired Macs see pictures (no protocol revision).
+2. Store each image as its own content-hashed file beside the chat, served by an `aiden-attachment:` protocol with an ETag; migrate an old chat's images lazily when it is next saved (no protocol revision).
+3. Raw-byte uploads with a progress bar (needs the next free Remote revision at merge). Keep the 10-minute single-use `att_` references.
+Do not copy bearer asset links or server-to-server attachment forwarding.
+
+## Step 1 (branch claude/project-thread-cej80h)
+
+- Main: `PEER_BINARY_OPERATIONS` in `main/services/peer-operation.ts` (`attachmentContent`, `botSessionImage`) decides which peer ops return `{mimeType, bytes}`; `botSessionImage` maps to `GET /bots/{id}/session/images/{entryId}` (`getBotSessionImage`). `bot:images` is in `NEGOTIATED_GRANTS` as `own_call`.
+- Renderer: `renderer/lib/hosts/remote-images.ts` reads bytes with React Query `useQueries` (staleTime Infinity, client default gcTime; a custom gcTime timer kept node:test processes alive; filled messages cached in a WeakMap so rows stay memoized) and fills `Attachment.data`, so all local image rendering is reused. Bytes are drawn only when the type and size match the listing.
+- Bot shared images map to `shared_image` with empty `data` until read; a failed read becomes the "I shared an image: NAME. Open this chat on its Mac to see it." line.
+- `MessageList storedImageActions={false}` on remote chats hides Save and Copy (they read the local chat store); Expand stays.
+- Reads go through a per-host limiter (`REMOTE_IMAGE_READS_PER_HOST` = 3) because main allows only 8 unary requests per host (`PEER_UNARY_PER_HOST`) and refuses extras with "Too many pending device operations." Retry only transient errors; 404 / mismatch become `RemoteImageGone`. Bot image reads run only while the session stream is `streaming`; loading entries show as file chips.
+- Sends to a paired Mac go through async `prepareRemoteAttachmentUploads` in `remote-attachments.ts`. Each redrawn image gets min(8 MiB, 16 MiB turn limit minus the other attachments), with a final aggregate check (host `reserve` 413s otherwise). Images over 8 MiB never reach it: picker/drop/clipboard ingestion reject them first. JPEG stays JPEG, other formats PNG then JPEG, scales 1 / 0.75 / 0.5 / 0.35 / 0.25 (size is the outer loop), quality 0.86, `imageOrientation: "from-image"`. Chromium can't decode HEIC, so HEIC is refused with "export it as a JPEG"; converting it in main (macOS `sips`/ImageIO) is a possible follow-up. Undecodable images throw a plain-language error.
+- Tests: `renderer/main/remote-chat-images.test.tsx` (in test:remote-chat), Bot image tests in `remote-bot-chat-view.test.tsx`, conversion tests in `host-resources.test.ts`.
+
+## Step 2: images as files beside the chats (branch claude/project-thread-cej80h, after #670 merged as b8e748c6)
+
+- Store: `main/services/chat-image-store.ts`, files `chats/images/<sha[0:2]>/<sha256>`. `put` dedupes by hash+size and touches the mtime on reuse; a put and a sweep never cross on one hash (in-flight puts are skipped by the sweep, a put waits for a removal in progress). `read(sha, size)` returns undefined on a missing or wrong-size file.
+- Chat store (`chat-store-core.ts`): `writeChat` runs `withStoredImages` (puts bytes, chat file keeps `sha256`, `width`, `height`, no `data`). Every public method returning a Chat goes through `withImageData`, which fills `data` and REMOVES `sha256/width/height`, so main-process callers get the exact legacy shape `{id,name,mimeType,kind,size,data}` (exact-key parsers like `parseAttachments`, the CLI daemon and exports depend on this). The hash is kept in a private WeakMap (`rememberImageHash` / `storedImageHashOf`) so `chatForRenderer` can still send a link. A missing file leaves the reference (no data) and calls `onImageUnavailable` once per hash (diagnostic `chat-degraded`/`not-found`).
+- Reference-only reads: `getWithImageReferences` (renderer IPC get via `chat-application-service`, Remote via the application get), `findStoredImage` (lock-free cached image list for the `aiden-attachment:` handler), `messagesWithImageData` (copies with bytes, used by the CLI daemon fork journal).
+- Window: `chatForRenderer` swaps `data` for `url: aiden-attachment://image/<chatId>/<sha>`; the handler serves only a hash the chat lists, canonical raster only, ETag = quoted sha, 304 on If-None-Match.
+- Exact-shape boundaries: `withReadableImages` (attachment-contract) drops data-less images before `parseAttachments`; chat export writes inline images only (drops one whose file is gone); generation names a lost image `[Image unavailable: name]`.
+- Remote: attachment content and visual viewer images read bytes via `chatStore.readImage`; fork-before prefill fills bytes before restaging (`withImageBytes`). HTTP route sends `etag`, 304 on If-None-Match, still `no-store`; iOS/Android don't send If-None-Match, so no client change or revision.
+- Sweep: only when a delete, clear or replaced visual snapshot left `chats/images/.sweep-needed`; 2 min after start and after each such change (`imageSweepDelayMs`, desktop `chat-store.ts` and CLI `daemon-chats.ts`). Regex-scans every file in the chats folder (also quarantined/staged), 24 h grace by mtime plus an in-process "written into a chat" map. Marker is kept while unused files wait out the grace.
+- One-way: an older Aiden can't read reference-only images. Say so in release notes.
+- Bot `share_image` images live in Pi durable entries (`bot-images.ts`), not the chat store: out of scope.
+- Bench (ten 3 MB PNGs in one chat): appendMessage 783 ms -> 25-45 ms, hydrated get 478 -> 20-25 ms, references-only get ~0 ms, chat file 41.9 MB -> under 1 KB.
+- Review (Opus, 2026-10-31) found 4 picture-losing paths, all fixed with tests: phone fork-before prefill, phone visual viewer, CLI daemon turns/forks, chat export. Not done: LRU cache for hydrated bytes (each hydrated read re-reads files).
+- Tests: `main/services/chat-image-storage.test.ts`, `renderer/lib/stored-attachments.test.tsx` (test:image-generation), ETag in `aiden-remote-chat-http.test.ts`, fork/viewer in `aiden-remote-chats.test.ts`, CLI parity "Remote HTTPS serves private workspaces" (photo turn + fork). Local runs of the CLI HTTPS test need the IPv4 shim ([[cloud-container-test-gaps]] in team memory).

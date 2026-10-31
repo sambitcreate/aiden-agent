@@ -105,6 +105,7 @@ import { displayImageArtifactStore } from "./services/display-image-artifact-sto
 import { toolOutputStore } from "./services/tool-output-store.js";
 import { generativeUiArtifactStore } from "./services/generative-ui-artifact-store.js";
 import { registerGenerativeUiProtocol } from "./services/generative-ui-protocol.js";
+import { registerChatAttachmentProtocol } from "./services/chat-attachment-protocol.js";
 import { createMainVisualSnapshotQueue } from "./services/visual-snapshot-main.js";
 import { disposeVisualSnapshots, installVisualSnapshotQueue } from "./services/visual-snapshot-service.js";
 import { registerCustomSchemes } from "./services/custom-schemes.js";
@@ -1966,6 +1967,9 @@ if (!ownsSingleInstanceLock) {
       await displayImageArtifactStore.initialize();
       await generativeUiArtifactStore.initialize();
       registerGenerativeUiProtocol();
+      registerChatAttachmentProtocol();
+      // Remove picture files left behind by chats deleted while Aiden was closed.
+      chatStore.scheduleImageSweep();
       // Phones and other clients that cannot draw a visual get its snapshot.
       installVisualSnapshotQueue(
         createMainVisualSnapshotQueue({

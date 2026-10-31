@@ -7,7 +7,9 @@ import { registerChatImageActionHandlers as register } from "../services/chat-im
 
 export function registerChatImageActionHandlers(): void {
   register(ipcMain as never, {
-    getChat: (chatId) => chatStore.get(chatId),
+    // One image's file, not the whole chat with every image's bytes.
+    getChat: (chatId) => chatStore.getWithImageReferences(chatId),
+    readImage: (sha256, size) => chatStore.readImage(sha256, size),
     downloadsDir: () => app.getPath("downloads"),
     writeClipboardImage: (bytes) => {
       const image = nativeImage.createFromBuffer(bytes);
