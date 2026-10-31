@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 const api = await import("../dist/parity-test-api.js");
@@ -89,6 +89,26 @@ test("a failed reinstall puts back the service that was already installed", (t) 
     assert.equal(readFileSync(file, "utf8"), working, `${platform}: the earlier service file is back`);
     assert.ok(!calls.some((call) => call.includes("disable")), `${platform}: the earlier service is not disabled`);
     assert.equal(calls.at(-1), platform === "linux" ? "systemctl --user restart aiden.service" : `launchctl bootstrap gui/501 ${file}`, `${platform}: the earlier service is started again`);
+  }
+});
+
+test("a reinstall whose new server never becomes ready puts back the service that was installed before", async (t) => {
+  const entry = join(mkdtempSync(join(tmpdir(), "aiden-service-entry-")), "cli.js");
+  writeFileSync(entry, "");
+  t.after(() => rmSync(dirname(entry), { recursive: true, force: true }));
+  const saved = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
+  for (const platform of ["linux", "darwin"]) {
+    const { host, calls, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" } });
+    const { file } = api.installService(host, { ...local, path: "/opt/working/bin" });
+    const working = readFileSync(file, "utf8");
+    calls.length = 0;
+    // Every manager command succeeds, but no server ever answers on the control socket.
+    await assert.rejects(api.serviceCommand(local.agentDir, ["install", "--network", "local", "--no-pair"], host, { readyTimeoutMs: 300 }), /did not start the server.*Put back the service that was installed before/s, platform);
+    assert.equal(readFileSync(file, "utf8"), working, `${platform}: the earlier service file is back`);
+    assert.equal(calls.at(-1), platform === "linux" ? "systemctl --user restart aiden.service" : `launchctl bootstrap gui/501 ${file}`, `${platform}: the earlier service is started again`);
+    if (platform === "darwin") assert.equal(calls.at(-2), "launchctl bootout gui/501/com.sambitcreate.aiden-agent.serve", "the replacement is unloaded first");
   }
 });
 
