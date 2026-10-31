@@ -20,6 +20,7 @@ import { createBotSessionService, type BotSessionRuntime, type BotSessionService
 import {
   BOT_CONNECT_CARD_ENTRY_KIND,
   createBotLiveProjection,
+  createQueuedInputClassifier,
   liveBotActivity,
   liveQueuedInputIds,
   liveQueuedMessages,
@@ -1890,6 +1891,45 @@ test("while classifying fails, a cached routine stays hidden and the person's cl
     unsubscribe();
   } finally {
     await live.close();
+  }
+});
+
+test("a retry timer that fires early never opens the classification pause before its time", async (t) => {
+  // A busy event loop schedules timers from a stale loop time, so a timer can
+  // fire before the classifier's own clock reaches the end of the pause.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let clock = 1_000;
+  const callsAt: number[] = [];
+  let retries = 0;
+  const classifier = createQueuedInputClassifier({
+    classify: async () => {
+      callsAt.push(clock);
+      throw new Error("inspect failed");
+    },
+    now: () => clock,
+    retryMs: 150,
+    report: () => undefined,
+    retry: () => {
+      retries += 1;
+    },
+  });
+  const docs = { "pi.inbox": { items: [{ id: "desk-3", mode: "followUp" }] } };
+  try {
+    assert.deepEqual([...(await classifier.personal(docs))], []);
+    // The timer fires on schedule while the classifier's clock has only moved 100 ms.
+    clock += 100;
+    t.mock.timers.tick(150);
+    assert.equal(retries, 0, "an early timer does not call for a retry");
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000], "no classification inside the pause");
+    // Once the pause is over by the classifier's clock, the retry comes without a new frame.
+    clock += 50;
+    t.mock.timers.tick(50);
+    assert.equal(retries, 1);
+    await classifier.personal(docs);
+    assert.deepEqual(callsAt, [1_000, 1_150]);
+  } finally {
+    classifier.close();
   }
 });
 
