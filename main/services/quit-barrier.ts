@@ -123,3 +123,20 @@ export function joinInFlight<A extends unknown[]>(
     return current;
   };
 }
+
+/**
+ * Run `work` within `budgetMs` and treat a timeout like a failure: resolves
+ * with the value, or rejects with the work's error or with `timeoutMessage`.
+ * For writes that must be durable before quit, where waiting forever is worse
+ * than cancelling the quit.
+ */
+export async function requireWithinDeadline<T>(
+  work: () => PromiseLike<T> | T,
+  budgetMs: number,
+  timeoutMessage: string,
+): Promise<T> {
+  const outcome = await withDeadline(work, budgetMs);
+  if (outcome.status === "fulfilled") return outcome.value;
+  if (outcome.status === "rejected") throw outcome.error;
+  throw new Error(timeoutMessage);
+}

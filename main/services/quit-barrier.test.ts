@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { closeRendererBeforeShutdown, joinInFlight, type RendererQuitWindow, withDeadline } from "./quit-barrier.js";
+import { closeRendererBeforeShutdown, joinInFlight, type RendererQuitWindow, requireWithinDeadline, withDeadline } from "./quit-barrier.js";
 
 class FakeQuitWindow extends EventEmitter implements RendererQuitWindow {
   readonly webContents = new EventEmitter();
@@ -168,4 +168,14 @@ test("a call made while a run is in flight waits for that run's outcome", async 
   release();
   await again;
   assert.deepEqual(runs, [false, true]);
+});
+
+test("requireWithinDeadline turns a write that never settles into a failure", async () => {
+  assert.equal(await requireWithinDeadline(async () => 7, 50, "late"), 7);
+  const failure = new Error("disk full");
+  await assert.rejects(requireWithinDeadline(() => Promise.reject(failure), 50, "late"), (error) => error === failure);
+  await assert.rejects(
+    requireWithinDeadline(() => new Promise<never>(() => {}), 10, "Computer Use did not save in time"),
+    /Computer Use did not save in time/,
+  );
 });

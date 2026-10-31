@@ -62,7 +62,7 @@ import { spending } from "./services/spending-main.js";
 import { usageLimits } from "./services/usage-limit-main.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
-import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, withDeadline } from "./services/quit-barrier.js";
+import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, requireWithinDeadline, withDeadline } from "./services/quit-barrier.js";
 import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
@@ -414,6 +414,16 @@ const SHUTDOWN_BUDGET_MS = {
 } as const;
 
 /**
+ * Budgets for the writes that run before the shutdown ceiling is armed. They
+ * are bounded on their own: a stuck window-state write is skipped, and a stuck
+ * Computer Use write cancels the quit like a failed one.
+ */
+const PRE_SHUTDOWN_BUDGET_MS = {
+  windowState: 2_000,
+  computerUseSettings: 5_000,
+} as const;
+
+/**
  * Last-resort bound on the whole quit: the serial steps, the slowest branch
  * of the parallel teardown, the diagnostic flushes, and 5 s of slack. It only
  * catches work that escapes the step budgets, so Aiden never stays half-shut
@@ -490,7 +500,7 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   llmClient.setQuitInProgress(true);
   if (!settingsPrepared) {
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
       llmClient.setQuitInProgress(false);
@@ -900,13 +910,27 @@ async function authorizeProtectedActionAttempts(
 }
 
 async function persistMainWindowState(window: BrowserWindow): Promise<void> {
-  try {
-    await mainWindowState.save(window);
-  } catch (error) {
-    // Window placement is a convenience preference. A transient persistence
-    // failure must never trap the user in the app during Close or Quit.
-    logger.warn("main-window", "Could not save the main window state", error);
+  // Window placement is a convenience preference. A failed or stuck write
+  // must never trap the user in the app during Close or Quit.
+  const outcome = await withDeadline(() => mainWindowState.save(window), PRE_SHUTDOWN_BUDGET_MS.windowState);
+  if (outcome.status === "rejected") {
+    logger.warn("main-window", "Could not save the main window state", outcome.error);
+  } else if (outcome.status === "timed-out") {
+    logger.warn("main-window", "The main window state did not save within the close budget.");
   }
+}
+
+/**
+ * Seal Computer Use and make its disabled state durable before quit. A write
+ * that fails or never settles cancels the quit (Aiden stays open, as for any
+ * failed write) instead of hanging it before the shutdown ceiling is armed.
+ */
+async function prepareComputerUseForQuit(): Promise<void> {
+  await requireWithinDeadline(
+    () => computerUseSettings.shutdown(),
+    PRE_SHUTDOWN_BUDGET_MS.computerUseSettings,
+    "Computer Use settings did not finish saving within the quit budget.",
+  );
 }
 
 async function requestWindowClose(window: BrowserWindow): Promise<void> {
@@ -969,7 +993,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
     if (authorization === "declined") return false;
     await persistMainWindowState(window);
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
@@ -1074,7 +1098,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   try {
     if (!(await authorizeProtectedAction(window, "close"))) return false;
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
       settingsPrepared = true;
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();

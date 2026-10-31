@@ -102,3 +102,10 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
 - Vibrancy `visualEffectState` (needs before/after screenshots of an
   unfocused window).
 - Pill `backgroundThrottling`: the pill records while hidden, so it stays off.
+- Before the ceiling is armed, the quit and reset paths make two writes that
+  are bounded on their own (`PRE_SHUTDOWN_BUDGET_MS`): the main window state
+  (2 s, skipped on timeout) and the Computer Use disabled state (5 s via
+  `requireWithinDeadline`; a timeout cancels the quit like a failed write).
+- `shutdownAndQuit` is `joinInFlight(runShutdownAndQuit)`: a second caller
+  waits for the running shutdown, so the startup-failure fallback sees whether
+  Aiden really quit.
