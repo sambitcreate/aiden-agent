@@ -1,8 +1,8 @@
 import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { useFocusRegionKeys } from "./focus-regions";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { focusRegionWhenShown, useFocusRegionKeys } from "./focus-regions";
 
 afterEach(cleanup);
 
@@ -133,4 +133,65 @@ test("⌥↑ in a message box that holds text moves the caret, not focus", () =>
   const event = press("ArrowUp", { altKey: true });
   assert.equal(focused(), "Message");
   assert.equal(event, true, "the key is left to the text box");
+});
+
+function LateComposer({ shown }: { shown: boolean }) {
+  return (
+    <>
+      <button type="button">Sidebar button</button>
+      {shown ? (
+        <div data-focus-region="composer">
+          <textarea aria-label="Message" />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+test("after onboarding closes, the message box takes focus as soon as it appears", async () => {
+  (document.activeElement as HTMLElement | null)?.blur();
+  const { rerender } = render(<LateComposer shown={false} />);
+  const cancel = focusRegionWhenShown("composer");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  rerender(<LateComposer shown />);
+  await waitFor(() =>
+    assert.ok(document.activeElement === screen.getByRole("textbox", { name: "Message" }), `focus is on ${document.activeElement?.tagName}`),
+  );
+  cancel();
+});
+
+test("if the page changes as onboarding closes, the new page's message box gets focus", async () => {
+  (document.activeElement as HTMLElement | null)?.blur();
+  const { rerender } = render(
+    <div data-focus-region="composer">
+      <textarea aria-label="Message" />
+    </div>,
+  );
+  const cancel = focusRegionWhenShown("composer");
+  await waitFor(() => assert.ok(document.activeElement === screen.getByRole("textbox", { name: "Message" })));
+  // Opening a Bot's chat swaps in its own message box.
+  rerender(
+    <div data-focus-region="composer" key="bot">
+      <textarea aria-label="Ask Chief of Staff" />
+    </div>,
+  );
+  await waitFor(() =>
+    assert.ok(
+      document.activeElement === screen.getByRole("textbox", { name: "Ask Chief of Staff" }),
+      `focus is on ${document.activeElement?.tagName}`,
+    ),
+  );
+  cancel();
+});
+
+test("focus someone moves first is left where they put it", async () => {
+  (document.activeElement as HTMLElement | null)?.blur();
+  const { rerender } = render(<LateComposer shown={false} />);
+  const cancel = focusRegionWhenShown("composer");
+  const button = screen.getByRole("button", { name: "Sidebar button" });
+  button.focus();
+  rerender(<LateComposer shown />);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(document.activeElement === button, `focus moved to ${document.activeElement?.tagName}`);
+  cancel();
 });

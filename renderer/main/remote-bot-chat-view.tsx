@@ -669,7 +669,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         />
       </MessageAttachmentPreviewProvider>
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onStop={stop} onLayoutChange={setStatusLayout} />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
       {isPaused ? <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} /> : null}
       {state?.kind === "interrupted" ? (

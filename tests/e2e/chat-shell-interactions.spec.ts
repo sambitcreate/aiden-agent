@@ -1037,6 +1037,52 @@ test("F6 moves between areas, arrows move through the chat list, and Command+F f
   await expect(message).toBeFocused();
 });
 
+test("Command+/ lists every key, and the menu bar's Help, Go and Chat items show keys and grey out what can't run", async ({ aiden }) => {
+  const { app, page } = aiden;
+  await finishLmStudioOnboarding(page);
+  // Setup finishes with the message box ready to type in.
+  const message = page.locator('[data-focus-region="composer"] textarea');
+  await expect(message).toBeFocused();
+
+  await page.keyboard.press(`${PRIMARY_MODIFIER}+/`);
+  const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+  await expect(sheet.getByRole("heading", { name: "Moving around" })).toBeVisible();
+  await expect(sheet.getByRole("searchbox", { name: "Search keyboard shortcuts" })).toBeFocused();
+  await page.keyboard.type("F6");
+  await expect(sheet.getByRole("listitem")).toHaveText([/Next \/ previous area/u]);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(message).toBeFocused();
+
+  const menuItem = (menu: string, label: string) =>
+    app.evaluate(
+      ({ Menu }, [menuLabel, itemLabel]) => {
+        const top = Menu.getApplicationMenu()?.items.find((item) => item.label === menuLabel);
+        const item = top?.submenu?.items.find((entry) => entry.label === itemLabel);
+        return item ? { enabled: item.enabled, accelerator: item.accelerator ?? null } : null;
+      },
+      [menu, label] as const,
+    );
+  // The menu shows Aiden's ⌘/ (Ctrl+/ off a Mac).
+  expect(await menuItem("Help", "Keyboard Shortcuts")).toEqual({
+    enabled: true,
+    accelerator: process.platform === "darwin" ? "Command+/" : "CommandOrControl+/",
+  });
+  expect(await menuItem("Go", "Back")).not.toBeNull();
+  await expect.poll(async () => (await menuItem("Chat", "Find in Chat"))?.enabled).toBe(true);
+  // No reply is coming, so there's nothing to stop.
+  await expect.poll(async () => (await menuItem("Chat", "Stop Reply"))?.enabled).toBe(false);
+
+  // Choosing the menu item opens the same list.
+  await app.evaluate(({ Menu }) => {
+    const help = Menu.getApplicationMenu()?.items.find((item) => item.label === "Help");
+    help?.submenu?.items.find((entry) => entry.label === "Keyboard Shortcuts")?.click();
+  });
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+});
+
 test("Find in chat brings each match into view, even far apart in one tall code block", async ({ aiden }) => {
   const { app, page } = aiden;
   await finishLmStudioOnboarding(page);
