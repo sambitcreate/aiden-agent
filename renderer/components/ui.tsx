@@ -1009,6 +1009,9 @@ export function ScrollArea({
   // the latest decision synchronously; React state only mirrors it for paint.
   const followRef = React.useRef<FollowState>(INITIAL_FOLLOW_STATE);
   const scrollSampleRef = React.useRef<{ top: number; height: number; viewport: number } | null>(null);
+  // Upward movement too small to count yet. Kept apart from the sample, which
+  // content snaps overwrite, so fractional scrolls add up across a stream.
+  const upwardDriftRef = React.useRef(0);
   const followFrameRef = React.useRef(0);
   const offerJumpTimerRef = React.useRef(0);
   const jumpSettleTimerRef = React.useRef(0);
@@ -1156,6 +1159,7 @@ export function ScrollArea({
       // The press itself keeps follow: only where the thumb settles counts.
       if (event.target !== element) return;
       scrollSampleRef.current = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+      upwardDriftRef.current = 0;
       dispatchFollow({ type: "scrollbarHold" });
     };
     const onPointerUp = () => {
@@ -1350,13 +1354,18 @@ export function ScrollArea({
           const previous = scrollSampleRef.current;
           const clamped = previous !== null &&
             (sample.height < previous.height || sample.viewport !== previous.viewport);
-          const movedUp = previous !== null && !clamped && sample.top < previous.top - 1;
           // Sandboxed frame input cannot reach our wheel/touch listeners. Its
           // chained host scroll can still reveal the reader moving upward.
-          // Retain the baseline so fractional movement adds up across events.
-          scrollSampleRef.current = !previous || clamped || movedUp || sample.top > previous.top || followRef.current.jumpPending
-            ? sample
-            : { ...sample, top: previous.top };
+          // Fractional upward movement adds up across events, including across
+          // a streaming snap; a downward move or a jump starts over.
+          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+            upwardDriftRef.current = 0;
+          } else {
+            upwardDriftRef.current += previous.top - sample.top;
+          }
+          const movedUp = upwardDriftRef.current > 1;
+          if (movedUp) upwardDriftRef.current = 0;
+          scrollSampleRef.current = sample;
           if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
             dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
           }

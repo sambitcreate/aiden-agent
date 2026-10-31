@@ -480,6 +480,33 @@ test("small scrolls chained from an embedded frame keep the reader's place while
   assert.equal(port.following(), true, "returning to the end resumes follow");
 });
 
+test("small chained scrolls add up even when a streaming chunk lands between them", () => {
+  const EmbeddedTranscript = ({ chunks }: { chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>Reply chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<EmbeddedTranscript chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<EmbeddedTranscript chunks={2} />);
+
+  port.moveTo(port.bottom() - 0.5);
+  port.moveTo(port.bottom() - 1);
+  assert.equal(port.following(), true, "one pixel up is not yet a decision to read");
+  // A chunk arrives mid-gesture and the still-following view snaps to it.
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={3} />);
+  assert.equal(port.top(), port.bottom());
+  port.moveTo(port.bottom() - 0.5);
+  assert.equal(port.following(), false, "the movement before the chunk still counts");
+  const place = port.top();
+  port.grow(60);
+  view.rerender(<EmbeddedTranscript chunks={4} />);
+  assert.equal(port.top(), place, "the next chunk leaves the reader's place alone");
+});
+
 test("a content-height clamp after an embedded visual shrinks keeps live follow armed", () => {
   const view = render(<Transcript chunks={1} />);
   const port = scrollport();
