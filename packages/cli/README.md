@@ -63,6 +63,8 @@ Daemon and delegated worker sessions retain Aiden's bounded extension inventorie
 
 The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and pi's attribution headers, and overrides settings), the settings default is flipped off, and the build patches the ping's call sites and endpoint out of the bundle — asserted by `tests/bundle.test.mjs`. Since Pi 1.4 the shared desktop runtime and durable Bots, which don't read that switch, set their own request identity with no attribution (`main/services/pi-client-identity.ts`).
 
+The CLI also sends no Aiden usage data. The desktop app's opt-out usage data ([`docs/analytics.md`](../../docs/analytics.md)) does not apply here yet; when the CLI adopts it, it will follow the same event list, `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0`.
+
 ## Where state lives
 
 | Path | Contents |

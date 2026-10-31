@@ -17,6 +17,7 @@ import {
   type SpendingChangedEvent,
   type SpendingStatusView,
 } from "../shared/spending";
+import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -583,6 +584,25 @@ function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
   const usd = choice?.kind === "amount" ? parseSpendingLimitUsd(choice.usd) : undefined;
   return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
 }
+
+function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
+  const status = value as Partial<Record<keyof AnalyticsStatusView, unknown>> | null;
+  return {
+    enabled: status?.enabled === true,
+    envDisabled: status?.envDisabled === true,
+    hasKey: status?.hasKey === true,
+    noticePending: status?.noticePending === true,
+  };
+}
+
+/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+export const analyticsApi = {
+  status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
+  setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
+  markNoticeShown: async (choice: AnalyticsNoticeChoice) =>
+    parseAnalyticsStatus(await invoke<unknown>("analytics:markNoticeShown", choice)),
+  registry: () => invoke<AnalyticsRegistryView>("analytics:registry"),
+};
 
 export const spendingApi = {
   status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>

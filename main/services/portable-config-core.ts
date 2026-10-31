@@ -80,6 +80,8 @@ export interface PortableConfigShape {
 
 export interface SettingsShape {
   settings: AppSettings;
+  /** Product-analytics consent state; parsed by `analytics-consent.ts`. */
+  analytics?: unknown;
 }
 
 export interface LocalConfigShape {
