@@ -1024,7 +1024,7 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   });
   await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
   t.after(() => { provider.closeAllConnections(); provider.close(); });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text", "image"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
   const workspace = await api.workspaceCommand(dir, ["add", dir]);
   const original = process.env.AIDEN_CLI_ENTRY; process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
   t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
@@ -1052,10 +1052,18 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const created = await request("/chats", "POST", { workspaceId: workspace.id, providerId: "cli-test", modelId: "test" }, "create-cli-test-0001");
   assert.equal(created.status, 201, JSON.stringify(created));
   const path = `/chats/${created.data.id}/turns`;
-  const turn = await request(path, "POST", { text: "Hello remote" }, "turn-cli-test-000001");
+  // The photo is kept as its own file beside the chat; the model still receives it.
+  const photo = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL2aQAAAABJRU5ErkJggg==";
+  const uploaded = await request(`/chats/${created.data.id}/attachments`, "POST", { name: "photo.png", mimeType: "image/png", kind: "image", data: photo });
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded));
+  const turn = await request(path, "POST", { text: "Hello remote", attachmentIds: [uploaded.data.id] }, "turn-cli-test-000001");
   assert.equal(turn.status, 202, JSON.stringify(turn));
   await daemon.llmClient.waitForChatIdle(created.data.id);
-  const repeated = await request(path, "POST", { text: "Hello remote" }, "turn-cli-test-000001");
+  // The photo reaches pi as an image (pi may replace it with its own "omitted" note when it can't resize it).
+  const carriesPhoto = (body) => /image\/png;base64|\[Image omitted/u.test(JSON.stringify(body.messages.filter((message) => message.role === "user")));
+  assert.ok(carriesPhoto(requests[0]), JSON.stringify(generationEvents));
+  assert.ok(!readFileSync(join(dir, "daemon-chats", `${created.data.id}.json`), "utf8").includes(photo));
+  const repeated = await request(path, "POST", { text: "Hello remote", attachmentIds: [uploaded.data.id] }, "turn-cli-test-000001");
   assert.deepEqual(repeated, turn); assert.equal(requests.length, 1, JSON.stringify(generationEvents));
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
@@ -1081,6 +1089,8 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   assert.equal(followUp.status, 202, JSON.stringify(followUp));
   await daemon.llmClient.waitForChatIdle(forked.data.chat.id);
   assert.equal(requests.length, 2, JSON.stringify(generationEvents));
+  // The fork's journal is seeded from the copied history, photo included.
+  assert.ok(carriesPhoto(requests[1]));
   assert.deepEqual(requests[1].messages.filter((message) => message.role !== "system").map((message) => [message.role, JSON.stringify(message.content)]).map(([role, content]) => [role, ["Hello remote", "Remote succeeded", "Continue in the fork"].find((text) => content.includes(text))]),
     [["user", "Hello remote"], ["assistant", "Remote succeeded"], ["user", "Continue in the fork"]]);
   assert.equal((await request(`/chats/${created.data.id}`)).data.messages.length, 2);

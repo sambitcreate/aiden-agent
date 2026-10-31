@@ -554,6 +554,13 @@ export interface Attachment {
   size: number;
   /** base64 (no data: prefix) for image attachments. */
   data?: string;
+  /** SHA-256 of a stored image's bytes; the window loads it through `url` instead of `data`. */
+  sha256?: string;
+  /** Pixel size of a stored image, so its box is reserved before the bytes load. */
+  width?: number;
+  height?: number;
+  /** Private `aiden-attachment:` link to a stored image's bytes. */
+  url?: string;
   /** UTF-8 contents for text/code attachments (truncated). */
   text?: string;
 }
