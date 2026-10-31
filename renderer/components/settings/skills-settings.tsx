@@ -179,7 +179,7 @@ export function SkillsSettings() {
             <Text variant="strong">Built-in and discovered skills</Text>
             <Text variant="small" color="secondary" className="mt-0.5 block">
               Aiden includes the immutable aiden-app skill. Other skills come from SKILL.md files in workspace and global <code>.agents/skills</code>,{" "}
-              <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders.
+              <code>.claude/skills</code>, and <code>.aiden/&#123;skill,skills&#125;</code> folders, plus enabled installed Claude Code plugins. Plugin skills use a plugin:name namespace.
               Availability follows the same collision and safety rules as the composer and model.
             </Text>
           </div>

@@ -57,3 +57,5 @@ export { cliDurableBotToolContext } from "./bot-durable.ts";
 export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
+export { chooseNetwork, installService, launchdPlist, parseInstallFlags, reachableNetwork, releaseTailscaleRoute, restoreService, savedNetwork, serviceCommand, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";
+export { formatChecklist, looksLikeCloudServer, networkQuestion, probeAidenHealth, readSystemTailscaleFacts, readTailscaleFacts, recommendNetwork, remoteCheckCommand, serverChecklist, tailscaleChecklist, tailscaleReady, waitForTailscaleAddress } from "./reachability.ts";

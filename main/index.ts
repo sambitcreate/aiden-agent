@@ -61,6 +61,7 @@ import { llmClient } from "./services/llm-client.js";
 import { modelPaceRecorder } from "./services/model-pace-runtime.js";
 import { spending } from "./services/spending-main.js";
 import { usageLimits } from "./services/usage-limit-main.js";
+import { usageStore } from "./services/usage-store.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, requireWithinDeadline, withDeadline } from "./services/quit-barrier.js";
@@ -547,9 +548,9 @@ async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
-  // Every reply has settled: save the last spending and usage-limit changes.
-  await settleShutdownStep("main", "Spending and usage limits", SHUTDOWN_BUDGET_MS.spending, () =>
-    Promise.all([spending.flush(), usageLimits.flush()]),
+  // Every reply has settled: save the last spending, usage-limit and usage changes.
+  await settleShutdownStep("main", "Spending, usage limits and usage", SHUTDOWN_BUDGET_MS.spending, () =>
+    Promise.all([spending.flush(), usageLimits.flush(), usageStore.flush()]),
   );
   // Send queued usage data, bounded (the service caps itself at 1.5 s).
   await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () => analyticsService().shutdown());

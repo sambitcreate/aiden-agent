@@ -10138,7 +10138,7 @@ final class AidenChatTests: XCTestCase {
             from: Data(#"""
             {
                 "invocationId": "sk1_\#(String(repeating: "a", count: 43))",
-                "name": "review-code",
+                "name": "engineering:review-code",
                 "description": "Review the current changes.",
                 "source": "workspace",
                 "available": true
@@ -10156,7 +10156,7 @@ final class AidenChatTests: XCTestCase {
 
         XCTAssertEqual(request.skill?.version, 1)
         XCTAssertEqual(request.skill?.invocationId, entry.invocationId)
-        XCTAssertEqual(request.skill?.displayName, "review-code")
+        XCTAssertEqual(request.skill?.displayName, "engineering:review-code")
         XCTAssertEqual(request.skill?.source, .workspace)
 
         let encoded = try JSONEncoder().encode(request)

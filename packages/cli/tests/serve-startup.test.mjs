@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -192,6 +192,25 @@ test("Tailscale pairing leaves foreign routes alone and names the setup step ins
   await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote mode both.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
   assert.deepEqual(conflict.calls, [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]], "no pairing window, and the added mode is put back");
 
+  // Codes from an interrupted or contested route change each name their next step, and an unknown one never shows bare.
+  for (const [code, message] of [
+    ["tailscale_route_outcome_unknown", /did not confirm.*aiden remote tailscale-reconcile.*aiden remote pair tailscale/s],
+    ["tailscale_route_verification_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
+    ["tailscale_route_recovery_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
+    ["tailscale_route_busy", /changing the Tailscale route right now.*aiden remote pair tailscale/s],
+    ["tailscale_ownership_commit_failed", /could not save.*writable.*aiden remote pair tailscale/s],
+    ["tailscale_status_invalid_response", /could not read.*tailscale status/s],
+    ["tailscale_something_new", /did not finish \(tailscale_something_new\).*aiden remote check.*aiden remote pair lan/s],
+  ]) {
+    const failed = tailscalePairingDouble({ connectError: code });
+    await assert.rejects(api.beginTailscalePairing(failed.service, failed.tailscale), (error) => {
+      assert.match(error.message, message, code);
+      assert.notEqual(error.message, code);
+      return true;
+    });
+    assert.equal(failed.mode(), "lan", `${code}: the added mode is put back`);
+  }
+
   const denied = tailscalePairingDouble({ deniedAfterConnect: true });
   await assert.rejects(api.beginTailscalePairing(denied.service, denied.tailscale), /sudo tailscale set --operator=\$USER.*aiden remote pair tailscale/s);
   assert.equal(denied.mode(), "lan");
@@ -285,7 +304,7 @@ test("startup pairing on a Tailscale-only server pairs over Tailscale and report
   try {
     const started = Date.now();
     await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
-    assert.deepEqual(daemon.asked, ["serve status", "remote pair tailscale", "remote pair-status"]);
+    assert.deepEqual(daemon.asked, ["serve status", "remote tailscale-prepare", "remote status", "remote pair tailscale", "remote pair-status"]);
     assert.match(out.text, /Manual code: ABCD-1234/);
     assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
     assert.doesNotMatch(out.text, /expired/);
@@ -310,4 +329,35 @@ test("startup pairing names both pair commands when the server's network is unkn
   } finally {
     daemon.close();
   }
+});
+
+test("Linux discovery keeps retrying when avahi-publish-service exits, warns once, and stops when Remote stops", async (t) => {
+  const { bonjourPublisher } = await import("../dist/parity-test-api.js");
+  const bin = mkdtempSync(join(tmpdir(), "aiden-avahi-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const runs = join(bin, "runs");
+  // Exits at once, as the real publisher does while avahi-daemon is not running yet (at boot).
+  writeFileSync(join(bin, "avahi-publish-service"), `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`, { mode: 0o755 });
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${bin}:${savedPath}`;
+  let warnings = "";
+  const write = process.stderr.write;
+  process.stderr.write = (chunk) => { warnings += chunk; return true; };
+  const count = () => { try { return readFileSync(runs, "utf8").split("\n").filter(Boolean).length; } catch { return 0; } };
+  const publisher = bonjourPublisher(50, "linux");
+  try {
+    await publisher.start({ instanceId: "i", displayName: "Aiden", port: 49320, hostname: "box.local" });
+    const deadline = Date.now() + 5_000;
+    while (count() < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(count() >= 3, `the publisher is started again after it exits (ran ${count()} times)`);
+    publisher.stop();
+    const stoppedAt = count();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(count() <= stoppedAt + 1, "no more attempts once Remote stops");
+  } finally {
+    publisher.stop();
+    process.stderr.write = write;
+    process.env.PATH = savedPath;
+  }
+  assert.equal(warnings.match(/avahi-publish-service exited/g)?.length, 1, "the exit is reported once, not on every retry");
 });

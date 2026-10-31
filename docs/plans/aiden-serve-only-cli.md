@@ -38,14 +38,33 @@ Bare `aiden` prints the command list (with `serve` first). The old flags (`-p`, 
 - **No secret in logs.** No pairing code is printed under `--daemon` or when output is not a terminal. `aiden remote pair lan|tailscale` still opens a new pairing window against a running server.
 - `serve --daemon`, `serve status` and `serve stop` keep their behavior.
 
+## Service install (follow-up, 2026-10-31)
+
+The owner asked for service install after the serve-only change, with a choice between local only and Tailscale.
+
+- `aiden service install` writes a systemd user unit on Linux (`~/.config/systemd/user/aiden.service`, plus `loginctl enable-linger` so it starts at boot) or a LaunchAgent on macOS (`com.sambitcreate.aiden-agent.serve`), both running `<node> <dist/app/cli.js> serve --no-pair` with the install's agent directory and `PATH`. A server already running is stopped first. `service status` and `service uninstall` complete the set; other systems are told to use `serve --daemon`.
+- The install asks who can reach the server: local network only, Tailscale only, or both (`--network local|tailscale|both`; without a terminal, the suggested network when Tailscale is ready and `local` otherwise, see A below). The choice goes through a new `remote network` command on the running server: local sets the `lan` mode, which also removes Aiden's own Serve route; Tailscale and both run the same ownership-safe setup as Tailscale pairing and put the previous mode back when the route can't be connected.
+- In a terminal, the install then shows a pairing code over the chosen network (Tailscale for both); `--no-pair` skips it.
+
+## Tailscale ease of use (follow-up, 2026-10-31)
+
+The owner asked how t3code and opencode handle Tailscale and what would make Aiden's setup easier, then chose A to D (server only). opencode has no Tailscale support; t3code tests its Tailscale address before advertising it, detects cloud servers, can use plain tailnet IPs without HTTPS certificates, and turns Serve off when it stops.
+
+- **A. Smarter install question.** `aiden service install` reads Tailscale's state and probes the cloud metadata address, shows a one-line Tailscale status, and suggests Tailscale only on a cloud server, Both when Tailscale is ready, else Local network only. Without a terminal it uses the suggestion only when Tailscale is ready.
+- **B. `aiden remote check`.** A ✓/✗ list of every Tailscale and server step with its fix, including the Linux operator grant, a Funnel on 443, an exit node without LAN access, and a live request to the Tailscale address.
+- **C. Test before the QR.** Tailscale pairing connects the route, then waits (up to 45 s) for the Tailscale address to answer before it opens the pairing window, which warms the new HTTPS certificate before pairing reads it (daemon command `remote tailscale-prepare`). Stopping the server cancels the wait.
+- **D. Tidy uninstall.** `aiden service uninstall` stops and removes the service first, then takes down Aiden's Serve route; when the service can't be stopped, the route stays with the running server.
+- **Not done (E).** Reaching the server over the tailnet IP without HTTPS certificates needs phone app and protocol changes.
+
 ## Deferred
 
-- **Service install.** An `aiden service install` (or similar) that writes a launchd or systemd unit so the server starts at boot. Until then, people run their own unit with `aiden serve --no-pair`, or `aiden serve --daemon`.
 - **Setup from a client.** Signing in to providers, adding workspaces and connectors from the phone or Mac app after pairing, instead of typed commands over SSH.
 - **Distribution.** An installer or an npm publish. The server is built from a clone (`npm ci --ignore-scripts`, `npm run cli:install`, `npm run cli:build`, `npm link`).
 
 ## Testing
 
+- Service tests drive the install, uninstall and status paths through a fake systemd and launchd host (call order, the unit and plist written, lingering, a missing user session, unsupported systems), check the systemd and XML escaping of paths, and cover the network choice against a fake Remote service, including the rollback when Tailscale can't connect.
+- Reachability tests feed fake `tailscale status`, Serve status and prefs output into the install question and `remote check`, check each missing step names its own fix, drive the pre-QR address check and uninstall route removal through a fake control socket, and probe a real local HTTPS server for Aiden's health answer.
 - Behavioral CLI tests: bare `aiden` and `aiden help` print the command list; the removed flags exit non-zero with the retirement message; `serve` flag parsing (`--no-remote`, `--pair`, `--no-pair`) and the startup pairing rule (foreground TTY only).
 - Existing bundle, runtime and parity suites keep covering the rebrand, no-telemetry, daemon chats, Bots, Remote and scheduling.
 - CI drops the playground job; `cli-linux` stays required.
