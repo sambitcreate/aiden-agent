@@ -55,6 +55,7 @@ import {
   createSystemTailscaleCommandRunner,
 } from "./aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
+import { aidenRemoteLanHostnames } from "./aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
@@ -313,7 +314,7 @@ let activeRuntime: AidenRemoteRuntime | null = null;
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const runtimeProfile = currentRuntimeProfile();
   const userData = app.getPath("userData");
-  const hostname = os.hostname();
+  const lanHostnames = await aidenRemoteLanHostnames();
   const defaultDisplayName = defaultAidenRemoteDisplayName(await computerDisplayName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
@@ -464,7 +465,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     appVersion: app.getVersion(),
     botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
-    hostname,
+    hostname: lanHostnames.endpoint,
     tailscale,
     portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
       runtimeProfile.id,
@@ -1163,7 +1164,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
-      hostnames: [hostname],
+      hostnames: lanHostnames.certificate,
     }),
     log: writeRemoteLog,
   });

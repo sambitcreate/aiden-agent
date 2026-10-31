@@ -50,24 +50,27 @@ object AidenDeepLink {
             val host = uri.host?.lowercase() ?: return null
             if (host == "bot") return parseBotChat(uri)
 
-            val query = uri.query ?: ""
-            val queryMap = query.split("&").filter { it.contains("=") }.associate {
-                val parts = it.split("=", limit = 2)
-                URLDecoder.decode(parts[0], "UTF-8") to URLDecoder.decode(parts[1], "UTF-8")
+            if (uri.rawUserInfo != null || uri.port != -1 || uri.rawFragment != null || !uri.rawPath.isNullOrEmpty()) return null
+            val items = uri.rawQuery?.takeIf { it.isNotEmpty() }?.split("&") ?: emptyList()
+            val queryMap = mutableMapOf<String, String>()
+            for (item in items) {
+                val parts = item.split("=", limit = 2)
+                if (parts.size != 2) return null
+                val name = URLDecoder.decode(parts[0], "UTF-8")
+                val value = URLDecoder.decode(parts[1], "UTF-8")
+                if (name !in setOf("instance", "workspace", "chat") || !isSafeId(value) || queryMap.put(name, value) != null) return null
             }
-
             val instanceId = queryMap["instance"]
             val workspaceId = queryMap["workspace"]
             val chatId = queryMap["chat"]
-
             when (host) {
-                "new-chat" -> AidenNavigationRequest(AidenNavigationDestination.NewChat, instanceId, workspaceId, false)
-                "new-chat-voice" -> AidenNavigationRequest(AidenNavigationDestination.NewChat, instanceId, workspaceId, true)
-                "chat" -> {
-                    if (chatId != null && instanceId != null) {
-                        AidenNavigationRequest(AidenNavigationDestination.Chat(chatId), instanceId, null, false)
-                    } else null
-                }
+                // Legacy voice links still open the new-chat confirmation, without recording authority.
+                "new-chat", "new-chat-voice" -> if (chatId == null) {
+                    AidenNavigationRequest(AidenNavigationDestination.NewChat, instanceId, workspaceId, false)
+                } else null
+                "chat" -> if (chatId != null && instanceId != null && workspaceId == null) {
+                    AidenNavigationRequest(AidenNavigationDestination.Chat(chatId), instanceId, null, false)
+                } else null
                 else -> null
             }
         } catch (_: Exception) {

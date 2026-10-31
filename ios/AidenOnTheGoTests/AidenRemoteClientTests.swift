@@ -309,6 +309,30 @@ final class AidenRemoteClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AidenManualPairingError, .endpointMismatch)
         }
+
+        // Nearby discovery reports the Bonjour name with its case; the
+        // desktop's payload carries it lowercased. Both name the same Mac.
+        let discoveredEndpoint = try XCTUnwrap(URL(string: "https://Aiden-Fixture.Example.Test/api/aiden/v1"))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/pairing/manual-bootstrap")
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Aiden-Protocol-Version": "1",
+                ]
+            ))
+            return (response, bootstrapData)
+        }
+        let discoveredPayload = try await AidenRemoteClient.manualPairingPayload(
+            code: code,
+            endpoint: discoveredEndpoint,
+            session: session,
+            now: Date(timeIntervalSince1970: 1_787_331_600)
+        )
+        XCTAssertEqual(discoveredPayload.bootstrap.endpoint, endpoint)
     }
 
     func testManualPairingCodeRejectsAmbiguousUnicodeAndInvalidLength() throws {

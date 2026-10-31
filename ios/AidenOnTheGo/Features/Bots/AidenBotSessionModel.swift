@@ -452,6 +452,10 @@ struct AidenBotOutgoingMessage: Equatable, Identifiable, Sendable {
     /// queued list caps at 20 and the Mac leaves out inputs it can't classify,
     /// so one snapshot is not proof: it goes only after a grace period.
     fileprivate var unheldSince: Date?
+    /// An earlier visit or launch saw the Mac take it. Its entry may sit beyond
+    /// the transcript window a snapshot carries, so it never draws as its own
+    /// bubble while nothing on the Mac shows it.
+    fileprivate var takenBeforeVisit = false
 
     fileprivate var submissionId: String? {
         if case let .sent(id) = status { return id }
@@ -1308,7 +1312,9 @@ final class AidenBotSessionModel {
         message.deferred = false
         message.dropEcho()
         message.queuedID = nil
-        message.unheldSince = nil
+        // Unheld when last seen stays hidden until the Mac shows it again; its grace starts over.
+        message.unheldSince = message.unheldSince == nil ? nil : now
+        message.takenBeforeVisit = message.submissionId != nil
         if message.status == .sending, isExpired(message, now: now) { message.expire() }
         return message
     }
@@ -1348,7 +1354,9 @@ final class AidenBotSessionModel {
     private var isConnected: Bool { hasLoaded && !isStreamDown }
 
     /// The outgoing messages to draw after the transcript and the Mac's Queued bubbles.
-    var outgoing: [AidenBotOutgoingMessage] { outbox.filter { !$0.echoed && !isShownAsQueued($0) } }
+    var outgoing: [AidenBotOutgoingMessage] {
+        outbox.filter { !$0.echoed && !isShownAsQueued($0) && !($0.takenBeforeVisit && $0.unheldSince != nil) }
+    }
 
     private func isShownAsQueued(_ message: AidenBotOutgoingMessage) -> Bool {
         guard let id = message.queuedID else { return false }

@@ -31,7 +31,7 @@ class AidenNativeIntegrationTest {
         val req2 = AidenDeepLink.parse(newChatVoice)
         assertNotNull(req2)
         assertEquals(AidenNavigationDestination.NewChat, req2?.destination)
-        assertTrue(req2?.startsVoice == true)
+        assertFalse(req2?.startsVoice == true)
 
         val chatUri = AidenDeepLink.chatUrl("inst_1", "chat_123")
         assertEquals("aiden-otg://chat?instance=inst_1&chat=chat_123", chatUri)
@@ -43,6 +43,17 @@ class AidenNativeIntegrationTest {
         // Rejections
         assertNull(AidenDeepLink.parse("https://aiden.test/chat?id=chat_123"))
         assertNull(AidenDeepLink.parse("aiden-otg://unknown-action"))
+    }
+
+    @Test
+    fun testPublicLinksRejectAmbiguousInputAndCannotAssertInternalVoiceProvenance() {
+        listOf(
+            "aiden-otg://new-chat-voice?internal=true", "aiden-otg://new-chat?trusted=1",
+            "aiden-otg://new-chat?startsVoice=true", "aiden-otg://new-chat?instance=a&instance=b",
+            "aiden-otg://new-chat/path", "aiden-otg://new-chat#fragment",
+            "aiden-otg://user@new-chat", "aiden-otg://new-chat:443", "aiden-otg://new-chat?workspace=../x",
+            "aiden-otg://new-chat?chat=c", "aiden-otg://chat?instance=a&chat=c&workspace=w"
+        ).forEach { assertNull(it, AidenDeepLink.parse(it)) }
     }
 
     @Test

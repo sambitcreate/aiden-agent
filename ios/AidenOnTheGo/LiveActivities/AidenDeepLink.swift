@@ -87,7 +87,8 @@ enum AidenDeepLink {
                 destination: .newChat,
                 instanceId: instance,
                 workspaceId: workspace,
-                startsVoice: url.host?.lowercased() == "new-chat-voice"
+                // Public URLs express navigation, never recording consent.
+                startsVoice: false
             )
         case "chat":
             guard let instance, let chat = value("chat"), safeID(chat), workspace == nil else { return nil }
