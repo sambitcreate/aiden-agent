@@ -1648,6 +1648,96 @@
         }
       }
     },
+      "/chats/{chatId}/jobs": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "get": {
+          "operationId": "listChatBackgroundJobs",
+          "x-aiden-archived-access": "readable",
+          "x-aiden-capability": "chat:read",
+          "x-aiden-capabilities": [
+            "chat:read",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 48. What the agent left running for this chat on the Mac (a dev server, a watcher, a long test run), running jobs first, then the ones that ended recently in this session of the Mac app. fromCommand marks processes a run_command call left running, which have no exit code. ports are the TCP ports a running job listens on, on the Mac (localhost there, not on the phone). The list is not pushed: read it again after a reply settles or while it is on screen.",
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
+      "/chats/{chatId}/jobs/{jobId}/stop": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "jobId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ProtocolVersion"
+          }
+        ],
+        "post": {
+          "operationId": "stopChatBackgroundJob",
+          "x-aiden-capability": "chat:write",
+          "x-aiden-capabilities": [
+            "chat:write",
+            "chat:jobs"
+          ],
+          "description": "Contract revision 48. Stops a job and everything it started: politely first, forced after a few seconds, and only processes that carry the job's own marker. Returns once it has ended, with the chat's list. A job that already ended is returned as it is. The body is an empty object. 404 not_found for a job this chat does not have.",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "maxProperties": 0
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "The chat's background jobs after the stop",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/BackgroundJobs"
+                  }
+                }
+              }
+            },
+            "default": {
+              "$ref": "#/components/responses/Error"
+            }
+          }
+        }
+      },
     "/chats/{chatId}/visuals/{visualId}/document": {
       "parameters": [
         {
@@ -7676,7 +7766,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -7719,7 +7810,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -7865,7 +7957,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -7917,7 +8010,8 @@
                 "bot:handoff-on-mac",
                 "bot:images",
                 "bot:issues",
-                "schedule:cards"
+                "schedule:cards",
+                "chat:jobs"
               ]
             },
             "uniqueItems": true
@@ -14298,6 +14392,95 @@
           }
         }
       },
+        "BackgroundJobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "jobs"
+          ],
+          "description": "Contract revision 48 (chat:jobs).",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "maxItems": 40,
+              "items": {
+                "$ref": "#/components/schemas/BackgroundJob"
+              }
+            }
+          }
+        },
+        "BackgroundJob": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "label",
+            "state",
+            "startedAt",
+            "ports"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^job_[0-9a-f]{8}$"
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "The agent's short label, else the command."
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "exited",
+                "failed",
+                "stopped"
+              ]
+            },
+            "startedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "endedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Present exactly when the job is not running."
+            },
+            "exitCode": {
+              "type": "integer",
+              "description": "Only for exited or failed jobs whose exit code is known."
+            },
+            "endReason": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person",
+                "output-limit",
+                "chat-deleted",
+                "access-changed",
+                "app-quit"
+              ],
+              "description": "Present exactly when the job is stopped."
+            },
+            "fromCommand": {
+              "type": "boolean",
+              "const": true,
+              "description": "A run_command call left these processes running; they have no exit code."
+            },
+            "ports": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "description": "TCP ports it listens on, on the Mac; empty unless it runs."
+            }
+          }
+        },
       "MemorySettings": {
         "type": "object",
         "required": [

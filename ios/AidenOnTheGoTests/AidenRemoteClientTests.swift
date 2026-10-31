@@ -1067,6 +1067,57 @@ final class AidenRemoteClientTests: XCTestCase {
         )
     }
 
+    func testBackgroundJobRoutesReadTheChatsJobsAndStopOneWithAnEmptyBody() async throws {
+        let client = makeClient()
+        let list = try botFixtureData(at: ["backgroundJobs", "list"])
+        let stopped = try botFixtureData(at: ["backgroundJobs", "stop", "response"])
+        var step = 0
+        AidenRemoteMockURLProtocol.handler = { request in
+            step += 1
+            if step == 1 {
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs")
+                return Self.response(for: request, status: 200, data: list)
+            }
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/chats/chat_fixture_01/jobs/job_1a2b3c4d/stop")
+            XCTAssertEqual(try Self.jsonBody(request).count, 0)
+            return Self.response(for: request, status: 200, data: stopped)
+        }
+
+        let read = try await client.backgroundJobs(chatId: "chat_fixture_01")
+        XCTAssertEqual(read.jobs.map(\.state), [.running, .running, .failed])
+        XCTAssertEqual(read.jobs[0].ports, [5173])
+        XCTAssertTrue(read.jobs[1].fromCommand)
+        XCTAssertEqual(read.jobs[2].exitCode, 1)
+        let after = try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "job_1a2b3c4d")
+        let job = try XCTUnwrap(after.jobs.first { $0.id == "job_1a2b3c4d" })
+        XCTAssertEqual(job.state, .stopped)
+        XCTAssertEqual(job.endReason, "person")
+        XCTAssertEqual(step, 2)
+        await assertInvalidResponse { try await client.stopBackgroundJob(chatId: "chat_fixture_01", jobId: "../server") }
+    }
+
+    func testBackgroundJobsRefuseWhatAPhoneCannotShow() throws {
+        let raw = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: botFixtureData(at: ["backgroundJobs", "list"])) as? [String: Any]
+        )
+        let jobs = try XCTUnwrap(raw["jobs"] as? [[String: Any]])
+        func refuses(_ change: (inout [String: Any]) -> Void, _ why: String) {
+            var job = jobs[0]
+            change(&job)
+            let data = try? JSONSerialization.data(withJSONObject: ["jobs": [job]])
+            XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: data ?? Data()), why)
+        }
+        refuses({ $0["endedAt"] = "2026-10-29T09:05:00.000Z" }, "a running job has no end time")
+        refuses({ $0["ports"] = [70_000] }, "ports are TCP ports")
+        refuses({ $0["exitCode"] = 0 }, "a running job has no exit code")
+        refuses({ $0["command"] = "npm run dev" }, "no unknown fields")
+        refuses({ $0["id"] = "job_1" }, "ids are job ids")
+        let twice = try JSONSerialization.data(withJSONObject: ["jobs": [jobs[0], jobs[0]]])
+        XCTAssertThrowsError(try AidenRemoteJSONDecoder.decode(AidenBackgroundJobs.self, from: twice))
+    }
+
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {
         let client = makeClient()
         let botID = "bot_fixture_01"
@@ -4771,6 +4822,67 @@ final class AidenRemoteClientTests: XCTestCase {
             let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
             XCTAssertEqual(installation.hasNegotiatedAccess(to: .botImages), offered)
             XCTAssertEqual(aidenBotSessionFeedGrants(installation).contains(.botImages), offered)
+        }
+    }
+
+    /// Contract revision 48: `chat:jobs` is asked for alone, after the other
+    /// opt-ins, only from a Mac that offers it, and the phone keeps the grant.
+    @MainActor
+    func testCoordinatorAsksForChatJobsAloneFromAMacThatOffersThem() async throws {
+        for offered in [false, true] {
+            let keychain = AidenRemoteMemoryKeychain()
+            let store = AidenInstallationStore(keychain: keychain)
+            _ = try store.savePairing(
+                makeExchange(instanceId: "instance-jobs", deviceId: "device-jobs", credential: "credential-jobs"),
+                trust: makeSystemTrust(),
+                name: "Jobs Mac"
+            )
+            let session = makeSession()
+            var granted = ["server:read", "workspace:read"]
+            var accepts: [[String]] = []
+            AidenRemoteMockURLProtocol.handler = { request in
+                switch (request.httpMethod, request.url?.path) {
+                case ("GET", "/api/aiden/v1/server"):
+                    let serverObject: [String: Any] = [
+                        "protocolVersion": 1,
+                        "instanceId": "instance-jobs",
+                        "name": "Jobs Mac",
+                        "appVersion": "1.0.0",
+                        "capabilities": granted,
+                        "serverCapabilities": ["server:read", "workspace:read", "tasks:read"]
+                            + (offered ? ["chat:jobs"] : []),
+                        "features": ["chat-tasks-v1"],
+                        "connectionMode": "lan",
+                        "serverTime": "2026-10-27T12:00:00.000Z",
+                    ]
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: serverObject))
+                case ("GET", "/api/aiden/v1/workspaces"):
+                    return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+                case ("PATCH", "/api/aiden/v1/device/identity"):
+                    let name = try XCTUnwrap(try Self.jsonBody(request)["name"] as? String)
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["name": name]))
+                case ("POST", "/api/aiden/v1/device/capabilities"):
+                    let asked = try XCTUnwrap(try Self.jsonBody(request)["accepts"] as? [String])
+                    accepts.append(asked)
+                    granted += asked.filter { !granted.contains($0) }
+                    return Self.response(for: request, status: 200, data: try JSONSerialization.data(withJSONObject: ["capabilities": granted]))
+                default:
+                    XCTFail("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
+                    return Self.response(for: request, status: 500, json: "{}")
+                }
+            }
+            let coordinator = AidenRemoteCoordinator(
+                installationStore: store,
+                clientFactory: { installation, credential in
+                    AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+                }
+            )
+            await coordinator.start()
+            XCTAssertEqual(coordinator.connectionState, .connected, "offered: \(offered)")
+            XCTAssertEqual(accepts, offered ? [["tasks:read"], ["chat:jobs"]] : [["tasks:read"]])
+            let installation = try XCTUnwrap(AidenInstallationStore(keychain: keychain).activeInstallation)
+            XCTAssertEqual(installation.hasNegotiatedAccess(to: .chatJobs), offered)
+            XCTAssertEqual(coordinator.server?.capabilities.contains(.chatJobs), offered)
         }
     }
 

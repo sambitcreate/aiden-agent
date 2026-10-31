@@ -83,7 +83,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) : AidenSpendingTransport {
+) : AidenSpendingTransport, AidenBackgroundJobTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -637,6 +637,24 @@ class AidenRemoteClient(
     /** Revision 47: the chat's or Bot's spending limit, or `spending: null` without one. */
     override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
         executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
+
+    /** Revision 48 (`chat:jobs`): what the agent left running for the chat on the Mac. */
+    override suspend fun backgroundJobs(chatId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        return executeRequest("/chats/$chatId/jobs") { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
+
+    /** Stops a job and everything it started; returns the chat's list once it has ended. */
+    override suspend fun stopBackgroundJob(chatId: String, jobId: String): AidenBackgroundJobs {
+        AidenBotWire.validateIdentifier(chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+        if (!AidenBackgroundJob.ID.matches(jobId)) throw AidenRemoteClientException.InvalidResponse()
+        return executeRequest(
+            "/chats/$chatId/jobs/$jobId/stop",
+            method = "POST",
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> AidenBackgroundJobs.decode(String(bytes, Charsets.UTF_8)) }
+    }
 
     /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
     override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {

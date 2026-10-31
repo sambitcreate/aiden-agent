@@ -211,6 +211,11 @@ data class AidenServer(
     val supportsBotIssues: Boolean
         get() = offersBotIssues && capabilities.contains(AidenRemoteCapability.BOT_ISSUES)
 
+    /** Offered and held (revision 48): a Workspace chat lists what it has running on the Mac. */
+    val supportsBackgroundJobs: Boolean
+        get() = serverCapabilities?.contains(AidenRemoteCapability.CHAT_JOBS) == true &&
+            capabilities.contains(AidenRemoteCapability.CHAT_JOBS)
+
     /**
      * Chat messages may carry inline `visuals` (revision 28). Informational:
      * the transcript renders whatever visuals a message carries.
