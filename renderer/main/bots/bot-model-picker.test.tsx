@@ -104,39 +104,55 @@ test("typing filters the list", async () => {
   assert.ok(screen.getByRole("option", { name: /^Seer/u }));
 });
 
-test("each model shows the same mark as the chat model picker: a model's own logo and a connection's picture", async () => {
+test("each model shows the same mark as the chat model picker, found from the opaque catalog by the service's name", async () => {
   const base = catalogFixture();
   const artwork = { mimeType: "image/png", dataBase64: "iVBORw0KGgo=" } as const;
+  // Production Bot catalogs carry main-minted opaque ids, never provider or model ids.
   mount(
     {
       catalog: {
         ...base,
         providers: [
           {
-            id: "anthropic",
+            id: "bc_provider_7f3a",
             label: "Anthropic",
             available: true,
-            models: [{ id: "claude-opus-4-1", label: "Claude Opus 4.1", available: true, supportsImages: true }],
+            models: [{ id: "bc_model_19c2", label: "Claude Opus 4.1", available: true, supportsImages: true }],
           },
           {
-            id: "custom:studio",
+            id: "bc_provider_d041",
             label: "Studio Box",
             available: true,
-            models: [{ id: "local-model", label: "Local Model", available: true, supportsImages: false }],
+            models: [{ id: "bc_model_5e8b", label: "Local Model", available: true, supportsImages: false }],
+          },
+          {
+            id: "bc_provider_aa90",
+            label: "Twin Box",
+            available: true,
+            models: [{ id: "bc_model_0b17", label: "Twin Model", available: true, supportsImages: false }],
           },
         ],
       },
-      providerId: "anthropic",
-      modelId: "claude-opus-4-1",
+      providerId: "bc_provider_7f3a",
+      modelId: "bc_model_19c2",
       recommended: undefined,
     },
-    [{ id: "custom:studio", label: "Studio Box", artwork } as unknown as Provider],
+    [
+      { id: "anthropic", label: "Anthropic" } as unknown as Provider,
+      { id: "custom:studio", label: "Studio Box", artwork } as unknown as Provider,
+      // Two connections share a name, so neither can be told apart from the catalog.
+      { id: "openai", label: "Twin Box" } as unknown as Provider,
+      { id: "custom:twin", label: "Twin Box", artwork } as unknown as Provider,
+    ],
   );
   const trigger = screen.getByRole("button", { name: "AI model" });
-  assert.ok(trigger.querySelector('[data-provider-icon="claude"]'), "the trigger shows the Claude mark");
+  await waitFor(() => assert.ok(trigger.querySelector('[data-provider-icon="claude"]'), "the trigger shows the Claude mark"));
   fireEvent.click(trigger);
   const claude = await screen.findByRole("option", { name: /^Claude Opus 4\.1/u });
   const local = screen.getByRole("option", { name: /^Local Model/u });
+  const twin = screen.getByRole("option", { name: /^Twin Model/u });
   assert.ok(claude.querySelector('[data-provider-icon="claude"]'), "a Claude model shows the Claude mark");
   assert.ok(local.querySelector('[data-provider-icon="custom"]'), "a custom connection shows its picture");
+  assert.equal(twin.querySelector("[data-provider-icon]"), null, "an ambiguous name never borrows another service's mark");
+  assert.ok(twin.querySelector("[data-provider-icon-fallback]"), "an ambiguous name keeps the neutral initial");
 });

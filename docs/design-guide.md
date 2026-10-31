@@ -144,7 +144,10 @@ pass the provider's `artwork` when it is known, so a custom connection shows the
 picture its owner chose. A provider without a bundled logo falls back to a
 neutral initial. Name models with `resolveModelDisplay` and the device-local
 model info (`useProvidersModelInfo`) rather than the raw id, so a model reads the
-same in the composer, the command palette, Bots, and scheduled tasks. iOS
+same in the composer, the command palette, Bots, and scheduled tasks. The Bot
+capability catalog carries opaque grant ids, so the Bot model picker finds the
+real provider by its label (only when exactly one provider has that label) and
+uses the model's display name as the Claude or Grok hint. iOS
 (`AidenProviderIcon`) and Android (`AidenProviderIcon`) follow the same rule.
 
 ## Loading and optimistic updates
