@@ -241,6 +241,33 @@ test("app_active goes out once per local calendar day, across hourly checks and 
   assert.deepEqual(restarted.names(), ["app_opened"]);
 });
 
+test("a settings read that fails at the daily check is retried on the next check", async (t) => {
+  let failReads = false;
+  let stored: AnalyticsState = { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" };
+  const h = harness({
+    store: {
+      read: async () => {
+        if (failReads) throw new Error("disk busy");
+        return stored;
+      },
+      update: async (mutate) => (stored = mutate(stored)),
+    },
+    log: () => {},
+  });
+  t.after(h.cleanup);
+  await h.service.start();
+  h.setClock(new Date(2026, 9, 31, 8, 0));
+
+  failReads = true;
+  await h.tick();
+  assert.equal(h.names().filter((name) => name === "app_active").length, 1);
+
+  failReads = false;
+  await h.tick();
+  assert.equal(h.names().filter((name) => name === "app_active").length, 2);
+  assert.equal(stored.lastActiveDay, "2026-10-31");
+});
+
 test("turning off says so once, drops the queue, and forgets the install id and pending crash", async (t) => {
   const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
   t.after(h.cleanup);

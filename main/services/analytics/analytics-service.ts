@@ -162,20 +162,25 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   }
 
   async function checkActiveDay(): Promise<void> {
+    let claimed: string | undefined;
+    let tracked = false;
     try {
       if (!core) return;
       const today = localDay(now());
       if (activeDay === today) return;
-      activeDay = today;
+      activeDay = claimed = today;
       const state = await options.store.read();
       if (state.lastActiveDay === today) return;
       if (!core?.track("app_active", {})) {
         activeDay = undefined;
         return;
       }
+      tracked = true;
       await options.store.update((current) => ({ ...current, lastActiveDay: today }));
     } catch (error) {
       log("Daily activity could not be recorded.", error);
+      // Nothing went out yet, so the next hourly check tries again.
+      if (!tracked && activeDay === claimed) activeDay = undefined;
     }
   }
 

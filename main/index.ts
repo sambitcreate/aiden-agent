@@ -341,7 +341,6 @@ function cleanupApplication(): void {
   botSkillContentWatcher.dispose();
   geminiLiveTranscription.dispose();
   void mcpManager.closeAll({ final: true });
-  analyticsService().markCleanExit();
 }
 
 /** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
@@ -1833,6 +1832,9 @@ if (!ownsSingleInstanceLock) {
   });
   app.on("quit", (_event, exitCode) => {
     logger.info("electron-lifecycle", "Application quit", { exitCode });
+    // Last, once the process is really exiting: a death during the awaited
+    // shutdown work still counts as an unclean exit next launch.
+    analyticsService().markCleanExit();
   });
 
   // Only a real content change reaches the renderer, and concurrent triggers
