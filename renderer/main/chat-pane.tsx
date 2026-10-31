@@ -1,3 +1,6 @@
+import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { remoteNewChatDraftKey } from "./remote-new-chat-view";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -43,6 +46,7 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
@@ -576,8 +580,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
+  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
   const onDraftContextChange = React.useCallback(
     (value: string, draftAttachments: Attachment[]) => {
+      cloneDraftRef.current = { text: value, attachments: draftAttachments };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
@@ -2862,6 +2868,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
 
   // The headline name and app-level entry points open the composer's menu.
+  const [cloningProject, setCloningProject] = React.useState(false);
   const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
   const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
     setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
@@ -3768,6 +3775,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
+                      // Only a project folder can be cloned; a No workspace chat has none to offer.
+                      onAddProject={effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) ? () => setCloningProject(true) : undefined}
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
@@ -4042,6 +4051,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         )}
       </ScrollArea>
+      {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {
+        const key = remoteNewChatDraftKey(hostId);
+        if (!loadComposerDraft(key).text) {
+          saveComposerDraftText(key, cloneDraftRef.current.text);
+          seedComposerAttachments(key, cloneDraftRef.current.attachments);
+        } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
+          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+        }
+        qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
+        void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });
+      }} /> : null}
       <ForkSummaryDialog
         open={forkSummaryRequest !== null}
         kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}

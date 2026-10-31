@@ -105,7 +105,7 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 Phones and Macs paired with the server see its workspaces, chats, Bots, scheduled tasks and files. Chats run on the server through Pi's SDK with a headless tool set: workspace tools under the workspace's access tier, memory, todo, MCP, web search, advisor, and artifact export (HTML visuals are written to `<agentDir>/artifacts` and the path is returned). Image display in the terminal and `ask_user_question` are not available on the server. Server sessions don't load codemode and declare MCP tools directly.
 
 - **Forks.** Paired phones fork server chats with the Remote `chat-fork-v1` feature; the fork's journal is seeded from the copied visible messages, so tool results before the cut are not carried. The server does not offer Fork with summary (`chat-fork-summary-v1`).
-- **Desktop limits.** The server does not serve the host feed or live runs, so paired desktops cannot list its chats.
+- **Desktop limits.** The server does not serve the host feed or live runs, so paired desktops cannot list its chats. It also does not advertise the desktop's `workspace-clone-v1` project transfer (Add this project to another machine); its Remote API keeps the existing workspace creation modes.
 - **Scheduled-run notifications.** Run completions show up through `aiden schedule runs <id>`, `aiden schedule notifications` and, for tasks with `notify`, local notifications on paired phones via the Remote `scheduled-tasks/notifications` feed.
 
 ## Bots
