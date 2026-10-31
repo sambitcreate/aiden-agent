@@ -1139,11 +1139,22 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
         let payload = try AidenRemoteJSONDecoder.decodePairingPayload(from: plaintext)
         _ = try payload.validated(at: now)
-        guard payload.bootstrap.endpoint.absoluteString == endpoint.absoluteString,
+        guard hostCaseFolded(payload.bootstrap.endpoint) == hostCaseFolded(endpoint),
               payload.bootstrap.expiresAt == sealed.expiresAt else {
             throw AidenManualPairingError.endpointMismatch
         }
         return payload
+    }
+
+    /// Host names are case-insensitive. Nearby discovery reports the Mac's
+    /// Bonjour name with its case ("Office-Mac.local"), while the desktop's
+    /// payload carries it lowercased.
+    private static func hostCaseFolded(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        components.host = components.host?.lowercased()
+        return components.string ?? url.absoluteString
     }
 
     static func normalizeManualPairingCode(_ value: String) throws -> String {

@@ -534,6 +534,18 @@ test("a workspace keeps only a literal scratch mark across saves and reloads", a
   assert.equal((await h.store.getWorkspace("scratch"))?.scratch, true);
 });
 
+test("a workspace keeps only a literal No workspace mark across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "chat", name: "No workspace", folderPath: "/x/chats/kind-fern-hike", noWorkspace: true });
+  await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", noWorkspace: 1 as unknown as true });
+  const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
+  assert.equal(listed.get("chat")?.noWorkspace, true);
+  assert.equal("noWorkspace" in (listed.get("odd") ?? {}), false);
+  await h.store.saveWorkspace({ ...listed.get("chat")!, permission: "full" });
+  assert.equal((await h.store.getWorkspace("chat"))?.noWorkspace, true);
+});
+
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

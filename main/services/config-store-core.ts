@@ -214,11 +214,12 @@ function normalizePortableConfig(value: unknown): {
 }
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
-  // Only a literal `true` marks a scratch workspace; anything else is dropped.
-  const { scratch, ...w } = workspace;
+  // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
+  const { scratch, noWorkspace, ...w } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
+    ...(noWorkspace === true ? { noWorkspace } : {}),
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),

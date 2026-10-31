@@ -138,6 +138,11 @@ interface MessageListProps {
   /** This fork's summary card, placed after the last copied message. */
   forkSummary?: { afterMessageId: string; node: React.ReactNode };
   /**
+   * Save to Downloads and Copy image on settled replies. They read the chat
+   * this Mac stores, so a chat stored on a paired host turns them off.
+   */
+  storedImageActions?: boolean;
+  /**
    * False where nothing comes before the first prompt shown, and editing it
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
    */
@@ -464,6 +469,8 @@ interface SettledMessageRowProps {
   uiVisuals?: readonly ChatUiVisualV1[];
   /** Stable; receives the owning message so local state can be remembered. */
   renderSettledUiVisual?: (visual: ChatUiVisualV1, message: ChatMessage) => React.ReactNode;
+  /** False for a chat stored on a paired host: Save and Copy read this Mac's chats. */
+  storedImageActions?: boolean;
 }
 
 /**
@@ -486,6 +493,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   renderVisual,
   uiVisuals,
   renderSettledUiVisual,
+  storedImageActions = true,
 }: SettledMessageRowProps) {
   const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
@@ -514,7 +522,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     };
   }, [forkDisabledReason, message, onFork, onForkWithSummary]);
   const assistant = Boolean(live) || message?.role === "assistant";
-  const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
+  const imageActions = React.useMemo(
+    () => (storedImageActions ? { chatId } : undefined),
+    [chatId, storedImageActions],
+  );
   const storedImagePlacements = message?.imagePlacements;
   const messageTimeline = message?.role === "assistant" ? message.timeline : undefined;
   const messageAttachments = message?.attachments;
@@ -756,6 +767,7 @@ export function MessageList({
   onForkWithSummary,
   forkSummary,
   forkBeforeFirstPrompt = true,
+  storedImageActions = true,
 }: MessageListProps) {
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
@@ -1093,6 +1105,7 @@ export function MessageList({
         renderVisual={renderVisual}
         uiVisuals={uiByMessage.get(message.id)}
         renderSettledUiVisual={renderSettledUiVisual}
+        storedImageActions={storedImageActions}
       />,
     );
     if (forkSummary?.afterMessageId === message.id) {
