@@ -1225,6 +1225,64 @@
         }
       }
     },
+    "/chats/{chatId}/context": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatContextPressure",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-context-pressure-v1",
+        "description": "Contract revision 41. The next-request context pressure the host's own composer meter shows for one workspace chat, reduced to bounded counts: no breakdown, prompt cache, tool or server names, paths or text. Announced by `chat-context-pressure-v1` to paired desktops only. Without a query the chat's own model prices the request; `providerId` and `modelId` together price a model the host has configured instead (one it has not is invalid_request, and either alone is invalid_request). `pressure` is null when the host cannot project the chat now (no model, or its history is unavailable). The device's unsent draft is not included. Bot chats are not projected (not_found). Bot-chat reads otherwise follow the same bot:read rule as other chat reads.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "name": "providerId",
+            "in": "query",
+            "required": false,
+            "description": "A configured host provider, sent together with modelId. Request URLs carry no percent-encoding, so only characters a query takes literally are allowed.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          },
+          {
+            "name": "modelId",
+            "in": "query",
+            "required": false,
+            "description": "A model of that provider, sent together with providerId.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[A-Za-z0-9._~:@/!$()*,;-]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next-request context pressure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatContextPressure"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/skills": {
       "parameters": [
         {
@@ -1500,6 +1558,86 @@
                   "type": "string",
                   "contentEncoding": "binary",
                   "maxLength": 8388608
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/spending": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatSpending",
+        "x-aiden-archived-access": "readable",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 47. What this chat's total limit allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "responses": {
+          "200": {
+            "description": "The spending status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/spending/allow-more": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "allowMoreChatSpending",
+        "x-aiden-capability": "chat:write",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 47. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The spending status after Allow more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
                 }
               }
             }
@@ -2231,6 +2369,359 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotQuestionAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/handoffs/{waitId}/answer": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The waitId of the hand-off the Bot is waiting on (BotSession.handoff.waitId).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "answerBotHandoff",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:handoffs"
+        ],
+        "description": "Contract revision 37. Done or Skip on the Bot's waiting hand-off. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt. A hand-off that is no longer waiting returns 409 handoff_expired; an answer it does not accept returns 400 invalid_request, as does done on a sign_in hand-off, which is finished on the Mac. A host without the hand-off routes answers not_found; a device without bot:handoffs gets capability_denied.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotHandoffAnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer settled the hand-off. A repeat with the same Idempotency-Key returns the same receipt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotHandoffAnswerReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/handoffs/{waitId}/open-on-mac": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "waitId",
+          "in": "path",
+          "required": true,
+          "description": "The waitId of the hand-off the Bot is waiting on (BotSession.handoff.waitId).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "openBotHandoffOnMac",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:handoffs"
+        ],
+        "description": "Contract revision 37. Brings the Bot's waiting hand-off forward on the Mac: its chat, and for a sign-in, or (contract revision 43) a step on the Bot's own browser or computer, that browser or computer. The body is an empty object. Idempotent per Idempotency-Key: a repeat returns the same receipt and never opens it twice. A hand-off that is no longer waiting returns 409 handoff_expired.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Mac was asked to show the hand-off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotHandoffOpenOnMacReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/spending": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSpending",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 47. What the Bot's monthly limit (its own or the default; the month starts on the owner's chosen day) allows and what it has spent, in US dollars. Only pay-as-you-go keys count; sign-ins and models on the Mac count as $0. spending is null when no limit applies. state is nearing from 80% of the allowed amount and reached at it.",
+        "responses": {
+          "200": {
+            "description": "The spending status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/spending/allow-more": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "allowMoreBotSpending",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write"
+        ],
+        "x-aiden-feature": "spending-limits-v1",
+        "description": "Contract revision 47. Allow more: adds the limit once more while the status is nearing or reached; a status still under its limit is returned unchanged. The body is an empty object. If-Match carries the status revision, so a repeated or crossed tap gets 409 revision_conflict (with currentRevision) instead of a second allowance. 404 when no limit applies.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The spending status after Allow more",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendingStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/issues/{issueId}/act": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "issueId",
+          "in": "path",
+          "required": true,
+          "description": "The id of the issue card the device is answering (BotSession.issues[].id).",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          }
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "actOnBotIssue",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:issues"
+        ],
+        "description": "Contract revision 42. Carries out one action a Bot issue card offers. The Idempotency-Key is the request UUID: a repeat with the same key returns the same receipt and runs the host action once. done means the host carried it out and settled the card (open_chat and open_settings answer done without settling). not_open means the issue is gone or already settled. An unknown action kind, or an action the card never offered (409 operation_stale), records nothing for its key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotIssueActRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The action ran, or nothing was open under that issue id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotIssueActReceipt"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/bots/{botId}/pause": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "pauseBot",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:handoffs"
+        ],
+        "description": "Contract revision 37. Pauses the Bot: it takes no new turns, routines skip, and a running turn is closed and left interrupted. The body is an empty object. Idempotent per Idempotency-Key; pausing a paused Bot keeps the first pause. Writes to a paused Bot then return 409 bot_paused to devices holding bot:handoffs and 409 operation_stale to every other device.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "maxProperties": 0
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Bot's session state after the pause (paused).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "unpauseBot",
+        "x-aiden-capability": "bot:write",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "bot:write",
+          "bot:handoffs"
+        ],
+        "description": "Contract revision 37. Clears the pause. No body. An interrupted turn then waits for Resume. Idempotent per Idempotency-Key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Bot's session state after the pause was cleared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotSessionState"
                 }
               }
             }
@@ -3211,6 +3702,7 @@
         "operationId": "getStreamApproval",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "chat:read",
+        "description": "Contract revision 39: devices holding schedule:cards and schedule:read receive schedule (ApprovalSchedule) on a scheduled-task approval. It is display-only and never changes canAllow.",
         "parameters": [
           {
             "$ref": "#/components/parameters/StreamId"
@@ -5736,7 +6228,7 @@
       ],
       "get": {
         "operationId": "chatCurrentRunEvents",
-        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
+        "description": "Contract revision 19 (run-streams-v1). Streams the newest retained run in a visible chat, whatever surface started it, from its first retained event. Resume a dropped stream through /runs/{runId}/events; a cursor here is invalid_request. run_gone when the chat has no retained run. The aiden-run-epoch response header names the run journal epoch. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 39: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -5772,7 +6264,7 @@
       ],
       "get": {
         "operationId": "runEvents",
-        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted.",
+        "description": "Contract revision 19 (run-streams-v1). Resumable stream of one run in a visible chat. Event types are those of /streams/{streamId}/events plus run.started, approval_resolved, question_resolved and the terminal run.ended. Last-Event-ID or after is the last delivered decimal sequence; a cursor older than retention yields a snapshot with the pending prompts first. Observers without runs:control receive approval_required without host-only details. run_gone when the run is unknown or evicted. Contract revision 24 (phone-run-control-v1): a phone holding the phone-scoped runs:observe grant also needs chat:read for the chat, and Bot chats keep the phone's own bot:read audience. Phones receive the phone approval projection: summary, toolCallId, toolName, canAllow and, only when canAllow, the offered scopes; never details or detailsOmitted. Contract revision 39: a phone holding schedule:cards and schedule:read also receives schedule (ApprovalSchedule) on scheduled-task approvals, here and in gap snapshot approvals; it never changes canAllow.",
         "x-aiden-archived-access": "readable",
         "x-aiden-capability": "runs:observe",
         "parameters": [
@@ -6290,6 +6782,138 @@
                 "$ref": "#/components/schemas/AppControlOperation"
               }
             }
+          }
+        }
+      }
+    },
+    "/bots/{botId}/session/images/{entryId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/BotId"
+        },
+        {
+          "name": "entryId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "description": "The id of a shared_image entry in the Bot's current session."
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getBotSessionImage",
+        "description": "Contract revision 45: the bytes of an image the Bot shared, while it is in the Bot's current conversation. 404 not_found once it is gone.",
+        "x-aiden-capability": "bot:read",
+        "x-aiden-capabilities": [
+          "bot:read",
+          "chat:read",
+          "bot:images"
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated shared image content",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 8388608
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 8388608
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/chats/{chatId}/recordings/{recordingId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ChatId"
+        },
+        {
+          "name": "recordingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "description": "The id a recording recap on one of this chat's timelines names."
+        },
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "get": {
+        "operationId": "getChatBrowserRecording",
+        "description": "Contract revision 46: the video a browser_recording_stop step in this chat saved. Announced by `chat-browser-recordings-v1`. Only a recording the chat's own timelines name can be read; 404 not_found when it is no longer on the Mac or on a host without the in-app browser.",
+        "x-aiden-capability": "chat:read",
+        "x-aiden-feature": "chat-browser-recordings-v1",
+        "responses": {
+          "200": {
+            "description": "Authenticated browser recording",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "X-Content-Type-Options": {
+                "required": true,
+                "schema": {
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "video/mp4": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              },
+              "video/webm": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary",
+                  "maxLength": 134217728
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
           }
         }
       }
@@ -7046,7 +7670,13 @@
                 "runs:control",
                 "simulators:mobile",
                 "bot:cards",
-                "bot:activity"
+                "bot:activity",
+                "bot:handoffs",
+                "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:images",
+                "bot:issues",
+                "schedule:cards"
               ]
             },
             "uniqueItems": true
@@ -7083,7 +7713,13 @@
                 "runs:control",
                 "simulators:mobile",
                 "bot:cards",
-                "bot:activity"
+                "bot:activity",
+                "bot:handoffs",
+                "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:images",
+                "bot:issues",
+                "schedule:cards"
               ]
             },
             "uniqueItems": true
@@ -7206,9 +7842,9 @@
         "properties": {
           "accepts": {
             "type": "array",
-            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity.",
+            "description": "Negotiable capability vocabulary the device accepts: the progress grants tasks:read and agents:read, and the desktop-only simulators:control. Only additive grants are negotiable after pairing; legacy and Bot grants are never modified by this route. simulators:control is refused with capability_denied unless the paired device type is mac or linux, and with not_found when the serving Mac has no simulator feature. Contract revision 19 adds the desktop-only host:events, runs:observe and runs:control grants under the same mac-or-linux rule; a host without the host feed or run registry answers not_found. Contract revision 24 lets iphone and ipad devices negotiate the phone-scoped runs:observe and runs:control subset while the server advertises phone-run-control-v1 (android devices since contract revision 31); host:events stays desktop-only. Contract revision 26 lets iphone and ipad devices negotiate simulators:mobile, the phone simulator viewer grant, while the server advertises mobile-simulators-v1; mac and linux devices are refused it with capability_denied, and a Mac without the simulator feature answers not_found. Contract revision 27 adds bot:cards, which any device type may negotiate while the server advertises bot-durable-session-v1: it grants no authority and only opts the device into the memory_update and routine_proposal Bot session entries. Contract revision 30 adds bot:activity, which any device type may negotiate while the server advertises bot-activity-v1: it grants no authority and only opts the device into the activity and queued Bot session frames and Bot detail chatActivity. Contract revision 37 adds bot:handoffs, which any device type may negotiate while the server lists it in serverCapabilities (a host without the hand-off routes answers not_found): it opts the device into the Bot session handoff field and frame, the paused session state, Bot paused flags and the bot_paused error code, and lets it call the hand-off answer, open-on-mac and pause routes, which still need bot:read and bot:write. Phones request it in their own call, after any other negotiation. Contract revision 39 adds schedule:cards, which any device type may negotiate while the server lists it in serverCapabilities (a host without streams or the run registry answers not_found): it grants no authority and, together with schedule:read, opts the device into the schedule field on scheduled-task approvals. Phones request it in its own call, so an older host that rejects the name leaves every other grant in place. Contract revision 42 adds bot:issues, which any device type may negotiate while the server lists it in serverCapabilities (a host without the issue act route answers not_found): it grants no authority and opts the device into the Bot session issues list and frame, the summary issueCount, issue items in the routine notification feed, and the issue act route, which still needs bot:read and bot:write. Phones request it in its own call. Contract revision 43 adds bot:handoff-on-mac, negotiated like bot:handoff-notes beside bot:handoffs: it grants no authority and opts the device into onMac on hand-off cards whose step is on the Bot's own screen.",
             "minItems": 1,
-            "maxItems": 11,
+            "maxItems": 16,
             "items": {
               "enum": [
                 "tasks:read",
@@ -7223,7 +7859,13 @@
                 "runs:control",
                 "simulators:mobile",
                 "bot:cards",
-                "bot:activity"
+                "bot:activity",
+                "bot:handoffs",
+                "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:images",
+                "bot:issues",
+                "schedule:cards"
               ]
             },
             "uniqueItems": true
@@ -7269,7 +7911,13 @@
                 "runs:control",
                 "simulators:mobile",
                 "bot:cards",
-                "bot:activity"
+                "bot:activity",
+                "bot:handoffs",
+                "bot:handoff-notes",
+                "bot:handoff-on-mac",
+                "bot:images",
+                "bot:issues",
+                "schedule:cards"
               ]
             },
             "uniqueItems": true
@@ -8226,6 +8874,11 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "toolCallId": {
+            "type": "string",
+            "pattern": "^call-[1-9][0-9]*$",
+            "description": "Contract revision 44: on an assistant image, the timeline tool step that produced it. Clients draw the image at that step; an image without it trails the reply."
           }
         },
         "additionalProperties": false
@@ -8493,6 +9146,12 @@
           },
           "questionnaire": {
             "$ref": "#/components/schemas/AskUserQuestionRecap"
+          },
+          "extraction": {
+            "$ref": "#/components/schemas/WebExtractRecap"
+          },
+          "recording": {
+            "$ref": "#/components/schemas/BrowserRecordingRecap"
           }
         },
         "allOf": [
@@ -8560,6 +9219,48 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "required": [
+                "extraction"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "web_fetch"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "recording"
+              ]
+            },
+            "then": {
+              "required": [
+                "status",
+                "toolName"
+              ],
+              "properties": {
+                "status": {
+                  "const": "completed"
+                },
+                "toolName": {
+                  "const": "browser_recording_stop"
+                }
+              }
+            }
           }
         ],
         "additionalProperties": false
@@ -8591,6 +9292,173 @@
             "maximum": 1000000000
           }
         },
+        "additionalProperties": false
+      },
+      "WebExtractRecap": {
+        "type": "object",
+        "description": "Contract revision 38. Display-only recap of a web_fetch extract call: the page's host and each value read, with the page line it came from. Only on completed web_fetch tool steps of a version 3 timeline. error means extraction failed and the page text was read instead; fields is then empty, and otherwise holds one to sixteen fields with distinct names. cut means only the first part of the page was read. Strings are single lines: no control characters, no leading, trailing or repeated whitespace, and spaces only as U+0020. Lengths count Unicode code points. Clients render it as text and never act on it; older clients ignore it.",
+        "required": [
+          "version",
+          "host",
+          "cut",
+          "fields"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "host": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "cut": {
+            "type": "boolean"
+          },
+          "error": {
+            "enum": [
+              "setup",
+              "auth",
+              "quota",
+              "timeout",
+              "unavailable",
+              "invalid-response"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/WebExtractRecapField"
+            }
+          }
+        },
+        "if": {
+          "required": [
+            "error"
+          ]
+        },
+        "then": {
+          "properties": {
+            "fields": {
+              "maxItems": 0
+            }
+          }
+        },
+        "else": {
+          "properties": {
+            "fields": {
+              "minItems": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "WebExtractRecapField": {
+        "type": "object",
+        "description": "One value read off the page. extracted is typed, confident and found on the page, so value, confidence and sourceLine are all present. uncertain is a guess, never a value read from the page; notFound marks a guess that appears nowhere on the page. null means the page has no value, and carries only name and status. value is a short display form; scripts get the whole value.",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+          },
+          "status": {
+            "enum": [
+              "extracted",
+              "uncertain",
+              "null"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "sourceLine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[^\\s\\u0000-\\u001F\\u007F]+(?: [^\\s\\u0000-\\u001F\\u007F]+)*$"
+          },
+          "notFound": {
+            "const": true
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "extracted"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value",
+                "confidence",
+                "sourceLine"
+              ],
+              "not": {
+                "required": [
+                  "notFound"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "status"
+              ],
+              "properties": {
+                "status": {
+                  "const": "null"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "value"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "confidence"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sourceLine"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "notFound"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       },
       "AskUserQuestionRecap": {
@@ -8943,8 +9811,17 @@
                 "steps": {
                   "items": {
                     "not": {
-                      "required": [
-                        "questionnaire"
+                      "anyOf": [
+                        {
+                          "required": [
+                            "questionnaire"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "extraction"
+                          ]
+                        }
                       ]
                     }
                   }
@@ -9253,13 +10130,25 @@
             "maxLength": 128
           },
           "sessionState": {
+            "description": "Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
             "enum": [
               "idle",
               "running",
               "interrupted",
               "needs_model",
-              "unavailable"
+              "unavailable",
+              "paused"
             ]
+          },
+          "paused": {
+            "description": "Contract revision 37, only for devices holding bot:handoffs and only while the person paused the Bot (sessionState is then paused).",
+            "const": true
+          },
+          "issueCount": {
+            "description": "Contract revision 42, only for devices holding bot:issues and only while it is above zero: how many open Bot issues the Bot holds.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
           }
         },
         "additionalProperties": false
@@ -9785,6 +10674,21 @@
           "chatActivity": {
             "description": "Contract revision 30, only for devices holding bot:activity.",
             "$ref": "#/components/schemas/BotChatActivity"
+          },
+          "sessionState": {
+            "description": "Present when the host advertises bot-durable-session-v1. Contract revision 37: paused reaches only devices holding bot:handoffs; every other device sees a paused Bot as unavailable.",
+            "enum": [
+              "idle",
+              "running",
+              "interrupted",
+              "needs_model",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "paused": {
+            "description": "Contract revision 37, always present for devices holding bot:handoffs and never for others: whether the person paused the Bot.",
+            "type": "boolean"
           },
           "createdAt": {
             "type": "string",
@@ -11151,6 +12055,115 @@
         },
         "additionalProperties": false
       },
+      "ChatContextPressure": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "pressure"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+          },
+          "pressure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ContextPressure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContextPressure": {
+        "type": "object",
+        "description": "Contract revision 41. Every field the host's projection sends; the host's breakdown and prompt cache never cross the wire.",
+        "required": [
+          "contextTokens",
+          "contextWindow",
+          "inputBudgetTokens",
+          "reservedTokens",
+          "percentOfWindow",
+          "percentOfUsableInput",
+          "shouldCompact",
+          "messageTokens",
+          "staticTokens",
+          "source",
+          "computedAt"
+        ],
+        "properties": {
+          "contextTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Projected total tokens for the next request."
+          },
+          "contextWindow": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "The pricing model's context window."
+          },
+          "inputBudgetTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Usable input budget after response and safety reserves."
+          },
+          "reservedTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Tokens reserved for output and safety margin."
+          },
+          "percentOfWindow": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / contextWindow, in percent."
+          },
+          "percentOfUsableInput": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "contextTokens / inputBudgetTokens, in percent."
+          },
+          "shouldCompact": {
+            "type": "boolean",
+            "description": "The host compacts before the next request."
+          },
+          "messageTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the conversation."
+          },
+          "staticTokens": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Estimated tokens for the system prompt and tool schemas."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "provider-anchored",
+              "estimated"
+            ]
+          },
+          "computedAt": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Epoch milliseconds when the host computed this projection."
+          }
+        },
+        "additionalProperties": false
+      },
       "ChatSkillCatalog": {
         "type": "object",
         "required": [
@@ -11199,6 +12212,205 @@
           "always"
         ]
       },
+      "ApprovalSchedule": {
+        "type": "object",
+        "description": "Contract revision 39. Display-only facts for a scheduled-task approval card, sent only to devices holding both schedule:cards and schedule:read. The host builds it from the validated scheduled-task details; it never changes canAllow and is never part of details. Text is trimmed and carries no control or bidirectional-override characters; prompt and script may contain line breaks. A client that cannot validate it drops it and shows the summary card.",
+        "required": [
+          "action",
+          "name",
+          "cadence",
+          "timezone",
+          "mode",
+          "permission",
+          "connectors",
+          "notify",
+          "enabled",
+          "schedulerEnabled"
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "create",
+              "update",
+              "pause",
+              "resume",
+              "remove",
+              "run_now"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "cadence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Human cadence such as Weekdays at 9:00 AM, with the zone when it differs from the host's. Never cron syntax."
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "IANA time zone the cadence is evaluated in."
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time",
+            "maxLength": 40,
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?Z$",
+            "description": "UTC next run. Present only while the task will run on its own: enabled, scheduling on, and not being removed."
+          },
+          "mode": {
+            "enum": [
+              "llm",
+              "script"
+            ]
+          },
+          "permission": {
+            "enum": [
+              "read-only",
+              "full"
+            ]
+          },
+          "workspaceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Project the task runs in, when it has one."
+          },
+          "connectors": {
+            "type": "array",
+            "maxItems": 16,
+            "description": "Connector (MCP server) display names the task may use.",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            }
+          },
+          "providerName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "llm mode only."
+          },
+          "modelName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "llm mode only."
+          },
+          "notify": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "False when the task is saved paused."
+          },
+          "schedulerEnabled": {
+            "type": "boolean",
+            "description": "False when scheduling is off on the host, so the task will not run automatically."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "llm mode instructions, at most 2,000 characters."
+          },
+          "script": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "script mode command, at most 2,000 characters."
+          },
+          "truncated": {
+            "const": true,
+            "description": "The prompt or script was shortened to fit. Present only with prompt or script."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "llm"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "script"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mode": {
+                  "const": "script"
+                }
+              },
+              "required": [
+                "mode"
+              ]
+            },
+            "then": {
+              "allOf": [
+                {
+                  "not": {
+                    "required": [
+                      "prompt"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "providerName"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "modelName"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "truncated"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "required": [
+                    "prompt"
+                  ]
+                },
+                {
+                  "required": [
+                    "script"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
       "PendingApproval": {
         "type": "object",
         "required": [
@@ -11245,6 +12457,9 @@
             "items": {
               "$ref": "#/components/schemas/ToolApprovalScope"
             }
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ApprovalSchedule"
           }
         },
         "additionalProperties": false
@@ -12999,6 +14214,90 @@
         },
         "additionalProperties": false
       },
+      "SpendingStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "spending"
+        ],
+        "description": "Contract revision 47 (spending-limits-v1).",
+        "properties": {
+          "spending": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Spending"
+              }
+            ]
+          }
+        }
+      },
+      "Spending": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "period",
+          "state",
+          "limitUsd",
+          "allowedUsd",
+          "spentUsd",
+          "allowMoreUsd",
+          "revision"
+        ],
+        "properties": {
+          "period": {
+            "type": "string",
+            "enum": [
+              "chat",
+              "month"
+            ],
+            "description": "chat: the whole chat, its helpers included. month: the Bot's current month, its routines included."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "under",
+              "nearing",
+              "reached"
+            ]
+          },
+          "limitUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 100000
+          },
+          "allowedUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "The limit plus what Allow more added."
+          },
+          "spentUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "allowMoreUsd": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "What one Allow more adds: the limit again."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the Bot's month starts over."
+          },
+          "revision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      },
       "MemorySettings": {
         "type": "object",
         "required": [
@@ -13117,7 +14416,9 @@
           "memory_entry_not_found",
           "memory_over_budget",
           "memory_blocked",
-          "routine_proposal_not_found"
+          "routine_proposal_not_found",
+          "bot_paused",
+          "handoff_expired"
         ]
       },
       "ErrorDetails": {
@@ -14795,12 +16096,14 @@
         ],
         "properties": {
           "state": {
+            "description": "interrupted is a turn that stopped part-way and waits for Resume or Dismiss. Contract revision 37: paused (the person paused the Bot) reaches only devices holding bot:handoffs; every other device sees unavailable.",
             "enum": [
               "idle",
               "running",
               "interrupted",
               "needs_model",
-              "unavailable"
+              "unavailable",
+              "paused"
             ]
           },
           "interrupted": {
@@ -15020,7 +16323,8 @@
               "label": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 120
+                "maxLength": 120,
+                "description": "When the routine runs, ready to show: a schedule with its timezone (\"Every day at 9:00 AM · Pacific Time\"), or what starts an event routine (\"When this routine's link is called\"). A card the Bot replaced with a revised one is omitted; the revised card follows as a new entry."
               },
               "status": {
                 "enum": [
@@ -15038,6 +16342,44 @@
               "createdAt": {
                 "type": "string",
                 "format": "date-time"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "Contract revision 45, only for devices holding bot:images: an image the Bot shared. The bytes are read from GET /bots/{botId}/session/images/{id}; devices without bot:images get an assistant message with the same id that names the image and points to the Mac.",
+            "required": [
+              "type",
+              "id",
+              "name",
+              "mimeType",
+              "size"
+            ],
+            "properties": {
+              "type": {
+                "const": "shared_image"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
+              "mimeType": {
+                "enum": [
+                  "image/png",
+                  "image/jpeg"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8388608
               }
             },
             "additionalProperties": false
@@ -15131,9 +16473,160 @@
             "items": {
               "$ref": "#/components/schemas/BotQueuedMessage"
             }
+          },
+          "handoff": {
+            "description": "Contract revision 37, always present for devices holding bot:handoffs and never for others: the hand-off the Bot is waiting on, or null. Other devices get an assistant message with id handoff-notice:<waitId> as the newest entry instead.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BotHandoff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "issues": {
+            "description": "Contract revision 42, present only for devices holding bot:issues: the Bot's issue cards, oldest first. A card that only the Mac can answer carries no actions.",
+            "type": "array",
+            "maxItems": 58,
+            "items": {
+              "$ref": "#/components/schemas/BotIssue"
+            }
           }
         },
         "unevaluatedProperties": false
+      },
+      "BotIssue": {
+        "type": "object",
+        "description": "Contract revision 42 (bot:issues): one host-owned \"Needs you\" card. open_settings is desktop-only and never sent as an action.",
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "actions",
+          "createdAt",
+          "resolved"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "kind": {
+            "enum": [
+              "preflight_failed",
+              "routine_failed",
+              "routine_paused",
+              "run_stalled"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 280
+          },
+          "routineId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$"
+          },
+          "actions": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/BotIssueAction"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolved": {
+            "type": "boolean",
+            "description": "A settled card offers no action."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "resolved"
+              ],
+              "properties": {
+                "resolved": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      },
+      "BotIssueAction": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "open_chat",
+              "resume_routine",
+              "stop_run",
+              "keep_waiting"
+            ]
+          },
+          "routineId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "description": "Present exactly on resume_routine."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotIssueActRequest": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/BotIssueAction"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotIssueActReceipt": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "result": {
+            "enum": [
+              "done",
+              "not_open"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "BotSessionActivity": {
         "description": "Contract revision 30 (bot-activity-v1). Exactly these keys: never a step, detail, path, command, query or thinking. Clients render an unknown phase as working.",
@@ -15249,10 +16742,13 @@
               "approval",
               "activity",
               "queued",
+              "handoff",
+              "issues",
               "closed"
             ]
           },
           "payload": {
+            "description": "handoff (contract revision 37, only for devices holding bot:handoffs) carries { handoff: BotHandoff | null }. issues (contract revision 42, only for devices holding bot:issues) carries { issues: BotIssue[] }. At the same seq, other devices get a state frame, so their sequence still advances.",
             "type": "object"
           }
         },
@@ -15614,9 +17110,7 @@
                 "id",
                 "botId",
                 "botName",
-                "routineId",
                 "routineName",
-                "status",
                 "finishedAt",
                 "preview"
               ],
@@ -15625,6 +17119,13 @@
                   "type": "string",
                   "minLength": 1,
                   "maxLength": 160
+                },
+                "kind": {
+                  "description": "Contract revision 42: absent means routine. An issue item carries no routineId or status, and routineName is the card's title.",
+                  "enum": [
+                    "routine",
+                    "issue"
+                  ]
                 },
                 "botId": {
                   "type": "string",
@@ -16225,6 +17726,120 @@
         },
         "additionalProperties": false
       },
+      "BotHandoff": {
+        "description": "Contract revision 37, only for devices holding bot:handoffs: a step the Bot hands back to the person (Your turn: <action>), answered once by waitId with done or skipped. A sign_in hand-off is finished on the Mac; a phone may only skip it or open it on the Mac.",
+        "type": "object",
+        "required": [
+          "waitId",
+          "kind",
+          "action"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "kind": {
+            "enum": [
+              "action",
+              "sign_in"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 400
+          },
+          "open": {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "description": "An absolute https URL with a host and no user name or password.",
+                "type": "string",
+                "minLength": 9,
+                "maxLength": 2048,
+                "pattern": "^https://"
+              }
+            },
+            "additionalProperties": false
+          },
+          "takesNote": {
+            "description": "Contract revision 40, only for devices that also hold bot:handoff-notes: present, and false, only on a card whose answer may carry no note (one the Bot's password-or-code rule opened). Clients hide the note box for it; a note with its answer is 400 invalid_request whether or not the device was told.",
+            "const": false
+          },
+          "onMac": {
+            "description": "Contract revision 43, only for devices that also hold bot:handoff-on-mac: present, and true, only on an action card whose step is on the Bot's own browser or computer. Such a card never carries open for any device; clients offer Finish on your Mac (POST /bots/{botId}/handoffs/{waitId}/open-on-mac), which brings the Bot's chat and its browser or computer forward on the Mac, beside Skip and Done.",
+            "const": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotHandoffAnswerRequest": {
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "done",
+              "skipped"
+            ]
+          },
+          "note": {
+            "description": "What the person adds with their answer. Not blank.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotHandoffAnswerReceipt": {
+        "type": "object",
+        "required": [
+          "waitId"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BotHandoffOpenOnMacReceipt": {
+        "type": "object",
+        "required": [
+          "waitId",
+          "opened"
+        ],
+        "properties": {
+          "waitId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9-]+$"
+          },
+          "opened": {
+            "description": "Whether the Mac brought the hand-off forward: the Bot's chat, and for a sign-in the Bot's own browser when it has one.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
       "AppControlPanel": {
         "type": "object",
         "additionalProperties": false,
@@ -16490,6 +18105,39 @@
             "maxLength": 500
           }
         }
+      },
+      "BrowserRecordingRecap": {
+        "type": "object",
+        "description": "Contract revision 46: the video a completed browser_recording_stop step saved. Display-only; the bytes are read from GET /chats/{chatId}/recordings/{recordingId}.",
+        "required": [
+          "id",
+          "mimeType",
+          "durationMs",
+          "sizeBytes"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^recording-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mimeType": {
+            "enum": [
+              "video/mp4",
+              "video/webm"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 360000
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 134217728
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

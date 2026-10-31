@@ -35,3 +35,7 @@ Remembered file targets preserve leading/trailing whitespace, so distinct filesy
 Independent review also identified Windows backslash parent segments; raw parent validation now covers both separator forms and mixed separators, with regression coverage.
 
 Status (2026-10-01): merged in PR #273 as contract revision 17 (on main after 0.51.0); plan moved to `docs/plans/completed/`.
+
+## Bot rules are separate (2026-10-20)
+
+Durable Bot approvals never use this rule book: `bot-approvals.ts` requests have no `scopes`, so the coordinator treats every Bot answer as "once". Bot rules (`.memory/bot-rules.md`, `rules.json` per Bot) are a different mechanism that only tightens a Bot's calls; a remembered chat or always scope here can never skip a rule-made ask or a rule hand-off.

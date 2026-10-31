@@ -233,7 +233,8 @@ function unsafeApprovalCodePoint(codePoint: number, multiline: boolean): boolean
   );
 }
 
-function safeApprovalText(value: unknown, limit: number, multiline = false): value is string {
+/** Non-empty, trimmed, bounded text free of control and bidi characters (tabs and newlines only when multiline). */
+export function safeApprovalText(value: unknown, limit: number, multiline = false): value is string {
   if (
     typeof value !== "string" ||
     value.length === 0 ||

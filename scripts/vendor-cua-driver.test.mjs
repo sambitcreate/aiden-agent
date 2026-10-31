@@ -15,6 +15,7 @@ import {
   assertArchiveListing,
   buildBrokerApp,
   extractDriverMember,
+  resolveCargo,
   runBoundedCommand,
   sigstoreBundleArchiveDigest,
   validateArtifact,
@@ -102,19 +103,55 @@ test("broker app gives a cold Cargo release build a dedicated bounded timeout", 
   let invocation;
 
   await assert.rejects(
-    buildBrokerApp(async (command, args, options) => {
-      invocation = { command, args, options };
-      throw stoppedAfterCargoCall;
-    }),
+    buildBrokerApp(
+      async (command, args, options) => {
+        invocation = { command, args, options };
+        throw stoppedAfterCargoCall;
+      },
+      async () => "/toolchain/bin/cargo",
+    ),
     (error) => error === stoppedAfterCargoCall,
   );
 
   assert.ok(invocation);
+  assert.equal(invocation.command, "/toolchain/bin/cargo");
+  // rustc and the other rustup proxies sit beside Cargo and must be found first.
+  assert.equal(invocation.options.env.PATH.split(path.delimiter)[0], "/toolchain/bin");
+  assert.ok(invocation.options.env.PATH.split(path.delimiter).includes("/usr/bin"));
   assert.equal(invocation.args[0], "build");
   assert.ok(invocation.args.includes("--locked"));
   assert.ok(invocation.args.includes("--release"));
   assert.equal(invocation.options.timeoutMs, 10 * 60_000);
   assert.match(invocation.options.cwd, /native\/computer-use-broker$/);
+});
+
+test("Cargo is found in ~/.cargo/bin, then on PATH, or reported clearly", async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cargo-resolve-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const home = path.join(root, "home");
+  const rustupHome = path.join(home, ".cargo", "bin");
+  const homebrew = path.join(root, "opt", "rustup", "bin");
+  const notExecutable = path.join(root, "plain");
+  for (const directory of [homebrew, notExecutable]) await mkdir(directory, { recursive: true });
+  await writeFile(path.join(notExecutable, "cargo"), "not a program\n", { mode: 0o644 });
+  await writeFile(path.join(homebrew, "cargo"), "#!/bin/sh\n", { mode: 0o755 });
+  const PATH = ["relative/bin", notExecutable, homebrew].join(path.delimiter);
+
+  // GitHub's macOS images now ship rustup from Homebrew, with no ~/.cargo/bin/cargo.
+  assert.equal(await resolveCargo({ env: { PATH }, home }), path.join(homebrew, "cargo"));
+
+  await mkdir(rustupHome, { recursive: true });
+  await writeFile(path.join(rustupHome, "cargo"), "#!/bin/sh\n", { mode: 0o755 });
+  assert.equal(await resolveCargo({ env: { PATH }, home }), path.join(rustupHome, "cargo"));
+
+  assert.equal(
+    await resolveCargo({ env: { PATH, CARGO: "/pinned/cargo" }, home }),
+    "/pinned/cargo",
+  );
+  await assert.rejects(
+    resolveCargo({ env: { PATH: notExecutable }, home: root }),
+    /Cargo was not found/,
+  );
 });
 
 test("checked-in cua-driver provenance exactly matches the compiled pins", async () => {

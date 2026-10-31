@@ -73,7 +73,7 @@ export interface ContextLifecycleServiceDeps {
     audience: ContextLifecycleAudience,
     runtime: ResolvedModelRuntime,
   ): Promise<ThinkingLevel>;
-  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime): void | Promise<void>;
+  recordUsage?(message: AssistantMessage, runtime: ResolvedModelRuntime, chatId: string): void | Promise<void>;
 }
 
 function cancelled(cause: unknown): boolean {
@@ -97,12 +97,6 @@ export class ContextLifecycleService {
     if (!operation || (ownerId !== undefined && operation.ownerId !== ownerId)) return false;
     operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
     return true;
-  }
-
-  cancelForSkillsDisabled(): void {
-    for (const operation of this.activeCompactions.values()) {
-      operation.controller.abort(new DOMException("Compaction cancelled.", "AbortError"));
-    }
   }
 
   async compactChat(
@@ -204,7 +198,7 @@ export class ContextLifecycleService {
         settings: resolveCompactionModelBudget(modelOverrides, model, engine),
         models: runtime
           ? createPiCompactionModels(runtime, (message) =>
-              this.deps.recordUsage?.(message, runtime!),
+              this.deps.recordUsage?.(message, runtime!, chat.id),
             )
           : createModels(),
         model,

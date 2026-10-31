@@ -29,7 +29,7 @@ const AUTHENTICATION =
 const QUOTA =
   /(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|billing (?:limit|issue|required)|credit(?:s)? (?:exhausted|balance))/iu;
 const RATE_LIMIT =
-  /(?:\b429\b|rate[_ -]?limit|too many requests|requests? per (?:minute|second|day))/iu;
+  /(?:\b429\b|rate[_ -]?limit|usage[_ ]limit|too many requests|requests? per (?:minute|second|day))/iu;
 const TIMEOUT =
   /(?:\bETIMEDOUT\b|timed? out|timeout|deadline[_ -]?exceeded|headers timeout)/iu;
 const SERVICE_UNAVAILABLE =

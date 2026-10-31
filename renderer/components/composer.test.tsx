@@ -287,7 +287,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
+  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending \|\| dictationPreviewing\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /logoutBuiltinProvider\(qc, providerId\)/u);
@@ -374,7 +374,6 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
   assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
-  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
   assert.match(composer, /role="status"[^\n]*Sending…/u);
 });
 

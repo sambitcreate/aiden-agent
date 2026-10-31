@@ -1,4 +1,4 @@
-import { AIDEN_APP_GUIDANCE } from "./aiden-app-knowledge.js";
+import { aidenAppGuidance } from "./aiden-app-knowledge.js";
 // System prompt assembly for chat generations and for ambient context
 // estimates (context meter). Kept free of llm-client so services that only
 // need the static prompt do not import the generation pipeline.
@@ -34,11 +34,13 @@ export async function buildSystemPromptWithSections(
   skillsAvailable = true,
   skillSnapshot?: SkillRegistrySnapshot,
   availableToolNames?: ReadonlySet<string>,
+  /** The folder is the hidden one behind a "No workspace" chat, not a user project. */
+  noWorkspace = false,
 ): Promise<ChatSystemPromptWithSections> {
-  const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${AIDEN_APP_GUIDANCE}` : "");
+  const base = PI_CHAT_SYSTEM_PROMPT + (availableToolNames?.has("aiden_help") ? `\n\n${aidenAppGuidance(availableToolNames)}` : "");
   const skillsText =
     skillsAvailable && skillSnapshot
-      ? formatAvailableSkills(skillSnapshot, availableToolNames)
+      ? formatAvailableSkills(skillSnapshot, availableToolNames, permission !== "none")
       : undefined;
   const skillsSuffix = skillsText ? `\n\n${skillsText}` : "";
   const browserSuffix = availableToolNames?.has("browser_open")
@@ -70,6 +72,9 @@ export async function buildSystemPromptWithSections(
   const systemPrompt =
     `${base}\n\n` +
     `You are working inside the folder: ${folderPath}.${git} ` +
+    (noWorkspace
+      ? "This chat has no project: the folder is a private one Aiden made for this chat alone, so use it freely for downloads, clones and scratch files. "
+      : "") +
     capability +
     workflow +
     (permission === "ask"

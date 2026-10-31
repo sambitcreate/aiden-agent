@@ -36,6 +36,8 @@ const VERBS: Record<string, VerbPair> = {
   schedule_task: { active: "Scheduling", complete: "Scheduled" },
   edit_automation: { active: "Editing automation", complete: "Edited automation" },
   computer_use: { active: "Using computer", complete: "Used computer" },
+  computer: { active: "Using its computer", complete: "Used its computer" },
+  computer_shell: { active: "Running in its computer", complete: "Ran in its computer" },
   browser: { active: "Loading browser tools", complete: "Loaded browser tools" },
   browser_status: { active: "Checking browser", complete: "Checked browser" },
   browser_open: { active: "Opening browser", complete: "Opened browser" },
@@ -189,6 +191,7 @@ const TALLIED_TOOLS = [
   "write_file",
   "edit_file",
   "web_search",
+  "web_fetch",
   "computer_use",
   "compact_context",
 ];
@@ -199,9 +202,14 @@ const TALLIED_TOOLS = [
  * command".
  */
 export function summarizeActivity(timeline: GenerationTimeline): string {
-  const { steps } = timeline;
   const running = timeline.status === "running";
-  const toolSteps = steps.filter(isToolStep);
+  const toolSteps = timeline.steps.filter(isToolStep);
+  // A denied or blocked call never ran, so it is counted as skipped rather than
+  // as work done. A call still waiting for approval is not counted yet.
+  const skipped = toolSteps.filter((step) => step.status === "blocked");
+  const steps = timeline.steps.filter(
+    (step) => !isToolStep(step) || (!skipped.includes(step) && step.status !== "awaiting_approval"),
+  );
 
   if (!toolSteps.length) {
     const thinking = steps.reduce(
@@ -218,9 +226,15 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
   const commands = countTools(steps, ["run_command"]);
   const changes = countTools(steps, ["write_file", "edit_file"]);
   const web = countTools(steps, ["web_search"]);
+  const pages = countTools(steps, ["web_fetch"]);
   const mac = countTools(steps, ["computer_use"]);
   const compactions = countTools(steps, ["compact_context"]);
-  const other = toolSteps.filter((step) => !TALLIED_TOOLS.includes(step.toolName)).length;
+  const other = steps.filter((step) => isToolStep(step) && !TALLIED_TOOLS.includes(step.toolName)).length;
+  const skippedNoun = skipped.every((step) => step.toolName === "run_command")
+    ? "command"
+    : skipped.every((step) => step.toolName === "write_file" || step.toolName === "edit_file")
+      ? "file change"
+      : "action";
 
   const explored = [
     files ? plural(files, "file") : "",
@@ -231,9 +245,11 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     changes ? `${running ? "editing" : "edited"} ${plural(changes, "file")}` : "",
     commands ? `${running ? "running" : "ran"} ${plural(commands, "command")}` : "",
     web ? plural(web, "web search", "web searches") : "",
+    pages ? plural(pages, "web page") : "",
     mac ? plural(mac, "Computer Use action") : "",
     compactions ? (running ? "compacting context" : "compacted context") : "",
     other ? plural(other, "tool call") : "",
+    skipped.length ? `skipped ${plural(skipped.length, skippedNoun)}` : "",
   ].filter(Boolean);
 
   if (explored.length) {
@@ -241,5 +257,6 @@ export function summarizeActivity(timeline: GenerationTimeline): string {
     return [lead, ...clauses].join(", ");
   }
   const [first = "", ...rest] = clauses;
+  if (!first) return running ? "Waiting for approval" : "No activity";
   return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(", ");
 }

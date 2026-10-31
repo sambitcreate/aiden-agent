@@ -3,57 +3,58 @@ import type { AcpRelease } from "../acp/harness.js";
 /**
  * Google Antigravity ACP server, pinned per Aiden release.
  *
- * URLs come from the official ACP registry (`antigravity-acp/agent.json`,
- * version 1.3.0). Hashes and exact sizes come from the Ed25519-signed catalog
- * in pi-antigravity-acp-provider @ 07e369b (signature verified 2026-10-06);
- * the darwin-arm64 archive was also downloaded and re-hashed independently.
+ * URLs and SHA-256 hashes come from the official ACP registry
+ * (`antigravity-acp/agent.json`, version 1.4.3). All four archives were
+ * downloaded from dl.google.com on 2026-10-27, re-hashed to match the registry,
+ * and their exact member sizes read from the archives; the linux-x64 server
+ * also passed a live `initialize` identity check.
  * The installer re-verifies every value and the server's live identity before
  * activation. Updating the runtime means updating this table in a reviewed
  * change; Aiden never fetches release metadata at runtime.
  */
 export const ANTIGRAVITY_RELEASE: AcpRelease = {
-  version: "1.3.0",
+  version: "1.4.3",
   platforms: {
     "darwin-arm64": {
-      url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-arm64.zip",
-      sha256: "7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88",
-      archiveBytes: 111_456_962,
+      url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-arm64.zip",
+      sha256: "c57db0a9b8b712daa9c3c17cdb990a61842ea569f279e8bd79d7aa85a303b20b",
+      archiveBytes: 114_147_623,
       members: [
-        { name: "agy_acp_server.par", bytes: 278_535_456 },
-        { name: "localharness_external", bytes: 118_611_392 },
+        { name: "agy_acp_server.par", bytes: 282_446_160 },
+        { name: "localharness_external", bytes: 122_957_936 },
       ],
       executable: "agy_acp_server.par",
       args: [],
     },
     "darwin-x64": {
-      url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-x86_64.zip",
-      sha256: "bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646",
-      archiveBytes: 117_245_544,
+      url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.4.3-darwin-x86_64.zip",
+      sha256: "9392dbbdad7f0663dbfb5a0bf641297b0cf80d2ee9cd2d49a616bbbc7378731d",
+      archiveBytes: 119_801_100,
       members: [
-        { name: "agy_acp_server.par", bytes: 282_840_688 },
-        { name: "localharness_external", bytes: 124_175_392 },
+        { name: "agy_acp_server.par", bytes: 286_653_712 },
+        { name: "localharness_external", bytes: 127_612_208 },
       ],
       executable: "agy_acp_server.par",
       args: [],
     },
     "linux-x64": {
-      url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-x86_64.zip",
-      sha256: "9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96",
-      archiveBytes: 333_727_150,
+      url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-x86_64.zip",
+      sha256: "0634ce5306ba92c932945455e7a83fda78e2d99c33fa8aa6ee0566206a382714",
+      archiveBytes: 336_846_435,
       members: [
-        { name: "agy_acp_server.par", bytes: 926_533_965 },
-        { name: "localharness_external", bytes: 130_388_040 },
+        { name: "agy_acp_server.par", bytes: 927_707_135 },
+        { name: "localharness_external", bytes: 133_926_136 },
       ],
       executable: "agy_acp_server.par",
       args: ["--uid="],
     },
     "linux-arm64": {
-      url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-arm64.zip",
-      sha256: "500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf",
-      archiveBytes: 321_690_363,
+      url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.3-linux-arm64.zip",
+      sha256: "05c153443b0b1175151c760eeddea538950bc9843e317d54786a1f03670182bc",
+      archiveBytes: 322_887_047,
       members: [
-        { name: "agy_acp_server.par", bytes: 930_848_992 },
-        { name: "localharness_external", bytes: 123_224_968 },
+        { name: "agy_acp_server.par", bytes: 932_662_106 },
+        { name: "localharness_external", bytes: 127_512_832 },
       ],
       executable: "agy_acp_server.par",
       args: ["--uid="],

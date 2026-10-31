@@ -21,6 +21,8 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
+import sbtbiswas.AidenOnTheGo.models.AidenBotHandoff
+import sbtbiswas.AidenOnTheGo.models.AidenBotHandoffKind
 import sbtbiswas.AidenOnTheGo.models.AidenBotRoutineNotification
 import sbtbiswas.AidenOnTheGo.models.AidenBotRoutineNotificationList
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledRunNotification
@@ -239,6 +241,48 @@ class AidenScheduledRunNotifier(context: Context) {
         }
     }
 
+    /**
+     * Contract revision 37 (G24): a Bot handed a step back while its chat was open but not on
+     * screen. One notification per hand-off: its tag names the pairing, the Bot and the wait id,
+     * so seeing the same card again replaces it quietly instead of alerting twice. Tapping it
+     * opens the Bot's chat.
+     */
+    fun postBotHandoff(instanceId: String, botId: String, botName: String, handoff: AidenBotHandoff): Boolean {
+        if (!notificationsEnabled()) return false
+        val link = AidenDeepLink.botChatUrl(botId, instanceId) ?: return false
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = link.toUri()
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val tag = botHandoffTag(instanceId, botId, handoff.waitId)
+        val pendingIntent = PendingIntent.getActivity(
+            appContext,
+            tag.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = appContext.getString(
+            if (handoff.kind == AidenBotHandoffKind.SIGN_IN) R.string.notification_bot_handoff_sign_in
+            else R.string.notification_bot_handoff_action
+        )
+        val notification = NotificationCompat.Builder(appContext, AidenOnTheGoApp.SCHEDULED_RUNS_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(displaySafe(botName, 120))
+            .setContentText(body)
+            .setContentIntent(pendingIntent)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .build()
+        return try {
+            notificationManager.notify(tag, BOT_HANDOFF_NOTIFICATION_ID, notification)
+            true
+        } catch (_: SecurityException) {
+            AidenDiagnostics.record(AidenDiagnosticArea.NOTIFICATION, AidenDiagnosticEvent.NOTIFICATION_FAILED, AidenDiagnosticOutcome.DEGRADED, AidenDiagnosticCode.UNAVAILABLE)
+            false
+        }
+    }
+
     private fun post(item: AidenScheduledRunNotification): Boolean {
         val intent = Intent(appContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -281,6 +325,11 @@ class AidenScheduledRunNotifier(context: Context) {
         private const val MAX_DELIVERED_IDS = 500
         /** Bot routine notifications are told apart by their `aiden.bot-routine.<runId>` tag. */
         private const val BOT_ROUTINE_NOTIFICATION_ID = 0x0B07
+        /** Bot hand-off notifications are told apart by their `aiden.bot-handoff.<instance>.<bot>.<wait>` tag. */
+        private const val BOT_HANDOFF_NOTIFICATION_ID = 0x0B08
+
+        fun botHandoffTag(instanceId: String, botId: String, waitId: String): String =
+            "aiden.bot-handoff.$instanceId.$botId.$waitId"
 
         /** Lock-screen display text: bounded and free of control/bidi characters. */
         fun displaySafe(value: String, limit: Int): String = buildString {

@@ -41,39 +41,15 @@ test("bundle entry is executable and lazy loaders are emitted beside the shared 
 	}
 });
 
-test("Aiden palettes replace pi's built-in dark and light themes", () => {
-	const dark = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", "dark.json"), "utf-8"));
-	const light = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", "light.json"), "utf-8"));
-	assert.equal(dark.name, "dark");
-	assert.equal(light.name, "light");
-	// themes.test.mjs owns palette fidelity to appearance.ts; here the bundle
-	// must carry the generated builtins rather than pi's originals.
+test("pi's built-in dark and light themes ship where its session export looks for them", () => {
 	const piThemeDir = join(pkgDir, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "modes", "interactive", "theme");
-	for (const [name, bundled] of [["dark", dark], ["light", light]]) {
-		assert.deepEqual(bundled, JSON.parse(readFileSync(join(pkgDir, "themes", "builtin", `${name}.json`), "utf-8")));
-		assert.notDeepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
+	for (const name of ["dark", "light"]) {
+		const bundled = JSON.parse(readFileSync(join(appDir, "src", "modes", "interactive", "theme", `${name}.json`), "utf-8"));
+		assert.equal(bundled.name, name);
+		assert.deepEqual(bundled, JSON.parse(readFileSync(join(piThemeDir, `${name}.json`), "utf-8")));
 	}
-});
-
-test("all theme presets and pi originals ship beside the bundle", () => {
-	const bundled = join(appDir, "themes");
-	const expected = [
-		"berry-dark",
-		"berry-light",
-		"moss-dark",
-		"moss-light",
-		"slate-dark",
-		"slate-light",
-	];
-	for (const name of expected) {
-		const theme = JSON.parse(readFileSync(join(bundled, `${name}.json`), "utf-8"));
-		assert.equal(theme.name, name, `${name}.json must carry a matching name`);
-		assert.ok(theme.vars && theme.colors, `${name}.json must define vars and colors`);
-	}
-	// Pi's own palettes are deliberately not shipped: Aiden themes only.
-	for (const gone of ["pi-dark", "pi-light"]) {
-		assert.ok(!existsSync(join(bundled, `${gone}.json`)), `${gone} must not ship`);
-	}
+	// Aiden has no terminal UI: no extra presets ship beside the bundle.
+	assert.equal(existsSync(join(appDir, "themes")), false);
 });
 
 test("the speech worker ships beside the Silero VAD model it trims silence with", () => {
@@ -93,18 +69,13 @@ test("pi's docs directory is vendored for auth/model guidance pointers", () => {
  * the anchors, scripts/patch-branding.mjs fails the build first — these catch
  * anything that slips past an anchor match.
  */
-test("bundle presents as Aiden, not Pi", () => {
+test("the system prompt presents as Aiden, not Pi", () => {
 	const cliBundle = readFileSync(join(appDir, "cli.js"), "utf-8");
 	const chunkFiles = readdirSync(join(appDir, "chunks"));
 	const chunks = chunkFiles.map((name) => readFileSync(join(appDir, "chunks", name), "utf-8"));
 	const everything = [cliBundle, ...chunks].join("\n");
-	assert.equal(
-		everything.includes("Pi can explain its own features"),
-		false,
-		"the Pi self-promotion header line must not ship",
-	);
 	assert.ok(everything.includes("operating inside Aiden, a coding agent harness"), "system prompt identity");
-	assert.ok(!/Pi works best with csi-u/.test(everything), "tmux hint must say Aiden");
+	assert.ok(!everything.includes("operating inside pi, a coding agent harness"), "pi's identity must not ship");
 });
 
 test("pi telemetry is removed, not just disabled", () => {
@@ -115,27 +86,20 @@ test("pi telemetry is removed, not just disabled", () => {
 	// The entry forces PI_TELEMETRY=0, which wins over settings and kills both
 	// the pi.dev report-install ping and pi's attribution headers.
 	assert.match(cliBundle, /PI_TELEMETRY["']?\]?\s*=\s*["']0["']/, "entry must force PI_TELEMETRY=0");
-	// The settings default flips to off so /config reflects reality (the
+	// The settings default flips to off so pi's settings reflect reality (the
 	// parity suite checks the real SettingsManager reads it as false).
 	// minifySyntax rewrites `false` / `true` as `!1` / `!0`.
 	assert.ok(everything.includes("enableInstallTelemetry:!1"), "install telemetry must default off");
 	assert.ok(!everything.includes("enableInstallTelemetry:!0"), "stock default-on telemetry must not survive");
 	assert.ok(!everything.includes("reportInstallTelemetry(VERSION)"), "ping call sites must be patched out");
 	assert.ok(!everything.includes("pi.dev/api/report-install"), "the telemetry endpoint must not ship");
-	// The startup wordmark: 5-row solid-block AIDEN banner (oh-my-pi style),
-	// animated with a one-loop sheen sweep that settles into the static mark.
-	assert.ok(
-		everything.includes("███████ █████ ██████  ███████ ██   ██"),
-		"the AIDEN block-letter wordmark must ship in the startup header",
-	);
-	assert.ok(!everything.includes("▄▀▀▄"), "superseded banner must not ship");
-	// The one-loop sheen animation lives in the aiden-startup extension:
-	assert.ok(everything.includes("__aidenStartupPlayed"), "startup flourish guard must ship");
-	// One loop then settle: the interval flips settled, clears itself, and the
-	// render loop then paints the static accent wordmark (minified forms).
-	assert.ok(/settled=!0/.test(everything), "one loop then settle (settled flag)");
-	assert.ok(everything.includes("timer&&clearInterval(timer)"), "one loop then settle (timer clear)");
-	// Animation colors derive from the active theme accent, never hardcoded blues.
-	assert.ok(!everything.includes("38;2;62;151;246"), "hardcoded Aiden-blue truecolor must not ship");
+});
 
+test("the bundled MCP docs the model reads describe Aiden's MCP configuration, not Pi's native one", () => {
+	const mcp = readFileSync(join(appDir, "docs", "mcp.md"), "utf8");
+	assert.match(mcp, /aiden-mcp\.json/);
+	assert.match(mcp, /aiden mcp login <id>/);
+	const cli = readFileSync(join(appDir, "docs", "cli.md"), "utf8");
+	assert.doesNotMatch(cli, /pi mcp (add|login|list|remove|logout)|builtin:mcp/);
+	assert.match(cli, /aiden mcp add <server\.json>/);
 });

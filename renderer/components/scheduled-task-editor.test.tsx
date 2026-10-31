@@ -30,7 +30,7 @@ function renderApproval(details: unknown) {
 
 test("task approval discloses instructions, runtime, exact connectors and paused scheduling", () => {
   const markup = renderApproval(approval);
-  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email (mail-1)", "America/New_York", "will not run automatically"]) {
+  for (const text of ["Summarize unread messages without sending replies.", "Local provider", "Brief model", "Email", "mail-1", "America/New_York", "will not run automatically"]) {
     assert.ok(markup.includes(text), `Missing approval disclosure: ${text}`);
   }
   assert.ok(markup.includes("Allow once"));
@@ -125,7 +125,7 @@ test("a selected MCP server that no longer exists is listed by its id, not a gen
       ["gmail", "Gmail", true],
       // A disabled but still configured selection keeps its own name.
       ["notion", "Notion", false],
-      ["github-work", "Unavailable MCP server (github-work)", false],
+      ["github-work", "Unavailable connector (github-work)", false],
     ],
   );
 });
@@ -144,7 +144,7 @@ test("a selected server switched off for the model is shown as unavailable with 
     visibleMcpServers.map(({ id, enabled, unavailableReason }) => [id, enabled, unavailableReason]),
     [
       ["gmail", true, undefined],
-      ["drive", false, "Off for the model in Settings → Plugins"],
+      ["drive", false, "Off for the model in Settings → Connectors"],
     ],
   );
 });

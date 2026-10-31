@@ -6,6 +6,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { MessageList } from "./message-list";
 import { ImageScanPlaceholder } from "./image-generation-placeholder";
 import { BotStatusLine } from "../main/bots/bot-status-line";
+import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
@@ -53,7 +54,7 @@ function list(props: {
   timeline: GenerationTimeline | null;
   messages?: ChatMessage[];
   artifacts?: ChatArtifactV1[];
-  /** attachment id → producing generate_image call id, as the host sends it. */
+  /** attachment id → producing call id, as the host sends it. */
   placements?: ReadonlyMap<string, string>;
   text?: string;
 }) {
@@ -144,6 +145,20 @@ test("Reduce Motion renders the still pose", () => {
   assert.equal(document.querySelector(".image-scan")?.getAttribute("data-motion"), "animate");
 });
 
+test("turning Reduce Motion on or off while an image generates switches the pose in place", () => {
+  render(list({ timeline: timeline(generateStep("running", { detail: "3:4" })) }));
+  const motion = () => document.querySelector(".image-scan")?.getAttribute("data-motion");
+  assert.equal(motion(), "animate");
+  const applyReduceMotion = (on: boolean) => act(() => {
+    document.documentElement.dataset.reduceMotion = String(on);
+    window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
+  });
+  applyReduceMotion(true);
+  assert.equal(motion(), "still");
+  applyReduceMotion(false);
+  assert.equal(motion(), "animate");
+});
+
 test("an arriving image is revealed in the placeholder, then shown as an ordinary attachment", async () => {
   document.documentElement.dataset.reduceMotion = "true";
   const before = imageArtifact("earlier-image");
@@ -208,13 +223,14 @@ test("parallel calls each reveal only their own image, once, and never a display
   assert.equal(screen.getAllByRole("img", { name: /^Generating image/u }).length, 2);
 
   // Out of order: the second call's image and a display_image result land first.
-  const early = new Map([["from-call-2", "call-2"]]);
+  // The host places a shown image at its own display_image call; no placeholder claims it.
+  const early = new Map([["from-call-2", "call-2"], ["from-display", "call-3"]]);
   view.rerender(list({ timeline: multiTimeline(steps("running", "running")), artifacts: [shown, second], placements: early }));
   assert.equal(revealedSource("tool-1"), null, "the first call keeps scanning");
   assert.match(revealedSource("tool-2") ?? "", /^data:image\/png/u);
   assert.ok(screen.getByRole("button", { name: "Open Shown.webp preview" }), "display_image results are never claimed");
 
-  const all = new Map([["from-call-2", "call-2"], ["from-call-1", "call-1"]]);
+  const all = new Map([["from-call-2", "call-2"], ["from-call-1", "call-1"], ["from-display", "call-3"]]);
   view.rerender(
     list({ timeline: multiTimeline(steps("running", "completed")), artifacts: [shown, second, first], placements: all }),
   );
@@ -296,6 +312,68 @@ test("a settled reply draws each generated image at its generate_image row", () 
   assert.ok(generated.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING, "anchored before later text");
   assert.ok(later.compareDocumentPosition(unplaced) & Node.DOCUMENT_POSITION_FOLLOWING, "unplaced images stay trailing");
   markupOrder.unmount();
+});
+
+function displayStep(id: string, toolCallId: string, order: number, contentOffset: number, toolName = "display_image"): AgentToolStep {
+  return generateStep("completed", { id, toolCallId, order, contentOffset, toolName, label: "Display image" });
+}
+
+function image(id: string, name: string) {
+  return { id, name, mimeType: "image/png", kind: "image" as const, size: 68, data: PNG };
+}
+
+function settledReply(steps: AgentToolStep[], attachments: ReturnType<typeof image>[], content: string): ChatMessage {
+  return {
+    id: "assistant-1",
+    role: "assistant",
+    content,
+    createdAt: 1,
+    timeline: { version: 3, generationId: "g", status: "completed", startedAt: 1, finishedAt: 2, steps },
+    attachments,
+  };
+}
+
+test("a shown image stays at its display_image row while later text streams in below it", () => {
+  const steps = [displayStep("tool-1", "call-1", 0, 7)];
+  const placements = new Map([["shown", "call-1"]]);
+  const artifacts = [imageArtifact("shown", "Shown.png")];
+  const view = render(list({ timeline: multiTimeline(steps), artifacts, placements, text: "Before." }));
+  view.rerender(list({ timeline: multiTimeline(steps), artifacts, placements, text: "Before. And this streamed after it." }));
+  const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
+  const prose = [...document.querySelectorAll(".streaming-reveal")];
+  assert.equal(prose.length, 2, "the text before and after the call are separate rows");
+  assert.ok(prose[0]!.compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING, "below the earlier text");
+  assert.ok(shown.compareDocumentPosition(prose[1]!) & Node.DOCUMENT_POSITION_FOLLOWING, "above the later text");
+});
+
+test("a reply saved without image placements still draws shown and shared images at their calls", () => {
+  const steps = [
+    displayStep("tool-1", "call-1", 0, 7),
+    displayStep("tool-2", "call-2", 1, 15, "share_image"),
+  ];
+  // The host keeps shared images ahead of shown ones in the saved list.
+  render(
+    list({
+      timeline: null,
+      text: "",
+      messages: [settledReply(steps, [image("shared_1", "Shared.png"), image("shown", "Shown.png")], "First. Second. Third.")],
+    }),
+  );
+  const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
+  const shared = screen.getByRole("button", { name: "Open Shared.png preview" });
+  const second = screen.getByText(/Second\./u);
+  const third = screen.getByText(/Third\./u);
+  assert.ok(shown.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING, "shown image before the text after its call");
+  assert.ok(second.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING, "shared image after the text before its call");
+  assert.ok(shared.compareDocumentPosition(third) & Node.DOCUMENT_POSITION_FOLLOWING, "shared image before the text after its call");
+});
+
+test("a saved reply whose images do not pair one for one with its calls keeps them trailing", () => {
+  // Two display calls but one image: one call showed a duplicate, so which call owns it is unknown.
+  const steps = [displayStep("tool-1", "call-1", 0, 7), displayStep("tool-2", "call-2", 1, 13)];
+  render(list({ timeline: null, text: "", messages: [settledReply(steps, [image("shown", "Shown.png")], "First. Second. Third.")] }));
+  const shown = screen.getByRole("button", { name: "Open Shown.png preview" });
+  assert.ok(screen.getByText(/Third\./u).compareDocumentPosition(shown) & Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
 test("elapsed time counts from the step's own start, so a remount keeps it", () => {

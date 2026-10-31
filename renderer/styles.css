@@ -53,6 +53,8 @@
 .browser-empty { display: flex; min-width: 0; width: 100%; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 30px; text-align: center; }
 .browser-empty > svg { width: 26px; height: 26px; margin-bottom: 4px; color: var(--text-tertiary); }
 .browser-empty p { max-width: 34ch; margin: 0; color: var(--text-secondary); font-size: calc(var(--ui-font-size) - 1px); line-height: 1.5; overflow-wrap: anywhere; }
+/* An empty state's error line keeps the paragraph's measure but reads as an error (this unlayered rule beats a text utility). */
+.browser-empty p[role="alert"] { color: var(--status-red); }
 .devices-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow-y: auto; padding: 8px 10px 14px; }
 .devices-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; }
 .devices-list-note { padding: 4px 5px 8px; }
@@ -78,6 +80,10 @@
 .device-phone-viewport > canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .device-viewer-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; background: var(--surface-popover); text-align: center; }
 .device-viewer-notice { position: absolute; bottom: 10px; left: 50%; max-width: calc(100% - 20px); padding: 4px 8px; border-radius: var(--radius-menu); background: var(--surface-popover); color: var(--text-secondary); font-size: var(--text-small); pointer-events: none; transform: translateX(-50%); white-space: nowrap; }
+/* A Bot's computer (bot-computer-tab.tsx): a Mac display, so card corners, and the Bot's avatar at its last action point. */
+.bot-computer-screen { border-radius: var(--radius-card); }
+.bot-computer-pointer { position: absolute; z-index: 1; display: flex; border-radius: var(--radius-pill); box-shadow: var(--elevation-popover); pointer-events: none; transform: translate(2px, 2px); }
+:root[data-reduce-motion="false"] .bot-computer-pointer { transition: left var(--motion-duration) var(--motion-easing), top var(--motion-duration) var(--motion-easing); }
 .devices-platform-group + .devices-platform-group { margin-top: 6px; }
 .devices-platform-title { display: block; padding: 6px 5px 2px; }
 .device-viewer-rail { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border-separator); }
@@ -638,6 +644,22 @@ body {
   corner-shape: squircle;
 }
 
+/* The approval card takes the composer's shape; its wells nest inside that radius. */
+.approval-well {
+  border-radius: calc(var(--radius-composer) - 16px);
+  corner-shape: squircle;
+}
+
+.approval-icon-tile {
+  border-radius: 14px;
+  corner-shape: squircle;
+}
+
+/* A diff's line bands run to the well's edge; a scrollbar appears only when it overflows. */
+.approval-diff {
+  scrollbar-gutter: auto;
+}
+
 .composer-shell:focus-within {
   background-color: color-mix(in srgb, var(--surface-popover) 98%, var(--text-primary));
 }
@@ -774,6 +796,15 @@ textarea {
   outline: none !important;
 }
 
+/* The conversation F6 lands on. Its ring is a sibling drawn below the overlaid
+   toolbar, inset because the conversation's edges meet the window's. */
+.conversation-scrollport { outline: none; }
+.conversation-focus-ring { display: none; }
+.conversation-scrollport:focus-visible ~ .conversation-focus-ring {
+  display: block;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
 /* Non-text controls retain a visible keyboard focus indicator. */
 :root :where(button, [role="button"], [role="radio"], [role="switch"], [role="checkbox"], [role="separator"], [role="listbox"], select, a, summary, [tabindex]:not([tabindex="-1"]):not(input):not(textarea)):focus-visible {
   outline: 2px solid var(--focus-ring) !important;
@@ -848,6 +879,26 @@ textarea {
     black calc(100% - var(--scroll-fade-size)),
     transparent
   );
+}
+
+/* A long sent prompt folds to a few lines behind its chevron. The fade is a
+   mask, not a gradient in the bubble's colour, so it holds over any fill (a
+   queued Bot bubble mixes its own). Height eases between the folded and the
+   natural size; Reduce Motion drops the transition with every other one. */
+.user-message-fold[data-foldable="true"] {
+  overflow: clip;
+  overflow-clip-margin: 4px;
+  interpolate-size: allow-keywords;
+  transition: height var(--motion-duration) var(--motion-easing);
+}
+
+.user-message-fold[data-folded="true"] {
+  height: calc(var(--user-message-fold-lines) * 1lh);
+  mask-image: linear-gradient(to bottom, black calc(100% - 1.5lh), transparent);
+}
+
+.user-message-bubble {
+  scroll-margin-top: calc(var(--scroll-area-sticky-top, 0px) + 0.75rem);
 }
 
 /* Promote the same live artifact iframe into Chromium's top layer. Keeping the
@@ -962,8 +1013,21 @@ textarea {
   }
 }
 
-.reasoning-surface {
-  --scroll-fade-size: 20px;
+/* A reasoning disclosure's body folds on a grid track so it can ease between
+   zero and its natural height. It only ever folds when the reader asks. */
+.reasoning-body {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+.reasoning-body > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.reasoning-body[data-state="closing"] {
+  grid-template-rows: 0fr;
+  opacity: 0;
 }
 
 /* Section headers inside the transcript (Thinking disclosures, expanded
@@ -997,6 +1061,21 @@ textarea {
 
 /* A collapse from a stuck header brings its section back into view below the
    toolbar instead of leaving the reader stranded mid-transcript. */
+.transcript-settled-contained {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+}
+
+/* Find in chat (⌘F): every match in a soft fill, the current one solid. */
+::highlight(aiden-find) {
+  background-color: color-mix(in srgb, var(--support-warning) 28%, transparent);
+}
+
+::highlight(aiden-find-current) {
+  background-color: var(--support-warning);
+  color: var(--support-warning-foreground);
+}
+
 .transcript-sticky-section {
   scroll-margin-top: var(--scroll-area-sticky-top, 0px);
 }
@@ -2168,6 +2247,9 @@ textarea {
 :root[data-reduce-motion="false"] .scheduled-task-detail[data-state="open"] {
   animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
 }
+:root[data-reduce-motion="false"] .usage-data-notice[data-state="open"] {
+  animation: aiden-app-update-banner-in 150ms cubic-bezier(0.19, 1, 0.22, 1) both;
+}
 :root[data-reduce-motion="false"] .agent-thinking-shimmer {
   color: transparent;
   background-image: linear-gradient(
@@ -2184,6 +2266,12 @@ textarea {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: aiden-thinking-shimmer 1.8s ease-in-out infinite;
+}
+/* The shimmer repaints its text every frame, so it pauses while scrolled away
+   or while the window is hidden (lib/offscreen-pause.ts). */
+.agent-thinking-shimmer[data-offscreen],
+:root[data-document-hidden] .agent-thinking-shimmer {
+  animation-play-state: paused !important;
 }
 
 /*
@@ -2206,6 +2294,40 @@ textarea {
 
 :root[data-reduce-motion="false"] .reasoning-surface[data-streaming="true"] {
   animation: aiden-reasoning-surface-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+:root[data-reduce-motion="false"] .reasoning-body {
+  transition:
+    grid-template-rows 240ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms ease-out;
+}
+
+@starting-style {
+  :root[data-reduce-motion="false"] .reasoning-body {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* The collapsed row's latest thought rolls in inside the row's own height. */
+:root[data-reduce-motion="false"] .reasoning-line-in {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  animation: aiden-reasoning-line-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes aiden-reasoning-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .agent-event-presence[data-presence="visible"],
@@ -2997,7 +3119,8 @@ textarea {
 .aiden-mark { display: block; flex: none; overflow: visible; }
 .aiden-mark * { transform-box: view-box; }
 .aiden-mark[data-paused] *,
-.aiden-mark[data-offscreen] * { animation-play-state: paused !important; }
+.aiden-mark[data-offscreen] *,
+:root[data-document-hidden] .aiden-mark * { animation-play-state: paused !important; }
 :root[data-reduce-motion="true"] .aiden-mark * { animation-play-state: paused !important; }
 @media (prefers-reduced-motion: reduce) {
   .aiden-mark * { animation-play-state: paused !important; }
@@ -3063,7 +3186,8 @@ textarea {
    face pauses where it is. */
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eyes { animation: aiden-mark-look 4s cubic-bezier(.5, 0, .3, 1) infinite; }
 :root[data-reduce-motion="false"] .bot-avatar[data-working] .bot-avatar-eye { transform-box: fill-box; transform-origin: center; animation: aiden-mark-blink 4s ease-in-out infinite; }
-.bot-avatar[data-offscreen] * { animation-play-state: paused !important; }
+.bot-avatar[data-offscreen] *,
+:root[data-document-hidden] .bot-avatar * { animation-play-state: paused !important; }
 /* Under Reduce Motion a working face holds the glance's look-aside pose instead,
    so it still reads as working without moving. */
 :root[data-reduce-motion="true"] .bot-avatar[data-working] .bot-avatar-eyes { transform: translateX(-2.6px); }
@@ -3232,10 +3356,11 @@ textarea {
    (iOS and Android use the same spec). Only transform and opacity animate; the
    dot fields are tiled gradients drawn once. Without motion (Reduce Motion, or
    before the animation class applies) the lens rests in its still pose. */
-/* The slot is exactly the requested shape: as wide as the column allows, at
-   most 42rem wide and 32rem tall. A generated image renders at the same size. */
+/* The slot is exactly the requested shape, message-sized like a photo in
+   Messages: at most 22.5rem wide and 20rem tall (IMAGE_SCAN_SPEC maxWidth and
+   maxHeight). Every assistant image in the chat renders within the same box. */
 .image-scan-slot {
-  width: min(100%, 42rem, calc(32rem * var(--image-scan-aspect, 1)));
+  width: min(100%, 22.5rem, calc(20rem * var(--image-scan-aspect, 1)));
 }
 .image-scan {
   --image-scan-period: 2.8s;
@@ -3337,7 +3462,7 @@ textarea {
 /* Offscreen or hidden pauses the whole slot, caption dot included. The reveal
    pauses the scan but never the arriving image's own fade. */
 .image-scan-slot[data-offscreen] *,
-.image-scan-slot[data-document-hidden] *,
+:root[data-document-hidden] .image-scan-slot *,
 .image-scan-slot[data-arrival="reveal"] .image-scan-live,
 .image-scan[data-arrival="reveal"] *:not(.image-scan-result) { animation-play-state: paused !important; }
 /* Arrival: the cover slides away under a bright edge, revealing the image. */

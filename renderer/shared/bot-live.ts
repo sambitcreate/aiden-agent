@@ -11,7 +11,14 @@ import type { BotActivityPhase, BotToolPhase } from "./bot-activity.js";
 import type { ConnectCardEntry } from "./bot-connections.js";
 import type { AskUserQuestionV1 } from "./ask-user-question.js";
 import type { BotMemorySource, BotMemoryTarget } from "./bot-memory.js";
+import type { BotIssue, BotIssueResolution } from "./bot-issues.js";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "./bot-routine-proposals.js";
+import {
+  botHandoffResultLine,
+  type BotHandoffKind,
+  type BotHandoffOutcome,
+  type BotPendingHandoff,
+} from "./bot-handoffs.js";
 
 export type { BotSessionState };
 
@@ -116,6 +123,22 @@ export type BotTranscriptEntry =
       at?: number;
     }
   /**
+   * The person's answer to a hand-off card, shown on their side of the chat:
+   * "You did this: …", "You skipped this: …" or "You signed in to …".
+   * Id `handoff:<toolCallId>`; a later answer for a call id the provider
+   * reused in another turn is `handoff:<toolCallId>:<entry id>`.
+   */
+  | {
+      id: string;
+      type: "handoff_result";
+      kind: BotHandoffKind;
+      outcome: BotHandoffOutcome;
+      action: string;
+      note?: string;
+      origin?: string;
+      at?: number;
+    }
+  /**
    * A file the Bot wrote or edited in its folder (host-confirmed by the tool
    * result, never inferred from text). Shown as a chip that opens Files.
    */
@@ -160,6 +183,47 @@ export type BotTranscriptEntry =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      /** The revised card that replaced this one (status dismissed). */
+      supersededBy?: string;
+      at?: number;
+    }
+  /** A lesson from a routine's runs, waiting for Keep; or a Learned line from a correction; or a tidy. */
+  | {
+      id: string;
+      type: "lesson_proposal" | "lesson_learned";
+      lesson: import("./bot-lessons.js").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+      at?: number;
+    }
+  | { id: string; type: "memory_tidy"; changeId?: string; at?: number }
+  /** A wake-up the Bot set for itself (`wake_up`); the chip reads from the Bot's routines whether it is still waiting. */
+  | { id: string; type: "wake_up"; wakeUpId: string; fireAt: number; at?: number }
+  /** A skill the Bot proposed, or one found in its folder, waiting for Add. */
+  | {
+      id: string;
+      type: "skill_proposal";
+      proposal: import("./bot-skill-proposals.js").BotSkillProposalEntryData;
+      status: import("./bot-skill-proposals.js").BotSkillProposalStatus;
+      at?: number;
+    }
+  /**
+   * A "Needs you" issue the host raised for this Bot (plan F2). `status` is
+   * `open` until a status entry settles it; a settled card keeps one quiet line.
+   */
+  | {
+      id: string;
+      type: "issue";
+      issue: BotIssue;
+      status: "open" | BotIssueResolution;
+      at?: number;
+    }
+  /** Shown on unpause: the routines that fired while the Bot was paused, each with Run now. */
+  | {
+      id: string;
+      type: "routines_skipped";
+      /** When the pause began. */
+      since: number;
+      routines: { routineId: string; name: string; count: number }[];
       at?: number;
     };
 
@@ -219,6 +283,11 @@ export interface BotLiveSnapshot {
   state: BotSessionState;
   /** The question the Bot is waiting on, or null. */
   question: BotPendingQuestion | null;
+  /**
+   * The hand-off card the Bot is waiting on, or null. Main always sets it;
+   * read it as `snapshot.handoff ?? null`.
+   */
+  handoff?: BotPendingHandoff | null;
   /** What the Bot is doing in the running turn, or null. */
   activity: BotLiveActivity | null;
   /** Messages waiting for the running turn, oldest first. */
@@ -230,6 +299,7 @@ export type BotLiveEventBody =
   | { type: "partial"; text: string | null }
   | { type: "state"; state: BotSessionState }
   | { type: "question"; question: BotPendingQuestion | null }
+  | { type: "handoff"; handoff: BotPendingHandoff | null }
   | { type: "activity"; activity: BotLiveActivity | null }
   | { type: "queued"; queued: BotQueuedMessage[] }
   /** Replaces everything: after an overflow, a reopen, or a retroactive change. */
@@ -243,7 +313,7 @@ export interface BotLiveSummary {
   preview: string | null;
   updatedAt: number | null;
   state: BotSessionState;
-  /** An approval or an A–E question is waiting on the person ("Needs you"). */
+  /** An approval, an A–E question or a hand-off card is waiting on the person ("Needs you"). */
   needsYou: boolean;
   /** When the newest reply with visible text arrived; the sidebar's unread dot compares it with last-viewed. */
   lastReplyAt: number | null;
@@ -271,6 +341,9 @@ export function botTranscriptPreview(entries: readonly BotTranscriptEntry[]): { 
     }
     if (entry.type === "question_answer") {
       return { text: oneLine(entry.text), ...(entry.at === undefined ? {} : { at: entry.at }) };
+    }
+    if (entry.type === "handoff_result") {
+      return { text: oneLine(botHandoffResultLine(entry)), ...(entry.at === undefined ? {} : { at: entry.at }) };
     }
     if (entry.type === "routine") {
       return { text: entry.label, ...(entry.at === undefined ? {} : { at: entry.at }) };
@@ -306,6 +379,8 @@ export function applyBotLiveEvent(snapshot: BotLiveSnapshot, event: BotLiveEvent
       return { ...snapshot, seq: event.seq, state: event.state };
     case "question":
       return { ...snapshot, seq: event.seq, question: event.question };
+    case "handoff":
+      return { ...snapshot, seq: event.seq, handoff: event.handoff };
     case "activity":
       return { ...snapshot, seq: event.seq, activity: event.activity };
     case "queued":

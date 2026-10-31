@@ -50,8 +50,10 @@ import { unattendedFallbackProviderId } from "../../renderer/shared/acp-harness.
 import {
   BOT_ROUTINE_PROPOSAL_REASON_LIMIT,
   BOT_ROUTINES_TOOL_NAME,
+  type BotRoutineProposalDecisionSummary,
 } from "../../renderer/shared/bot-routine-proposals.js";
 import type { BotRoutine } from "./scheduled-bot-routines.js";
+import { botWakeSourceLines } from "./bot-wake-sources.js";
 
 export const SCHEDULE_TOOL_NAME = ASSISTANT_AUTOMATION_TOOL_NAME;
 export const EDIT_AUTOMATION_TOOL_NAME = ASSISTANT_AUTOMATION_EDIT_TOOL_NAME;
@@ -1743,20 +1745,47 @@ export function createScheduleTaskTool(
   };
 }
 
+/** What the Bot asks a proposal or revision to show: a schedule or a trigger, exactly one. */
+export interface BotRoutineProposalToolInput {
+  name: string;
+  prompt: string;
+  schedule?: unknown;
+  trigger?: unknown;
+  reason?: string;
+  requested?: boolean;
+}
+
+type BotRoutineProposalToolOutcome =
+  | { ok: true; proposalId: string }
+  | { ok: false; code: string; error: string; until?: number };
+
 /**
  * What the Bot's `routines` tool may do. Creating, changing or deleting a
- * routine is the person's job: `propose` only shows an approval card, and
- * `pause` only reduces activity.
+ * routine is the person's job: `propose` and `revise` only show an approval
+ * card, and `pause` only reduces activity.
  */
 export interface BotRoutinesToolDependencies {
   list(botId: string): Promise<BotRoutine[]>;
   /** Turn one of this Bot's routines off. Throws when it is not this Bot's. */
   pause(botId: string, routineId: string): Promise<BotRoutine>;
   /** Store the proposal and show its card. */
-  propose(
+  propose(botId: string, input: BotRoutineProposalToolInput): Promise<BotRoutineProposalToolOutcome>;
+  /** Replace a card that still waits for an answer with a new one. */
+  revise?(
     botId: string,
-    input: { name: string; schedule: unknown; prompt: string; reason?: string },
-  ): Promise<{ ok: true; proposalId: string } | { ok: false; code: string; error: string }>;
+    proposalId: string,
+    input: BotRoutineProposalToolInput,
+  ): Promise<BotRoutineProposalToolOutcome | { ok: true; proposalId: string; replaced: string }>;
+  /** The suggestions still waiting for an answer. */
+  pending?(botId: string): Promise<Array<{ proposalId: string; name: string; label: string }>>;
+  /** This Bot's event routines (file change or link). Never includes a link or token. */
+  eventRoutines?: {
+    list(botId: string): Promise<Array<{ id: string; name: string; label: string; enabled: boolean }>>;
+    /** Turn one off. Returns undefined when it is not this Bot's event routine. */
+    pause(botId: string, routineId: string): Promise<{ id: string; name: string; label: string; enabled: boolean } | undefined>;
+  };
+  /** The newest answered suggestions, so the Bot learns what the person declined. */
+  recentDecisions?(botId: string): Promise<BotRoutineProposalDecisionSummary[]>;
 }
 
 const BOT_ROUTINE_TIME = Type.String({
@@ -1802,6 +1831,54 @@ const BOT_ROUTINE_SCHEDULE = Type.Union(
   { description: "When the routine runs, in the person's local timezone." },
 );
 
+// Checked in full by the proposal service (parseBotRoutineTrigger); the schema
+// only tells the model the shapes.
+const BOT_ROUTINE_TRIGGER = Type.Object(
+  {
+    kind: Type.String({
+      description:
+        '"file_change" (a file in your folder changes), "webhook" (the routine gets its own link on this Mac\'s network) ' +
+        'or "watch" (Aiden checks a page or a script on an interval and wakes you only when its output changes).',
+    }),
+    folder: Type.Optional(Type.String({ description: "file_change: a folder relative to your folder, for example \"inbox\"." })),
+    pattern: Type.Optional(Type.String({ description: "file_change: optional file pattern, for example \"*.pdf\"." })),
+    source: Type.Optional(
+      Type.Object(
+        {
+          type: Type.String({ description: '"url" or "script".' }),
+          url: Type.Optional(Type.String({ description: "url: an https address (http only for localhost), read with no sign-in and no redirects." })),
+          script: Type.Optional(Type.String({ description: "script: a file relative to your folder, for example \"scripts/ci-status.sh\"." })),
+        },
+        { additionalProperties: true, description: "watch: what to check." },
+      ),
+    ),
+    everyMinutes: Type.Optional(Type.Integer({ minimum: 5, maximum: 1440, description: "watch: minutes between checks, 5 to 1440." })),
+  },
+  { additionalProperties: true, description: "What starts the routine, instead of a schedule." },
+);
+
+const PROPOSAL_FIELDS = ["name", "schedule", "trigger", "prompt", "reason", "requested"] as const;
+
+function proposalInput(fields: Record<string, unknown>): BotRoutineProposalToolInput {
+  return {
+    name: typeof fields.name === "string" ? fields.name : "",
+    prompt: typeof fields.prompt === "string" ? fields.prompt : "",
+    ...(fields.schedule !== undefined ? { schedule: fields.schedule } : {}),
+    ...(fields.trigger !== undefined ? { trigger: fields.trigger } : {}),
+    ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
+    ...(fields.requested === true ? { requested: true } : {}),
+  };
+}
+
+function refused(outcome: { code: string; error: string; until?: number }): AgentToolResult<null> {
+  return result({
+    ok: false,
+    code: outcome.code,
+    error: outcome.error,
+    ...(outcome.until !== undefined ? { until: new Date(outcome.until).toISOString() } : {}),
+  });
+}
+
 function routinesRequest(fields: Record<string, unknown>, allowed: readonly string[]): void {
   for (const key of Object.keys(fields)) {
     if (!allowed.includes(key)) throw new Error("Invalid routine request.");
@@ -1810,28 +1887,41 @@ function routinesRequest(fields: Record<string, unknown>, allowed: readonly stri
 
 /**
  * The Bot's `routines` tool (spec 2026-10-09 §11.3): `list` reads this Bot's
- * routines, `propose` shows the person an Add routine card, and `pause` turns
- * one off. It is bound to the current Bot and has no way to create, change or
- * delete a routine itself.
+ * routines, `propose` shows the person an Add routine card, `revise` replaces
+ * a card still waiting for an answer, and `pause` turns one off. It is bound
+ * to the current Bot and has no way to create, change or delete a routine
+ * itself.
  */
 export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDependencies): AgentTool {
+  const actions = ["list", "propose", "pause", ...(routines.revise ? ["revise"] : [])].map((action) => Type.Literal(action));
+  const triggers = Boolean(routines.eventRoutines);
   return {
     name: BOT_ROUTINES_TOOL_NAME,
     label: "Routines",
     description:
-      "This Bot's routines: messages you receive on a schedule, like a weekly plan or a morning check-in. " +
-      "Actions: list; propose (name, schedule, prompt, optional reason) shows the person an Add routine card they approve or decline, so only propose when a regular check-in would clearly help and they haven't declined it; pause (id from list) turns a routine off. " +
-      "You cannot create, change or delete routines yourself: the person does that in the Bot's profile.",
+      "This Bot's routines: future turns in this same conversation, at a time or when something happens. " +
+      `Actions: list; propose (name, prompt, and a schedule${triggers ? " or a trigger" : ""}, optional reason) shows the person an Add routine card to approve or decline; ` +
+      (routines.revise ? "revise (proposalId from list or propose, plus the same fields) replaces a card that still waits for an answer, without taking another slot; " : "") +
+      "pause (id from list) turns a routine off. " +
+      "When the person asks for a future wake-up, reminder, check-in, or recurring task, propose it directly. Suggest an unrequested routine only when it would clearly help and the person has not declined it. " +
+      "list also returns pendingSuggestions (cards still waiting) and recentDecisions: what the person accepted or declined, with why when they said. Don't suggest something like a declined routine, and when a reason was wrong_time, a different time may fit. " +
+      "A proposal is not added until the person accepts its card. You cannot create, change or delete routines yourself: the person does that in the Bot's profile.\n" +
+      botWakeSourceLines().join("\n"),
     parameters: Type.Object(
       {
-        action: Type.Union([Type.Literal("list"), Type.Literal("propose"), Type.Literal("pause")]),
+        action: Type.Union(actions),
         id: Type.Optional(Type.String({ description: "Exact routine id from list (pause)." })),
+        ...(routines.revise
+          ? { proposalId: Type.Optional(Type.String({ description: "Exact id of the waiting card to replace (revise)." })) }
+          : {}),
         name: Type.Optional(Type.String({ description: "Short routine name, for example \"Weekly meal prep\"." })),
         schedule: Type.Optional(BOT_ROUTINE_SCHEDULE),
+        ...(triggers ? { trigger: Type.Optional(BOT_ROUTINE_TRIGGER) } : {}),
         prompt: Type.Optional(Type.String({ description: "What you should do each time the routine runs." })),
         reason: Type.Optional(
           Type.String({ maxLength: BOT_ROUTINE_PROPOSAL_REASON_LIMIT, description: "One line on why this would help them." }),
         ),
+        requested: Type.Optional(Type.Boolean({ description: "true only when the person asked for this routine in this conversation." })),
       },
       { additionalProperties: false },
     ),
@@ -1841,8 +1931,10 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
         throw new Error("Invalid routine request.");
       }
       const { action, ...fields } = rawParams as Record<string, unknown>;
+      const proposalFields = triggers ? PROPOSAL_FIELDS : PROPOSAL_FIELDS.filter((key) => key !== "trigger");
       if (action === "list") {
         routinesRequest(fields, []);
+        const eventRoutines = (await routines.eventRoutines?.list(botId)) ?? [];
         return result({
           routines: (await routines.list(botId)).map((routine) => ({
             id: routine.id,
@@ -1850,27 +1942,44 @@ export function createBotRoutinesTool(botId: string, routines: BotRoutinesToolDe
             label: routine.label,
             enabled: routine.enabled,
           })),
+          ...(routines.eventRoutines
+            ? {
+                // Marked so the Bot never mistakes one for a scheduled routine.
+                eventRoutines: eventRoutines.map((routine) => ({ ...routine, kind: "event" })),
+              }
+            : {}),
+          ...(routines.pending ? { pendingSuggestions: await routines.pending(botId) } : {}),
+          recentDecisions: (await routines.recentDecisions?.(botId)) ?? [],
         });
       }
       if (action === "pause") {
         routinesRequest(fields, ["id"]);
         if (typeof fields.id !== "string" || !fields.id) throw new Error("Invalid routine request.");
+        const event = await routines.eventRoutines?.pause(botId, fields.id);
+        if (event) return result({ routine: { ...event, kind: "event" } });
         const paused = await routines.pause(botId, fields.id);
         return result({ routine: { id: paused.id, name: paused.name, label: paused.label, enabled: paused.enabled } });
       }
       if (action === "propose") {
-        routinesRequest(fields, ["name", "schedule", "prompt", "reason"]);
-        const outcome = await routines.propose(botId, {
-          name: typeof fields.name === "string" ? fields.name : "",
-          schedule: fields.schedule,
-          prompt: typeof fields.prompt === "string" ? fields.prompt : "",
-          ...(fields.reason !== undefined ? { reason: String(fields.reason) } : {}),
-        });
-        if (!outcome.ok) return result({ ok: false, code: outcome.code, error: outcome.error });
+        routinesRequest(fields, proposalFields);
+        const outcome = await routines.propose(botId, proposalInput(fields));
+        if (!outcome.ok) return refused(outcome);
         return result({
           ok: true,
           proposalId: outcome.proposalId,
-          message: "I've shown the person an Add routine card. Don't ask again unless they bring it up.",
+          message: "I've shown the person an Add routine card. Don't ask again unless they bring it up; to change it before they answer, use revise.",
+        });
+      }
+      if (action === "revise" && routines.revise) {
+        const { proposalId, ...rest } = fields;
+        routinesRequest(rest, proposalFields);
+        if (typeof proposalId !== "string" || !proposalId) throw new Error("Invalid routine request.");
+        const outcome = await routines.revise(botId, proposalId, proposalInput(rest));
+        if (!outcome.ok) return refused(outcome);
+        return result({
+          ok: true,
+          proposalId: outcome.proposalId,
+          message: "I've replaced the card with the revised one. The person answers the new card.",
         });
       }
       throw new Error("Invalid routine request.");

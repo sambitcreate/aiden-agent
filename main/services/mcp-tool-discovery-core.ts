@@ -2,10 +2,10 @@
 // deadlines, parallel per-server collection, deferred admission and the
 // recent-failure cache.
 // Kept free of Electron, config and credential imports so it can be exercised
-// against real in-memory MCP SDK servers.
+// against real in-memory MCP servers.
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { McpTimeoutError } from "@earendil-works/pi-mcp";
+import type { McpCallOptions } from "./mcp-client.js";
 import { assertUniqueMcpAgentToolNames } from "./mcp-tool-identity.js";
 
 export interface McpDiscoveryDeadlines {
@@ -22,7 +22,7 @@ export const MCP_DISCOVERY_DEADLINES: McpDiscoveryDeadlines = Object.freeze({
 
 /**
  * Budget for one server's whole discovery step, including admission and
- * credential resolution, which the per-request SDK timeouts do not cover.
+ * credential resolution, which the per-request timeouts do not cover.
  */
 export function mcpServerDiscoveryBudgetMs(
   deadlines: McpDiscoveryDeadlines = MCP_DISCOVERY_DEADLINES,
@@ -30,12 +30,12 @@ export function mcpServerDiscoveryBudgetMs(
   return deadlines.connectMs + deadlines.listMs + 2_000;
 }
 
-/** Per-request SDK bound. `maxTotalTimeout` also caps progress-reset requests. */
-export function mcpRequestDeadline(ms: number, signal?: AbortSignal): RequestOptions {
-  return { ...(signal ? { signal } : {}), timeout: ms, maxTotalTimeout: ms };
+/** Per-request bound. Aiden never asks for progress, so the bound is a hard total. */
+export function mcpRequestDeadline(ms: number, signal?: AbortSignal): McpCallOptions {
+  return { ...(signal ? { signal } : {}), timeoutMs: ms };
 }
 
-/** Tool calls keep the SDK's default per-request bound, now with an explicit total. */
+/** Tool calls get an explicit total bound. */
 export const MCP_TOOL_CALL_TIMEOUT_MS = 60_000;
 
 export class McpDeadlineError extends Error {
@@ -46,11 +46,11 @@ export class McpDeadlineError extends Error {
 }
 
 /**
- * SDK request timeouts surface as `McpError(RequestTimeout)`; present them as
- * a `TimeoutError` so diagnostics classify the skipped server as timed out.
+ * MCP request timeouts surface as `McpTimeoutError`; present them as a
+ * `TimeoutError` so diagnostics classify the skipped server as timed out.
  */
 export function asMcpDeadlineError(error: unknown): unknown {
-  if (error instanceof McpError && error.code === ErrorCode.RequestTimeout) {
+  if (error instanceof McpTimeoutError) {
     return Object.assign(new McpDeadlineError("The MCP request", 0), {
       message: error.message,
       cause: error,
@@ -390,7 +390,7 @@ export class McpPrewarmer {
 
 /**
  * Bound a whole connection attempt (transport start, OAuth refresh and
- * `initialize`) by `ms`, which the SDK's initialize timeout alone does not
+ * `initialize`) by `ms`, which the initialize request timeout alone does not
  * cover. On timeout or abort the client is closed, and closed again once the
  * raw attempt settles so a transport still starting cannot linger.
  */

@@ -259,7 +259,7 @@ test("a newer host's session opens here: unknown states, entries and events degr
           botId: "bot_1",
           epoch: "e1",
           seq: 0,
-          state: "paused",
+          state: "hibernating",
           interrupted: false,
           entries: [
             { type: "message", id: "m1", role: "user", text: "Book the flight" },

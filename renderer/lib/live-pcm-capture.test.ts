@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { voiceApi } from "./ipc.js";
 import { GeminiLiveCapture, OrderedPcmSendQueue, Pcm16ChunkEncoder } from "./live-pcm-capture.js";
@@ -111,18 +110,104 @@ test("cancel still reaches main after live finalization has started", async () =
   }
 });
 
-test("audio worklet flushes trailing frames before acknowledging the drain", async () => {
-  const source = await readFile(
-    new URL("../worklets/gemini-live-pcm-worklet.js", import.meta.url),
-    "utf8",
+type WorkletMessage = Float32Array | { type: string };
+
+/** Runs the real worklet module against a fake audio thread at `rate`. */
+async function loadWorklet(rate: number) {
+  const globals = globalThis as Record<string, unknown>;
+  const posted: WorkletMessage[] = [];
+  let Processor: (new () => unknown) | undefined;
+  globals.sampleRate = rate;
+  globals.AudioWorkletProcessor = class {
+    readonly port = {
+      onmessage: null as ((event: { data: unknown }) => void) | null,
+      postMessage: (message: WorkletMessage) => posted.push(message),
+    };
+  };
+  globals.registerProcessor = (_name: string, processor: typeof Processor) => {
+    Processor = processor;
+  };
+  type WorkletProcessor = {
+    process(inputs: Float32Array[][]): boolean;
+    port: { onmessage: ((event: { data: unknown }) => void) | null };
+  };
+  try {
+    await import(`../worklets/gemini-live-pcm-worklet.js?rate=${rate}`);
+    // The audio thread's `sampleRate` global is read when the processor is built.
+    const processor = new Processor!() as WorkletProcessor;
+    return { processor, posted };
+  } finally {
+    delete globals.sampleRate;
+    delete globals.AudioWorkletProcessor;
+    delete globals.registerProcessor;
+  }
+}
+
+test("audio worklet posts mono 100 ms chunks and flushes trailing frames before acknowledging the drain", async () => {
+  const { processor, posted } = await loadWorklet(1_000);
+  const ramp = (from: number) => Float32Array.from({ length: 128 }, (_, index) => from + index);
+  // Stereo input averages to the left channel's ramp; 300 frames is three 100-frame chunks.
+  for (const from of [0, 128]) {
+    assert.equal(processor.process([[ramp(from), ramp(from)]]), true);
+  }
+  processor.process([[ramp(256).subarray(0, 44), ramp(256).subarray(0, 44)]]);
+  processor.process([[Float32Array.of(300, 301, 302), Float32Array.of(300, 301, 302)]]);
+  processor.port.onmessage?.({ data: { type: "flush" } });
+
+  const chunks = posted.filter((message): message is Float32Array => message instanceof Float32Array);
+  assert.deepEqual(
+    chunks.map((chunk) => chunk.length),
+    [100, 100, 100, 3],
   );
-  const tailIndex = source.indexOf("this.pending.splice(0)");
-  const tailPostIndex = source.indexOf("this.port.postMessage(chunk", tailIndex);
-  const acknowledgementIndex = source.indexOf('this.port.postMessage({ type: "flushed" })');
-  assert.ok(tailIndex >= 0, "worklet should consume its trailing frames");
-  assert.ok(tailPostIndex > tailIndex, "worklet should post its trailing frames");
-  assert.ok(
-    acknowledgementIndex > tailPostIndex,
-    "worklet should acknowledge only after posting trailing frames",
+  assert.deepEqual(
+    chunks.flatMap((chunk) => Array.from(chunk)),
+    Array.from({ length: 303 }, (_, index) => index),
   );
+  assert.deepEqual(posted[posted.length - 1], { type: "flushed" });
+  // A drained worklet stops processing, so no audio follows the acknowledgement.
+  assert.equal(processor.process([[ramp(0)]]), false);
+});
+
+test("PCM encoder output does not depend on how the input was split", () => {
+  // At 48 kHz every third input sample lands exactly on a 16 kHz output sample.
+  const input = Float32Array.from({ length: 48_000 }, (_, index) => Math.sin(index / 50) * 0.9);
+  const whole = new Pcm16ChunkEncoder(48_000);
+  const reference = [...whole.push(input), ...whole.flush()].flatMap(decode);
+  const split = new Pcm16ChunkEncoder(48_000);
+  const pieces: Uint8Array[] = [];
+  let offset = 0;
+  for (const size of [1, 2, 128, 5, 4_801, 127, 3, 999]) {
+    pieces.push(...split.push(input.subarray(offset, offset + size)));
+    offset += size;
+  }
+  pieces.push(...split.push(input.subarray(offset)), ...split.flush());
+  const values = pieces.flatMap(decode);
+
+  assert.equal(values.length, 16_000);
+  assert.deepEqual(values, reference);
+  const expected = Array.from({ length: 16_000 }, (_, index) => {
+    const sample = input[index * 3];
+    return sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7fff);
+  });
+  assert.deepEqual(values, expected);
+  // Every chunk before the last is exactly 100 ms.
+  assert.ok(pieces.slice(0, -1).every((chunk) => chunk.byteLength === 3_200));
+});
+
+test("PCM encoder lands exactly on shared 44.1 kHz instants for the whole of a long capture", () => {
+  // 441 input samples span exactly 160 output samples, so every 160th output is
+  // an input sample itself, however long the capture runs and however it is split.
+  const seconds = 30;
+  const input = Float32Array.from({ length: 44_100 * seconds }, (_, index) => Math.sin(index / 7) * 0.9);
+  const encoder = new Pcm16ChunkEncoder(44_100);
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < input.length; offset += 4_410) chunks.push(...encoder.push(input.subarray(offset, offset + 4_410)));
+  chunks.push(...encoder.flush());
+  const values = chunks.flatMap(decode);
+
+  assert.equal(values.length, 16_000 * seconds);
+  for (let output = 0, source = 0; output < values.length; output += 160, source += 441) {
+    const sample = input[source];
+    assert.equal(values[output], sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7fff), `output ${output}`);
+  }
 });

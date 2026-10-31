@@ -30,13 +30,17 @@ import {
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
+  isDictationShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -53,10 +57,12 @@ import {
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
 import { modelPaceRecorder } from "./services/model-pace-runtime.js";
+import { spending } from "./services/spending-main.js";
+import { usageLimits } from "./services/usage-limit-main.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
 import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
-import { disposeDictation, toggleDictation } from "./services/dictation.js";
+import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
@@ -72,13 +78,14 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { analyticsService } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
   effectiveBindings,
   migrateLegacyKeybindings,
 } from "../renderer/shared/keybindings.js";
-import { applicationMenuTemplate } from "./services/application-menu-core.js";
+import { applicationMenuTemplate, parseMenuCommandIds } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -124,6 +131,7 @@ import {
 } from "./services/git.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
+import { workspaceApplicationService } from "./services/workspace-application-service-main.js";
 import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
@@ -135,6 +143,7 @@ import {
 import {
   reconcileExternalMcpCredentialChanges,
   reconcilePendingMcpCredentialCleanup,
+  cleanupRetiredMcpServerCredentials,
 } from "./services/mcp-credential-cleanup.js";
 import { resetOnboardingData } from "./services/onboarding-reset.js";
 import {
@@ -163,6 +172,7 @@ import { desktopVersionRequested } from "./desktop-cli-core.js";
 import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -326,6 +336,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
@@ -357,11 +368,13 @@ async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
 async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  llmClient.setQuitInProgress(true);
   if (!settingsPrepared) {
     try {
       await computerUseSettings.shutdown();
     } catch (error) {
       shutdownStarted = false;
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
         "main",
@@ -392,6 +405,14 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       error,
     );
   }
+  // Background jobs and done-when checks stop with the app; follows and
+  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  await Promise.race([
+    shutdownFollowThrough().catch((error: unknown) =>
+      logger.warn("follow-through", "Background jobs did not stop cleanly.", error),
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, 6_000).unref()),
+  ]);
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
   await Promise.race([
@@ -405,6 +426,13 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
+  // Every reply has settled: save the last spending and usage-limit changes.
+  await Promise.race([
+    Promise.all([spending.flush(), usageLimits.flush()]).catch(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
+  ]);
+  // Send queued usage data, bounded (the service caps itself at 1.5 s).
+  await analyticsService().shutdown();
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =
@@ -509,12 +537,38 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
           );
       })(),
       browserService.shutdown(),
+      // Every running Bot computer is asked to stop, then forced, inside the budget;
+      // a computer that never started (or no Apple silicon) resolves at once.
+      Promise.race([
+        import("./services/bot-computers/bot-computers-main.js")
+          .then(({ shutdownBotComputers }) => shutdownBotComputers(4_000))
+          .then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("bot-computers", "Bot computers did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
+      // cleanupApplication() asked any running Foundation Models helper to stop; its
+      // PID is checked asynchronously first, so wait (bounded) for the signal.
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
+      // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+      Promise.race([
+        shutdownAntigravity().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("acp", "Agent harness processes did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("acp", "Agent harness processes did not stop cleanly.", error)),
     ]);
   } catch (error) {
     logger.error(
@@ -750,8 +804,11 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       return false;
     }
     protectedAction = "quit";
+    // Set before the window closes, so a question or approval it withdraws stays saved for the next launch.
+    llmClient.setQuitInProgress(true);
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
     }
@@ -986,7 +1043,9 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    void analyticsService().onboardingFinished(outcome, selectedProviderId);
+    return result;
   },
 );
 
@@ -1655,10 +1714,27 @@ registerAppPathOpener(async (path) => {
   await deliverMainWindowNotification("app:navigate", { path });
 });
 
+// The last settings the menu was built from, and the commands the renderer
+// reports it can run now, so the menu can be rebuilt when either changes.
+let applicationMenuInputs: { settings: AppSettings; acceleratorsEnabled: boolean } | null = null;
+let applicationMenuAvailable: ReadonlySet<string> | null = null;
+
+ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  const next = parseMenuCommandIds(commandIds);
+  if (!next) return false;
+  const current = applicationMenuAvailable;
+  if (current && current.size === next.size && [...next].every((id) => current.has(id))) return true;
+  applicationMenuAvailable = next;
+  if (applicationMenuInputs) setupApplicationMenu(applicationMenuInputs.settings, applicationMenuInputs.acceleratorsEnabled);
+  return true;
+});
+
 function setupApplicationMenu(
   settings: AppSettings,
   acceleratorsEnabled = true,
 ): void {
+  applicationMenuInputs = { settings, acceleratorsEnabled };
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
@@ -1671,6 +1747,7 @@ function setupApplicationMenu(
       platform: process.platform,
       appName: app.getName(),
       bindings,
+      available: applicationMenuAvailable,
       actions: {
         checkForUpdates: () => void appUpdateService.checkNow(true),
         deliverCommand: (commandId) =>
@@ -1774,6 +1851,9 @@ if (!ownsSingleInstanceLock) {
   });
   app.on("quit", (_event, exitCode) => {
     logger.info("electron-lifecycle", "Application quit", { exitCode });
+    // Last, once the process is really exiting: a death during the awaited
+    // shutdown work still counts as an unclean exit next launch.
+    analyticsService().markCleanExit();
   });
 
   // Only a real content change reaches the renderer, and concurrent triggers
@@ -1990,6 +2070,10 @@ if (!ownsSingleInstanceLock) {
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      // After deletions settle and before any renderer draft exists.
+      await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
+        logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
+      });
       await startDesignStudio({
         enabled: designStudioEnabled(),
         store: designProjectStore,
@@ -2076,6 +2160,13 @@ if (!ownsSingleInstanceLock) {
         trackConnectionSetupFocus,
         logError: (message, error) => logger.error("bots", message, error),
       });
+      // Bot computers left running by an earlier launch stop, and interrupted ones are
+      // marked for Reset. Apple silicon only; a Mac that never chose Set up runs no Lume.
+      if (hostPlatformCapabilities().botComputers) {
+        void import("./services/bot-computers/bot-computers-main.js")
+          .then(({ reconcileBotComputers }) => reconcileBotComputers())
+          .catch((error) => logger.warn("bot-computers", "Bot computer startup check did not finish.", error));
+      }
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {
@@ -2170,6 +2261,11 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      try {
+        await cleanupRetiredMcpServerCredentials();
+      } catch (error) {
+        logger.error("mcp", "Could not remove credentials of retired SSE MCP servers.", error);
+      }
       // Env and header values still written in config.json move into the keychain.
       await sealPlaintextMcpServerFields().catch((error: unknown) =>
         logger.warn("mcp", "Could not move MCP env and header values into the keychain.", error),
@@ -2218,6 +2314,12 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Voice warm-up, a few seconds after launch so it never competes with the
+      // first window: the hidden dictation pill and the on-device voice model.
+      setTimeout(() => {
+        if (isDictationShortcutActive()) void prepareDictationPill();
+        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+      }, 3_000).unref();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
@@ -2245,6 +2347,7 @@ if (!ownsSingleInstanceLock) {
 
       openProcessStartupIpcAdmission();
       startupIpcAdmitted = true;
+      void analyticsService().start();
       writeDiagnosticEvent({
         level: "info",
         area: "app",
@@ -2274,6 +2377,10 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
+      await startFollowThrough().catch((error: unknown) =>
+        logger.error("follow-through", "Follow-through state could not be restored.", error),
+      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.

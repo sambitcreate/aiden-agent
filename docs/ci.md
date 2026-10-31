@@ -20,7 +20,7 @@ and detection failures select every area. Policy checks always run.
 
 Every main push runs full validation except a push that changes only the
 generated model catalog (`resources/model-capabilities.json`, reason
-`catalog-only`). Those catalog bot commits run detection, policy and the
+`catalog-only`). Those commits run detection, policy and the
 `catalog` job; the other jobs skip. Real code changes on main are never routed
 this way. Linux packaging jobs run only when the `linux` area is selected, which
 includes every full main run.
@@ -64,6 +64,10 @@ superseded. Runner capacity can still cause queueing.
   of Node test workers), then the preserved commands.
   Each registered file runs once. `npm run test:serial` keeps the original chain,
   which runs some files more than once, for comparison.
+- When a lane fails, the runner lists its failed tests again after all of its
+  output, each with its file, line and error, and adds the list to the job
+  summary. A lane's TAP output runs to tens of thousands of lines, so the end of
+  the log is where a failure stays findable.
 - Browser containment, terminal coverage thresholds, Ruby policy, Rust
   formatting/tests/clippy and native helper production/test builds retain their
   execution modes. Registry validation checks both files and these prerequisites.

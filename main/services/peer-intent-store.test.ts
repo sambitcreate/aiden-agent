@@ -44,3 +44,15 @@ test("network admission binds the exact saved request and rejects altered text o
   await assert.rejects(store.admissionIdentity("host_1", { operation: "send", resourceId: "chat_2", body: { text: "Hello" }, idempotencyKey: "request_123" }), /cannot be changed/);
   assert.equal((await store.list("host_1", "chat_1")).length, 1, "failed admission preserves the original uncertainty");
 });
+
+test("a saved send that picked a model and effort is admitted only with that same turn body", async () => {
+  let rows: BoundIntent[] = [];
+  const store = new PeerIntentStore({ load: async () => structuredClone(rows), save: async value => { rows = structuredClone(value); } }, async () => "device_1");
+  await store.put({ ...intent, createdAt: Date.now(), request: { kind: "send", input: {
+    text: "Hello", idempotencyKey: "request_123", model: { providerId: "acme", modelId: "deep" }, thinkingLevel: "high",
+  } } });
+  const body = { text: "Hello", providerId: "acme", modelId: "deep", thinkingLevel: "high" };
+  assert.equal(await store.admissionIdentity("host_1", { operation: "send", resourceId: "chat_1", body, idempotencyKey: "request_123" }), "device_1");
+  // The host refuses a reused key with a different body, so recovery must never drop the pick.
+  await assert.rejects(store.admissionIdentity("host_1", { operation: "send", resourceId: "chat_1", body: { text: "Hello" }, idempotencyKey: "request_123" }), /cannot be changed/);
+});

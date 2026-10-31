@@ -17,12 +17,33 @@
 // A feed also runs without subscribers while a reply is running, so the end
 // of every run is observed and reported (`onRunSettled`) for list rows.
 
+import {
+  BOT_LESSON_LEARNED_ENTRY_KIND,
+  BOT_LESSON_PROPOSAL_ENTRY_KIND,
+  BOT_LESSON_STATUS_ENTRY_KIND,
+  botLessonCardOf,
+  botLessonStatusOf,
+} from "../../../renderer/shared/bot-lessons.js";
+import {
+  BOT_SKILL_PROPOSAL_ENTRY_KIND,
+  BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND,
+  botSkillProposalOf,
+  botSkillProposalStatusOf,
+} from "../../../renderer/shared/bot-skill-proposals.js";
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Message, TextContent, ToolCall } from "@earendil-works/pi-ai";
 import type { Conversation, ConversationWatch, EntryRecord } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry, ConnectCardStatus } from "../../../renderer/shared/bot-connections.js";
 import { ASK_USER_QUESTION_TOOL_NAME } from "../../../renderer/shared/ask-user-question.js";
+import {
+  BOT_HANDOFF_RESULT_ENTRY_KIND,
+  BOT_HANDOFF_TOOL_NAME,
+  BOT_SIGN_IN_TOOL_NAME,
+  botHandoffResultOf,
+  type BotHandoffResultDetails,
+  type BotPendingHandoff,
+} from "../../../renderer/shared/bot-handoffs.js";
 import {
   BOT_SILENT_REPLY,
   botFailedTurnId,
@@ -52,8 +73,16 @@ import {
   type BotRoutineProposalEntryData,
   type BotRoutineProposalStatusEntryData,
 } from "../../../renderer/shared/bot-routine-proposals.js";
+import {
+  BOT_ISSUE_ENTRY_KIND,
+  BOT_ISSUE_STATUS_ENTRY_KIND,
+  botIssueOf,
+  botIssueStatusOf,
+  type BotIssueResolution,
+} from "../../../renderer/shared/bot-issues.js";
 import { botStepDescriptor } from "./bot-activity-detail.js";
 import { BOT_SHARED_IMAGE_ENTRY_KIND } from "./bot-images.js";
+import { BOT_WAKE_UP_ENTRY_KIND } from "../../../renderer/shared/bot-wake-ups.js";
 import { BOT_NOTICE_ENTRY_KIND, type BotNotice, type BotSessionState } from "./bot-session-service.js";
 
 export const BOT_CONNECT_CARD_ENTRY_KIND = "aiden.connect-card";
@@ -117,7 +146,7 @@ function isNotice(entry: EntryRecord): entry is EntryRecord & { data: BotNotice 
 }
 
 /** Entries that stay visible when the turn they follow is hidden as `[SILENT]`. */
-const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal"]);
+const OUTLIVES_SILENT_TURN = new Set<BotTranscriptEntry["type"]>(["connect_card", "memory_update", "routine_proposal", "skill_proposal", "lesson_proposal", "lesson_learned", "memory_tidy", "wake_up"]);
 
 function isSilentAnswer(entry: BotTranscriptEntry): boolean {
   return entry.type === "assistant" && entry.toolCalls.length === 0 && entry.text.trim() === BOT_SILENT_REPLY;
@@ -151,11 +180,15 @@ function memorySaveOf(details: unknown): BotMemoryTarget[] | null {
 function proposalOf(data: unknown): BotRoutineProposalEntryData | null {
   if (typeof data !== "object" || data === null) return null;
   const record = data as Record<string, unknown>;
-  for (const key of ["proposalId", "name", "prompt", "timezone", "label"] as const) {
+  for (const key of ["proposalId", "name", "prompt", "label"] as const) {
     if (typeof record[key] !== "string") return null;
   }
-  if (typeof record.schedule !== "object" || record.schedule === null) return null;
   if (record.reason !== undefined && typeof record.reason !== "string") return null;
+  // A schedule card (with its timezone) or a trigger card, never both.
+  const trigger = typeof record.trigger === "object" && record.trigger !== null;
+  const schedule = typeof record.schedule === "object" && record.schedule !== null && typeof record.timezone === "string";
+  if (trigger === schedule) return null;
+  if (trigger && (record.schedule !== undefined || record.timezone !== undefined)) return null;
   return data as BotRoutineProposalEntryData;
 }
 
@@ -165,10 +198,12 @@ function proposalStatusOf(data: unknown): BotRoutineProposalStatusEntryData | nu
   if (typeof record.proposalId !== "string") return null;
   if (record.status !== "accepted" && record.status !== "dismissed") return null;
   if (record.routineId !== undefined && typeof record.routineId !== "string") return null;
+  if (record.supersededBy !== undefined && typeof record.supersededBy !== "string") return null;
   return {
     proposalId: record.proposalId,
     status: record.status,
     ...(record.routineId === undefined ? {} : { routineId: record.routineId }),
+    ...(record.status === "dismissed" && record.supersededBy !== undefined ? { supersededBy: record.supersededBy } : {}),
   };
 }
 
@@ -196,6 +231,20 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
   return "failed";
 }
 
+/** Counts each tool call id an assistant message issues; a provider may reuse one in every turn. */
+function countIssuedCalls(record: EntryRecord, issued: Map<string, number>): void {
+  const message = firstMessage(record);
+  if (record.kind !== "pi.assistant" || message?.role !== "assistant") return;
+  for (const part of message.content) {
+    if (part.type === "toolCall") issued.set(part.id, (issued.get(part.id) ?? 0) + 1);
+  }
+}
+
+/** A call id as issued for the nth time so far: what an answer or a result pairs with. */
+function callKey(issued: ReadonlyMap<string, number>, toolCallId: string): string {
+  return `${issued.get(toolCallId) ?? 0}:${toolCallId}`;
+}
+
 /**
  * Map raw Pi Durable entries to what a Bot chat shows. Pure: the same entries
  * always give the same view, so a full re-projection can be diffed safely.
@@ -205,12 +254,19 @@ function toolResultStatus(record: EntryRecord, isError: boolean): BotToolResultS
  * - `pi.assistant` / `pi.tool-result` → assistant text and tool activity. A
  *   reply that ended in an error becomes a `failed_turn` (after any text it
  *   wrote), carrying the turn's typed message for Retry.
+ * - A settled `ask_user_question` → `question_answer`; a settled `hand_off` or
+ *   `sign_in` → `handoff_result` (id `handoff:<toolCallId>`; a later answer
+ *   for a call id a provider reused gets `handoff:<toolCallId>:<entry id>`).
+ *   Their error results (stopped, refused) stay tool results.
  * - `aiden.connect-card` → a connect card; `aiden.bot-shared-image` → an image.
  * - A successful `bot_memory` result that changed something, or an
  *   `aiden.memory-review` entry that added something → `memory_update`.
  * - `aiden.routine-proposal` → a `routine_proposal` card whose status is the
  *   newest `aiden.routine-proposal-status` for its `proposalId` (pending
  *   without one); status entries themselves are not shown.
+ * - `aiden.bot-issue` → an `issue` card whose status is the newest
+ *   `aiden.bot-issue-status` for its `issueId` (`open` without one); status
+ *   entries themselves are not shown.
  * - A confirmed `write_file` / `edit_file` result in the Bot's folder → a file.
  * - `aiden.bot-notice` → `interrupted` and `session_reset` notices; routine,
  *   silent and hidden markers only shape the entries around them.
@@ -230,11 +286,72 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
   let turn: Turn | null = null;
   /** The newest decision on each proposal: cards show what is true now. */
   const proposalStatus = new Map<string, BotRoutineProposalStatusEntryData>();
+  /** The newest settlement on each issue: its card shows what is true now. */
+  const issueStatus = new Map<string, BotIssueResolution>();
+  /**
+   * The person's answer to each rule hand-off, by the call the rule stopped
+   * (the last entry for a call wins), and the calls whose blocked result is
+   * in the transcript: the answer reads right after that result. Both are
+   * keyed by `callKey`: a provider may reuse a call id in every turn.
+   */
+  const ruleHandoffs = new Map<string, { record: EntryRecord; result: BotHandoffResultDetails }>();
+  const resultCallKeys = new Set<string>();
+  const emittedRuleHandoffs = new Set<string>();
+  const handoffRowIds = new Set<string>();
+  /** The first answer for a call id keeps `handoff:<toolCallId>`; a reused id's later ones add their entry id. */
+  const handoffRowId = (toolCallId: string, record: EntryRecord): string => {
+    const base = `handoff:${toolCallId}`;
+    const rowId = handoffRowIds.has(base) ? `${base}:${String(record.id)}` : base;
+    handoffRowIds.add(rowId);
+    return rowId;
+  };
+  const issued = new Map<string, number>();
+  const skillStatus = new Map<string, "added" | "dismissed">();
+  const lessonStatus = new Map<string, "active" | "dismissed" | "retired">();
   for (const record of entries) {
-    if (record.kind !== BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
-    const status = proposalStatusOf(record.data);
-    if (status) proposalStatus.set(status.proposalId, status);
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) {
+      const status = botLessonStatusOf(record.data);
+      if (status) lessonStatus.set(status.lessonId, status.status);
+      continue;
+    }
+    if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) {
+      const status = proposalStatusOf(record.data);
+      if (status) proposalStatus.set(status.proposalId, status);
+    } else if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) {
+      const status = botSkillProposalStatusOf(record.data);
+      if (status) skillStatus.set(status.proposalId, status.status);
+    } else if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) {
+      const status = botIssueStatusOf(record.data);
+      if (status) issueStatus.set(status.issueId, status.resolution);
+    } else if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
+      const result = botHandoffResultOf(record.data);
+      if (result?.toolCallId !== undefined && result.rule !== undefined) {
+        ruleHandoffs.set(callKey(issued, result.toolCallId), { record, result });
+      }
+    } else if (record.kind === "pi.tool-result") {
+      const message = firstMessage(record);
+      if (message?.role === "toolResult") resultCallKeys.add(callKey(issued, message.toolCallId));
+    } else {
+      countIssuedCalls(record, issued);
+    }
   }
+  issued.clear();
+  const ruleHandoffRow = (key: string, at: number | undefined): BotTranscriptEntry | undefined => {
+    const found = ruleHandoffs.get(key);
+    if (found === undefined || emittedRuleHandoffs.has(key)) return undefined;
+    emittedRuleHandoffs.add(key);
+    const { record, result } = found;
+    return {
+      id: handoffRowId(result.toolCallId!, record),
+      type: "handoff_result",
+      kind: result.kind,
+      outcome: result.outcome,
+      action: result.action,
+      ...(result.note === undefined ? {} : { note: result.note }),
+      ...(result.origin === undefined ? {} : { origin: result.origin }),
+      ...(at === undefined ? {} : { at }),
+    };
+  };
 
   for (const record of entries) {
     const id = String(record.id);
@@ -244,6 +361,19 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       else if (notice.notice === "hidden_input") pendingHidden = true;
       else if (notice.notice === "interrupted" || notice.notice === "session_reset") {
         mapped.push({ entry: { id, type: "notice", notice: notice.notice }, turn });
+      } else if (notice.notice === "routines_skipped" && typeof notice.since === "number" && Array.isArray(notice.routines)) {
+        // Written on unpause, between turns: no turn owns it, so a [SILENT] turn never hides it.
+        const routines = notice.routines.flatMap((routine) =>
+          typeof routine?.routineId === "string" &&
+          typeof routine.name === "string" &&
+          Number.isSafeInteger(routine.count) &&
+          routine.count > 0
+            ? [{ routineId: routine.routineId, name: routine.name, count: routine.count }]
+            : [],
+        );
+        if (routines.length > 0) {
+          mapped.push({ entry: { id, type: "routines_skipped", since: notice.since, routines }, turn: null });
+        }
       }
       continue;
     }
@@ -273,6 +403,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
             proposal,
             status: decided?.status ?? "pending",
             ...(decided?.routineId === undefined ? {} : { routineId: decided.routineId }),
+            ...(decided?.supersededBy === undefined ? {} : { supersededBy: decided.supersededBy }),
           },
           turn,
         });
@@ -280,6 +411,73 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === BOT_ROUTINE_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_SKILL_PROPOSAL_ENTRY_KIND) {
+      const proposal = botSkillProposalOf(record.data);
+      if (proposal) {
+        mapped.push({ entry: { id, type: "skill_proposal", proposal, status: skillStatus.get(proposal.proposalId) ?? "pending" }, turn });
+      }
+      continue;
+    }
+    if (record.kind === BOT_SKILL_PROPOSAL_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND || record.kind === BOT_LESSON_LEARNED_ENTRY_KIND) {
+      const lesson = botLessonCardOf(record.data);
+      if (lesson) {
+        const proposal = record.kind === BOT_LESSON_PROPOSAL_ENTRY_KIND;
+        mapped.push({
+          entry: {
+            id,
+            type: proposal ? "lesson_proposal" : "lesson_learned",
+            lesson,
+            status: lessonStatus.get(lesson.lessonId) ?? (proposal ? "pending" : "active"),
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_LESSON_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_WAKE_UP_ENTRY_KIND) {
+      const data = record.data as { wakeUpId?: unknown; fireAt?: unknown } | null;
+      if (typeof data?.wakeUpId === "string" && typeof data.fireAt === "number" && Number.isFinite(data.fireAt)) {
+        mapped.push({ entry: { id, type: "wake_up", wakeUpId: data.wakeUpId, fireAt: data.fireAt }, turn });
+      }
+      continue;
+    }
+    if (record.kind === "aiden.memory-tidy") {
+      const data = record.data as { changeId?: unknown } | null;
+      const changeId = typeof data?.changeId === "string" ? data.changeId : undefined;
+      mapped.push({ entry: { id, type: "memory_tidy", ...(changeId ? { changeId } : {}) }, turn: null });
+      continue;
+    }
+    if (record.kind === BOT_ISSUE_ENTRY_KIND) {
+      const issue = botIssueOf(record.data);
+      if (issue) {
+        // Host entries sit between turns: a [SILENT] routine never hides one.
+        mapped.push({
+          entry: {
+            id,
+            type: "issue",
+            issue,
+            status: issueStatus.get(issue.id) ?? issue.resolution ?? "open",
+            at: issue.createdAt,
+          },
+          turn: null,
+        });
+      }
+      continue;
+    }
+    if (record.kind === BOT_ISSUE_STATUS_ENTRY_KIND) continue;
+    if (record.kind === BOT_HANDOFF_RESULT_ENTRY_KIND) {
+      // Read after the blocked call's result; here only when that result never landed.
+      const result = botHandoffResultOf(record.data);
+      const toolCallId = result?.toolCallId;
+      const key = toolCallId === undefined ? undefined : callKey(issued, toolCallId);
+      if (key !== undefined && !resultCallKeys.has(key) && ruleHandoffs.get(key)?.record === record) {
+        const row = ruleHandoffRow(key, undefined);
+        if (row) mapped.push({ entry: row, turn });
+      }
+      continue;
+    }
     const message = firstMessage(record);
     if (record.kind === "pi.user" && message?.role === "user") {
       const content = message.content as UserContent;
@@ -303,6 +501,7 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
       continue;
     }
     if (record.kind === "pi.assistant" && message?.role === "assistant") {
+      countIssuedCalls(record, issued);
       const calls = message.content.filter((part): part is ToolCall => part.type === "toolCall");
       for (const call of calls) {
         if (BOT_FILE_CHIP_TOOLS.has(call.name) && (call.arguments as { location?: unknown } | undefined)?.location === undefined) {
@@ -356,6 +555,27 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         mapped.push({ entry: { id, type: "question_answer", text: answerText, at: message.timestamp }, turn });
         continue;
       }
+      // The person's Done or Skip on a hand-off card reads as their side of the chat.
+      const handoff =
+        (message.toolName === BOT_HANDOFF_TOOL_NAME || message.toolName === BOT_SIGN_IN_TOOL_NAME) && !message.isError
+          ? botHandoffResultOf(message.details)
+          : undefined;
+      if (handoff !== undefined) {
+        mapped.push({
+          entry: {
+            id: handoffRowId(message.toolCallId, record),
+            type: "handoff_result",
+            kind: handoff.kind,
+            outcome: handoff.outcome,
+            action: handoff.action,
+            ...(handoff.note === undefined ? {} : { note: handoff.note }),
+            ...(handoff.origin === undefined ? {} : { origin: handoff.origin }),
+            at: message.timestamp,
+          },
+          turn,
+        });
+        continue;
+      }
       const startedAt = callStartedAt.get(message.toolCallId);
       const at = typeof message.timestamp === "number" ? message.timestamp : undefined;
       mapped.push({
@@ -371,6 +591,9 @@ export function projectBotTranscript(entries: readonly EntryRecord[]): BotTransc
         },
         turn,
       });
+      // A rule handed this call to the person: their Done or Skip reads next.
+      const ruleRow = ruleHandoffRow(callKey(issued, message.toolCallId), at);
+      if (ruleRow) mapped.push({ entry: ruleRow, turn });
       // A file the Bot wrote in its folder, as the tool result confirms it.
       const produced =
         !message.isError && homeFileCalls.has(message.toolCallId)
@@ -682,6 +905,8 @@ export interface BotLiveProjectionDeps {
   state(botId: string): Promise<BotSessionState>;
   /** The question the Bot is waiting on right now, if any. */
   question?(botId: string): BotPendingQuestion | null;
+  /** The hand-off card the Bot is waiting on right now, if any. */
+  handoff?(botId: string): BotPendingHandoff | null;
   /**
    * Classify queued submission ids: `true` for a routine's input or the hidden
    * self-intro, `false` for the person's own message. Decided from durable
@@ -691,6 +916,8 @@ export interface BotLiveProjectionDeps {
   quietInputs(botId: string, submissionIds: readonly string[]): Promise<ReadonlyMap<string, boolean>>;
   /** Whether a tool approval is waiting on the person. */
   approvalPending?(botId: string): boolean;
+  /** Whether an open "Needs you" issue is waiting on the person for this Bot. */
+  issuePending?(botId: string): Promise<boolean> | boolean;
   /** Clock for `startedAt`; defaults to `Date.now`. */
   now?(): number;
   /**
@@ -725,6 +952,8 @@ export interface BotLiveProjection {
   refresh(botId: string): Promise<void>;
   /** The Bot's pending question changed (asked, answered, withdrawn): push a `question` event. */
   refreshQuestion(botId: string): Promise<void>;
+  /** The Bot's pending hand-off changed (opened, answered, withdrawn): push a `handoff` event. */
+  refreshHandoff(botId: string): Promise<void>;
   /** The person pressed Stop: the running turn reads "Stopping" until it ends. Ignored when nothing runs. */
   notifyStopping(botId: string): void;
   /**
@@ -759,6 +988,7 @@ interface Feed {
   partial: string | null;
   state: BotSessionState;
   question: BotPendingQuestion | null;
+  handoff: BotPendingHandoff | null;
   activity: BotLiveActivity | null;
   queued: BotQueuedMessage[];
   /** Which queued inputs are the person's own (fail closed, throttled retries). */
@@ -811,6 +1041,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       partial: feed.partial,
       state: feed.state,
       question: feed.question,
+      handoff: feed.handoff,
       activity: feed.activity,
       queued: feed.queued,
     };
@@ -873,7 +1104,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
   }
 
   function waitingOn(feed: Feed): boolean {
-    return feed.question !== null || deps.approvalPending?.(feed.botId) === true;
+    return feed.question !== null || feed.handoff !== null || deps.approvalPending?.(feed.botId) === true;
   }
 
   /** Null unless the session is running: a paused Bot keeps `pi.live.run` but is not working. */
@@ -1042,6 +1273,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         partial: livePartialText(initial.docs),
         state: await deps.state(botId),
         question: deps.question?.(botId) ?? null,
+        handoff: deps.handoff?.(botId) ?? null,
         activity: null,
         queued: [],
         classifier,
@@ -1123,14 +1355,26 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
     });
   }
 
+  /** Push a `handoff` event when the Bot's waiting hand-off differs from the feed's. */
+  function syncHandoff(feed: Feed): Promise<void> {
+    return enqueueWork(feed, async () => {
+      const handoff = deps.handoff?.(feed.botId) ?? null;
+      if (handoff?.waitId === feed.handoff?.waitId) return;
+      feed.handoff = handoff;
+      emit(feed, { type: "handoff", handoff });
+      updateActivity(feed);
+    });
+  }
+
   return {
     async subscribe(botId, sink) {
       const subscriber: Subscriber = { sink, pending: [], overflowed: false, scheduled: false, closed: false };
       const feed = await openFeed(botId);
       // A new subscriber gets current connect-card statuses, not the feed's last view.
       await reproject(feed).catch((error) => report(botId, error));
-      // A question asked or settled while no feed was open is caught up here.
+      // A question or hand-off asked or settled while no feed was open is caught up here.
       await syncQuestion(feed).catch((error) => report(botId, error));
+      await syncHandoff(feed).catch((error) => report(botId, error));
       let set = subscribers.get(botId);
       if (!set) subscribers.set(botId, (set = new Set()));
       set.add(subscriber);
@@ -1203,10 +1447,20 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
       await syncQuestion(feed);
     },
 
+    async refreshHandoff(botId) {
+      const feed = feeds.get(botId);
+      if (!feed || feed.ended) return;
+      await syncHandoff(feed);
+    },
+
     async summary(botId) {
       // Read right before each return, so a slow summary never reports a stale wait. It uses the
       // same sources as the chat, so a row agrees with it whether or not a chat is open.
-      const needsYouNow = () => (deps.question?.(botId) ?? null) !== null || deps.approvalPending?.(botId) === true;
+      const needsYouNow = async () =>
+        (deps.question?.(botId) ?? null) !== null ||
+        (deps.handoff?.(botId) ?? null) !== null ||
+        deps.approvalPending?.(botId) === true ||
+        (await deps.issuePending?.(botId)) === true;
       const feed = feeds.get(botId);
       if (feed && !feed.ended) {
         await feed.queue;
@@ -1216,7 +1470,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
           preview: preview?.text ?? null,
           updatedAt: preview?.at ?? null,
           state: feed.state,
-          needsYou: needsYouNow(),
+          needsYou: await needsYouNow(),
           lastReplyAt: botLastReplyAt(feed.entries),
         };
       }
@@ -1232,7 +1486,7 @@ export function createBotLiveProjection(deps: BotLiveProjectionDeps): BotLivePro
         preview: preview?.text ?? null,
         updatedAt: preview?.at ?? null,
         state,
-        needsYou: needsYouNow(),
+        needsYou: await needsYouNow(),
         lastReplyAt: botLastReplyAt(entries),
       };
     },

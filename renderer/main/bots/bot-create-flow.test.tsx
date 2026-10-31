@@ -273,3 +273,29 @@ test("connection chips start an app's setup, and an app already connected on thi
   assert.match(create!.textContent ?? "", /Connections/u);
   assert.match(setup!.textContent ?? "", /Gmail|Composio/u);
 });
+
+test("Create opens the new Bot's chat before its self-intro and the list reread answer", async () => {
+  let finishIntro: (value: boolean) => void = () => undefined;
+  let listReads = 0;
+  const calls = installBotTestIpc({
+    "bots:list": () => {
+      listReads += 1;
+      // The reread after create never answers during this test.
+      return listReads === 1 ? [] : new Promise<never>(() => undefined);
+    },
+    "bots:getCapabilityCatalog": () => catalogFixture(),
+    "bots:create": () => botFixture({ id: "bot-9", name: "Meal Planner" }),
+    "bots:introduce": () => new Promise<boolean>((resolve) => (finishIntro = resolve)),
+    "bots:get": () => botFixture({ id: "bot-9", name: "Meal Planner" }),
+    "bots:live:summary": () => ({ botId: "bot-9", preview: null, updatedAt: null, state: { kind: "idle" } }),
+    "bots:live:subscribe": () => liveSnapshot("bot-9", { kind: "idle" }),
+  });
+  const { router, queryClient } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots" });
+  const dialog = await fillNameStep("Meal Planner", "Plan my meals");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-9/chat"));
+  assert.equal(calls.filter((call) => call.channel === "bots:introduce").length, 1, "the intro was started");
+  const listed = queryClient.getQueryData<ReturnType<typeof botFixture>[]>(["bots", "active"]);
+  assert.deepEqual(listed?.map((bot) => bot.id), ["bot-9"], "the new Bot is in the list before the reread answers");
+  finishIntro(true);
+});

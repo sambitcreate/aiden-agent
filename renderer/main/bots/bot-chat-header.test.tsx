@@ -10,13 +10,13 @@ afterEach(cleanup);
 const bot = { id: "b1", name: "SLMob", avatar: { ...DEFAULT_BOT_AVATAR } };
 
 /** Renders inside an async act, so the avatar's photo read settles before the test goes on. */
-async function renderHeader(pinned = false) {
+async function renderHeader(pinned = false, paused = false) {
   const calls: string[] = [];
   await act(async () => {
     render(
     <>
       <BotChatNamePill bot={bot} onOpenProfile={() => calls.push("profile")} />
-      <BotChatActions bot={bot} pinned={pinned} onAction={(action) => calls.push(action)} />
+      <BotChatActions bot={bot} pinned={pinned} paused={paused} onAction={(action) => calls.push(action)} />
     </>,
     );
   });
@@ -34,9 +34,9 @@ test("the name pill opens the Bot's profile", async () => {
   assert.deepEqual(calls, ["profile"]);
 });
 
-test("the ••• menu offers Profile, Files, Memory, Routines, Advanced, Pin to top and Delete Bot, in that order", async () => {
+test("the ••• menu offers Profile, Files, Memory, Routines, Advanced, Pin to top, Pause Bot and Delete Bot, in that order", async () => {
   const calls = await renderHeader();
-  assert.deepEqual(await openMenu(), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
+  assert.deepEqual(await openMenu(), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Routines" }));
   assert.deepEqual(calls, ["routines"]);
 });
@@ -48,6 +48,14 @@ test("a pinned Bot's menu offers Unpin instead", async () => {
   assert.equal(items.includes("Pin to top"), false);
   fireEvent.click(screen.getByRole("menuitem", { name: "Unpin" }));
   assert.deepEqual(calls, ["pin"]);
+});
+
+test("a paused Bot's menu offers Resume Bot instead of Pause Bot", async () => {
+  const calls = await renderHeader(false, true);
+  const items = await openMenu();
+  assert.equal(items.includes("Pause Bot"), false);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Resume Bot" }));
+  assert.deepEqual(calls, ["unpause"]);
 });
 
 test("the ••• menu opens from the keyboard, moves with arrows and runs the highlighted item on Enter", async () => {

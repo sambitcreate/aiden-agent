@@ -3,6 +3,9 @@ import "./test-env";
 import { isServer } from "@tanstack/router-core/isServer";
 import { Window } from "happy-dom";
 import { invalidateBotCanonicalPhotos } from "../../lib/bot-canonical-photo-cache";
+import { resetBotLiveViewsForTests } from "../../lib/use-bot-live";
+import { defaultBotRulesView } from "../../shared/bot-rules";
+import { DEFAULT_BOT_COMPUTERS_SETTINGS } from "../../shared/bot-computers";
 
 // With the router's server build, routed pages never follow a navigation and
 // tests that navigate pass while showing the wrong page. Fail loudly instead.
@@ -97,6 +100,24 @@ export function installBotTestDom(): Window {
 /** Answers for reads every Bot surface makes, unless a test overrides them. */
 const BOT_TEST_IPC_DEFAULTS: Record<string, (...args: unknown[]) => unknown> = {
   "bots:getCanonicalPhoto": () => null,
+  // A Bot whose browser isn't reachable: the panel shows no Browser tab.
+  "bots:browser:workspace": () => null,
+  // Profile → Rules: a Bot nobody has changed the rules of.
+  "bots:rules:get": (botId) => defaultBotRulesView(String(botId)),
+  // Bot computers on a Mac that never chose Set up (asked only with the botComputers capability).
+  "botComputers:status": () => ({
+    setup: { kind: "not_set_up" },
+    settings: { ...DEFAULT_BOT_COMPUTERS_SETTINGS },
+    diskUsedBytes: 0,
+    computers: [],
+    requirements: {
+      downloadBytes: 19_772_231_540,
+      baseDiskBytes: 50_000_000_000,
+      setupFreeBytes: 84_196_731_252,
+      memoryPerComputerBytes: 8 * 1024 ** 3,
+      baseVersion: "26.6.2",
+    },
+  }),
 };
 
 export interface BotTestIpcCall {
@@ -124,6 +145,8 @@ export function installBotTestIpc(
   notificationListeners.clear();
   // The photo cache is process-wide; a photo cached by an earlier test must not answer this one.
   invalidateBotCanonicalPhotos();
+  // So are the remembered live views: a conversation from an earlier test must not open this one.
+  resetBotLiveViewsForTests();
   (window as unknown as { aidenAPI: unknown }).aidenAPI = {
     ipc: {
       invoke: async (channel: string, ...args: unknown[]) => {

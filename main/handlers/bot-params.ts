@@ -2,6 +2,7 @@ import {
   BOT_LIMITS,
   isBotAvatar,
   parseBotChatActivity,
+  parseBotInterruptions,
   type BotCreateInput,
   type BotUpdateInput,
 } from "../../renderer/shared/bots.js";
@@ -12,6 +13,8 @@ import {
   type BotAccessUpdate,
 } from "../../renderer/shared/bot-capabilities.js";
 import type { BotMemoryEditInput, BotMemoryTarget } from "../../renderer/shared/bot-memory.js";
+import { BOT_HANDOFF_NOTE_MAX_CHARS, type BotHandoffOutcome } from "../../renderer/shared/bot-handoffs.js";
+import { isBotRuleBehavior, type BotRuleBehavior, type BotRuleChange, type BotRulesUpdateInput } from "../../renderer/shared/bot-rules.js";
 import {
   ASK_USER_MAX_CUSTOM_ANSWER_LENGTH,
   ASK_USER_MAX_LABEL_LENGTH,
@@ -29,7 +32,7 @@ const CREATE_KEYS = new Set([
   "name",
 ]);
 const CREATE_WITH_ACCESS_KEYS = new Set(["access", "bot"]);
-const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "expectedRevision", "id"]);
+const UPDATE_KEYS = new Set([...CREATE_KEYS, "chatActivity", "interruptions", "selfWakeUps", "expectedRevision", "id"]);
 const CHAT_KEYS = new Set(["botId", "model", "providerId", "workspaceId"]);
 const ACCESS_UPDATE_KEYS = new Set(["access", "botId", "expectedRevision"]);
 function exact(value: unknown, keys: ReadonlySet<string>, label: string) {
@@ -110,7 +113,14 @@ export function parseBotUpdate(value: unknown): BotUpdateInput {
     expectedRevision: parseBotRevision(record.expectedRevision),
     ...createFields(record),
     ...(chatActivity ? { chatActivity } : {}),
+    ...(record.interruptions !== undefined ? { interruptions: parseBotInterruptions(record.interruptions) } : {}),
+    ...(record.selfWakeUps !== undefined ? { selfWakeUps: parseSelfWakeUps(record.selfWakeUps) } : {}),
   };
+}
+
+function parseSelfWakeUps(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("Invalid bot wake-up setting.");
+  return value;
 }
 
 export function parseBotRevision(value: unknown): string {
@@ -301,6 +311,39 @@ export function parseBotQuestionAnswer(input: unknown): { botId: string; waitId:
   };
 }
 
+const HANDOFF_ANSWER_KEYS = new Set(["botId", "waitId", "outcome", "note"]);
+const HANDOFF_OPEN_KEYS = new Set(["botId", "waitId"]);
+
+function handoffWaitId(value: unknown): string {
+  if (typeof value !== "string" || !BOT_APPROVAL_WAIT_ID.test(value)) throw new Error("Invalid bot hand-off id.");
+  return value;
+}
+
+/** A hand-off card answer: the Bot, the durable `waitId`, Done or Skip, and an optional note. */
+export function parseBotHandoffAnswer(input: unknown): {
+  botId: string;
+  waitId: string;
+  outcome: BotHandoffOutcome;
+  note?: string;
+} {
+  const fields = exact(input, HANDOFF_ANSWER_KEYS, "bot hand-off answer fields");
+  const waitId = handoffWaitId(fields.waitId);
+  if (fields.outcome !== "done" && fields.outcome !== "skipped") throw new Error("Invalid bot hand-off answer.");
+  const note = text(fields.note, "bot hand-off note", BOT_HANDOFF_NOTE_MAX_CHARS, true);
+  return {
+    botId: parseBotId(fields.botId),
+    waitId,
+    outcome: fields.outcome,
+    ...(note === undefined ? {} : { note }),
+  };
+}
+
+/** Open on a hand-off card: the Bot and the durable `waitId`. */
+export function parseBotHandoffOpen(input: unknown): { botId: string; waitId: string } {
+  const fields = exact(input, HANDOFF_OPEN_KEYS, "bot hand-off fields");
+  return { botId: parseBotId(fields.botId), waitId: handoffWaitId(fields.waitId) };
+}
+
 export function parseBotChatCreate(value: unknown) {
   const record = exact(value, CHAT_KEYS, "bot chat creation fields");
   // Legacy desktop renderers still send the visible workspace selection. Bot
@@ -371,4 +414,65 @@ export function parseBotMemoryEdit(value: unknown): BotMemoryEditInput {
     };
   }
   throw new Error("Invalid bot memory edit.");
+}
+
+const RULES_UPDATE_KEYS = new Set(["botId", "revision", "change"]);
+const RULE_CHANGE_KEYS: Readonly<Record<BotRuleChange["type"], ReadonlySet<string>>> = {
+  set_behavior: new Set(["type", "ruleId", "behavior"]),
+  add_custom: new Set(["type", "text", "behavior"]),
+  edit_custom: new Set(["type", "ruleId", "text", "behavior"]),
+  remove_custom: new Set(["type", "ruleId"]),
+};
+/** `locked.money`, `default.purchase`, `custom.<uuid>`; the store says whether it exists. */
+const RULE_ID = /^[a-z]{1,16}\.[a-z0-9-]{1,64}$/u;
+/** Hard bound on rule text; the store refuses anything over the rule limit as `invalid`, with its message. */
+const RULE_TEXT_CHARS = 1_000;
+
+function ruleId(value: unknown): string {
+  if (typeof value !== "string" || !RULE_ID.test(value)) throw new Error("Invalid bot rule id.");
+  return value;
+}
+
+function ruleBehavior(value: unknown): BotRuleBehavior {
+  if (!isBotRuleBehavior(value)) throw new Error("Invalid bot rule behavior.");
+  return value;
+}
+
+function ruleText(value: unknown): string {
+  if (typeof value !== "string" || value.length > RULE_TEXT_CHARS) throw new Error("Invalid bot rule text.");
+  return value;
+}
+
+function ruleChange(value: unknown): BotRuleChange {
+  const type = (value as { type?: unknown } | null | undefined)?.type;
+  if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(RULE_CHANGE_KEYS, type)) {
+    throw new Error("Invalid bot rule change.");
+  }
+  const change = exact(value, RULE_CHANGE_KEYS[type as BotRuleChange["type"]], "bot rule change");
+  switch (type as BotRuleChange["type"]) {
+    case "set_behavior":
+      return { type: "set_behavior", ruleId: ruleId(change.ruleId), behavior: ruleBehavior(change.behavior) };
+    case "add_custom":
+      return { type: "add_custom", text: ruleText(change.text), behavior: ruleBehavior(change.behavior) };
+    case "edit_custom":
+      if (change.text === undefined && change.behavior === undefined) throw new Error("Invalid bot rule change.");
+      return {
+        type: "edit_custom",
+        ruleId: ruleId(change.ruleId),
+        ...(change.text === undefined ? {} : { text: ruleText(change.text) }),
+        ...(change.behavior === undefined ? {} : { behavior: ruleBehavior(change.behavior) }),
+      };
+    case "remove_custom":
+      return { type: "remove_custom", ruleId: ruleId(change.ruleId) };
+  }
+}
+
+/** `bots:rules:update`: `{ botId, revision, change }` with exactly the keys of one change type. */
+export function parseBotRulesUpdate(value: unknown): BotRulesUpdateInput {
+  const record = exact(value, RULES_UPDATE_KEYS, "bot rules update");
+  const revision = record.revision;
+  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
+    throw new Error("Invalid bot rules revision.");
+  }
+  return { botId: parseBotId(record.botId), revision, change: ruleChange(record.change) };
 }

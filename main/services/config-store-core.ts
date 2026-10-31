@@ -1,9 +1,11 @@
 import { compactionEngineFrom, isCompactionEngine, parseCompactionModelOverrides, type CompactionEngine, type CompactionModelBudget, type CompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 import { randomBytes } from "node:crypto";
-import { normalizeAppearanceConfig, parseAppearanceConfig } from "../../renderer/shared/appearance.js";
+import { getPresetVariant, normalizeAppearanceConfig, parseAppearanceConfig, type ThemePresetId } from "../../renderer/shared/appearance.js";
 import { appControlPolicy, appControlRevision, type AppControlState } from "./app-controls-core.js";
-import { parseAppControlOperation, type AppControlOperation } from "../../renderer/shared/app-controls.js";
+import { parseAppControlOperation, parseNewChatModelValue, type AppControlOperation } from "../../renderer/shared/app-controls.js";
 // Custom-provider configuration + lightweight app settings persistence.
 // Pi built-ins are derived from its runtime registry, not seeded into this file.
 //
@@ -25,6 +27,8 @@ import {
   isPortableProviderList,
   isProviderAliasMap,
   isMcpServerList,
+  withoutRetiredMcpServers,
+  retiredMcpServerIds,
   isSkillList,
   mergeProviderModelCacheEntries,
   providerAliasSourcesAreInactive,
@@ -80,6 +84,7 @@ import {
 } from "../../renderer/shared/model-pad-preferences.js";
 import { hiddenModelsForGeminiScope } from "../../renderer/shared/gemini-usage-scope.js";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import {
   freshWebSearchSettings,
   migrateWebSearchSettingsWithReport,
@@ -87,6 +92,12 @@ import {
   normalizeWebSearchSettings,
   type WebSearchSettingsV2,
 } from "./web-search-provider-registry-core.js";
+import {
+  defaultWebFetchSettings,
+  parseWebFetchSettings,
+  type WebFetchSettingsV1,
+} from "../../renderer/shared/web-fetch-settings.js";
+import { parseAnalyticsState, type AnalyticsState } from "./analytics/analytics-consent.js";
 import type {
   AppSettings,
   McpServer,
@@ -182,7 +193,7 @@ function normalizePortableConfig(value: unknown): {
     safeAliases = {};
   }
 
-  const mcpServers = value.mcpServers;
+  const mcpServers = withoutRetiredMcpServers(value.mcpServers);
   const safeMcpServers = !has("mcpServers")
     ? []
     : isMcpServerList(mcpServers)
@@ -204,14 +215,17 @@ function normalizePortableConfig(value: unknown): {
 }
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
-  // Only a literal `true` marks a scratch workspace; anything else is dropped.
-  const { scratch, ...w } = workspace;
+  // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
+  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, ...w } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
+    ...(noWorkspace === true ? { noWorkspace } : {}),
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
+    // No workspace chats always use the global skills and connectors.
+    ...(noWorkspace === true ? {} : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&
@@ -485,6 +499,7 @@ export function createConfigStore(
         // — before the corrupt-file guard below — silently replace a file with a
         // JSON typo with an empty default.
         const before = await portable.load();
+        noteRetiredMcpServers(before);
         const normalized = normalizePortableConfig(before);
         const config = normalized.config;
         if (normalized.unsafe) return false;
@@ -668,9 +683,19 @@ export function createConfigStore(
     }
   }
 
+  // Saved legacy SSE servers seen by this process. Any write drops them from
+  // the file, so remember their ids until their credentials are cleaned up.
+  const retiredMcpIds = new Set<string>();
+  const noteRetiredMcpServers = (value: unknown) => {
+    const servers = value && typeof value === "object" ? (value as { mcpServers?: unknown }).mcpServers : undefined;
+    for (const id of retiredMcpServerIds(servers)) retiredMcpIds.add(id);
+  };
+
   async function readPortable(): Promise<PortableConfigShape> {
     await ensureSeeded();
-    return normalizePortableConfig(await portable.load()).config;
+    const loaded = await portable.load();
+    noteRetiredMcpServers(loaded);
+    return normalizePortableConfig(loaded).config;
   }
 
   async function mutatePortable<R>(
@@ -682,6 +707,7 @@ export function createConfigStore(
       throw new Error("Portable config contains invalid JSON; fix ~/.aiden/config.json first.");
     }
     return portable.update(async (draft) => {
+      noteRetiredMcpServers(draft);
       const normalized = normalizePortableConfig(draft);
       if (normalized.unsafe) {
         throw new Error(
@@ -747,6 +773,21 @@ export function createConfigStore(
       await modelCache.update((config) => {
         config.byProvider = {};
       });
+    },
+
+    /**
+     * Ids of saved legacy SSE servers this process found in the portable
+     * file. They never load, so their stored sign-ins and header values are
+     * cleaned up instead.
+     */
+    async retiredMcpServerIds(): Promise<string[]> {
+      await readPortable();
+      return [...retiredMcpIds];
+    },
+
+    /** Forget retired ids whose credentials were cleaned up. */
+    forgetRetiredMcpServerIds(ids: readonly string[]): void {
+      for (const id of ids) retiredMcpIds.delete(id);
     },
 
     async portableConfigSafeForCredentialReconciliation(): Promise<boolean> {
@@ -872,6 +913,20 @@ export function createConfigStore(
       return resolveProviderAlias(config.providerIdAliases, id) ?? migrateLegacyPiProviderId(id);
     },
 
+    /** Machine-local product-analytics consent, never exposed through settings:get. */
+    async getAnalyticsState(): Promise<AnalyticsState> {
+      await ensureSeeded();
+      return parseAnalyticsState((await settingsStore.load()).analytics);
+    },
+
+    async updateAnalyticsState(mutate: (state: AnalyticsState) => AnalyticsState): Promise<AnalyticsState> {
+      return mutateSettings((config) => {
+        const next = mutate(parseAnalyticsState(config.analytics));
+        config.analytics = { ...next };
+        return next;
+      });
+    },
+
     async getSettings(): Promise<AppSettings> {
       await ensureSeeded();
       return runtimeSettingsFrom((await settingsStore.load()).settings);
@@ -932,6 +987,38 @@ export function createConfigStore(
       return runtimeSettingsFrom(saved);
     },
 
+    /** Read the `web_fetch` document; a future or invalid one reads as off. */
+    async getWebFetchSettings(): Promise<WebFetchSettingsV1> {
+      await ensureSeeded();
+      const stored = (await settingsStore.load()).settings;
+      const settings = runtimeSettingsFrom(stored);
+      if (settings.webFetch) return settings.webFetch;
+      return Object.prototype.hasOwnProperty.call(stored, "webFetch")
+        ? { ...defaultWebFetchSettings(), enabled: false }
+        : defaultWebFetchSettings();
+    },
+
+    /** Atomically update only the `web_fetch` document; keys stay in the key pool. */
+    async updateWebFetchSettings(
+      mutation: (current: WebFetchSettingsV1) => WebFetchSettingsV1,
+      isCurrent: () => boolean = () => true,
+    ): Promise<WebFetchSettingsV1> {
+      const saved = await mutateSettings((config) => {
+        const stored = Object.prototype.hasOwnProperty.call(config.settings, "webFetch");
+        const current = parseWebFetchSettings(config.settings.webFetch);
+        if (!current && stored) {
+          throw new Error(
+            "Web page settings are invalid or from a newer version; repair settings.json before changing them.",
+          );
+        }
+        const next = parseWebFetchSettings(mutation(structuredClone(current ?? defaultWebFetchSettings())));
+        if (!next) throw new Error("Web page settings must be a supported version 1 document.");
+        config.settings.webFetch = next;
+        return structuredClone(config.settings);
+      }, isCurrent);
+      return parseWebFetchSettings(saved.webFetch) ?? defaultWebFetchSettings();
+    },
+
     /** Read the normalized Text to Speech document after startup migration. */
     async getTtsSettings(): Promise<{
       settings: TtsSettingsV1;
@@ -984,7 +1071,21 @@ export function createConfigStore(
         if (remote && state.settings.remoteAppControlsEnabled !== true) throw new Error("Paired-host app controls were disabled.");
         if (!isCurrent() || appControlPolicy(state.settings) === "disabled") throw new Error("App control authority changed.");
         if (appControlRevision(state, operation.control) !== operation.expectedRevision) throw new Error("Settings changed. Refresh this control.");
-        if (operation.control.startsWith("appearance.")) {
+        if (operation.control === "models.newChat") {
+          const selection = parseNewChatModelValue(String(operation.value))!;
+          config.settings.lastProviderId = selection.providerId;
+          config.settings.lastModel = selection.model;
+        } else if (operation.control === "appearance.theme") {
+          const current = config.settings.appearance === undefined
+            ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
+          // The same replacement Settings → Appearance makes when a theme is picked.
+          const preset = operation.value as ThemePresetId;
+          config.settings.appearance = parseAppearanceConfig({
+            ...current,
+            light: getPresetVariant(preset, "light"),
+            dark: getPresetVariant(preset, "dark"),
+          });
+        } else if (operation.control.startsWith("appearance.")) {
           const current = config.settings.appearance === undefined
             ? normalizeAppearanceConfig(undefined) : parseAppearanceConfig(config.settings.appearance);
           const field = operation.control.slice("appearance.".length);
@@ -1010,6 +1111,13 @@ export function createConfigStore(
         throw new Error("Invalid compaction engine.");
       }
       if (patch.cacheWarmingEnabled !== undefined && typeof patch.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
+      if (patch.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(patch.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      if (patch.botRoutinesGoAhead !== undefined && typeof patch.botRoutinesGoAhead !== "boolean") throw new Error("Invalid Bot routines setting.");
+      if (patch.spendingLimits !== undefined) {
+        const spendingLimits = parseSpendingLimitsSettings(patch.spendingLimits);
+        if (spendingLimits === undefined) throw new Error("Invalid spending limits.");
+        patch = { ...patch, spendingLimits };
+      }
       if (patch.compactionModelOverrides !== undefined) {
         patch = { ...patch, compactionModelOverrides: parseCompactionModelOverrides(patch.compactionModelOverrides) };
       }
@@ -1036,6 +1144,10 @@ export function createConfigStore(
           if (!parseWebSearchSettings(patch.webSearch)) {
             throw new Error("Web Search settings must be a supported version 2 document.");
           }
+        }
+        // web_fetch has its own seam too; the broad patch API never writes it.
+        if (Object.prototype.hasOwnProperty.call(patch, "webFetch")) {
+          throw new Error("Web page settings change only through their own settings call.");
         }
         const lastProviderId =
           typeof patch.lastProviderId === "string"
@@ -1308,8 +1420,13 @@ export function createConfigStore(
       const saved = await localStore.update(async (config) => {
         await assertCurrent?.(config.workspaces.find((w) => w.id === next.id));
         const idx = config.workspaces.findIndex((w) => w.id === next.id);
-        if (idx >= 0) config.workspaces[idx] = { ...config.workspaces[idx], ...next };
-        else config.workspaces.push(next);
+        if (idx >= 0) {
+          const merged = { ...config.workspaces[idx], ...next };
+          // An emptied off-list is omitted from `next`; don't let the merge keep the old one.
+          if (!next.disabledSkills) delete merged.disabledSkills;
+          if (!next.disabledMcpServerIds) delete merged.disabledMcpServerIds;
+          config.workspaces[idx] = merged;
+        } else config.workspaces.push(next);
         return structuredClone(config.workspaces.find((w) => w.id === next.id)!);
       });
       notifyListeners(workspaceListeners);

@@ -46,10 +46,13 @@ export function BotChatNamePill({
 export function BotChatActions({
   bot,
   pinned,
+  paused = false,
   onAction,
 }: {
   bot: Pick<BotDefinition, "name">;
   pinned: boolean;
+  /** The person paused this Bot: the menu offers Resume Bot. */
+  paused?: boolean;
   onAction(action: BotMenuAction, returnFocus?: HTMLElement | null): void;
 }) {
   const focusGuard = useBotMenuFocusGuard();
@@ -63,6 +66,7 @@ export function BotChatActions({
       <DropdownMenuContent align="end" onCloseAutoFocus={focusGuard.onCloseAutoFocus}>
         <BotMenuItems
           pinned={pinned}
+          paused={paused}
           Item={DropdownMenuItem}
           Separator={DropdownMenuSeparator}
           focusGuard={focusGuard}

@@ -589,8 +589,20 @@ export class BotCapabilityStore {
   }): Promise<BotCapabilityAdmission> {
     this.requireInitialized();
     return this.serialized(async () => {
-      const state = await this.persistence.load();
-      const editor = this.editor(state);
+      let state = await this.persistence.load();
+      let editor = this.editor(state);
+      editor.assertBotMayAct(input);
+      if (
+        input.snapshot &&
+        editor.hasStaleModelBindings({ botId: input.botId, snapshot: input.snapshot })
+      ) {
+        const snapshot = input.snapshot;
+        await this.persistence.update((draft) =>
+          this.editor(draft).refreshStaleModelBindings({ botId: input.botId, snapshot }),
+        );
+        state = await this.persistence.load();
+        editor = this.editor(state);
+      }
       const authority = editor.assertBotMayAct(input);
       const modelAuthority = editor.getBotModelAuthority(input.botId);
       const visionModelAuthority = editor.getBotVisionModelAuthority(input.botId);

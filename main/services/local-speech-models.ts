@@ -1,11 +1,14 @@
 import path from "node:path";
 import { rm } from "node:fs/promises";
 import { app, ipcMain, logger } from "../platform.js";
+import { speechModelsForHost } from "./local-speech-catalog.js";
 import { createSpeechModelManager } from "./local-speech-downloads.js";
 export type { LocalModel, LocalModelDownloadState } from "./local-speech-downloads.js";
 
 const manager = createSpeechModelManager({
   root: () => path.join(app.getPath("userData"), "voice-models"),
+  // The desktop app also offers models limited to this Mac or PC, such as Parakeet on Metal.
+  catalog: speechModelsForHost({ platform: process.platform, arch: process.arch }),
   progress: (value) => ipcMain.broadcast("localModels:progress", value),
   info: (message) => logger.info("local-speech", message),
 });

@@ -3,15 +3,20 @@ package sbtbiswas.AidenOnTheGo.models
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.nullable
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.io.File
@@ -31,6 +36,26 @@ enum class AidenAttachmentKind {
     @SerialName("text") TEXT
 }
 
+private val TOOL_CALL_ID = Regex("^call-[1-9][0-9]{0,15}$")
+
+/**
+ * Decodes an attachment's `toolCallId` without ever failing the message: a value
+ * of the wrong type becomes null, like a malformed one (see [AidenMessageAttachment.placedToolCallId]).
+ */
+object AidenAttachmentToolCallIdSerializer : KSerializer<String?> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor.nullable
+
+    override fun deserialize(decoder: Decoder): String? {
+        val json = decoder as? JsonDecoder ?: throw SerializationException("attachments decode from JSON only")
+        val value = json.decodeJsonElement() as? JsonPrimitive ?: return null
+        return value.takeIf { it.isString }?.content
+    }
+
+    override fun serialize(encoder: Encoder, value: String?) {
+        if (value == null) encoder.encodeNull() else encoder.encodeString(value)
+    }
+}
+
 @Serializable
 @Immutable
 data class AidenMessageAttachment(
@@ -38,8 +63,18 @@ data class AidenMessageAttachment(
     val name: String,
     val mimeType: String,
     val kind: AidenAttachmentKind,
-    val size: Int
+    val size: Int,
+    /**
+     * Contract revision 44: on an assistant image, the timeline tool step that
+     * produced it. Read through [placedToolCallId], which drops a malformed value.
+     */
+    @Serializable(with = AidenAttachmentToolCallIdSerializer::class)
+    val toolCallId: String? = null
 ) {
+    /** The producing step's public `call-N` id, or null when absent or malformed. */
+    val placedToolCallId: String?
+        get() = toolCallId?.takeIf { TOOL_CALL_ID.matches(it) }
+
     val isWireSafe: Boolean
         get() = id.isNotEmpty() &&
                 id.length <= 256 &&
@@ -250,7 +285,13 @@ data class AidenAgentStep(
     val producedFile: AidenProducedFile? = null,
     /** Decoded leniently: a malformed recap is dropped, never the step. */
     @Serializable(with = AidenQuestionnaireRecapSerializer::class)
-    val questionnaire: AidenQuestionnaireRecap? = null
+    val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step. */
+    @Serializable(with = AidenWebExtractRecapSerializer::class)
+    val extraction: AidenWebExtractRecap? = null,
+    /** Decoded leniently: a malformed recap is dropped, never the step (revision 46). */
+    @Serializable(with = AidenBrowserRecordingRecapSerializer::class)
+    val recording: AidenBrowserRecordingRecap? = null
 ) {
     @Serializable
     enum class Kind {
@@ -271,6 +312,28 @@ data class AidenAgentStep(
             kind == Kind.TOOL && toolName == AidenQuestionnaireRecap.TOOL_NAME &&
                 status == AidenAgentStepStatus.COMPLETED && it.isValid
         }
+
+    /**
+     * The values a completed `web_fetch` extract call read, shown under its
+     * activity line. A recap on any other step is ignored. Unlike a
+     * questionnaire, the step stays an activity line too.
+     */
+    val extractionRecap: AidenWebExtractRecap?
+        get() = extraction?.takeIf {
+            kind == Kind.TOOL && toolName == AidenWebExtractRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
+
+    /**
+     * The video a completed `browser_recording_stop` saved, shown as a playable
+     * card under its activity line. A recap on any other step is ignored, and
+     * the step stays an activity line either way.
+     */
+    val recordingRecap: AidenBrowserRecordingRecap?
+        get() = recording?.takeIf {
+            kind == Kind.TOOL && toolName == AidenBrowserRecordingRecap.TOOL_NAME &&
+                status == AidenAgentStepStatus.COMPLETED && it.isValid
+        }
 }
 
 @Immutable
@@ -281,10 +344,18 @@ data class AidenChronologicalRow(
     val steps: List<AidenAgentStep> = emptyList(),
     /** Set on a [Kind.QUESTIONNAIRE] row: the owner's answers, at the step's position. */
     val questionnaire: AidenQuestionnaireRecap? = null,
+    /** Set on an [Kind.EXTRACTION] row: the values a page read, after the line that read them. */
+    val extraction: AidenWebExtractRecap? = null,
+    /** Set on a [Kind.RECORDING] row: the video a browser recording saved, after the line that saved it. */
+    val recording: AidenBrowserRecordingRecap? = null,
     /** Set on [Kind.VISUAL] rows: the inline visual drawn at this point of the reply. */
-    val visual: AidenChatVisual? = null
+    val visual: AidenChatVisual? = null,
+    /** Set on [Kind.IMAGES] rows: the images the step above produced (contract revision 44). */
+    val images: List<AidenMessageAttachment> = emptyList(),
+    /** Set on [Kind.IMAGE_SLOT] rows: the live `generate_image` call whose placeholder sits here. */
+    val imageSlot: String? = null
 ) {
-    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, VISUAL }
+    enum class Kind { TEXT, REASONING, TOOL, QUESTIONNAIRE, EXTRACTION, RECORDING, VISUAL, IMAGES, IMAGE_SLOT }
 }
 
 object AidenChronologicalProjection {
@@ -292,13 +363,19 @@ object AidenChronologicalProjection {
      * The reply in reading order. Each of [visuals] follows the tool step whose
      * `toolCallId` drew it (a run of same-offset tool steps splits there), and
      * visuals no step claims trail at the end. A live reply passes no visuals:
-     * snapshots exist only once the reply commits.
+     * snapshots exist only once the reply commits. Each of [images] likewise
+     * follows the step that produced it; an image no step claims gets no row
+     * and stays in the attachment strip after the reply ([placedImageIds]). [imageSlots]
+     * are the live reply's placeholder calls: each gets an [AidenChronologicalRow.Kind.IMAGE_SLOT]
+     * row beneath its step, split the same way its image will be once the reply commits.
      */
     fun rows(
         text: String,
         reasoning: String,
         timeline: AidenGenerationTimeline?,
-        visuals: List<AidenChatVisual> = emptyList()
+        visuals: List<AidenChatVisual> = emptyList(),
+        images: List<AidenMessageAttachment> = emptyList(),
+        imageSlots: List<String> = emptyList()
     ): List<AidenChronologicalRow>? {
         if (timeline == null || !timeline.isRendererSafe(text.length, reasoning.length)) return null
         var reasoningCursor = 0
@@ -316,6 +393,7 @@ object AidenChronologicalProjection {
             step.toolCallId.takeIf { step.kind == AidenAgentStep.Kind.TOOL }
         }
         val visualsByCall = visuals.filter { it.toolCallId in toolCallIds }.groupBy { it.toolCallId }
+        val imagesByCall = images.filter { it.placedToolCallId in toolCallIds }.groupBy { it.placedToolCallId }
         val result = mutableListOf<AidenChronologicalRow>()
         fun emitVisuals(drawn: List<AidenChatVisual>) {
             drawn.forEach { result += AidenChronologicalRow("visual-${it.id}", AidenChronologicalRow.Kind.VISUAL, visual = it) }
@@ -348,17 +426,43 @@ object AidenChronologicalProjection {
             } else {
                 val group = mutableListOf<AidenAgentStep>()
                 var drawn: List<AidenChatVisual> = emptyList()
+                var produced: List<AidenMessageAttachment> = emptyList()
+                var slot: String? = null
                 while (index < steps.size && steps[index].kind == AidenAgentStep.Kind.TOOL &&
                     steps[index].questionnaireRecap == null && steps[index].contentOffset == offset
                 ) {
                     val step = steps[index++]
                     group += step
                     val callId = step.toolCallId
-                    drawn = if (callId != null && emittedCalls.add(callId)) visualsByCall[callId].orEmpty() else emptyList()
-                    if (drawn.isNotEmpty()) break
+                    val fresh = callId != null && emittedCalls.add(callId)
+                    drawn = if (fresh) visualsByCall[callId].orEmpty() else emptyList()
+                    produced = if (fresh) imagesByCall[callId].orEmpty() else emptyList()
+                    slot = callId?.takeIf { fresh && it in imageSlots }
+                    // A step that drew a visual, produced an image or holds a placeholder closes its group.
+                    if (drawn.isNotEmpty() || produced.isNotEmpty() || slot != null) break
                 }
                 result += AidenChronologicalRow("tool-${group.first().id}", AidenChronologicalRow.Kind.TOOL, steps = group)
+                // Values a page read in extract mode follow the line that read them.
+                group.forEach { grouped ->
+                    grouped.extractionRecap?.let { recap ->
+                        result += AidenChronologicalRow(
+                            "extraction-${grouped.id}", AidenChronologicalRow.Kind.EXTRACTION,
+                            steps = listOf(grouped), extraction = recap
+                        )
+                    }
+                    // So does the video a browser recording saved.
+                    grouped.recordingRecap?.let { recap ->
+                        result += AidenChronologicalRow(
+                            "recording-${grouped.id}", AidenChronologicalRow.Kind.RECORDING,
+                            steps = listOf(grouped), recording = recap
+                        )
+                    }
+                }
                 emitVisuals(drawn)
+                slot?.let { result += AidenChronologicalRow("image-slot-$it", AidenChronologicalRow.Kind.IMAGE_SLOT, imageSlot = it) }
+                if (produced.isNotEmpty()) {
+                    result += AidenChronologicalRow("images-${group.first().id}", AidenChronologicalRow.Kind.IMAGES, images = produced)
+                }
             }
             cursor = offset
         }
@@ -369,6 +473,14 @@ object AidenChronologicalProjection {
         emitVisuals(visuals.filter { it.toolCallId !in toolCallIds })
         return result
     }
+
+    /** Placeholder calls [rows] drew beneath their steps; the rest stay after the reply. */
+    fun placedImageSlots(rows: List<AidenChronologicalRow>): Set<String> =
+        rows.mapNotNullTo(HashSet()) { it.imageSlot }
+
+    /** Ids of the images [rows] drew beneath their steps; the attachment strip leaves them out. */
+    fun placedImageIds(rows: List<AidenChronologicalRow>): Set<String> =
+        rows.flatMapTo(HashSet()) { row -> row.images.map { it.id } }
 }
 
 @Serializable
@@ -653,6 +765,20 @@ object AidenAgentActivityPresentation {
         timeline?.steps.orEmpty().filter { it.questionnaireRecap != null }
 
     /**
+     * Pages read in extract mode, in timeline order, for a fallback transcript
+     * that shows their values after the activity list. The steps stay in it.
+     */
+    fun extractionSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.extractionRecap != null }
+
+    /**
+     * Browser recordings, in timeline order, for a fallback transcript that shows
+     * their cards after the activity list. The steps stay in it.
+     */
+    fun recordingSteps(timeline: AidenGenerationTimeline?): List<AidenAgentStep> =
+        timeline?.steps.orEmpty().filter { it.recordingRecap != null }
+
+    /**
      * Whether a fallback live transcript lists the stream's own tool rows. Once
      * the timeline has a tool step, its rows or a recap card already show each
      * call, so the live rows would only repeat them.
@@ -661,23 +787,30 @@ object AidenAgentActivityPresentation {
         tools.isNotEmpty() && timeline?.steps.orEmpty().none { it.kind == AidenAgentStep.Kind.TOOL }
 
     fun summary(timeline: AidenGenerationTimeline): String {
-        val tools = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
-        if (tools.isEmpty()) {
+        val toolSteps = timeline.steps.filter { it.kind == AidenAgentStep.Kind.TOOL && it.questionnaireRecap == null }
+        if (toolSteps.isEmpty()) {
             return if (timeline.status == AidenGenerationTimelineStatus.RUNNING) "Thinking"
             else "Thought ${duration(timeline.steps.mapNotNull { it.durationMs }.sum())}"
         }
         val running = timeline.status == AidenGenerationTimelineStatus.RUNNING
+        // Matches desktop: a denied or blocked call never ran, so it is
+        // counted as skipped. A call still waiting for approval is not counted yet.
+        val skipped = toolSteps.filter { it.status == AidenAgentStepStatus.BLOCKED }
+        val tools = toolSteps.filter {
+            it.status != AidenAgentStepStatus.BLOCKED && it.status != AidenAgentStepStatus.AWAITING_APPROVAL
+        }
         val files = tools.count { it.toolName == "read_file" }
         val searches = tools.count { it.toolName == "grep" || it.toolName == "glob" }
         val directories = tools.count { it.toolName == "list_dir" }
         val commands = tools.count { it.toolName == "run_command" }
         val changes = tools.count { it.toolName == "write_file" || it.toolName == "edit_file" }
         val web = tools.count { it.toolName == "web_search" }
+        val pages = tools.count { it.toolName == "web_fetch" }
         val mac = tools.count { it.toolName == "computer_use" }
         val compactions = tools.count { it.toolName == "compact_context" }
         val tallied = setOf(
             "read_file", "grep", "glob", "list_dir", "run_command", "write_file", "edit_file",
-            "web_search", "computer_use", "compact_context"
+            "web_search", "web_fetch", "computer_use", "compact_context"
         )
         val other = tools.count { step ->
             val toolName = step.toolName ?: return@count true
@@ -695,10 +828,19 @@ object AidenAgentActivityPresentation {
         if (changes > 0) clauses.add("${if (running) "editing" else "edited"} $changes file${if (changes == 1) "" else "s"}")
         if (commands > 0) clauses.add("${if (running) "running" else "ran"} $commands command${if (commands == 1) "" else "s"}")
         if (web > 0) clauses.add("$web web search${if (web == 1) "" else "es"}")
+        if (pages > 0) clauses.add("$pages web page${if (pages == 1) "" else "s"}")
         if (mac > 0) clauses.add("$mac Computer Use action${if (mac == 1) "" else "s"}")
         if (compactions > 0) clauses.add(if (running) "compacting context" else "compacted context")
         if (other > 0) clauses.add("$other tool call${if (other == 1) "" else "s"}")
-        if (clauses.isEmpty()) return if (running) "Working" else "Used ${tools.size} tool${if (tools.size == 1) "" else "s"}"
+        if (skipped.isNotEmpty()) {
+            val noun = when {
+                skipped.all { it.toolName == "run_command" } -> "command"
+                skipped.all { it.toolName == "write_file" || it.toolName == "edit_file" } -> "file change"
+                else -> "action"
+            }
+            clauses.add("skipped ${skipped.size} $noun${if (skipped.size == 1) "" else "s"}")
+        }
+        if (clauses.isEmpty()) return if (running) "Waiting for approval" else "No activity"
         val sentence = clauses.joinToString(", ")
         return if (exploredList.isEmpty() && sentence.isNotEmpty()) {
             sentence.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
@@ -1360,7 +1502,10 @@ data class AidenStreamPendingApproval(
     val canAllow: Boolean,
     /** Contract revision 17. Raw names so an unknown future scope never fails
      * decoding; [AidenApprovalScope.offered] keeps the known ones. */
-    val scopes: List<String>? = null
+    val scopes: List<String>? = null,
+    /** Contract revision 39 (`schedule:cards`): a scheduled-task card. An invalid one reads as null. */
+    @Serializable(with = AidenApprovalScheduleLenientSerializer::class)
+    val schedule: AidenApprovalSchedule? = null
 )
 
 @Serializable
@@ -1566,7 +1711,13 @@ data class AidenPendingApproval(
     val hasRequiredWriteCapability: Boolean,
     val hostCanAllow: Boolean,
     val canAllow: Boolean,
-    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE)
+    val scopes: List<AidenApprovalScope> = listOf(AidenApprovalScope.ONCE),
+    /**
+     * Revision 39: the scheduled-task card, kept only on a `schedule_task` approval. Display
+     * only: it never changes [canAllow] or [scopes]. Approvals are never persisted, so a
+     * relaunch reads it again from the host.
+     */
+    val schedule: AidenApprovalSchedule? = null
 )
 
 data class AidenApprovalCapabilities(
@@ -1581,23 +1732,85 @@ data class AidenApprovalCapabilities(
 object AidenApprovalPresentation {
     private val automationTools = setOf("schedule_task", "edit_automation")
 
-    fun oneLineSummary(summary: String): String {
-        val collapsed = summary.split(AidenChatPatterns.WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
-        return if (collapsed.isEmpty()) "Review requested action" else collapsed
-    }
+    /**
+     * Host summary prefixes that name the tool, which the card's title already says.
+     * Desktop hosts write the first four; the CLI daemon writes the last three.
+     */
+    private val actionPrefixes = mapOf(
+        "run_command" to "Run command: ",
+        "edit_file" to "Edit file: ",
+        "write_file" to "Create or replace file: ",
+        "share_image" to "Share image in chat: ",
+        "bash" to "Run command: ",
+        "read" to "Read file: ",
+        "ls" to "List folder: "
+    )
 
     fun isAutomation(toolName: String): Boolean = automationTools.contains(toolName)
 
     fun title(toolName: String): String = when (toolName) {
-        "schedule_task" -> "Create this automation?"
-        "edit_automation" -> "Save these automation changes?"
-        else -> "Approval Required"
+        "schedule_task" -> "Save this scheduled task?"
+        "edit_automation" -> "Change this automation?"
+        else -> "Approval needed"
+    }
+
+    /** The exact action the host asks about, without a prefix the title repeats. */
+    fun requestedAction(toolName: String, summary: String): String {
+        val trimmed = summary.trim()
+        val prefix = actionPrefixes[toolName]
+        if (prefix != null && trimmed.startsWith(prefix)) {
+            val rest = trimmed.removePrefix(prefix).trim()
+            if (rest.isNotEmpty()) return rest
+        }
+        return trimmed.ifEmpty { "Review requested action" }
+    }
+
+    /** The card's title: the requested action as a plain question. Matches desktop and iOS. */
+    fun headline(toolName: String, summary: String): String = when (toolName) {
+        "run_command", "bash" -> "Run this command?"
+        "edit_file", "edit" -> fileName(toolName, summary)?.let { "Edit $it?" } ?: "Edit files?"
+        "write_file", "write" -> fileName(toolName, summary)?.let { "Write $it?" } ?: "Write a file?"
+        "delete_file" -> "Delete files?"
+        "move_file" -> "Move files?"
+        "read_file", "read" -> "Read a file?"
+        "ls" -> "List a folder?"
+        "grep", "find" -> "Search files?"
+        "web_fetch" -> "Open a web page?"
+        "generate_image" -> "Generate an image?"
+        "share_image" -> "Share this image in the chat?"
+        else -> title(toolName)
+    }
+
+    /** A short file name for the title, only when the host summary names one path. */
+    private fun fileName(toolName: String, summary: String): String? {
+        val prefix = actionPrefixes[toolName] ?: return null
+        if (!summary.trim().startsWith(prefix)) return null
+        val path = requestedAction(toolName, summary)
+        if (path.any { it == '\n' || it == '\r' }) return null
+        val name = path.substringAfterLast('/')
+        return name.takeIf { it.isNotEmpty() && it.length <= 60 }
     }
 
     fun scopeTitle(scope: AidenApprovalScope): String = when (scope) {
         AidenApprovalScope.ONCE -> "Allow once"
         AidenApprovalScope.CHAT -> "Allow for this chat"
         AidenApprovalScope.ALWAYS -> "Always allow"
+    }
+
+    /**
+     * What a remembered scope covers, under its menu title. A command rule matches only
+     * that exact command, but a file rule matches the tool and path, so it also covers
+     * later changes with different contents.
+     */
+    fun scopeDetail(scope: AidenApprovalScope, toolName: String): String? {
+        if (scope == AidenApprovalScope.ONCE) return null
+        val target = when (toolName) {
+            "run_command" -> "This exact command"
+            "edit_file" -> "Any edit to this file"
+            "write_file" -> "Any write to this file"
+            else -> "This exact action"
+        }
+        return if (scope == AidenApprovalScope.CHAT) "$target, until Aiden quits" else "$target in this workspace"
     }
 
     fun requiresDesktopConfirmation(approval: AidenPendingApproval): Boolean =
@@ -1632,7 +1845,8 @@ object AidenPendingApprovalResolution {
                 AidenApprovalScope.offered(approval.scopes)
             } else {
                 listOf(AidenApprovalScope.ONCE)
-            }
+            },
+            schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
         )
     }
 }
@@ -1902,6 +2116,15 @@ object AidenTurnRequestBuilder {
 }
 
 object AidenDraftSendReconciliation {
+    /**
+     * A turn the Mac refused without running it: the phone drops the saved attempt and shows the
+     * Mac's reason. A 409 is settled only for `workspace_unavailable` (a moved or deleted folder),
+     * which the Mac sends before anything runs; other conflicts may have an unknown outcome.
+     */
+    fun refusalSettlesSend(statusCode: Int, code: AidenRemoteErrorCode): Boolean =
+        statusCode in setOf(400, 401, 403, 404, 413, 422, 429) ||
+            (statusCode == 409 && code == AidenRemoteErrorCode.WORKSPACE_UNAVAILABLE)
+
     fun failedDraft(submitted: String, current: String): String {
         if (current.isEmpty()) return submitted
         if (current == submitted || (submitted.isNotEmpty() && current.startsWith("$submitted\n\n"))) return current
@@ -1970,6 +2193,12 @@ object AidenChatModelAuthority {
             )
         }
 
+        // A chat that already has messages keeps its own model. The remembered
+        // per-host choice (passed only until the user picks in this chat)
+        // seeds a new chat, or one whose model this phone can't use.
+        if (remembered != null && chat.messages.isNotEmpty()) {
+            ownSelection(chat, catalog, selectedProviderId, selectedModelId, selectedThinkingLevel)?.let { return it }
+        }
         rememberedSelection(catalog, remembered)?.let { return it }
 
         val selectedProvider = catalog.providers.firstOrNull { it.id == selectedProviderId }
@@ -1993,6 +2222,27 @@ object AidenChatModelAuthority {
             modelId = modelId,
             thinkingLevel = selectedThinkingLevel ?: model?.effectiveThinkingLevel
         )
+    }
+
+    /**
+     * The chat's own provider/model pair, when the host still offers it.
+     * Hidden models stay usable here, as they do for existing chats on the Mac.
+     */
+    fun ownSelection(
+        chat: AidenChat,
+        catalog: AidenModelCatalog,
+        selectedProviderId: String?,
+        selectedModelId: String?,
+        selectedThinkingLevel: String?
+    ): AidenChatModelSelection? {
+        val providerId = chat.providerId ?: return null
+        val modelId = chat.modelId ?: return null
+        val provider = catalog.providers.firstOrNull { it.id == providerId } ?: return null
+        val model = provider.models.firstOrNull { it.id == modelId } ?: return null
+        val keepsLevel = selectedProviderId == providerId && selectedModelId == modelId
+        val levels = model.thinkingLevels.orEmpty()
+        val thinkingLevel = selectedThinkingLevel?.takeIf { keepsLevel && it in levels } ?: model.effectiveThinkingLevel
+        return AidenChatModelSelection(providerId, modelId, thinkingLevel)
     }
 
     /**

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Camera, Check, ExternalLink, Globe, History, Link2, Loader2, MessageCirclePlus, Minus, MoreVertical, PictureInPicture2, Plus, RadioTower, RotateCw, Settings2, Square, Unlink2, Volume2, VolumeX, X } from "lucide-react";
 import type { BrowserAnnotation, BrowserCommand, BrowserCommandResult, BrowserImage, BrowserSnapshot, BrowserState, BrowserStylePreview, BrowserTab, BrowserViewport } from "../shared/browser";
 import { browserApi } from "../lib/ipc";
-import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed } from "../lib/browser-ui-state";
+import { acceptBrowserState, BROWSER_DEVICE_PRESETS, browserBoundsFromRect, enqueueBrowserPresentation, resizeBrowserViewport, savedBrowserScreenshotPath, validBrowserViewport, visibleBrowserNativeOccluders, browserNativeViewObstructed, browserOcclusionMutated, browserOcclusionScrolled } from "../lib/browser-ui-state";
 import { Button, DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Input, Text, toast } from "./ui";
 import { BrowserSettings } from "./browser-settings";
 import { BrowserFloatingFrame } from "./browser-floating-frame";
@@ -19,7 +19,24 @@ import { BrowserAnnotationPreviewQueue } from "../lib/browser-annotation-preview
 const ZOOM_STEPS = [.25, .33, .5, .67, .75, .8, .9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
 type RunCommand = (command: BrowserCommand) => Promise<BrowserCommandResult | null>;
 
-export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void }) {
+/** `bot`: a Bot's own browser, shown in its panel. */
+export type BrowserPanelVariant = "workspace" | "bot";
+
+/** What the strip says while the person holds a Bot's tab. */
+export function browserHoldNotice(reason: NonNullable<BrowserTab["heldForPerson"]>["reason"], agentName = "The Bot"): string {
+  switch (reason) {
+    case "sign_in":
+      return `This tab is yours: sign in, then choose I’m signed in on ${agentName}’s card. ${agentName} can’t see or use it until then.`;
+    case "handoff":
+      return `This tab is yours until you finish ${agentName}’s hand-off. ${agentName} can’t see or use it until then.`;
+    case "takeover":
+      return `You’re using this tab. ${agentName} can’t see or use it until you’re done.`;
+  }
+}
+
+export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = false, onStateChange, variant = "workspace", agentName }: { workspaceId: string; active: boolean; onDock?: () => void; integratedTabs?: boolean; onStateChange?: (state: BrowserState | null) => void; variant?: BrowserPanelVariant; agentName?: string }) {
+  // A Bot's own browser: no profile choice, annotations, DevTools, capture, recording or floating.
+  const bot = variant === "bot";
   const [state, setState] = React.useState<BrowserState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = React.useState(0);
@@ -139,13 +156,15 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     let frame = 0;
     let disposed = false;
     let previous = "";
+    let occluders: HTMLElement[] = [];
     const presentationKey = `${workspaceId}:${tabId}`;
     const present = () => {
       frame = 0;
       if (disposed) return;
       const bounds = browserBoundsFromRect(host.getBoundingClientRect());
+      occluders = visibleBrowserNativeOccluders();
       const overlay = bounds
-        ? browserNativeViewObstructed(bounds, visibleBrowserNativeOccluders().map((element) => element.getBoundingClientRect()))
+        ? browserNativeViewObstructed(bounds, occluders.map((element) => element.getBoundingClientRect()))
         : false;
       const visible = surfaceActive && ready && !annotation && !settingsOpen && !menuOpen && !profileMenuOpen && !overlay && Boolean(bounds);
       const command: BrowserCommand = { action: "present", tabId, visible, ...(bounds ? { bounds } : {}) };
@@ -158,16 +177,17 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     presentationRef.current = schedule;
     const resize = new ResizeObserver(schedule);
     resize.observe(host);
-    const overlays = new MutationObserver(schedule);
+    const overlays = new MutationObserver((records) => { if (browserOcclusionMutated(records, host, occluders)) schedule(); });
+    const scrolled = (event: Event) => { if (browserOcclusionScrolled(event.target, host, occluders)) schedule(); };
     overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-state", "aria-hidden", "inert", "data-presence", "popover", "style"] });
     window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", scrolled, true);
     document.addEventListener("transitionend", schedule, true);
     present();
     return () => {
       disposed = true; window.cancelAnimationFrame(frame); resize.disconnect(); overlays.disconnect();
       if (presentationRef.current === schedule) presentationRef.current = null;
-      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", schedule, true); document.removeEventListener("transitionend", schedule, true);
+      window.removeEventListener("resize", schedule); window.removeEventListener("scroll", scrolled, true); document.removeEventListener("transitionend", schedule, true);
       void enqueueBrowserPresentation(presentationKey, () => browserApi.command(workspaceId, { action: "present", tabId, visible: false })).catch(() => undefined);
     };
   }, [workspaceId, tab?.id, tab?.floating, surfaceActive, ready, annotation, settingsOpen, menuOpen, profileMenuOpen]);
@@ -245,7 +265,7 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     if (!surfaceActive) return;
     return browserApi.onEvent((event) => {
       if (event.type !== "shortcut" || event.workspaceId !== workspaceId || event.tabId !== tab?.id) return;
-      if (event.shortcut === "annotate") void annotate();
+      if (event.shortcut === "annotate") { if (!bot) void annotate(); }
       else if (event.shortcut === "focus_address") { addressRef.current?.focus(); addressRef.current?.select(); }
       else void run({ action: "reload", tabId: event.tabId, ignoreCache: event.shortcut === "hard_reload" });
     });
@@ -256,12 +276,14 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
     const keyboard = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       const key = event.key.toLowerCase();
-      if (key === ".") { event.preventDefault(); event.stopPropagation(); void annotate(); }
+      // ⌘. marks up the page only from inside the browser; elsewhere it stops a reply.
+      // Window capture runs before the app's command keys, so focus here wins.
+      if (key === "." && !bot && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); event.stopPropagation(); void annotate(); }
       else if (key === "l" && panelRef.current?.contains(document.activeElement)) { event.preventDefault(); addressRef.current?.focus(); }
       else if (key === "r" && panelRef.current?.contains(document.activeElement) && tab) { event.preventDefault(); void run({ action: "reload", tabId: tab.id, ignoreCache: event.shiftKey }); }
     };
-    document.addEventListener("keydown", keyboard);
-    return () => document.removeEventListener("keydown", keyboard);
+    window.addEventListener("keydown", keyboard, true);
+    return () => window.removeEventListener("keydown", keyboard, true);
   }, [surfaceActive, annotate, tab, run]);
 
   const content = <div ref={panelRef} className="browser-panel" data-browser-workspace={workspaceId}>
@@ -280,10 +302,10 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
         </div>)}
       </div>
       <Button variant="transparent" size="small" iconOnly aria-label="New browser tab" title="New browser tab" onClick={() => void run({ action: "create" }).then(() => addressRef.current?.focus())}><Plus /></Button>
-      <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
+      {bot ? null : <DropdownMenu open={profileMenuOpen} onOpenChange={setProfileMenuOpen}>
         <DropdownMenuTrigger asChild><Button variant="transparent" size="small" className="browser-profile-button" title="Browser profile" aria-label="Choose browser profile">{visibleState?.profiles.find((profile) => profile.id === tab?.profileId)?.name ?? "Default"}</Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end"><DropdownMenuLabel>Open a new tab in</DropdownMenuLabel>{visibleState?.profiles.map((profile) => <DropdownMenuItem key={profile.id} onSelect={() => void run({ action: "create", profileId: profile.id })}>{profile.name}{profile.id === tab?.profileId ? <Check className="ml-auto size-3.5" /> : null}</DropdownMenuItem>)}<DropdownMenuSeparator /><DropdownMenuItem onSelect={() => setSettingsOpen(true)}>Browser settings…</DropdownMenuItem></DropdownMenuContent>
-      </DropdownMenu>
+      </DropdownMenu>}
     </div>
     <div className="browser-chrome" data-loading={tab?.loading ?? false}>
       <div className="browser-control-group" role="group" aria-label="Browser navigation">
@@ -294,13 +316,14 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       <form className="browser-address-form" onSubmit={(event) => { event.preventDefault(); submitAddress(address); }}>
         <Input ref={addressRef} aria-label="Search or enter URL" placeholder="Search or enter URL" spellCheck={false} autoComplete="off" value={addressFocused ? address : tab?.url === "about:blank" ? "" : tab?.url ?? ""} onChange={(event) => setAddress(event.target.value)} onFocus={() => { setAddress(tab?.url === "about:blank" ? "" : tab?.url ?? ""); setAddressFocused(true); queueMicrotask(() => addressRef.current?.select()); }} onBlur={() => setAddressFocused(false)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setAddressFocused(false); event.currentTarget.blur(); } }} />
       </form>
-      <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>
+      {bot ? null : <Button ref={annotateButtonRef} variant={pickerActive || annotation ? "muted" : "transparent"} size="small" iconOnly aria-label={pickerActive || annotation ? "Cancel annotation" : "Annotate"} aria-pressed={pickerActive || Boolean(annotation)} aria-keyshortcuts="Meta+." title="Annotate ⌘." disabled={!ready} onClick={() => void annotate()}><MessageCirclePlus /></Button>}
       {integratedTabs && tab && (tab.audible || tab.muted) ? <Button variant="transparent" size="small" iconOnly aria-label={tab.muted ? "Unmute tab" : "Mute tab"} onClick={() => void run({ action: "mute", tabId: tab.id, muted: !tab.muted })}>{tab.muted ? <VolumeX /> : <Volume2 />}</Button> : null}
-      <BrowserMoreMenu tab={tab} state={visibleState} open={menuOpen} onOpenChange={setMenuOpen} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
+      <BrowserMoreMenu bot={bot} tab={tab} state={visibleState} open={menuOpen} onOpenChange={setMenuOpen} run={run} onCapture={capture} onSettings={() => setSettingsOpen(true)} onDock={onDock} />
     </div>
     {tab?.viewport.mode === "responsive" ? <BrowserDeviceToolbar tab={tab} run={run} /> : null}
     {pickerActive ? <div className="browser-picker-status" role="status">Select an element or highlighted text. Press Esc to cancel.</div> : null}
-    {tab?.agentControlling ? <div className="browser-agent-status" role="status">Aiden is using this browser</div> : null}
+    {tab?.agentControlling ? <div className="browser-agent-status" role="status">{agentName ?? "Aiden"} is using this browser</div> : null}
+    {bot && tab?.heldForPerson ? <div className="browser-agent-status" role="status">{browserHoldNotice(tab.heldForPerson.reason, agentName)}</div> : null}
     {error ? <div className="browser-action-error" role="alert"><span>{error}</span><Button size="small" variant="transparent" iconOnly aria-label="Dismiss browser error" onClick={() => setError(null)}><X /></Button></div> : null}
     <div className="browser-content" data-responsive={tab?.viewport.mode === "responsive"}>
       <div className="browser-native-slot" ref={hostRef} data-browser-viewport />
@@ -308,9 +331,9 @@ export function BrowserPanel({ workspaceId, active, onDock, integratedTabs = fal
       {tab?.viewport.mode === "responsive" && ready && !annotation && !tab.floating ? <BrowserViewportResizeHandles tab={tab} run={run} /> : null}
       {annotation ? <BrowserAnnotationEditor snapshot={annotation.snapshot} initial={annotation.initial} pending={annotationPending} onCancel={cancelAnnotation} onPreview={previewAnnotation} onSubmit={(value) => void submitAnnotation(value)} />
         : tab?.error || tab?.crashed ? <div className="browser-empty"><Globe /><Text variant="strong">{tab.crashed ? "This page stopped responding" : "This page could not be loaded"}</Text><p>{tab.error || "Reload the page to continue."}</p><Button size="small" onClick={() => void run({ action: "reload", tabId: tab.id })}>Reload page</Button></div>
-        : !ready ? <BrowserEmptyState state={visibleState} loadFailed={!visibleState && Boolean(error)} onRetryLoad={() => setLoadAttempt((attempt) => attempt + 1)} onOpen={submitAddress} run={run} /> : null}
+        : !ready ? <BrowserEmptyState bot={bot} agentName={agentName} state={visibleState} loadFailed={!visibleState && Boolean(error)} onRetryLoad={() => setLoadAttempt((attempt) => attempt + 1)} onOpen={submitAddress} run={run} /> : null}
     </div>
-    {visibleState ? <BrowserSettings state={visibleState} open={settingsOpen} onOpenChange={setSettingsOpen} run={run} error={error} /> : null}
+    {visibleState && !bot ? <BrowserSettings state={visibleState} open={settingsOpen} onOpenChange={setSettingsOpen} run={run} error={error} /> : null}
   </div>;
   if (!tab?.floating) return content;
   const dock = () => { void run({ action: "float", tabId: tab.id, floating: false }).then((result) => { if (result) onDock?.(); }); };
@@ -327,10 +350,12 @@ function BrowserFavicon({ src }: { src?: string }) {
     : <Globe aria-hidden="true" />;
 }
 
-export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOpen, run }: { state: BrowserState | null; loadFailed?: boolean; onRetryLoad?: () => void; onOpen: (url: string) => void; run: RunCommand }) {
+export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOpen, run, bot = false, agentName }: { state: BrowserState | null; loadFailed?: boolean; onRetryLoad?: () => void; onOpen: (url: string) => void; run: RunCommand; bot?: boolean; agentName?: string }) {
   // The error itself is announced by the panel's alert strip; this replaces the endless spinner with a way out.
   if (!state && loadFailed) return <div className="browser-empty"><Globe aria-hidden="true" /><Text variant="strong">Couldn’t open the browser</Text>{onRetryLoad ? <Button size="small" onClick={onRetryLoad}>Try again</Button> : null}</div>;
   if (!state) return <div className="browser-empty"><Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" /><Text color="secondary" role="status">Opening browser…</Text></div>;
+  // A Bot's browser keeps its own sign-ins: the person's history and local servers don't belong here.
+  if (bot) return <div className="browser-empty"><Globe aria-hidden="true" /><Text variant="strong">No page open</Text><p>{agentName ?? "The Bot"} opens pages here, with its own sign-ins. You can also enter a URL above.</p></div>;
   const history = state.history.slice(0, 10);
   if (!history.length && !state.servers.length) return <div className="browser-empty"><Globe /><Text variant="strong">No page open</Text><p>Enter a URL above, or run a dev server in your workspace. Local servers appear here automatically.</p></div>;
   return <div className="browser-start-page">
@@ -339,7 +364,7 @@ export function BrowserEmptyState({ state, loadFailed = false, onRetryLoad, onOp
   </div>;
 }
 
-function BrowserMoreMenu({ tab, state, open, onOpenChange, run, onCapture, onSettings, onDock }: { tab: BrowserTab | null; state: BrowserState | null; open: boolean; onOpenChange: (open: boolean) => void; run: RunCommand; onCapture: (record: boolean) => Promise<void>; onSettings: () => void; onDock?: () => void }) {
+function BrowserMoreMenu({ bot = false, tab, state, open, onOpenChange, run, onCapture, onSettings, onDock }: { bot?: boolean; tab: BrowserTab | null; state: BrowserState | null; open: boolean; onOpenChange: (open: boolean) => void; run: RunCommand; onCapture: (record: boolean) => Promise<void>; onSettings: () => void; onDock?: () => void }) {
   const captureShiftRef = React.useRef(false);
   const disabled = !tab?.url;
   const profileId = tab?.profileId ?? state?.defaults.profileId ?? "default";
@@ -348,23 +373,23 @@ function BrowserMoreMenu({ tab, state, open, onOpenChange, run, onCapture, onSet
     <DropdownMenuContent align="end" className="browser-more-menu">
       <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "open_external", tabId: tab.id })}><ExternalLink />Open in system browser</DropdownMenuItem>
       <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "reload", tabId: tab.id, ignoreCache: true })}>Hard reload</DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "devtools", tabId: tab.id })}>Open DevTools</DropdownMenuItem>
+      {bot ? null : <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "devtools", tabId: tab.id })}>Open DevTools</DropdownMenuItem>}
       <DropdownMenuSeparator />
-      <DropdownMenuItem disabled={disabled || Boolean(tab?.error)} onPointerDown={(event) => { captureShiftRef.current = event.shiftKey; }} onKeyDown={(event) => { captureShiftRef.current = event.shiftKey; }} onSelect={() => { void onCapture(captureShiftRef.current); captureShiftRef.current = false; }}><Camera />{tab?.recording ? "Stop recording" : "Capture screenshot"}<span className="ml-auto text-mini opacity-70">⇧ record</span></DropdownMenuItem>
+      {bot ? null : <><DropdownMenuItem disabled={disabled || Boolean(tab?.error)} onPointerDown={(event) => { captureShiftRef.current = event.shiftKey; }} onKeyDown={(event) => { captureShiftRef.current = event.shiftKey; }} onSelect={() => { void onCapture(captureShiftRef.current); captureShiftRef.current = false; }}><Camera />{tab?.recording ? "Stop recording" : "Capture screenshot"}<span className="ml-auto text-mini opacity-70">⇧ record</span></DropdownMenuItem>
       <DropdownMenuItem disabled={disabled || Boolean(tab?.error)} onSelect={() => void onCapture(true)}>{tab?.recording ? "Stop recording" : "Record browser"}</DropdownMenuItem>
       <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "float", tabId: tab.id, floating: !tab.floating }).then((result) => { if (result && tab.floating) onDock?.(); })}><PictureInPicture2 />{tab?.floating ? "Return to Environment" : "Float browser over chat"}</DropdownMenuItem>
-      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "picture_in_picture", tabId: tab.id, enabled: !tab.pictureInPicture })}>{tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window"}</DropdownMenuItem>
+      <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "picture_in_picture", tabId: tab.id, enabled: !tab.pictureInPicture })}>{tab?.pictureInPicture ? "Close separate preview window" : "Open separate preview window"}</DropdownMenuItem></>}
       <DropdownMenuItem disabled={disabled} onSelect={() => tab && void run({ action: "viewport", tabId: tab.id, viewport: { ...tab.viewport, mode: tab.viewport.mode === "fill" ? "responsive" : "fill" } })}>{tab?.viewport.mode === "responsive" ? "Hide device toolbar" : "Show device toolbar"}</DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuLabel>Appearance</DropdownMenuLabel>
       {(["system", "light", "dark"] as const).map((appearance) => <DropdownMenuCheckboxItem key={appearance} checked={tab?.appearance === appearance} disabled={disabled} onCheckedChange={() => tab && void run({ action: "appearance", tabId: tab.id, appearance })}>{appearance[0].toUpperCase() + appearance.slice(1)}</DropdownMenuCheckboxItem>)}
       <DropdownMenuSeparator />
       <div className="browser-zoom-row"><span>Zoom</span><Button variant="transparent" size="small" iconOnly disabled={disabled || (tab?.zoom ?? 1) <= .25} aria-label="Zoom out" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: [...ZOOM_STEPS].reverse().find((value) => value < tab.zoom - .001) ?? .25 })}><Minus /></Button><button type="button" className="browser-zoom-reset" disabled={disabled} aria-label="Reset zoom" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: 1 })}>{Math.round((tab?.zoom ?? 1) * 100)}%</button><Button variant="transparent" size="small" iconOnly disabled={disabled || (tab?.zoom ?? 1) >= 5} aria-label="Zoom in" onClick={() => tab && void run({ action: "zoom", tabId: tab.id, zoom: ZOOM_STEPS.find((value) => value > tab.zoom + .001) ?? 5 })}><Plus /></Button></div>
-      <DropdownMenuSeparator />
+      {bot ? null : <><DropdownMenuSeparator />
       <DropdownMenuLabel>Profile: {state?.profiles.find((profile) => profile.id === profileId)?.name ?? "Default"}</DropdownMenuLabel>
       <DropdownMenuItem onSelect={() => void run({ action: "clear_cookies", profileId })}>Clear cookies</DropdownMenuItem>
       <DropdownMenuItem onSelect={() => void run({ action: "clear_cache", profileId })}>Clear cache</DropdownMenuItem>
-      <DropdownMenuSeparator /><DropdownMenuItem onSelect={onSettings}><Settings2 />Browser settings…</DropdownMenuItem>
+      <DropdownMenuSeparator /><DropdownMenuItem onSelect={onSettings}><Settings2 />Browser settings…</DropdownMenuItem></>}
     </DropdownMenuContent>
   </DropdownMenu>;
 }

@@ -36,7 +36,7 @@ test("Assistant MCP inventory exposes only bounded enabled identities", async ()
     truncated: false,
     status: "enabled_servers_invalid_identities_omitted",
     instruction:
-      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Plugins.",
+      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Connectors.",
   });
 });
 
@@ -49,7 +49,7 @@ test("Assistant MCP inventory gives explicit host guidance when no server is ena
     truncated: false,
     status: "no_enabled_servers",
     instruction:
-      "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → Plugins.",
+      "No MCP server is enabled. Do not create or add external-service access. Tell the user to connect a server in Settings → Connectors.",
   });
 });
 
@@ -96,6 +96,17 @@ test("Assistant MCP inventory never reports unsafe enabled identities as no serv
     truncated: false,
     status: "enabled_servers_invalid_identities_omitted",
     instruction:
-      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Plugins.",
+      "One or more enabled MCP servers have identities that cannot be shown safely. Use only exact shown server ids and ask the user to repair the omitted server names or IDs in Settings → Connectors.",
   });
+});
+
+test("Assistant MCP inventory never lists a connector the chat's workspace switched off", async () => {
+  const servers: McpServer[] = [
+    { id: "gmail", name: "Gmail", transport: "http", url: "https://example.test", enabled: true },
+    { id: "notion", name: "Notion", transport: "http", url: "https://example.test", enabled: true },
+  ];
+  const tool = createAssistantMcpServerTool(async () => servers, ["notion"]);
+  const listed = resultJson(await tool.execute("list", {})) as { servers: unknown; totalEnabledServers: number };
+  assert.deepEqual(listed.servers, [{ id: "gmail", name: "Gmail" }]);
+  assert.equal(listed.totalEnabledServers, 1);
 });

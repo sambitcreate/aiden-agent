@@ -36,14 +36,20 @@ export class AidenLiveThreadStore {
 
   async begin(input: { id: string; model: string; computerUseEnabled: boolean }): Promise<void> {
     const store = this.store(input.id);
-    await store.save({
-      schemaVersion: 1,
-      id: input.id,
-      startedAt: this.now().toISOString(),
-      outcome: "active",
-      model: input.model,
-      computerUseEnabled: input.computerUseEnabled,
-    });
+    try {
+      await store.save({
+        schemaVersion: 1,
+        id: input.id,
+        startedAt: this.now().toISOString(),
+        outcome: "active",
+        model: input.model,
+        computerUseEnabled: input.computerUseEnabled,
+      });
+    } catch (error) {
+      // finish() skips a thread that never began, so it would never drop this.
+      this.stores.delete(input.id);
+      throw error;
+    }
     this.begun.add(input.id);
   }
 

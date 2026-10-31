@@ -16,16 +16,10 @@ paths, idempotence, and rejection of unexpected source/version changes.
 
 `resources/model-capabilities.json` is the packaged, immutable models.dev snapshot used for
 runtime limits and request admission. `npm run dist` refreshes and validates it before every
-package. A separate `Model catalog refresh` workflow runs after pushes to `main`, updates only that
-tracked file and runs `npm run test:model-catalog`. A changed snapshot does not go straight to
-`main`: the workflow pushes it to a fresh `automation/models-dev-catalog-*` branch with its deploy
-key, opens a pull request with auto-merge, and closes any older catalog pull request it
-supersedes. CI runs the catalog contracts and the desktop unit lanes on that branch (the runtime
-takes model limits from the snapshot), and GitHub merges once `main`'s required checks pass. A
-merge made through the job token starts no workflows, so `Model catalog main baseline` starts full
-CI on `main` unless a recent `main` CI run already tested a commit that contains the latest catalog
-merge (checked by commit ancestry). It checks right after catalog branch CI passes (waiting briefly
-for the merge) and every 30 minutes, so a late merge is still covered. A failed fetch leaves the known-good snapshot
+package; `release.yml` runs the same refresh for the published build. There is no post-merge
+catalog workflow: the bot that refreshed the tracked snapshot after every push to `main` was removed
+on 2026-10-27, so the checked-in file changes only when someone runs `npm run models:refresh` and
+commits the result through a normal pull request. A failed fetch leaves the known-good snapshot
 untouched.
 
 The live app contacts models.dev only when a user chooses **Update model catalogs** in Settings →
@@ -62,7 +56,9 @@ authority. Ordinary model reads and application startup remain offline.
   in one public GitHub release in this repository. The workflow also uploads a byte-identical
   `Aiden-Agent-Beta-arm64.dmg` alias so the website can use GitHub's stable
   `releases/latest/download` URL without a per-release source edit. Each release includes
-  GitHub-generated notes for changes since the previous release. The DMGs are website and
+  GitHub-generated notes for changes since the previous release. When the version-bump pull
+  request adds `docs/release-notes/v<version>.md`, the publisher places that reviewed text
+  between the Beta line and the generated notes (see [release notes](release-notes/README.md)). The DMGs are website and
   Homebrew downloads; the ZIP and YAML are the updater payload.
 - Release-related pull requests run the separate release-consumer contract workflow. It verifies
   the versioned DMG name against `sambitcreate/homebrew-tap`, verifies the deployed website points
@@ -199,6 +195,7 @@ its history scan, before changing visibility.
    | `APPLE_API_KEY_P8`           | Complete private `.p8` key contents                                 |
    | `MACOS_CERTIFICATE_P12`      | Base64-encoded Developer ID Application certificate and private key |
    | `MACOS_CERTIFICATE_PASSWORD` | Password used when exporting that `.p12`                            |
+   | `AIDEN_POSTHOG_PROJECT_KEY`  | PostHog project key; the release checks the built app carries it    |
 
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses

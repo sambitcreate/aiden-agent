@@ -15,9 +15,7 @@ export default [
       ".agents/**",
       "resources/generative-ui/**",
       "packages/cli/dist/**",
-      "packages/cli-playground/dist/**",
       "**/node_modules/**",
-      "packages/cli-playground/test-results/**",
     ],
   },
   js.configs.recommended,
@@ -52,6 +50,20 @@ export default [
     ignores: ["main/**/*.test.{ts,tsx}", "main/platform.ts"],
     rules: {
       "no-console": "error",
+    },
+  },
+  {
+    // The desktop MCP client is Pi's (`@earendil-works/pi-mcp`). The official
+    // SDK stays only for code that hosts MCP servers (the ACP bridge).
+    files: ["main/**/*.{ts,tsx,mjs}", "renderer/**/*.{ts,tsx}"],
+    ignores: ["main/services/acp/**"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["@modelcontextprotocol/sdk/client", "@modelcontextprotocol/sdk/client/*"],
+          message: "Use Pi's MCP client (@earendil-works/pi-mcp) for MCP client code. The SDK is only for hosting MCP servers.",
+        }],
+      }],
     },
   },
   {

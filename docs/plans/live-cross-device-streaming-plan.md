@@ -26,7 +26,7 @@ All three platforms follow these rules.
 
 1. **Follow is a latch driven by what the user does, not by distance.** Content growth, keyboard insets and layout settling never turn follow off. Only a user gesture does: a wheel-up with overflow, a drag, a scrollbar press, PageUp/Home/ArrowUp, or a mobile pan. Follow turns back on only when a gesture settles near the bottom: 40px on desktop, 12pt or 12dp on mobile. Distance controls only whether the jump button is visible: 80 when idle, 160 while streaming. The button appears after 150ms away from the bottom and hides immediately.
 2. **The jump is a reset, followed by a deferred snap that is checked again after layout.** It cancels in-flight scrolls, forces follow on, and ignores leftover momentum. It snaps without animation while streaming, because animated scrolls get cut off by the next tick. While following, every reveal tick re-snaps, so any height-estimate error corrects itself within one tick.
-3. **Text is released only at safe boundaries, and new content fades rather than moves.** Settled blocks are memoized. Only the live tail re-parses or re-lays out. New blocks fade in with opacity only, with no `translateY` and no per-glyph animation. Reduce Motion means instant reveal, with no fade and no glide.
+3. **Text is released only at safe boundaries, and new content fades rather than moves.** Settled blocks are memoized. Only the live tail re-parses or re-lays out. New blocks fade in with opacity only, with no `translateY` and no per-glyph animation. Reduce Motion means no fade and no glide. On desktop it also skips block gating, but still releases the text that has arrived at most once per 300ms, so a reply is not re-parsed on every token; phones show it through the unpaced word gate.
 4. **Streaming and settled replies share one tree, and the reply settles in place.** No reply is rendered twice, and finishing a reply doesn't remount it.
 5. **Cost is zero when nobody is watching** (cross-device). Use cursor reads of the existing `HostRunRegistry` journal, which already coalesces deltas, and open subscriptions only while a surface shows a chat that something else is running. Add no polling of transcripts.
 
@@ -195,3 +195,14 @@ Add a `run_update { runId, state }` progress event, emitted on begin and settle.
   4. Start a turn on the phone and watch the Mac update live.
   5. Start a turn on the Mac with the chat open on both phones, and watch both update live.
   6. Repeat with Reduce Motion on: instant reveal, no fades.
+
+## Update 2026-10-21: iOS settle and pacing follow-up
+
+The owner reported flicker and jitter in iOS workspace chats and asked for slower, smoother streaming. Findings and changes (iOS only, no Remote protocol change):
+
+- **Settle in place was not met.** On `done`, `finishStream` published the reconciled transcript and then awaited the cache before clearing the live reply, so the reply rendered twice for at least a frame, the same desktop P4 bug. The live copy is now cleared in the same main-actor turn as the publish. A reply with only tools or reasoning also vanished between `done` and the transcript read; it now stays until the settled transcript replaces it (`showsLiveResponse`).
+- **"Working for" moved.** It sat above the live reply and disappeared at `done`, moving the reply up. It now sits in a footer-height row below the reply, where the settled "Worked for" footer replaces it.
+- **Optimistic sends kept their row.** The server message ID replaced the local one in the `ForEach`, so the row was recreated and its thumbnails reloaded. Rows now keep the local ID as their render identity.
+- **Pacing revisited.** The 50ms gate above showed each burst whole, which reads as lumps when the Mac or network delivers text unevenly. The gate now ticks every 33ms and shows at least 1/8 of the backlog (minimum 3 characters, rounded up to whole words), so a burst drains over about a quarter second. A backlog over 600 characters is shown down to 600 at once, which addresses Hermex's lag concern. `done` keeps draining (a third of the backlog per tick) while the settled transcript is read instead of dumping it; error, cancel and other non-delta events still flush. Placeholders and visual cards in the live reply stay until it settles. Reduce Motion keeps the unpaced word gate. Bot session partials use the same gate. Android still uses the unpaced gate.
+- **Open Markdown in the tail.** While streaming, the open tail is drawn through `AidenStreamingMarkdownTail`, which closes open inline code, strong, emphasis and strike on the last line, shows a link that is still arriving as its label, and hides an unfinished line that is only a block marker. Sealed chunks and settled replies always use the real text.
+

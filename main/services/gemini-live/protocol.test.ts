@@ -65,6 +65,7 @@ function harness(
     idleTimeoutMs?: number;
     model?: string;
     signal?: AbortSignal;
+    tools?: ConstructorParameters<typeof GeminiLiveProtocol>[0]["tools"];
   } = {},
 ) {
   const server = new FakeGeminiLiveServer();
@@ -75,6 +76,7 @@ function harness(
     connector: options.connector ?? server.connector,
     model: options.model ?? "gemini-3.1-flash-live-preview",
     onEvent: (event) => events.push(event),
+    ...(options.tools ? { tools: options.tools } : {}),
     ...(options.connectTimeoutMs
       ? { connectTimeoutMs: options.connectTimeoutMs }
       : {}),
@@ -144,12 +146,24 @@ test("seeds ordered history once, then sends conversational text through realtim
 });
 
 test("extended-thinking sessions enable low thinking and a voice-first action contract", async () => {
-  const subject = harness({ model: "gemini-3.8-live-extended-thinking" });
+  const subject = harness({
+    model: "gemini-3.8-live-extended-thinking",
+    tools: [{ functionDeclarations: [{ name: "computer_use", description: "Act on the screen." }] }],
+  });
   await subject.protocol.start();
   const config = subject.server.latest.params.config!;
   assert.deepEqual(config.thinkingConfig, { thinkingLevel: "LOW" });
   assert.match(String(config.systemInstruction), /fully voice-first/u);
   assert.match(String(config.systemInstruction), /without per-action approval prompts/u);
+});
+
+test("without screen tools, Live is told it cannot act on the screen", async () => {
+  const subject = harness({ model: "gemini-3.8-live-extended-thinking" });
+  await subject.protocol.start();
+  const instruction = String(subject.server.latest.params.config!.systemInstruction);
+  assert.match(instruction, /fully voice-first/u);
+  assert.match(instruction, /cannot click, type or act on the user's screen/u);
+  assert.doesNotMatch(instruction, /Execute the user's requested screen actions/u);
 });
 
 test("accepts only bounded 16 kHz 20-40 ms PCM and emits an exact SDK audio blob", async () => {

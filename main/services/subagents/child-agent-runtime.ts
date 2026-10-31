@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { convertToLlm } from "../pi-legacy-harness.js";
 import type {
   AgentMessage,
+  AgentOptions,
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
@@ -13,6 +14,10 @@ import type {
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { writeDevLog } from "../dev-log.js";
 import { buildAgentRuntimeOptions } from "../generation-runtime.js";
+import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
+import type { UsageLimitOwner } from "../usage-limit-core.js";
+import { withUsageLimitWait, type UsageLimitStreamOptions } from "../usage-limit-stream.js";
+import { createSpendingMeter, spendCounts, type SpendingMeterOptions } from "../spending-service.js";
 import {
   assertGenerationContextCapacity,
   createGenerationContextTransform,
@@ -60,6 +65,9 @@ export interface SubagentChildSpec {
     context: BeforeToolCallContext,
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
+  /** Host-owned budget transition; may remove tools for a final report. */
+  prepareNextTurnWithContext?: AgentOptions["prepareNextTurnWithContext"];
+  finishTurn?: AgentOptions["finishTurn"];
   onStarting?: () => void;
 }
 
@@ -100,6 +108,10 @@ export interface SubagentRuntimeRegistryOptions {
   inferenceIsolation?: SubagentInferenceIsolation;
   /** Separate crash-safe tool-effect journal; omitted by isolated unit registries. */
   effectStore?: PiRuntimeEffectStore;
+  /** Waits out provider usage limits for the parent chat; omitted by unit registries. */
+  usageLimits?: (owner: UsageLimitOwner, providerLabel: string, extra: { observeFetch: boolean }) => UsageLimitStreamOptions;
+  /** Counts the child's spending toward the parent chat's limit; omitted by unit registries. */
+  spending?: SpendingMeterOptions["spending"];
 }
 
 function childIdentity(
@@ -143,6 +155,8 @@ export class SubagentRuntimeRegistry {
   private readonly recordCompactionUsage?: SubagentRuntimeRegistryOptions["recordCompactionUsage"];
   private readonly inferenceIsolation?: SubagentInferenceIsolation;
   private readonly effectStore?: PiRuntimeEffectStore;
+  private usageLimits?: SubagentRuntimeRegistryOptions["usageLimits"];
+  private spending?: SubagentRuntimeRegistryOptions["spending"];
   private reportRuntimeFault: (source: string) => void = () => {};
   private shuttingDown = false;
   private readonly quarantinedDeployments = new Set<SubagentDeployment>();
@@ -165,14 +179,54 @@ export class SubagentRuntimeRegistry {
     this.recordCompactionUsage = options.recordCompactionUsage;
     this.inferenceIsolation = options.inferenceIsolation;
     this.effectStore = options.effectStore;
+    this.usageLimits = options.usageLimits;
+    this.spending = options.spending;
   }
 
   setHealthMetrics(healthMetrics: SubagentHealthMetricsSink): void {
     this.healthMetrics = healthMetrics;
   }
 
+  /** The app's usage-limit waits and spending limits, bound by the Electron main process. */
+  setLimits(limits: Pick<SubagentRuntimeRegistryOptions, "usageLimits" | "spending">): void {
+    this.usageLimits = limits.usageLimits;
+    this.spending = limits.spending;
+  }
+
   setRuntimeFaultReporter(reporter: (source: string) => void): void {
     this.reportRuntimeFault = reporter;
+  }
+
+  /**
+   * The child's provider transport. Its requests wait out usage limits as the
+   * parent chat's would; an isolated request process cannot take a recording
+   * fetch, so only its response hook is read there.
+   */
+  private childStreamOptions(sessionId: string, childRuntime: ResolvedModelRuntime, spec: SubagentChildSpec) {
+    const options = buildAgentRuntimeOptions(sessionId, childRuntime);
+    if (!options.streamFn || isAcpHarnessProvider(spec.runtime.provider.id)) return options;
+    let streamFn = options.streamFn;
+    if (this.usageLimits) {
+      const limits = this.usageLimits({ kind: "chat", id: spec.authority.chatId }, spec.runtime.provider.label, {
+        observeFetch: childRuntime === spec.runtime,
+      });
+      streamFn = withUsageLimitWait(streamFn, limits);
+    }
+    if (this.spending) {
+      // A helper's spending is its chat's. Over the limit, its next request is
+      // refused, so the helper stops and the chat ends after that step.
+      streamFn = createSpendingMeter({
+        spending: this.spending,
+        owner: { kind: "chat", id: spec.authority.chatId },
+        refuse: true,
+        counts: () => spendCounts({
+          local: isLocalProviderDeployment(spec.runtime.provider),
+          provider: spec.runtime.provider,
+          models: spec.runtime.models,
+        }),
+      }).wrap(streamFn);
+    }
+    return { ...options, streamFn };
   }
 
   get activeCount(): number {
@@ -251,7 +305,7 @@ export class SubagentRuntimeRegistry {
           ]);
         }
       },
-      ...buildAgentRuntimeOptions(sessionId, childRuntime),
+      ...this.childStreamOptions(sessionId, childRuntime, spec),
       convertToLlm,
       transformContext: createGenerationContextTransform(contextOptions),
       durability: {
@@ -273,6 +327,8 @@ export class SubagentRuntimeRegistry {
         entry.providerResponseReceived = true;
       },
       beforeToolCall: spec.beforeToolCall,
+      prepareNextTurnWithContext: spec.prepareNextTurnWithContext,
+      finishTurn: spec.finishTurn,
       initialState: {
         systemPrompt: spec.systemPrompt,
         model: spec.runtime.model,

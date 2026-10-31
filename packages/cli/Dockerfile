@@ -11,7 +11,6 @@ COPY renderer ./renderer
 COPY resources ./resources
 COPY native ./native
 COPY scripts ./scripts
-COPY patches ./patches
 COPY packages/cli ./packages/cli
 COPY THIRD_PARTY_NOTICES.md ./
 RUN npm run build --prefix packages/cli && npm run type-check --prefix packages/cli
@@ -32,7 +31,6 @@ FROM mirror.gcr.io/library/node:22-bookworm-slim
 RUN apt-get update -qq && apt-get install -y --no-install-recommends git openssl ca-certificates libssl3 avahi-utils bzip2 && rm -rf /var/lib/apt/lists/*
 COPY --from=runtime-deps --chown=node:node /deps/node_modules /opt/aiden/node_modules
 COPY --from=build --chown=node:node /build/packages/cli/package.json /opt/aiden/package.json
-COPY --from=build --chown=node:node /build/packages/cli/themes /opt/aiden/themes
 COPY --from=build --chown=node:node /build/packages/cli/dist/app /opt/aiden/dist/app
 ENV AIDEN_CODING_AGENT_DIR=/home/node/.aiden/agent PI_TELEMETRY=0
 USER node

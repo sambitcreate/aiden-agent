@@ -1,7 +1,7 @@
 // What a Bot chat shows, row by row, from the durable projection.
 //
 // A reply's turn starts at the person's message (or a routine, or their answer
-// to a question) and ends at the next one. Everything the Bot writes is a
+// to a question or a hand-off card) and ends at the next one. Everything the Bot writes is a
 // bubble, including the narration it writes alongside tool calls (spec
 // decision 9); tool steps themselves never become rows. With Summary or
 // Detailed chat activity, a turn that used tools also gets one recap of its
@@ -10,9 +10,11 @@
 // and never stored.
 
 import { botRetryableFailedTurn, type BotQueuedMessage, type BotTranscriptEntry } from "../../shared/bot-live";
+import { botHandoffResultLine, type BotHandoffOutcome } from "../../shared/bot-handoffs";
 import type { BotChatActivityLevel } from "../../shared/bots";
 import type { ConnectCardEntry } from "../../shared/bot-connections";
 import type { BotRoutineProposalEntryData, BotRoutineProposalStatus } from "../../shared/bot-routine-proposals";
+import type { BotIssue, BotIssueResolution } from "../../shared/bot-issues";
 import { botSettleSteps, type BotRecapStep } from "./bot-activity-steps";
 import { walkBotTurns, type BotTurn } from "./bot-turns";
 
@@ -25,6 +27,8 @@ export interface BotTranscriptRowOptions {
 
 export type BotTranscriptRow =
   | { kind: "user"; id: string; text: string }
+  /** The person's answer to a hand-off card, on their side: "You did this: …" with their note below. */
+  | { kind: "handoff_result"; id: string; outcome: BotHandoffOutcome; signedIn: boolean; text: string; note?: string }
   | { kind: "routine"; id: string; label: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming?: boolean }
   /** One turn's steps; `live` while the turn runs (Detailed only). */
@@ -47,6 +51,31 @@ export type BotTranscriptRow =
       proposal: BotRoutineProposalEntryData;
       status: BotRoutineProposalStatus;
       routineId?: string;
+      supersededBy?: string;
+    }
+  | {
+      kind: "skill_proposal";
+      id: string;
+      proposal: import("../../shared/bot-skill-proposals").BotSkillProposalEntryData;
+      status: import("../../shared/bot-skill-proposals").BotSkillProposalStatus;
+    }
+  | {
+      kind: "lesson_proposal" | "lesson_learned";
+      id: string;
+      lesson: import("../../shared/bot-lessons").BotLessonCardData;
+      status: "pending" | "active" | "dismissed" | "retired";
+    }
+  | { kind: "memory_tidy"; id: string; changeId?: string }
+  /** "Wake-up at 3:10 PM · Cancel": a wake-up the Bot set for itself. */
+  | { kind: "wake_up"; id: string; wakeUpId: string; fireAt: number }
+  /** A "Needs you" issue the host raised; settles to one quiet line. */
+  | { kind: "issue"; id: string; issue: BotIssue; status: "open" | BotIssueResolution }
+  /** Routines that fired while the person had paused the Bot, each with Run now. */
+  | {
+      kind: "routines_skipped";
+      id: string;
+      since: number;
+      routines: { routineId: string; name: string; count: number }[];
     };
 
 export function botTranscriptRows(
@@ -82,6 +111,16 @@ export function botTranscriptRows(
         case "question_answer":
           // Every message starts a turn: a steer is placed after the round's tool results, so it never splits a step from its result.
           rows.push({ kind: "user", id: entry.id, text: entry.text });
+          break;
+        case "handoff_result":
+          rows.push({
+            kind: "handoff_result",
+            id: entry.id,
+            outcome: entry.outcome,
+            signedIn: entry.kind === "sign_in" && entry.outcome === "done",
+            text: botHandoffResultLine(entry),
+            ...(entry.note ? { note: entry.note } : {}),
+          });
           break;
         case "routine":
           rows.push({ kind: "routine", id: entry.id, label: entry.label, text: entry.text });
@@ -123,7 +162,27 @@ export function botTranscriptRows(
             proposal: entry.proposal,
             status: entry.status,
             ...(entry.routineId ? { routineId: entry.routineId } : {}),
+            ...(entry.supersededBy ? { supersededBy: entry.supersededBy } : {}),
           });
+          break;
+        case "lesson_proposal":
+        case "lesson_learned":
+          rows.push({ kind: entry.type, id: entry.id, lesson: entry.lesson, status: entry.status });
+          break;
+        case "memory_tidy":
+          rows.push({ kind: "memory_tidy", id: entry.id, ...(entry.changeId ? { changeId: entry.changeId } : {}) });
+          break;
+        case "wake_up":
+          rows.push({ kind: "wake_up", id: entry.id, wakeUpId: entry.wakeUpId, fireAt: entry.fireAt });
+          break;
+        case "skill_proposal":
+          rows.push({ kind: "skill_proposal", id: entry.id, proposal: entry.proposal, status: entry.status });
+          break;
+        case "routines_skipped":
+          rows.push({ kind: "routines_skipped", id: entry.id, since: entry.since, routines: entry.routines });
+          break;
+        case "issue":
+          rows.push({ kind: "issue", id: entry.id, issue: entry.issue, status: entry.status });
           break;
         case "tool_result":
           break;

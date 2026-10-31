@@ -159,3 +159,31 @@ test("native visuals ride the stream projection so a detached view keeps them", 
     bridge.restore();
   }
 });
+
+test("a retry wait reaches its own stream only, and a malformed one is dropped", () => {
+  const bridge = installFakeBridge();
+  try {
+    const retries: unknown[] = [];
+    const statuses: string[] = [];
+    const stream = subscribeGenerationStream("retry-stream", { chatId: "chat-retry" }, {
+      onDelta: () => undefined,
+      onDone: () => undefined,
+      onError: (message) => assert.fail(message),
+      onStatus: (phase) => statuses.push(phase),
+      onRetrying: (retry) => retries.push(retry),
+    });
+    const retry = { attempt: 2, maxAttempts: 6, retryAt: 1_000 };
+    bridge.emit("chat:status", { streamId: "other-stream", phase: "retrying", retry });
+    bridge.emit("chat:status", { streamId: "retry-stream", phase: "retrying", retry });
+    bridge.emit("chat:status", {
+      streamId: "retry-stream",
+      phase: "retrying",
+      retry: { attempt: 7, maxAttempts: 6, retryAt: 1_000 },
+    });
+    assert.deepEqual(retries, [retry]);
+    assert.deepEqual(statuses, []);
+    stream.dispose();
+  } finally {
+    bridge.restore();
+  }
+});

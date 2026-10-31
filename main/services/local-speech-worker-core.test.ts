@@ -8,12 +8,14 @@ import { decodeOggOpusToPcm16k, OggOpusTooLongError } from "./local-speech-opus.
 import { MAX_PCM_SAMPLES } from "./local-speech-protocol.js";
 import {
   createLocalSpeechMessageHandler,
+  createRoutedSpeechEngine,
   replyToWorkerFrame,
   type LocalSpeechWorkerEngine,
 } from "./local-speech-worker-core.js";
 
 const parakeet = speechModel("parakeet-v3")!;
 const canary = speechModel("canary-180m-flash")!;
+const metal = speechModel("parakeet-v3-metal")!;
 
 function fakeEngine(overrides: Partial<LocalSpeechWorkerEngine> = {}) {
   const requests: EngineTranscribeRequest[] = [];
@@ -275,4 +277,64 @@ test("an invalid frame that names a request fails at once instead of timing out"
   assert.equal(await replyToWorkerFrame("noise", handle), null);
   const valid = await replyToWorkerFrame({ version: 2, kind: "status", requestId: "s9" }, handle);
   assert.equal(valid?.kind, "result");
+});
+
+test("GGUF models run on transcribe.cpp and every other model on sherpa-onnx, one engine held at a time", async () => {
+  const sherpa = fakeEngine();
+  let gpuDecodes = 0;
+  const gguf = fakeEngine({
+    transcribe: () => {
+      gpuDecodes += 1;
+      return { text: "from metal", language: null, decodeMs: 3 };
+    },
+  });
+  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine));
+
+  const metalReply = await handle(transcribe(metal));
+  assert.equal(metalReply.kind === "result" && metalReply.text, "from metal");
+  assert.equal(sherpa.requests.length, 0);
+  assert.equal(sherpa.releases(), 1, "switching to the GPU engine frees the sherpa recognizer");
+
+  const sherpaReply = await handle(transcribe(parakeet));
+  assert.equal(sherpaReply.kind === "result" && sherpaReply.text, "hallo welt");
+  assert.equal(gpuDecodes, 1);
+  assert.equal(gguf.releases(), 1, "switching back frees the GPU model");
+});
+
+test("a GGUF model on a worker without transcribe.cpp fails as engine-unavailable", async () => {
+  const sherpa = fakeEngine();
+  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, null));
+  const reply = await handle(transcribe(metal));
+  assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
+  assert.equal(sherpa.requests.length, 0);
+  const status = await handle({ version: 2, kind: "status", requestId: "s3", family: "parakeet-gguf" });
+  assert.equal(status.kind === "result" && status.ready, false);
+});
+
+test("a transcribe.cpp engine that fails to load reports unavailable for Metal models while sherpa stays ready", async () => {
+  const sherpa = fakeEngine();
+  const gguf = fakeEngine({
+    status: () => ({ ready: false, error: "The Metal voice engine failed to load: dlopen" }),
+    load: async () => {
+      const error = new Error("The Metal voice engine failed to load: dlopen");
+      error.name = "EngineUnavailableError";
+      throw error;
+    },
+  });
+  const handle = createLocalSpeechMessageHandler(createRoutedSpeechEngine(sherpa.engine, gguf.engine));
+  const reply = await handle({
+    version: 2,
+    kind: "load",
+    requestId: "l2",
+    modelId: metal.id,
+    modelDirectory: "/models/metal",
+    spec: metal,
+  });
+  assert.equal(reply.kind === "failure" && reply.code, "engine-unavailable");
+
+  const metalStatus = await handle({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" });
+  assert.equal(metalStatus.kind === "result" && metalStatus.ready, false);
+  assert.match(metalStatus.kind === "result" ? (metalStatus.error ?? "") : "", /dlopen/);
+  const sherpaStatus = await handle({ version: 2, kind: "status", requestId: "s2", family: "nemo-transducer" });
+  assert.equal(sherpaStatus.kind === "result" && sherpaStatus.ready, true);
 });

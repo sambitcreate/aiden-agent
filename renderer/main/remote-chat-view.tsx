@@ -1,13 +1,17 @@
 import * as React from "react";
 import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, ShieldQuestion, TriangleAlert } from "lucide-react";
+import { GitFork, Info, Loader2, MessageCircleQuestion, MoreHorizontal, TriangleAlert } from "lucide-react";
 import { AskUserQuestionComposer } from "../components/ask-user-question-composer";
-import { ChatApprovalCard, toolLabel, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
+import { ApprovalIcon, ChatApprovalCard, approvalHeadline, type ChatApprovalDecisionOptions } from "../components/chat-approval-card";
 import { Composer, type ComposerSkillCatalog } from "../components/composer";
 import { ForkSummaryCard, ForkSummaryDialog } from "../components/fork-summary-card";
-import { MessageList } from "../components/message-list";
-import { RemoteHostMarker, RemoteHostStatusRow } from "../components/sidebar-remote";
+import { MessageList, type ProviderFailureActions } from "../components/message-list";
+import { QueuedMessages } from "../components/queued-messages";
+import { RemoteModelPicker } from "../components/remote-new-chat-pickers";
+import { ThinkingControl } from "../components/thinking-control";
+import { ContextMeter } from "../components/context-meter";
+import { RemoteHostChip, RemoteHostStatusRow } from "../components/sidebar-remote";
 import {
   AlertDialog,
   Button,
@@ -19,10 +23,13 @@ import {
   EmptyState,
   Input,
   ScrollArea,
+  ScrollAreaFooterStack,
   Text,
   toast,
 } from "../components/ui";
-import { peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
+import { createChatTurnId, peerHostsApi, type ApprovalPrompt } from "../lib/ipc";
+import { committedRunInputNotice, steerQueuedMessage, steerRejectionMessage } from "../lib/chat-message-queue";
+import { useChatMessageQueue } from "../lib/use-chat-message-queue";
 import { forkedFromLabel } from "../lib/chat-copy-view";
 import { saveComposerDraftText } from "../lib/composer-draft-store";
 import { releaseAttachments, type ChatSessionControl, type ChatSessionSnapshot } from "../lib/hosts/chat-session-control";
@@ -33,8 +40,23 @@ import {
   hostResultValue,
   isOutcomeUnknown,
   type HostChatLineage,
+  type HostChatTurnReceipt,
 } from "../lib/hosts/host-chat-adapter";
-import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
+import { prepareRemoteAttachmentUploads } from "../lib/hosts/remote-attachments";
+import type { HostModelCatalog } from "../lib/hosts/host-resources";
+import {
+  REMOTE_QUEUE_FENCE_STALL_MS,
+  remoteQueueFence,
+  remoteQueueFenceHolds,
+  sendFencedTurn,
+  setRemoteQueueFence,
+  useRemoteQueueFence,
+} from "../lib/hosts/remote-queue-fence";
+import {
+  resolveRemoteTurnSelection,
+  useRemoteTurnPick,
+  type RemoteTurnSelection,
+} from "../lib/hosts/remote-turn-selection";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import { mapHostForkLineage, RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import type { RemoteTranscript } from "../lib/hosts/remote-chat-mapper";
@@ -42,7 +64,7 @@ import { RemoteChatSession, type RemoteChatSnapshot } from "../lib/hosts/remote-
 import { remoteRunTranscript } from "../lib/hosts/remote-stream-translator";
 import { useChatSession, type ChatSession } from "../lib/hosts/use-chat-session";
 import { sidebarHosts, type SidebarHost } from "../lib/sidebar-remote-groups";
-import type { Attachment } from "../lib/types";
+import type { Attachment, ChatMessage } from "../lib/types";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
@@ -51,8 +73,18 @@ import {
   type ChatForkPosition,
 } from "../shared/chat-copy-contract";
 import type { ChatRunInputMode, ChatRunInputRejectionReason } from "../shared/chat-run-input";
-import { hostResourceKey, type PeerHostFeedSnapshot, type PeerHostStatus, type PeerHostView } from "../shared/peer-host";
+import {
+  hostResourceKey,
+  type PeerHostFeedSnapshot,
+  type PeerHostStatus,
+  type PeerHostView,
+  type PeerRunState,
+} from "../shared/peer-host";
+import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import { isToolStep } from "../shared/generation-timeline";
+import { useChatFind } from "../components/chat-find-bar";
+import { useRemoteChatImages } from "../lib/hosts/remote-images";
 
 /**
  * `/host/$hostId/chat/$chatId`: a chat that lives on a paired host, read,
@@ -65,6 +97,8 @@ import type { SkillInvocationV1 } from "../shared/slash-commands";
  */
 
 const NO_SUBAGENTS: [] = [];
+const NO_MESSAGES: ChatMessage[] = [];
+const NO_HOST_RUNS: readonly PeerRunState[] = [];
 const noop = () => {};
 const subscribeNothing = () => noop;
 const nothing = () => null;
@@ -76,21 +110,10 @@ const INPUT_REJECTION: Record<ChatRunInputRejectionReason, string> = {
   invalid: "That message can't be added to the run.",
 };
 
-function availabilityLabel(host: SidebarHost): string {
-  switch (host.availability) {
-    case "online":
-      return "Connected";
-    case "connecting":
-      return "Connecting…";
-    case "blocked":
-      return "Needs re-pairing";
-    default:
-      return "Offline";
-  }
-}
-
 export interface RemoteComposerActions {
   send(text: string, attachments?: Attachment[], skill?: SkillInvocationV1): Promise<void>;
+  /** `send`, answering with the host's run for the turn, or null when the outcome is held unresolved. */
+  sendTurn(text: string, attachments?: Attachment[], skill?: SkillInvocationV1): Promise<HostChatTurnReceipt | null>;
   submitInput(mode: ChatRunInputMode): (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) => Promise<void>;
 }
 
@@ -104,19 +127,29 @@ export function remoteComposerActions(
   control: ChatSessionControl | null,
   runId: string | null,
   hostLabel: string,
+  /** The model and effort a new turn sends, read when it is sent. */
+  turnSelection: () => RemoteTurnSelection["extras"] = () => ({}),
 ): RemoteComposerActions {
+  const sendTurn: RemoteComposerActions["sendTurn"] = async (text, attachments = [], skill) => {
+    if (!control) throw new Error(`Connecting to ${hostLabel}…`);
+    // Files are read on this Mac and uploaded to the chat's host before the turn starts.
+    const uploads = await prepareRemoteAttachmentUploads(attachments);
+    try {
+      return await control.send(text, {
+        ...(uploads.length > 0 ? { attachments: uploads } : {}),
+        ...(skill ? { skill } : {}),
+        ...turnSelection(),
+      });
+    } catch (error) {
+      // The banner keeps the text and retries it with the same key; the composer clears.
+      if (isOutcomeUnknown(error)) return null;
+      throw error;
+    }
+  };
   return {
-    async send(text, attachments = [], skill) {
-      if (!control) throw new Error(`Connecting to ${hostLabel}…`);
-      // Files are read on this Mac and uploaded to the chat's host before the turn starts.
-      const uploads = remoteAttachmentUploads(attachments);
-      try {
-        await control.send(text, { ...(uploads.length > 0 ? { attachments: uploads } : {}), ...(skill ? { skill } : {}) });
-      } catch (error) {
-        // The banner keeps the text and retries it with the same key; the composer clears.
-        if (isOutcomeUnknown(error)) return;
-        throw error;
-      }
+    sendTurn,
+    async send(text, attachments, skill) {
+      await sendTurn(text, attachments, skill);
     },
     submitInput: (mode) => async (text, attachments = [], skill) => {
       if (!control) throw new Error(`Connecting to ${hostLabel}…`);
@@ -192,24 +225,20 @@ function ReadOnlyApprovalCard({ prompt, reason }: { prompt: ApprovalPrompt; reas
     <section
       aria-labelledby={titleId}
       data-remote-approval={prompt.approvalId}
-      className="rounded-card bg-popover p-3 shadow-popover"
+      className="approval-shell composer-shell bg-popover p-4 shadow-composer"
     >
-      <div className="flex items-start gap-2.5">
-        <span className="grid size-8 shrink-0 place-items-center rounded-full bg-status-warning-surface text-status-warning">
-          <ShieldQuestion className="size-4" aria-hidden="true" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <Text variant="small-strong" as="p" id={titleId}>
-            {`${toolLabel(prompt.toolName)} needs approval`}
-          </Text>
-          <Text variant="small" color="secondary" as="p" className="mt-0.5 break-words">
-            {prompt.summary}
-          </Text>
-          <Text variant="small" color="tertiary" as="p" className="mt-1.5">
-            {reason}
-          </Text>
-        </div>
+      <div className="flex flex-col items-center text-center">
+        <ApprovalIcon preview={undefined} command={false} />
+        <Text variant="strong" as="p" id={titleId} className="mt-2.5 text-balance">
+          {approvalHeadline(prompt)}
+        </Text>
       </div>
+      <Text variant="small" as="p" className="approval-well mt-3 break-words bg-well px-4 py-3 font-mono whitespace-pre-wrap">
+        {prompt.summary}
+      </Text>
+      <Text variant="small" color="secondary" as="p" className="mt-2.5 text-center text-pretty">
+        {reason}
+      </Text>
     </section>
   );
 }
@@ -300,6 +329,11 @@ export interface RemoteChatPaneProps {
   onOpenChat?(chatId: string): void;
   /** Called as a summary action starts; the returned function takes the action's answer. */
   beginLineageChange?(): (lineage: HostChatLineage) => void;
+  /** This chat's runs as the host feed reports them (`run.state`, keyed by run id). */
+  hostRuns?: readonly PeerRunState[];
+  /** The host's models, for this chat's model and effort controls. */
+  models?: HostModelCatalog;
+  modelsLoading?: boolean;
 }
 
 export interface RemoteChatLineage {
@@ -323,8 +357,18 @@ export function RemoteChatPane({
   lineage,
   onOpenChat,
   beginLineageChange,
+  models,
+  modelsLoading = false,
+  hostRuns,
 }: RemoteChatPaneProps) {
-  const messages = snapshot?.transcript.messages ?? [];
+  const control = chat?.control ?? null;
+  // The host lists images without their bytes; they draw once read from it.
+  const messages = useRemoteChatImages(
+    control?.adapter,
+    snapshot?.chatId ?? "",
+    snapshot?.transcript.messages ?? NO_MESSAGES,
+    Boolean(snapshot) && host.availability === "online",
+  );
   const run = snapshot?.run;
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
   const stale = host.availability !== "online";
@@ -334,8 +378,8 @@ export function RemoteChatPane({
   const approvals = live && run ? run.approvals : [];
   const questions = live && run ? run.questions : [];
   const runId = live ? (run?.runId ?? null) : null;
+  const findBar = useChatFind(snapshot ? `${snapshot.hostId}/${snapshot.chatId}` : `${host.id}/pending`);
 
-  const control = chat?.control ?? null;
   const state: ChatSessionSnapshot | null = chat?.snapshot ?? null;
   const capabilities = control?.adapter.capabilities();
   // Until the session control exists every action waits for the host.
@@ -379,9 +423,132 @@ export function RemoteChatPane({
     }
   };
 
-  const { send, submitInput } = remoteComposerActions(control, runId, host.label);
+  // The model and effort the next turn runs on, as the host lists them.
+  const turnKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
+  const [pick, setPick] = useRemoteTurnPick(turnKey);
+  const selection = resolveRemoteTurnSelection(models, snapshot?.transcript.model, pick);
+  const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
+  const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  const { sendTurn, submitInput } = remoteComposerActions(control, runId, host.label, () => selection.extras);
+  // Typed sends, queued ones and Try again all fence the queue on their run.
+  const send = (text: string, attachments?: Attachment[], skill?: SkillInvocationV1) =>
+    sendFencedTurn(turnKey, () => sendTurn(text, attachments, skill));
+  const generating = live && run?.status === "running";
+  // A run the host is still working on; an idle view with no run is not one.
+  const runActive = live && run?.runId != null;
+
+  // A queued turn's run reaches this Mac over the run stream a moment after
+  // the host accepts it, so the queue waits until that turn has finished.
+  // The fence is kept per host and chat, so reopening the chat keeps it.
+  const fence = useRemoteQueueFence(turnKey);
+  const [fenceClock, setFenceClock] = React.useState(() => Date.now());
+  const fenceHolds = remoteQueueFenceHolds(fence, {
+    run: run ? { runId: run.runId, ended: run.ended } : null,
+    hostRunState: fence ? hostRuns?.find((entry) => entry.runId === fence.runId)?.state : undefined,
+    now: Math.max(fenceClock, fence?.since ?? 0),
+  });
+  React.useEffect(() => {
+    if (fence && !fenceHolds && turnKey && remoteQueueFence(turnKey) === fence) setRemoteQueueFence(turnKey, null);
+  }, [fence, fenceHolds, turnKey]);
+  React.useEffect(() => {
+    if (!fence) return;
+    // Re-read when the stall fallback is due.
+    const timer = setTimeout(() => setFenceClock(Date.now()), Math.max(0, fence.since + REMOTE_QUEUE_FENCE_STALL_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [fence]);
+
+  // Queued follow-ups wait on this Mac, as in a local chat, and go to the host
+  // one at a time as new turns once its run has settled. Steer still joins the
+  // running turn on the host directly.
+  const { queue: messageQueue, snapshot: queuedState } = useChatMessageQueue({
+    chatId: turnKey ?? "remote-chat:pending",
+    contextKey: JSON.stringify([selection.model?.providerId, selection.model?.modelId]),
+    enabled:
+      turnKey !== null &&
+      !fenceHolds &&
+      !unavailable &&
+      !stale &&
+      Boolean(capabilities?.has("send")) &&
+      !runActive &&
+      !state?.sending &&
+      !state?.recovering &&
+      !unresolved &&
+      sendRefusal === null &&
+      !forkSummaryHoldsSend(lineage?.forkedFrom),
+    // `enabled` already waits for the host's run to end.
+    waitUntilIdle: () => Promise.resolve(true),
+    send: (message) => send(message.text, message.attachments, message.skillInvocation),
+  });
+  const queueMessage = async (text: string, attachments: Attachment[] = [], skill?: SkillInvocationV1) => {
+    messageQueue.add({ id: createChatTurnId(), text, attachments, ...(skill ? { skillInvocation: skill } : {}) });
+  };
+  const canSteerQueued = generating && runId !== null && steerRefusal === null && !state?.stopping;
+  const steerQueued = async (id: string) => {
+    if (!control || !runId) {
+      toast.error("The current response has ended. The message stays queued.");
+      return;
+    }
+    const outcome = await steerQueuedMessage({
+      queue: messageQueue,
+      id,
+      admit: (text) => control.submitInput(runId, "steer", text),
+    });
+    if (outcome.kind === "admitted") toast.info("Guidance sent. Aiden will read it at the next step.");
+    else if (outcome.kind === "committed") toast.info(committedRunInputNotice(outcome.reason));
+    else if (outcome.kind === "rejected") toast.error(`${steerRejectionMessage(outcome.reason)} The message stays queued.`);
+    else if (outcome.kind === "unknown") {
+      messageQueue.pause();
+      toast.error(`${host.label} didn't confirm the guidance. The queue is paused; check the conversation before resuming.`);
+    }
+  };
+
+  // The same next-request projection a local chat's meter shows, read from the
+  // host when the chat opens, when a reply settles (the transcript revision
+  // moves) and when a different model is picked. Never on a timer.
+  const contextAdapter = control?.adapter;
+  const contextRevision = snapshot?.transcript.revision ?? null;
+  const contextGranted = Boolean(contextAdapter?.contextPressure && capabilities?.has("contextPressure"));
+  const contextPressure = useQuery({
+    queryKey: hostQueryKeys.contextPressure(host.id, snapshot?.chatId ?? "", contextRevision ?? "", selection.extras.model),
+    queryFn: async () => hostResultValue(await contextAdapter!.contextPressure!(snapshot!.chatId, selection.extras.model)),
+    enabled:
+      contextGranted &&
+      Boolean(snapshot?.loaded) &&
+      contextRevision !== null &&
+      !stale &&
+      !runActive,
+    // While a reply runs the last reading stays up; the next one follows it.
+    placeholderData: (previous) => previous,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  // The latest reply failed: offer the next step this Mac can take on the host.
+  const [failureBusy, setFailureBusy] = React.useState(false);
+  const last = messages[messages.length - 1];
+  const failedReplyId = !runActive && last?.role === "assistant" && last.providerFailure ? last.id : undefined;
+  const failureActions: (ProviderFailureActions & { messageId: string }) | undefined =
+    failedReplyId && capabilities?.has("send")
+      ? {
+          messageId: failedReplyId,
+          // A turn already sent from here owns the chat until it settles.
+          busy: failureBusy || Boolean(state?.sending) || sendRefusal !== null || fenceHolds,
+          // Compaction and provider sign-in happen on that Mac.
+          supports: (action: ProviderFailureAction) => action === "try_again" || action === "continue",
+          onAction: (action: ProviderFailureAction) => {
+            setFailureBusy(true);
+            void send(action === "continue" ? PROVIDER_FAILURE_FOLLOW_UPS.continue : PROVIDER_FAILURE_FOLLOW_UPS.try_again)
+              .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Couldn't try that again."))
+              .finally(() => setFailureBusy(false));
+          },
+          ...(models ? { onSwitchModel: () => setModelMenuOpen(true) } : {}),
+        }
+      : undefined;
 
   const stop = () => {
+    // Stop ends this response only; queued follow-ups stay, paused, to resume or delete.
+    messageQueue.pause();
     if (!control || !runId) return;
     void control.cancel(runId).catch((error: unknown) => reportControlError(control, error, "Aiden could not stop that run."));
   };
@@ -515,7 +682,7 @@ export function RemoteChatPane({
   // Decisions go out one at a time, so only the first approval takes input and
   // the rest wait behind it, the way a local chat queues them.
   const openApproval = approvalAnswerable ? approvals[0] : undefined;
-  const isGenerating = live && run?.status === "running";
+  const isGenerating = generating;
   const showChatMenu = Boolean(capabilities?.has("rename") || capabilities?.has("remove"));
   const composerKey = snapshot ? hostResourceKey({ hostId: snapshot.hostId, resourceId: snapshot.chatId }) : null;
   const composerWaiting = useComposerWaiting(control);
@@ -523,40 +690,34 @@ export function RemoteChatPane({
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
-          <span className="flex min-w-0 items-center gap-2">
-            <RemoteHostMarker hostLabel={host.label} stale={stale} />
-            <span className="min-w-0">
-              <span className="block truncate">{title}</span>
-              {lineage ? (
-                <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary" data-chat-fork-lineage>
-                  <GitFork aria-hidden="true" className="size-3 shrink-0" />
-                  {lineage.sourceTitle !== undefined && onOpenChat ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
-                      onClick={() => onOpenChat(lineage.forkedFrom.chatId)}
-                    >
-                      {forkedFromLabel(lineage.sourceTitle)}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">
-                      {lineage.sourceTitle !== undefined ? forkedFromLabel(lineage.sourceTitle) : "Forked from another chat"}
-                    </span>
-                  )}
-                </span>
-              ) : null}
-              <span
-                className="block truncate text-small font-normal text-secondary"
-                data-remote-host-availability={host.availability}
-              >
-                {`${host.label} · ${availabilityLabel(host)}`}
+          <span className="block min-w-0">
+            <span className="block truncate">{title}</span>
+            {lineage ? (
+              <span className="flex min-w-0 items-center gap-1 text-small font-normal text-secondary" data-chat-fork-lineage>
+                <GitFork aria-hidden="true" className="size-3 shrink-0" />
+                {lineage.sourceTitle !== undefined && onOpenChat ? (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate rounded-control text-left outline-none hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus-ring"
+                    onClick={() => onOpenChat(lineage.forkedFrom.chatId)}
+                  >
+                    {forkedFromLabel(lineage.sourceTitle)}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate">
+                    {lineage.sourceTitle !== undefined ? forkedFromLabel(lineage.sourceTitle) : "Forked from another chat"}
+                  </span>
+                )}
               </span>
-            </span>
+            ) : null}
           </span>
         }
+        titleAccessory={<RemoteHostChip host={host} />}
         actions={
           showChatMenu ? (
             <DropdownMenu>
@@ -600,119 +761,125 @@ export function RemoteChatPane({
         showScrollToBottomButton
         streaming={isGenerating}
         footer={
-          <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
-            {openApproval ? (
-              <ChatApprovalCard
-                key={openApproval.approvalId}
-                pending={openApproval}
-                deciding={state?.decidingApprovalId === openApproval.approvalId}
-                onDecide={(decision, options) => decide(openApproval, decision, options)}
-                disabledReason={
-                  refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
-                }
-                pendingCount={approvals.length}
-                computerUseHost="remote"
-              />
-            ) : null}
-            {approvals
-              .filter((prompt) => prompt !== openApproval)
-              .map((prompt) => (
-                <ReadOnlyApprovalCard
-                  key={prompt.approvalId}
-                  prompt={prompt}
-                  reason={approvalAnswerable ? "Answer the approval above first." : `Approve or deny it on ${host.label}.`}
+          <ScrollAreaFooterStack>
+            {/* Cards and notices sit on the transcript column. The composers
+                below carry that inset themselves, as in a local chat, so
+                wrapping them here would narrow them by a second gutter. */}
+            <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2 empty:hidden">
+              {openApproval ? (
+                <ChatApprovalCard
+                  key={openApproval.approvalId}
+                  pending={openApproval}
+                  deciding={state?.decidingApprovalId === openApproval.approvalId}
+                  onDecide={(decision, options) => decide(openApproval, decision, options)}
+                  disabledReason={
+                    refusal("respondApproval") ?? (runId ? undefined : "Waiting for the run on that Mac.")
+                  }
+                  pendingCount={approvals.length}
+                  keyboardShortcuts
+                  computerUseHost="remote"
                 />
-              ))}
-            {questions
-              .filter((prompt) => prompt !== openQuestion)
-              .map((prompt) => (
-                <ReadOnlyQuestionCard
-                  key={prompt.promptId}
-                  prompt={prompt}
-                  reason={questionAnswerable ? (questionRefusal ?? "Answer the question above first.") : `Answer it on ${host.label}.`}
-                />
-              ))}
-            {elsewhere ? (
-              <ControlNotice
-                tone="info"
-                role="status"
-                data-remote-elsewhere={elsewhere.kind}
-                actions={
-                  <Button variant="muted" size="small" onClick={() => control?.dismissElsewhere()}>
-                    Dismiss
-                  </Button>
-                }
-              >
-                <Text variant="small-strong" as="p">
-                  Already answered elsewhere
-                </Text>
-                <Text variant="small" color="secondary" as="p" className="mt-0.5">
-                  {elsewhere.kind === "approval"
-                    ? elsewhere.decision
-                      ? `Another device ${elsewhere.decision === "allow" ? "allowed" : "denied"} it first. Your decision was not applied.`
-                      : "Another device answered it first. Your decision was not applied."
-                    : "Another device answered this question first. Your answer was not applied."}
-                </Text>
-              </ControlNotice>
-            ) : null}
-            {state?.unresolvedFork ? (
-              <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>I checked the host</Button>}>
-                <Text as="p" variant="small">Couldn't confirm the earlier fork. Check this computer's chat list before creating another. Repeating the same fork can recover it within the safe retry window.</Text>
-              </ControlNotice>
-            ) : null}
-            {state?.recoveryError ? (
-              <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => void control?.restore()}>Retry recovery</Button>}>
-                <Text as="p" variant="small">{state.recoveryError}</Text>
-              </ControlNotice>
-            ) : null}
-            {unresolved ? (
-              <ControlNotice
-                tone="warning"
-                role="alert"
-                data-remote-unresolved={unresolved.kind}
-                actions={
-                  <>
-                    <Button
-                      variant="muted"
-                      size="small"
-                      disabled={unresolved.retrying}
-                      onClick={() => { void control?.dismissUnresolved().catch(() => toast.error("Couldn’t dismiss this saved request. Try again.")); }}
-                    >
+              ) : null}
+              {approvals
+                .filter((prompt) => prompt !== openApproval)
+                .map((prompt) => (
+                  <ReadOnlyApprovalCard
+                    key={prompt.approvalId}
+                    prompt={prompt}
+                    reason={approvalAnswerable ? "Answer the approval above first." : `Approve or deny it on ${host.label}.`}
+                  />
+                ))}
+              {questions
+                .filter((prompt) => prompt !== openQuestion)
+                .map((prompt) => (
+                  <ReadOnlyQuestionCard
+                    key={prompt.promptId}
+                    prompt={prompt}
+                    reason={questionAnswerable ? (questionRefusal ?? "Answer the question above first.") : `Answer it on ${host.label}.`}
+                  />
+                ))}
+              {elsewhere ? (
+                <ControlNotice
+                  tone="info"
+                  role="status"
+                  data-remote-elsewhere={elsewhere.kind}
+                  actions={
+                    <Button variant="muted" size="small" onClick={() => control?.dismissElsewhere()}>
                       Dismiss
                     </Button>
-                    <Button
-                      variant="accent"
-                      size="small"
-                      disabled={!unresolved.retryAllowed || unresolved.retrying || refusal(unresolved.kind === "submitInput" ? "steer" : unresolved.kind) !== null}
-                      onClick={retry}
-                    >
-                      {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
-                      Retry
-                    </Button>
-                  </>
-                }
-              >
-                <Text variant="small-strong" as="p">
-                  {unresolved.message}
-                </Text>
-                {unresolved.text ? (
-                  <Text variant="small" color="secondary" as="p" className="mt-0.5 line-clamp-3 break-words">
-                    {unresolved.text}
+                  }
+                >
+                  <Text variant="small-strong" as="p">
+                    Already answered elsewhere
                   </Text>
-                ) : null}
-                <Text variant="small" color="tertiary" as="p" className="mt-1">
-                  Retry uses the original request within its safe delivery window. Nothing is resent automatically.
-                </Text>
-              </ControlNotice>
-            ) : null}
-            {unavailable ? (
-              <>
-                <RemoteHostStatusRow host={host} onReconnect={onReconnect} onManage={onManage} />
-                <Text variant="small" color="secondary" as="p" className="px-1" data-remote-chat-stale="true">
-                  {`Showing the last-known transcript. It updates when ${host.label} is back.`}
-                </Text>
-              </>
-            ) : null}
+                  <Text variant="small" color="secondary" as="p" className="mt-0.5">
+                    {elsewhere.kind === "approval"
+                      ? elsewhere.decision
+                        ? `Another device ${elsewhere.decision === "allow" ? "allowed" : "denied"} it first. Your decision was not applied.`
+                        : "Another device answered it first. Your decision was not applied."
+                      : "Another device answered this question first. Your answer was not applied."}
+                  </Text>
+                </ControlNotice>
+              ) : null}
+              {state?.unresolvedFork ? (
+                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => { void control?.dismissFork().catch(() => toast.error("Couldn’t dismiss this saved fork.")); }}>I checked the host</Button>}>
+                  <Text as="p" variant="small">Couldn't confirm the earlier fork. Check this computer's chat list before creating another. Repeating the same fork can recover it within the safe retry window.</Text>
+                </ControlNotice>
+              ) : null}
+              {state?.recoveryError ? (
+                <ControlNotice tone="warning" role="alert" actions={<Button size="small" onClick={() => void control?.restore()}>Retry recovery</Button>}>
+                  <Text as="p" variant="small">{state.recoveryError}</Text>
+                </ControlNotice>
+              ) : null}
+              {unresolved ? (
+                <ControlNotice
+                  tone="warning"
+                  role="alert"
+                  data-remote-unresolved={unresolved.kind}
+                  actions={
+                    <>
+                      <Button
+                        variant="muted"
+                        size="small"
+                        disabled={unresolved.retrying}
+                        onClick={() => { void control?.dismissUnresolved().catch(() => toast.error("Couldn’t dismiss this saved request. Try again.")); }}
+                      >
+                        Dismiss
+                      </Button>
+                      <Button
+                        variant="accent"
+                        size="small"
+                        disabled={!unresolved.retryAllowed || unresolved.retrying || refusal(unresolved.kind === "submitInput" ? "steer" : unresolved.kind) !== null}
+                        onClick={retry}
+                      >
+                        {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+                        Retry
+                      </Button>
+                    </>
+                  }
+                >
+                  <Text variant="small-strong" as="p">
+                    {unresolved.message}
+                  </Text>
+                  {unresolved.text ? (
+                    <Text variant="small" color="secondary" as="p" className="mt-0.5 line-clamp-3 break-words">
+                      {unresolved.text}
+                    </Text>
+                  ) : null}
+                  <Text variant="small" color="tertiary" as="p" className="mt-1">
+                    Retry uses the original request within its safe delivery window. Nothing is resent automatically.
+                  </Text>
+                </ControlNotice>
+              ) : null}
+              {unavailable ? (
+                <>
+                  <RemoteHostStatusRow host={host} onReconnect={onReconnect} onManage={onManage} />
+                  <Text variant="small" color="secondary" as="p" className="px-1" data-remote-chat-stale="true">
+                    {`Showing the last-known transcript. It updates when ${host.label} is back.`}
+                  </Text>
+                </>
+              ) : null}
+            </div>
             {openQuestion && control ? (
               <AskUserQuestionComposer
                 key={openQuestion.promptId}
@@ -721,9 +888,11 @@ export function RemoteChatPane({
                 onRespond={(response) => answer(openQuestion, response)}
               />
             ) : canSend && composerKey && composerWaiting ? (
-              <Text variant="small" color="secondary" as="p" className="px-1 text-center" data-remote-send-pending="true">
-                {`Waiting for ${host.label} to confirm your last message.`}
-              </Text>
+              <div className="aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5">
+                <Text variant="small" color="secondary" as="p" className="px-1 text-center" data-remote-send-pending="true">
+                  {`Waiting for ${host.label} to confirm your last message.`}
+                </Text>
+              </div>
             ) : canSend && composerKey ? (
               <Composer
                 // Keyed by host and chat, so drafts never cross hosts.
@@ -738,19 +907,78 @@ export function RemoteChatPane({
                 hasMessages={messages.length > 0}
                 onSend={send}
                 hostSkills={capabilities?.has("skills") ? hostSkills : undefined}
-                onQueue={steerRefusal === null ? submitInput("queue") : undefined}
+                onQueue={queueMessage}
                 onSteer={steerRefusal === null ? submitInput("steer") : undefined}
+                hasQueuedMessages={queuedState.messages.length > 0}
+                queuedMessages={
+                  <QueuedMessages
+                    key={composerKey}
+                    queue={messageQueue}
+                    canSteer={canSteerQueued}
+                    onSteer={steerQueued}
+                    returnFocus={() => composerRef.current}
+                  />
+                }
+                // Images are refused only when the chat's model is known not to read them.
+                visionSupported={selection.hostModel ? selection.hostModel.supportsImages : undefined}
+                modelPicker={
+                  models || modelsLoading ? (
+                    <RemoteModelPicker
+                      hostLabel={host.label}
+                      catalog={models}
+                      loading={modelsLoading}
+                      selected={selection.model}
+                      disabled={isGenerating || Boolean(state?.sending)}
+                      onSelect={(model) => setPick({ ...pick, model })}
+                      open={modelMenuOpen}
+                      onOpenChange={setModelMenuOpen}
+                    />
+                  ) : undefined
+                }
+                thinkingControl={
+                  selection.levels.length > 0 && selection.thinkingLevel ? (
+                    <ThinkingControl
+                      providerLabel={selection.hostModel?.label ?? "Model"}
+                      level={selection.thinkingLevel}
+                      levels={selection.levels}
+                      canDisable={selection.canDisable}
+                      disabled={isGenerating || Boolean(state?.sending)}
+                      disabledReason="Change the effort after this response finishes."
+                      onChange={(thinkingLevel) => setPick({ ...pick, thinkingLevel })}
+                    />
+                  ) : undefined
+                }
+                contextMeter={
+                  // A disabled query still answers from the cache: show only what this host grants.
+                  contextGranted && contextPressure.data ? (
+                    <ContextMeter
+                      pressure={contextPressure.data}
+                      // The host compacts during a run; its timeline says when.
+                      compacting={
+                        row?.timeline?.steps.some(
+                          (step) =>
+                            isToolStep(step) &&
+                            step.toolName === "compact_context" &&
+                            (step.status === "pending" || step.status === "running"),
+                        ) ?? false
+                      }
+                    />
+                  ) : undefined
+                }
                 onStop={stop}
+                inputRef={composerRef}
                 isGenerating={isGenerating || Boolean(state?.sending)}
                 canStopGeneration={isGenerating && Boolean(runId) && cancelRefusal === null && !state?.stopping}
                 stoppingGeneration={Boolean(state?.stopping)}
               />
             ) : control ? (
-              <Text variant="small" color="secondary" as="p" className="px-1 text-center" data-remote-send-unsupported="true">
-                {`This chat runs on ${host.label}. ${sendRefusal ?? ""}`.trim()}
-              </Text>
+              <div className="aiden-dock-inset chat-content-column pb-4 pt-3 sm:pb-5">
+                <Text variant="small" color="secondary" as="p" className="px-1 text-center" data-remote-send-unsupported="true">
+                  {`This chat runs on ${host.label}. ${sendRefusal ?? ""}`.trim()}
+                </Text>
+              </div>
             ) : null}
-          </div>
+          </ScrollAreaFooterStack>
         }
       >
         {loading ? (
@@ -786,6 +1014,8 @@ export function RemoteChatPane({
             <MessageList
               chatId={snapshot.chatId}
               messages={messages}
+              // Save and Copy read this Mac's stored chats; this chat is stored on its host.
+              storedImageActions={false}
               streamingText={row!.streamingText}
               streamingReasoning={row!.streamingReasoning}
               streamComplete={row!.streamComplete}
@@ -796,6 +1026,7 @@ export function RemoteChatPane({
               onOpenSubagent={noop}
               agentActivity={row!.agentActivity}
               error={row!.error ?? snapshot.error}
+              failureActions={failureActions}
               onFork={forkOffered ? forkFromTranscript : undefined}
               forkDisabledReason={forkDisabledReason}
               onForkWithSummary={
@@ -1022,6 +1253,13 @@ function ControlledRemoteChatPane({
 }) {
   const chat = useChatSession(adapter, { hostId: adapter.hostId, chatId });
   const hostSkills = useHostSkills(adapter, chatId);
+  // The same host query a new chat on this Mac reads, so both pickers agree.
+  const models = useQuery({
+    queryKey: hostQueryKeys.models(adapter.hostId),
+    queryFn: async () => hostResultValue(await adapter.models()),
+    enabled: adapter.capabilities().has("createChat") && props.host.availability === "online",
+    staleTime: 60_000,
+  });
   const fork = useRemoteForkLineage(adapter, chatId, listedLineage, rowRevision);
   const lineage: RemoteChatLineage | undefined = fork.forkedFrom
     ? { forkedFrom: fork.forkedFrom, ...(sourceTitle !== undefined ? { sourceTitle } : {}) }
@@ -1030,6 +1268,8 @@ function ControlledRemoteChatPane({
     <RemoteChatPane
       {...props}
       chat={chat}
+      {...(models.data ? { models: models.data } : {})}
+      modelsLoading={models.isFetching && !models.data}
       {...(hostSkills ? { hostSkills } : {})}
       {...(lineage ? { lineage } : {})}
       beginLineageChange={fork.beginUpdate}
@@ -1160,6 +1400,7 @@ export function RemoteChatRoute({ hostId, chatId, onManage, onRemoved, onOpenCha
     onRemoved,
     // Bot chats are never listed, and the host refuses to fork them.
     forkable: summary !== undefined,
+    hostRuns: feed.data?.runs.filter((entry) => entry.chatId === chatId) ?? NO_HOST_RUNS,
     ...(onOpenChat ? { onOpenChat } : {}),
   };
 

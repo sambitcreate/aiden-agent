@@ -36,6 +36,7 @@ import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticEvent
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnosticOutcome
 import sbtbiswas.AidenOnTheGo.diagnostics.AidenDiagnostics
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -56,6 +57,22 @@ import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * A request query value as the Mac reads it back. Macs before contract revision
+ * 41 refuse any `%` in a URL, so what they could read stays literal: a space
+ * travels as `+`, which every Mac decodes, and the separators ids, dates and
+ * cursors use stay as they are. Only a character that can't travel literally
+ * (`& + # %`, quotes, accents, emoji) is percent-encoded, which revision 41
+ * Macs accept.
+ */
+object AidenHostQuery {
+    private val literalEscapes = Regex("%(3A|40|2F|24|2C|3B|3D|21|28|29|7E)", RegexOption.IGNORE_CASE)
+
+    fun value(raw: String): String =
+        URLEncoder.encode(raw, Charsets.UTF_8.name())
+            .replace(literalEscapes) { match -> match.value.substring(1).toInt(16).toChar().toString() }
+}
+
 data class AidenPreferredChatSummaryPage(
     val summaries: List<AidenChatSummary>,
     val nextCursor: String?,
@@ -66,7 +83,7 @@ class AidenRemoteClient(
     val endpoint: String,
     val credential: String?,
     val customOkHttpClient: OkHttpClient? = null
-) {
+) : AidenSpendingTransport {
     constructor(
         installation: AidenInstallation,
         credential: String,
@@ -473,7 +490,7 @@ class AidenRemoteClient(
                 AidenDiagnosticOutcome.FAILED,
                 if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
             )
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.retryAfter))
         }
 
         try {
@@ -616,6 +633,44 @@ class AidenRemoteClient(
             acceptedStatus = setOf(201), bodyJson = json.encodeToString(input)) { bytes ->
             json.decodeFromString(String(bytes, Charsets.UTF_8))
         }
+
+    /** Revision 47: the chat's or Bot's spending limit, or `spending: null` without one. */
+    override suspend fun spending(owner: AidenSpendingOwner): AidenSpendingStatus =
+        executeRequest(spendingPath(owner)) { bytes -> decodeSpending(bytes) }
+
+    /** Adds the limit once more; the revision makes a repeated tap a `revision_conflict`. */
+    override suspend fun allowMoreSpending(owner: AidenSpendingOwner, revision: String): AidenSpendingStatus {
+        if (revision.isEmpty() || revision.length > 128 || revision.any { it.code !in 0x21..0x7e }) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        return executeRequest(
+            spendingPath(owner) + "/allow-more",
+            method = "POST",
+            ifMatchRevision = revision,
+            bodyJson = "{}",
+            retryConnectionFailure = false
+        ) { bytes -> decodeSpending(bytes) }
+    }
+
+    private fun spendingPath(owner: AidenSpendingOwner): String = when (owner) {
+        is AidenSpendingOwner.Chat -> {
+            AidenBotWire.validateIdentifier(owner.chatId, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
+            "/chats/${owner.chatId}/spending"
+        }
+        is AidenSpendingOwner.Bot -> {
+            AidenBotWire.validateIdentifier(owner.botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+            "/bots/${owner.botId}/spending"
+        }
+    }
+
+    private fun decodeSpending(bytes: ByteArray): AidenSpendingStatus {
+        val text = String(bytes, Charsets.UTF_8)
+        val root = json.parseToJsonElement(text) as? kotlinx.serialization.json.JsonObject
+        if (root == null || !root.containsKey("spending")) throw AidenRemoteClientException.InvalidResponse()
+        val status = json.decodeFromString<AidenSpendingStatus>(text)
+        if (status.spending?.isValid == false) throw AidenRemoteClientException.InvalidResponse()
+        return status
+    }
 
     suspend fun memorySettings(): AidenMemorySettings =
         executeRequest("/memory/settings") { bytes ->
@@ -1007,7 +1062,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "image/jpeg" && contentType != "image/png") {
@@ -1083,7 +1138,7 @@ class AidenRemoteClient(
                     AidenDiagnosticOutcome.FAILED,
                     if (response.code == 401 || response.code == 403) AidenDiagnosticCode.UNAUTHORIZED else AidenDiagnosticCode.NETWORK
                 )
-                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes))
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
             }
             val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
             if (contentType != "text/html") {
@@ -1112,6 +1167,61 @@ class AidenRemoteClient(
         AidenDiagnostics.record(AidenDiagnosticArea.CONNECTION, AidenDiagnosticEvent.REQUEST_FAILED, AidenDiagnosticOutcome.CANCELLED, AidenDiagnosticCode.NETWORK)
         throw error
     }
+
+    /**
+     * Revision 46 (`chat-browser-recordings-v1`): the video a completed
+     * `browser_recording_stop` step in [chatId] names, streamed to
+     * `<recordingId>.mp4` or `.webm` in [directory] rather than held in memory.
+     * Only MP4 or WebM with `no-store` and `nosniff`, non-empty and at most
+     * 128 MiB, is accepted; a refused body leaves no file behind. A recording
+     * the Mac no longer has answers 404, thrown as [AidenRemoteClientException.Server].
+     */
+    suspend fun browserRecording(chatId: String, recordingId: String, directory: File): AidenBrowserRecordingFile =
+        withContext(Dispatchers.IO) {
+            if (!AidenVisualDocumentRequest.isValidIdentifier(chatId) || !AidenBrowserRecordingRecap.isValidId(recordingId)) {
+                throw AidenRemoteClientException.InvalidResponse("Invalid browser recording request.")
+            }
+            if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+            // Both ids are limited to unreserved path characters above.
+            val request = Request.Builder()
+                .url("$endpoint/chats/$chatId/recordings/$recordingId")
+                .addHeader("Aiden-Protocol-Version", "1")
+                .addHeader("Accept", "video/mp4, video/webm")
+                .addHeader("Authorization", "Bearer $credential")
+                .get()
+                .build()
+            httpClient.newCall(request).await().use { response ->
+                if (!response.isSuccessful) {
+                    val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                    throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+                }
+                val mimeType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+                if (mimeType == null || mimeType !in AidenBrowserRecordingRecap.MIME_TYPES ||
+                    response.header("Cache-Control")?.lowercase() != "no-store" ||
+                    response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
+                ) {
+                    AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                    throw AidenRemoteClientException.InvalidResponse()
+                }
+                if (!directory.isDirectory && !directory.mkdirs()) throw IOException("recording directory unavailable")
+                val target = File(directory, "$recordingId.${AidenBrowserRecordingRecap.extension(mimeType)}")
+                val partial = File(directory, "$recordingId.part")
+                try {
+                    val written = try {
+                        response.body.writeBounded(partial, AidenBrowserRecordingRecap.MAX_BYTES) { isActive }
+                    } catch (_: ResponseBodyLimitExceededException) {
+                        AidenDiagnostics.record(AidenDiagnosticArea.CONTRACT, AidenDiagnosticEvent.CONTRACT_REJECTED, AidenDiagnosticOutcome.FAILED, AidenDiagnosticCode.INVALID_RESPONSE)
+                        throw AidenRemoteClientException.InvalidResponse()
+                    }
+                    if (written == 0L) throw AidenRemoteClientException.InvalidResponse()
+                    target.delete()
+                    if (!partial.renameTo(target)) throw IOException("recording could not be saved")
+                } finally {
+                    partial.delete()
+                }
+                AidenBrowserRecordingFile(target, mimeType)
+            }
+        }
 
     suspend fun startTurn(
         chatId: String,
@@ -1422,7 +1532,7 @@ class AidenRemoteClient(
                     if (!response.isSuccessful) {
                         val bytes = response.body?.bytes() ?: ByteArray(0)
                         val errorBody = parseError(response.code, bytes)
-                        throw AidenRemoteClientException.Server(response.code, errorBody)
+                        throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
                     }
                     onOpen(response.header("Aiden-Progress-Resumed") == "true")
                     val stream = response.body?.byteStream()
@@ -1633,6 +1743,94 @@ class AidenRemoteClient(
         }
     }
 
+    /**
+     * Revision 37 (`bot:handoffs`): answers the step the Bot handed back, Done or Skip. The key
+     * makes a retried answer replay the same receipt; `handoff_expired` means the card was
+     * already answered or closed.
+     */
+    suspend fun answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ): AidenBotHandoffAnswerReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/handoffs/$waitId/answer",
+            method = "POST",
+            bodyJson = botJson.encodeToString(AidenBotHandoffAnswerRequest.serializer(), request),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botHandoffAnswer")
+        ) { bytes ->
+            val receipt = decodeBotWire(AidenBotHandoffAnswerReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.waitId != waitId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
+    /** Revision 37: asks the Mac to bring a sign-in hand-off's browser forward, to finish it there. */
+    suspend fun openBotHandoffOnMac(botId: String, waitId: String, idempotencyKey: UUID): AidenBotHandoffOpenOnMacReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenBotHandoffWire.validateWaitId(waitId)
+        return executeRequest(
+            "/bots/$botId/handoffs/$waitId/open-on-mac",
+            method = "POST",
+            bodyJson = "{}",
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botHandoffOpenOnMac")
+        ) { bytes ->
+            val receipt = decodeBotWire(AidenBotHandoffOpenOnMacReceipt.serializer(), String(bytes, Charsets.UTF_8))
+            if (receipt.waitId != waitId) throw AidenRemoteClientException.InvalidResponse()
+            receipt
+        }
+    }
+
+    /** Revision 37: `POST /bots/{id}/pause` with `{}`. A paused Bot doesn't reply or run routines. */
+    suspend fun pauseBot(botId: String, idempotencyKey: UUID): AidenBotSessionStateView =
+        botSessionControl(botId, "pause", idempotencyKey)
+
+    /** Revision 37: lifts the pause with a body-less `DELETE /bots/{id}/pause`. */
+    suspend fun unpauseBot(botId: String, idempotencyKey: UUID): AidenBotSessionStateView {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        return executeRequest(
+            "/bots/$botId/pause",
+            method = "DELETE",
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botSessionResume")
+        ) { bytes ->
+            decodeBotWire(AidenBotSessionStateView.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
+    /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
+    suspend fun actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ): AidenBotIssueActReceipt {
+        AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
+        AidenRemoteIssueWire.validateId(issueId, "issueId")
+        return executeRequest(
+            "/bots/$botId/issues/$issueId/act",
+            method = "POST",
+            bodyJson = json.encodeToString(AidenBotIssueActRequest.serializer(), request),
+            idempotencyKey = idempotencyKey,
+            retryConnectionFailure = false,
+            acceptedStatus = setOf(200),
+            botScope = AidenBotPrivateResponseScope.Root("botIssues")
+        ) { bytes ->
+            decodeBotWire(AidenBotIssueActReceipt.serializer(), String(bytes, Charsets.UTF_8))
+        }
+    }
+
     private suspend fun botSessionControl(botId: String, action: String, idempotencyKey: UUID): AidenBotSessionStateView {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
         return executeRequest(
@@ -1837,7 +2035,8 @@ class AidenRemoteClient(
     /** Finished Bot routine runs to post as local notifications; pass the previous `now` as [since]. */
     suspend fun botRoutineNotifications(since: Instant? = null): AidenBotRoutineNotificationList {
         val query = since?.let {
-            "?since=" + java.net.URLEncoder.encode(InstantIso8601Serializer.millisecondFormat.format(it), "UTF-8")
+            // Its `:` stays literal, so Macs before revision 41 read it too.
+            "?since=" + AidenHostQuery.value(InstantIso8601Serializer.millisecondFormat.format(it))
         } ?: ""
         return executeRequest(
             "/bots/routine-notifications$query",
@@ -1851,9 +2050,9 @@ class AidenRemoteClient(
         spec: AidenBotConversationQuery
     ): AidenBotConversationPage {
         val params = mutableListOf<String>()
-        if (spec.cursor != null) params.add("cursor=${spec.cursor}")
-        if (spec.query != null) params.add("query=${spec.query}")
-        if (spec.botId != null) params.add("botId=${spec.botId}")
+        if (spec.cursor != null) params.add("cursor=${AidenHostQuery.value(spec.cursor)}")
+        if (spec.query != null) params.add("query=${AidenHostQuery.value(spec.query)}")
+        if (spec.botId != null) params.add("botId=${AidenHostQuery.value(spec.botId)}")
         if (spec.limit != null) params.add("limit=${spec.limit}")
         val queryString = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
 
@@ -1992,7 +2191,7 @@ class AidenRemoteClient(
         val bytes = response.body?.bytes() ?: ByteArray(0)
         if (!response.isSuccessful) {
             val errorBody = parseError(response.code, bytes)
-            throw AidenRemoteClientException.Server(response.code, errorBody)
+            throw AidenRemoteClientException.Server(response.code, errorBody, AidenRetryAfter.parseHeader(response.header("Retry-After")))
         }
 
         val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
@@ -2004,6 +2203,48 @@ class AidenRemoteClient(
         }
 
         AidenBotAvatarContent(data = bytes, assetRevision = assetRevision)
+    }
+
+    /**
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, read while it is in the
+     * Bot's current conversation. Only PNG or JPEG with `no-store` and `nosniff`, at most the
+     * Mac's inline image limit, is accepted.
+     */
+    suspend fun botSessionImage(botId: String, entryId: String): ByteArray = withContext(Dispatchers.IO) {
+        if (!AidenBotWire.isSafeIdentifier(botId) || !AidenBotWire.isSafeIdentifier(entryId) ||
+            botId.isEmpty() || entryId.isEmpty() ||
+            entryId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH || botId.length > AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH
+        ) {
+            throw AidenRemoteClientException.InvalidResponse()
+        }
+        if (credential.isNullOrEmpty()) throw AidenRemoteClientException.MissingCredential
+        val request = Request.Builder()
+            .url("$endpoint/bots/$botId/session/images/$entryId")
+            .addHeader("Aiden-Protocol-Version", "1")
+            .addHeader("Accept", "image/png, image/jpeg")
+            .addHeader("Authorization", "Bearer $credential")
+            .get()
+            .build()
+        httpClient.newCall(request).await().use { response ->
+            if (!response.isSuccessful) {
+                val bytes = try { response.body.readBounded(1_048_576) } catch (_: Exception) { ByteArray(0) }
+                throw AidenRemoteClientException.Server(response.code, parseError(response.code, bytes), AidenRetryAfter.parseHeader(response.header("Retry-After")))
+            }
+            val contentType = response.header("Content-Type")?.split(";")?.firstOrNull()?.trim()?.lowercase()
+            if (contentType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES ||
+                response.header("Cache-Control")?.lowercase() != "no-store" ||
+                response.header("X-Content-Type-Options")?.lowercase() != "nosniff"
+            ) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            val bytes = try {
+                response.body.readBounded(AidenBotSessionWire.MAX_SHARED_IMAGE_BYTES)
+            } catch (_: ResponseBodyLimitExceededException) {
+                throw AidenRemoteClientException.InvalidResponse()
+            }
+            if (bytes.isEmpty()) throw AidenRemoteClientException.InvalidResponse()
+            bytes
+        }
     }
 
     // --- Scheduled Tasks ---
@@ -2754,7 +2995,7 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
-private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?)
+private data class BufferedHttpResponse(val code: Int, val bytes: ByteArray, val etag: String?, val retryAfter: String? = null)
 
 /** Keep cancellation connected to the socket until the body is consumed and closed. */
 @OptIn(DelicateCoroutinesApi::class)
@@ -2776,7 +3017,7 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
                             } else {
                                 it.body?.bytes() ?: ByteArray(0)
                             }
-                            BufferedHttpResponse(it.code, bytes, it.header("ETag"))
+                            BufferedHttpResponse(it.code, bytes, it.header("ETag"), it.header("Retry-After"))
                         }
                     } catch (error: Exception) {
                         continuation.resumeWithException(error)
@@ -2796,6 +3037,30 @@ private suspend fun Call.awaitBody(maximumBytes: Int?): BufferedHttpResponse = c
 }
 
 private class ResponseBodyLimitExceededException : IOException("response body exceeds limit")
+
+/**
+ * Streams the body to [file], refusing more than [maximumBytes]. Stops with a
+ * cancellation once [isActive] turns false, so a closed player stops the read.
+ */
+private fun ResponseBody?.writeBounded(file: File, maximumBytes: Long, isActive: () -> Boolean): Long {
+    val body = this ?: return 0L
+    if (body.contentLength() > maximumBytes) throw ResponseBodyLimitExceededException()
+    var total = 0L
+    body.byteStream().use { input ->
+        file.outputStream().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                if (!isActive()) throw CancellationException("recording read cancelled")
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > maximumBytes) throw ResponseBodyLimitExceededException()
+                output.write(buffer, 0, read)
+            }
+        }
+    }
+    return total
+}
 
 private fun ResponseBody?.readBounded(maximumBytes: Int): ByteArray {
     val body = this ?: return ByteArray(0)

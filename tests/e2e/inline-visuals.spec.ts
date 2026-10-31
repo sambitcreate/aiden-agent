@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
@@ -52,7 +52,7 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
     prompt,
     calls: [
       { name: "render_ui", arguments: { title: "Plan options", markup: MARKUP } },
-      { name: "render_artifact", arguments: { title: "Weekly total", html: HTML } },
+      { name: "render_artifact", arguments: { title: "Weekly total", layout: "wide", html: HTML } },
     ],
     finalText: "Here are your plan options and weekly total.",
   });
@@ -98,6 +98,31 @@ test("a reply draws native and HTML visuals inline, and both get snapshots for p
   // The hidden capture window never became a visible application window.
   const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((window) => window.isVisible()).length);
   expect(visible).toBe(1);
+
+  // Move these real visuals into older history, where text rows skip layout.
+  const reopened = await aiden.relaunch(async () => {
+    const metas = JSON.parse(await readFile(path.join(userDataDir, "chats/index.json"), "utf8")) as { id: string; botId?: string; workspaceId?: string }[];
+    const meta = metas.find((item) => !item.botId && item.workspaceId !== "assistant")!;
+    const file = path.join(userDataDir, "chats", `${meta.id}.json`);
+    const chat = JSON.parse(await readFile(file, "utf8"));
+    chat.messages.push(...Array.from({ length: 64 }, (_, i) => ({ id: `later-${i}`, role: i % 2 ? "assistant" : "user", content: `Later history ${i}.`, createdAt: Date.now() + i })));
+    await writeFile(file, JSON.stringify(chat));
+  });
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((window) => window.isVisible())!.setSize(1800, 1100));
+  const frame = reopened.locator('iframe[title="Weekly total"]');
+  await frame.scrollIntoViewIfNeeded();
+  await expect(frame).toBeInViewport();
+  const outerEdgeVisible = await frame.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const column = element.closest('[data-subagent-chip-focus-scope]')!.getBoundingClientRect();
+    const x = box.left + 8, y = box.top + Math.min(32, box.height / 2);
+    return { extendsColumn: box.left < column.left - 10, hit: document.elementFromPoint(x, y) === element };
+  });
+  expect(outerEdgeVisible).toEqual({ extendsColumn: true, hit: true });
+  const restoredNative = reopened.getByRole("figure", { name: "Plan options" });
+  await restoredNative.scrollIntoViewIfNeeded();
+  await restoredNative.getByRole("tab", { name: "Team" }).click();
+  await expect(restoredNative.getByText("$60.00")).toBeVisible();
 });
 
 test("snapshots run guest HTML offline and keep everything down to its last margin", async ({ aiden }) => {
@@ -167,7 +192,7 @@ test("a runaway visual is abandoned at the snapshot timeout and the next visual 
     calls: [
       { name: "render_artifact", arguments: { title: "Spins after report", html: SPINS_AFTER_REPORT } },
       { name: "render_artifact", arguments: { title: "Spins before report", html: SPINS_BEFORE_REPORT } },
-      { name: "render_artifact", arguments: { title: "Weekly total", html: HTML } },
+      { name: "render_artifact", arguments: { title: "Weekly total", layout: "wide", html: HTML } },
     ],
     finalText: "All three visuals are drawn.",
   });

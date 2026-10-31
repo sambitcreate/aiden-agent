@@ -89,6 +89,18 @@ test("a settled chat refreshes working-tree reads but not remote or branch reads
   assert.deepEqual([info(), review(), push(), branches()], [2, 2, 1, 1]);
 });
 
+test("files touched by a turn this window didn't start refresh that workspace's working-tree reads", async (t) => {
+  const h = harness(t);
+  const info = h.mount(queryKeys.git("ws-1"));
+  const review = h.mount(queryKeys.gitReview("ws-1"));
+  const branches = h.mount(queryKeys.gitBranches("ws-1"));
+  const otherInfo = h.mount(queryKeys.git("ws-2"));
+  await flush();
+  h.emit("workspace:files-touched", { workspaceId: "ws-1" });
+  await flush();
+  assert.deepEqual([info(), review(), branches(), otherInfo()], [2, 2, 1, 1]);
+});
+
 test("a burst of agent tool results refreshes working-tree reads at most once per window", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const h = harness(t);

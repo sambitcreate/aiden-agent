@@ -176,6 +176,17 @@ export class ProviderRegistry {
     return this.models.getModel(providerId, modelId);
   }
 
+  /**
+   * The credential Aiden stores for a built-in provider, read once: its type
+   * and, for an API key, the key. Main-process only (custom connector sharing).
+   */
+  async storedCredential(providerId: string): Promise<{ type: "api_key" | "oauth"; key?: string } | undefined> {
+    if (!this.isBuiltinProvider(providerId) || providerId === OPENAI_CODEX_PROVIDER_ID) return undefined;
+    const credential = await this.credentials.read(providerId);
+    if (!credential) return undefined;
+    return credential.type === "api_key" ? { type: "api_key", ...(credential.key ? { key: credential.key } : {}) } : { type: "oauth" };
+  }
+
   /** Main-process-only auth for explicit non-chat Pi capabilities such as voice. */
   async getBuiltinRequestAuth(providerId: string) {
     await this.ensureBuiltinCatalogs();
@@ -396,8 +407,8 @@ export class ProviderRegistry {
    */
   async listBuiltinProviders(): Promise<Provider[]> {
     await this.ensureBuiltinCatalogs();
-    const storedCredentialIds = new Set(
-      (await this.credentials.list()).map((credential) => credential.providerId),
+    const storedCredentials = new Map(
+      (await this.credentials.list()).map((credential) => [credential.providerId, credential.type] as const),
     );
     return Promise.all(
       this.builtinProviders().map(async (provider) => {
@@ -433,7 +444,8 @@ export class ProviderRegistry {
         return {
           ...record,
           hasKey: configured,
-          canLogout: storedCredentialIds.has(provider.id),
+          canLogout: storedCredentials.has(provider.id),
+          ...(storedCredentials.has(provider.id) ? { credentialType: storedCredentials.get(provider.id) } : {}),
           authMethods,
         };
       }),

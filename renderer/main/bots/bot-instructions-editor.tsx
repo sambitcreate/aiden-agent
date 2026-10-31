@@ -31,16 +31,18 @@ export function BotInstructionsEditor({
     onLeave: onClose,
     description: `Your edits to ${bot.name}’s instructions won’t be saved.`,
   });
+  // The Bot's cache shows the new instructions as soon as Save is pressed; the
+  // editor closes when main confirms, so a failed save keeps the text to try again.
   const save = async () => {
     if (empty || !changed || saving) return;
     setSaving(true);
+    const next = text.trim();
     try {
-      await updateBotIdentity(qc, bot.id, { instructions: text.trim() });
+      await updateBotIdentity(qc, bot.id, { instructions: next });
       toast.success("Instructions saved");
       onClose();
     } catch (error) {
       toast.error(userFacingErrorMessage(error, "Aiden couldn’t save these instructions."));
-    } finally {
       setSaving(false);
     }
   };

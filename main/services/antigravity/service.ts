@@ -51,6 +51,7 @@ export class AntigravityService {
   private readonly stateDir: string;
   private readonly listeners = new Set<() => void>();
   private loaded: Promise<void> | undefined;
+  private stopping: Promise<void> | undefined;
   private readonly release: AcpRelease;
 
   constructor(options: AntigravityServiceOptions) {
@@ -192,9 +193,16 @@ export class AntigravityService {
     return (await this.runtime.discoverModels(this.scratchDir(), signal)).models;
   }
 
-  async shutdown(): Promise<void> {
-    this.installer.cancel();
-    await this.runtime.close();
+  /**
+   * App quit. Idempotent; stops chat and catalog sessions and every other
+   * agent process (sign-in, sign-out, validation) the launcher started.
+   */
+  shutdown(): Promise<void> {
+    this.stopping ??= (async () => {
+      this.installer.cancel();
+      await Promise.allSettled([this.launcher.shutdown(), this.runtime.close()]);
+    })();
+    return this.stopping;
   }
 
   private scratchDir(): string {

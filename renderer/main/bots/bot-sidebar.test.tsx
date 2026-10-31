@@ -6,6 +6,8 @@ import { afterEach, beforeEach, test } from "node:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { rememberRoute } from "../../lib/bot-routes";
+import { useCommandSystem } from "../../lib/command-system";
+import type { CommandId } from "../../shared/keybindings";
 import { useBotNotificationsSync } from "../../lib/bot-notifications-sync";
 import { hostQueryKeys } from "../../lib/hosts/host-query-keys";
 import {
@@ -270,15 +272,38 @@ test("a Needs-you change re-reads only that Bot, and an older answer that arrive
   assert.deepEqual(reads, ["bots:live:summary bot-1", "bots:live:summary bot-1"], "no other Bot and no list re-read");
 });
 
-test("a paused Bot says so, and one without a model says it needs one", async () => {
-  sidebarIpc([PLANNER, INBOX], {
+test("an interrupted Bot and a paused one read differently, and one without a model says it needs one", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
     "bot-1": summary("bot-1", { preview: "Reading your calendar", state: { kind: "interrupted", submissionId: "s1" } }),
     "bot-2": summary("bot-2", { state: { kind: "needs_model" } }),
+    "bot-3": summary("bot-3", { preview: "Found three cafés", state: { kind: "paused", since: 1, by: "phone", interrupted: "s9" } }),
   });
   await mountSidebar();
-  await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Paused — tap to resume")));
+  await waitFor(() => assert.ok(within(rowButton("Planner")).getByText("Interrupted — tap to resume")));
   assert.equal(within(rowButton("Planner")).queryByText("Reading your calendar") === null, true);
   assert.ok(within(rowButton("Inbox Helper")).getByText("Needs an AI model"));
+  assert.ok(within(rowButton("Scout")).getByText("Paused"), "a pause outranks the reply it cut short");
+  assert.equal(within(rowButton("Scout")).queryByText("Found three cafés"), null);
+});
+
+test("a row's menu pauses its Bot, and a paused Bot's menu resumes it", async () => {
+  const calls = sidebarIpc([PLANNER, INBOX], {
+    "bot-2": summary("bot-2", { state: { kind: "paused", since: 1, by: "mac" } }),
+  }, {
+    "bots:pause": () => ({ kind: "paused", since: 1, by: "mac" }),
+    "bots:unpause": () => ({ kind: "idle" }),
+  });
+  await mountSidebar();
+  await waitFor(() => assert.ok(within(rowButton("Inbox Helper")).getByText("Paused")));
+
+  fireEvent.contextMenu(rowButton("Planner"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Pause Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:pause").map((call) => call.args), [["bot-1"]]));
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "More for Inbox Helper" }), { key: "Enter" });
+  assert.equal(screen.queryByRole("menuitem", { name: "Pause Bot" }), null);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Resume Bot" }));
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:unpause").map((call) => call.args), [["bot-2"]]));
 });
 
 test("tapping a row opens that Bot's chat, and its context menu and ••• offer the Bot menu", async () => {
@@ -289,7 +314,7 @@ test("tapping a row opens that Bot's chat, and its context menu and ••• of
 
   fireEvent.contextMenu(rowButton("Planner"));
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Advanced" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-1"));
   assert.equal((router.state.location.search as { page?: string }).page, "advanced");
@@ -506,7 +531,7 @@ test("Shift+F10 on a focused row opens its menu from the keyboard", async () => 
   row.focus();
   fireEvent.keyDown(row, { key: "F10", shiftKey: true });
   const items = await screen.findAllByRole("menuitem");
-  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Delete Bot"]);
+  assert.deepEqual(items.map((item) => item.textContent), ["Profile", "Files", "Memory", "Routines", "Advanced", "Pin to top", "Pause Bot", "Delete Bot"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Profile" }));
   await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2"));
 });
@@ -746,4 +771,57 @@ test("opening another Bot redraws only the two rows whose selection changed", as
   await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
   await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
   assert.equal(rowRenders() - before, 2, "Planner and Scout, not every row");
+});
+
+test("the chat keys work for Bots too: ⌘1–9 open the Bot on that row, ⇧⌘[ and ⇧⌘] the one above or below", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
+    "bot-1": summary("bot-1", { updatedAt: 100 }),
+    "bot-2": summary("bot-2", { updatedAt: 300 }),
+    "bot-3": summary("bot-3", { updatedAt: 200 }),
+  });
+  let run: (commandId: CommandId) => boolean = () => false;
+  function Commands() {
+    run = useCommandSystem().execute;
+    return null;
+  }
+  const { router } = await mountWithBotRouter(null, {
+    initialPath: "/bots",
+    sidebar: (
+      <>
+        <Commands />
+        <BotSidebar />
+      </>
+    ),
+  });
+  await waitFor(() => assert.deepEqual(rowOrder(), ["Inbox Helper", "Scout", "Planner"]));
+  const at = () => router.state.location.pathname;
+
+  act(() => void run("chat.jump.3"));
+  // The third row is Planner.
+  await waitFor(() => assert.equal(at(), "/bots/bot-1/chat"));
+  act(() => void run("chat.previous"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-3/chat"));
+  act(() => void run("chat.previous"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-2/chat"));
+  act(() => void run("chat.next"));
+  await waitFor(() => assert.equal(at(), "/bots/bot-3/chat"));
+  assert.equal(run("chat.jump.4"), false, "no fourth Bot, so nothing to open");
+});
+
+test("the Bot list is one Tab stop on the open Bot, and ↓ and Home move between rows", async () => {
+  sidebarIpc([PLANNER, INBOX, SCOUT], {
+    "bot-1": summary("bot-1", { updatedAt: 100 }),
+    "bot-2": summary("bot-2", { updatedAt: 300 }),
+    "bot-3": summary("bot-3", { updatedAt: 200 }),
+  });
+  await mountSidebar("/bots/bot-3/chat");
+  await waitFor(() => assert.equal(rowButton("Scout").getAttribute("aria-current"), "page"));
+  const stops = () =>
+    ["Inbox Helper", "Scout", "Planner"].filter((name) => rowButton(name).getAttribute("tabindex") !== "-1");
+  await waitFor(() => assert.deepEqual(stops(), ["Scout"]));
+  rowButton("Scout").focus();
+  fireEvent.keyDown(rowButton("Scout"), { key: "ArrowDown" });
+  assert.equal(document.activeElement, rowButton("Planner"));
+  fireEvent.keyDown(rowButton("Planner"), { key: "Home" });
+  assert.equal(document.activeElement, rowButton("Inbox Helper"));
 });

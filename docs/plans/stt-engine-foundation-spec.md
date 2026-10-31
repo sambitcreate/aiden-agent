@@ -17,6 +17,8 @@ The owner chose four bundles on 2026-10-09. Each gets its own spec, plan and PR,
 
 A separate throwaway spike measures transcribe.cpp with Metal against sherpa-onnx on CPU. If the numbers justify it, transcribe.cpp can later slot in behind the engine boundary defined here. Nothing in this spec depends on the spike.
 
+Update (2026-10-22): the spike ran on the owner's Mac and picked transcribe.cpp on Metal with Parakeet TDT v3 for Apple silicon. It now sits behind this engine boundary as the `parakeet-gguf` family, and sherpa-onnx stays the engine everywhere else. See [voice dictation speed](voice-dictation-speed-plan.md#phase-2-build).
+
 **Standing rules:**
 - **UI stays Aiden.** Port Handy's behavior, never its visuals.
 - **Pre-1.0.** Replace old shapes instead of migrating them.
@@ -34,12 +36,12 @@ A separate throwaway spike measures transcribe.cpp with Metal against sherpa-onn
 
 ## Non-goals (for this sub-project)
 
-- Streaming recognition and live preview (sub-project 2).
+- Streaming recognition and live preview (sub-project 2, now planned in [voice dictation speed](voice-dictation-speed-plan.md)).
 - Silero-based silence auto-stop in the pill (sub-project 2). The RMS detector in `renderer/lib/dictation-vad.ts` stays for now.
 - Recognizer biasing from the dictionary (sub-project 2).
 - History, paste, mic picker and cleanup changes (sub-project 3).
 - Onboarding and CLI `/voice` defaults (sub-project 4).
-- GPU acceleration: CoreML or Metal (pending the spike).
+- GPU acceleration: CoreML or Metal (pending the spike; it later chose transcribe.cpp on Metal for Apple silicon).
 - Thread-count tuning. `numThreads` stays 2 until the spike measures 2 against 4.
 - Models outside the six below.
 - Cloud translation.

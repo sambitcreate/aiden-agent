@@ -9,6 +9,7 @@ const liveLmStudioAcceptance = process.env.AIDEN_E2E_LIVE_LMSTUDIO === "1";
  */
 const config: PlaywrightTestConfig = {
   testDir: "./tests/e2e",
+  globalSetup: "./tests/e2e/global-setup.ts",
   testMatch: liveLmStudioAcceptance ? "**/*.live.spec.ts" : "**/*.spec.ts",
   testIgnore: liveLmStudioAcceptance
     ? "**/._*"
@@ -23,7 +24,7 @@ const config: PlaywrightTestConfig = {
   retries: process.env.CI ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI
-    ? [["line"], ["html", { outputFolder: "playwright-report/e2e", open: "never" }]]
+    ? [["./scripts/safe-test-reporter.mjs"], ["line"], ["html", { outputFolder: "playwright-report/e2e", open: "never" }]]
     : "line",
   use: {
     screenshot: "only-on-failure",

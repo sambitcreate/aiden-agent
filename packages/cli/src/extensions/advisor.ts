@@ -1,5 +1,5 @@
 /**
- * Advisor in the terminal: reuses Aiden's AdvisorRuntime core
+ * Advisor for daemon chats: reuses Aiden's AdvisorRuntime core
  * (main/services/advisor-runtime.ts, bundled straight from the desktop
  * source) — the same one-consultation-per-response, tool-free second opinion as the desktop —
  * with the model runtime resolved through pi's extension ModelRegistry
@@ -9,7 +9,8 @@
  * preserving the once-per-response semantics.
  */
 
-import { recordUsage } from "../usage-ledger.ts";
+import type { ResolvedModelRuntime } from "../../../../main/services/model-runtime.js";
+import { recordUsage, recordUsageRecord } from "../usage-ledger.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { join } from "node:path";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -28,7 +29,6 @@ import {
 	type ModelRuntimeContext,
 } from "../pi-bridge/model-runtime.ts";
 import type { CapturedContext } from "../pi-bridge/adapt-aiden-extension.ts";
-import { requestQuestionnaire, type SelectUi } from "./ask-user-question.ts";
 
 const DEFAULT_EFFORTS = GENERATION_THINKING_LEVELS.filter((level) => level !== "off");
 
@@ -63,9 +63,8 @@ export function createAdvisorInlineExtension(context: {
 }): { name: string; factory: ExtensionFactory } {
 	const attempts = new AdvisorAttemptStore({ root: () => join(context.agentDir, "advisor") });
 	let runtime: VendorAdvisorRuntime | undefined;
-	// The TUI captures the extension context through the pi-bridge; headless
-	// daemon sessions have no capture, so each turn's before_agent_start ctx is
-	// retained as the fallback resolution source.
+	// Daemon sessions pass no captured context, so each turn's
+	// before_agent_start ctx is retained as the resolution source.
 	let turnContext: ModelRuntimeContext | undefined;
 	const runtimeContext = () => context.latestContext() ?? turnContext;
 	const ensureRuntime = async (): Promise<VendorAdvisorRuntime> => {
@@ -86,8 +85,13 @@ export function createAdvisorInlineExtension(context: {
 				if (!ctx) throw new Error("The session context is unavailable.");
 				return resolveRuntimeFromContext(asModelRuntimeContext(ctx), providerId, modelId);
 			},
-			recordUsage: async (message: AssistantMessage) => recordUsage(context.agentDir, "advisor", message),
-			recordUnreportedUsage: async () => {},
+			recordUsage: async (message: AssistantMessage, _runtime: ResolvedModelRuntime, attemptId: string) => recordUsage(context.agentDir, "advisor", message, attemptId),
+			recordUnreportedUsage: async (runtime: ResolvedModelRuntime, status: "failed" | "cancelled", attemptId: string) => recordUsageRecord(context.agentDir, {
+        source: "advisor", providerId: runtime.provider.id, providerLabel: runtime.provider.label,
+        modelId: runtime.model.id, modelLabel: runtime.model.name,
+        local: /^(ollama|lmstudio)$/.test(runtime.provider.id), status,
+        tokens: null, costStatus: "unavailable",
+      }, attemptId),
 		});
 		return runtime;
 	};
@@ -108,7 +112,6 @@ export function createAdvisorInlineExtension(context: {
 		pi.on("before_agent_start", async (event, ctx) => {
 			const advisorContext = asModelRuntimeContext(ctx);
 			turnContext = advisorContext;
-			const ui = advisorContext.hasUI ? (advisorContext.ui as unknown as SelectUi) : undefined;
 			const input: AdvisorExtensionInput = {
 				scope,
 				executor: advisorContext.model
@@ -116,11 +119,8 @@ export function createAdvisorInlineExtension(context: {
 					: { providerId: "", modelId: "" },
 				executorTools: [],
 				getLiveMessages: () => projectLiveMessages(advisorContext),
-				requestQuestionnaire:
-					ui?.select
-						? (toolCallId, questions, signal) =>
-								requestQuestionnaire({ select: ui.select.bind(ui) }, questions, signal)
-						: undefined,
+				// Headless sessions have no one to ask, so the reviewer must be named.
+				requestQuestionnaire: undefined,
 			};
 			const extension = await (await ensureRuntime()).extensionForGeneration(input);
 			const advisorTool = extension?.tools?.[0] as

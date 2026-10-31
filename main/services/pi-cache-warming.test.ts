@@ -349,9 +349,11 @@ async function cancellationHost() {
     "./generation-delta-coalescer.js": { GenerationDeltaCoalescer: UnusedService },
     "./gemini-context-cache.js": { GeminiContextCache: UnusedService },
     "./chat-run-input-admission.js": { createChatRunInputAdmission: (ports: { active: Map<string, Entry> }) => { active = ports.active; return {}; } },
-    "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
+    "./subagents/child-agent-runtime.js": { subagentRuntimeRegistry: { setHealthMetrics() {}, setLimits() {}, setRuntimeFaultReporter() {}, abortGeneration: (id: string) => children.push(id) } },
     "./tool-approval.js": { ToolApprovalCoordinator: class { cancelStream(id: string) { approvals.push(id); } } },
     "./ask-user-question-coordinator.js": { AskUserQuestionCoordinator: UnusedService },
+    "./workspace-files-touched.js": { createWorkspaceFilesTouchedNotifier: () => () => {} },
+    "./acp/scratch-directory.js": { createAcpScratchDirectories: () => ({ directoryFor: async () => "", forget: async () => {} }) },
   };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./llm-client.ts", import.meta.url))],

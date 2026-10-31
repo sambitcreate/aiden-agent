@@ -3,6 +3,31 @@ import Foundation
 import ImageIO
 import zlib
 
+/// A request query as the Mac reads it back. Macs before contract revision 41
+/// refuse any `%` in a URL, so what they could read stays literal: a space
+/// travels as `+`, which every Mac decodes, and the separators ids, dates and
+/// cursors use stay as they are. Only a character that can't travel literally
+/// (`& + # %`, accents, emoji) is percent-encoded, which revision 41 Macs
+/// accept. `URLQueryItem` alone sends a space as `%20` and `+` as itself.
+enum AidenHostQuery {
+    private static let literal: CharacterSet = {
+        var set = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        // `=` is safe in a value (the Mac splits each pair at its first `=`),
+        // and base64 cursors carry it, so it stays literal for older Macs.
+        set.insert(charactersIn: "-._~!*'():@/$,;?= ")
+        return set
+    }()
+
+    static func value(_ raw: String) -> String {
+        (raw.addingPercentEncoding(withAllowedCharacters: literal) ?? "")
+            .replacingOccurrences(of: " ", with: "+")
+    }
+
+    static func encode(_ items: [URLQueryItem]) -> String {
+        items.map { "\(value($0.name))=\(value($0.value ?? ""))" }.joined(separator: "&")
+    }
+}
+
 enum AidenDeviceType: String, Codable, Sendable {
     case iphone
     case ipad
@@ -113,6 +138,13 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// `GET /chats/{chatId}/visuals/{visualId}/document`. Visual entries carry
     /// no new key, so the token alone gates the viewer.
     static let chatVisualViewerFeature = "chat-visual-viewer-v1"
+    /// Contract revision 46: a completed `browser_recording_stop` step's video
+    /// may be read from `GET /chats/{chatId}/recordings/{recordingId}`. The
+    /// step's `recording` recap is additive; the token alone gates Play.
+    static let chatBrowserRecordingsFeature = "chat-browser-recordings-v1"
+    /// Contract revision 47: a chat's or Bot's spending limit, and Allow more
+    /// once it is reached.
+    static let spendingLimitsFeature = "spending-limits-v1"
 
     let protocolVersion: Int
     let instanceId: String
@@ -296,6 +328,15 @@ struct AidenServer: Codable, Equatable, Sendable {
         features.contains(Self.chatVisualViewerFeature)
     }
 
+    /// The Mac serves the agent's browser recordings (revision 46).
+    var supportsChatBrowserRecordings: Bool {
+        features.contains(Self.chatBrowserRecordingsFeature)
+    }
+    /// The chat and Bot screens show the spending notice with Allow more (revision 47).
+    var supportsSpendingLimits: Bool {
+        features.contains(Self.spendingLimitsFeature)
+    }
+
     /// The Mac offers the phone-scoped `runs:observe` / `runs:control` subset.
     var supportsPhoneRunControl: Bool {
         features.contains(Self.phoneRunControlFeature)
@@ -316,6 +357,29 @@ struct AidenServer: Codable, Equatable, Sendable {
     /// The Mac offers `bot:activity` (revision 30), so this device may ask for it.
     var offersBotActivity: Bool {
         serverCapabilities?.contains(.botActivity) == true
+    }
+
+    /// The Mac offers `bot:handoffs` (revision 37), so this device may ask for
+    /// it. There is no feature token: the support inventory is the only signal.
+    var offersBotHandoffs: Bool {
+        serverCapabilities?.contains(.botHandoffs) == true
+    }
+
+    /// This device holds `bot:handoffs`: show hand-off cards and the paused
+    /// state, and offer Pause and Resume.
+    var supportsBotHandoffs: Bool {
+        offersBotHandoffs && capabilities.contains(.botHandoffs)
+    }
+
+    /// The Mac offers `bot:issues` (revision 42): show issue cards and their
+    /// actions. There is no feature token: the support inventory is the signal.
+    var offersBotIssues: Bool {
+        serverCapabilities?.contains(.botIssues) == true
+    }
+
+    /// This device holds `bot:issues`: render the Bot's "Needs you" cards.
+    var supportsBotIssues: Bool {
+        offersBotIssues && capabilities.contains(.botIssues)
     }
 
     /// The Mac announces `bot-activity-v1`, whatever this device holds.
@@ -543,6 +607,86 @@ struct AidenProviderCreationReceipt: Decodable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey { case id, label, models }
 }
 
+/// Whose spending a request reads: a Workspace chat's total, or a Bot's month.
+enum AidenSpendingOwner: Equatable, Hashable, Sendable {
+    case chat(String)
+    case bot(String)
+}
+
+/// Revision 47 (`spending-limits-v1`). Amounts are US dollars.
+struct AidenSpending: Codable, Equatable, Sendable {
+    enum Period: String, Codable, Sendable { case chat, month }
+    enum State: String, Codable, Sendable { case under, nearing, reached }
+
+    let period: Period
+    let state: State
+    let limitUsd: Double
+    let allowedUsd: Double
+    let spentUsd: Double
+    let allowMoreUsd: Double
+    let periodStart: Date?
+    let periodEnd: Date?
+    let revision: String
+
+    init(
+        period: Period,
+        state: State,
+        limitUsd: Double,
+        allowedUsd: Double,
+        spentUsd: Double,
+        allowMoreUsd: Double,
+        periodStart: Date? = nil,
+        periodEnd: Date? = nil,
+        revision: String
+    ) {
+        self.period = period
+        self.state = state
+        self.limitUsd = limitUsd
+        self.allowedUsd = allowedUsd
+        self.spentUsd = spentUsd
+        self.allowMoreUsd = allowMoreUsd
+        self.periodStart = periodStart
+        self.periodEnd = periodEnd
+        self.revision = revision
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        period = try values.decode(Period.self, forKey: .period)
+        state = try values.decode(State.self, forKey: .state)
+        limitUsd = try values.decode(Double.self, forKey: .limitUsd)
+        allowedUsd = try values.decode(Double.self, forKey: .allowedUsd)
+        spentUsd = try values.decode(Double.self, forKey: .spentUsd)
+        allowMoreUsd = try values.decode(Double.self, forKey: .allowMoreUsd)
+        periodStart = try values.decodeIfPresent(Date.self, forKey: .periodStart)
+        periodEnd = try values.decodeIfPresent(Date.self, forKey: .periodEnd)
+        revision = try values.decode(String.self, forKey: .revision)
+        guard limitUsd > 0, allowedUsd >= limitUsd, spentUsd >= 0, allowMoreUsd > 0,
+              !revision.isEmpty, revision.unicodeScalars.count <= 128 else {
+            throw DecodingError.dataCorruptedError(forKey: .limitUsd, in: values, debugDescription: "Invalid spending amounts.")
+        }
+    }
+}
+
+struct AidenSpendingStatus: Codable, Equatable, Sendable {
+    /// Nil: no limit applies to this chat or Bot.
+    let spending: AidenSpending?
+
+    init(spending: AidenSpending?) {
+        self.spending = spending
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard values.contains(.spending) else {
+            throw DecodingError.keyNotFound(CodingKeys.spending, .init(codingPath: decoder.codingPath, debugDescription: "spending is required"))
+        }
+        spending = try values.decodeIfPresent(AidenSpending.self, forKey: .spending)
+    }
+
+    private enum CodingKeys: String, CodingKey { case spending }
+}
+
 struct AidenMemorySettings: Codable, Equatable, Sendable {
     let enabled: Bool
     let revision: String
@@ -597,6 +741,19 @@ enum AidenRemoteClientError: Error, LocalizedError {
     var isCredentialRevoked: Bool {
         guard case .server(_, let body) = self else { return false }
         return body.code.rawValue == "credential_revoked"
+    }
+
+    /// A 429 the server marked `retryable`. The request was refused before it
+    /// ran, so it can be sent again after `serverRetryAfterSeconds`.
+    var isRetryableRateLimit: Bool {
+        guard case .server(429, let body) = self else { return false }
+        return body.retryable
+    }
+
+    /// The server's clamped retry delay for a 429, if it named one.
+    var serverRetryAfterSeconds: Int? {
+        guard case .server(429, let body) = self else { return nil }
+        return body.retryAfterDelaySeconds
     }
 
     var errorDescription: String? {
@@ -995,11 +1152,22 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
         let payload = try AidenRemoteJSONDecoder.decodePairingPayload(from: plaintext)
         _ = try payload.validated(at: now)
-        guard payload.bootstrap.endpoint.absoluteString == endpoint.absoluteString,
+        guard hostCaseFolded(payload.bootstrap.endpoint) == hostCaseFolded(endpoint),
               payload.bootstrap.expiresAt == sealed.expiresAt else {
             throw AidenManualPairingError.endpointMismatch
         }
         return payload
+    }
+
+    /// Host names are case-insensitive. Nearby discovery reports the Mac's
+    /// Bonjour name with its case ("Office-Mac.local"), while the desktop's
+    /// payload carries it lowercased.
+    private static func hostCaseFolded(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        components.host = components.host?.lowercased()
+        return components.string ?? url.absoluteString
     }
 
     static func normalizeManualPairingCode(_ value: String) throws -> String {
@@ -1043,8 +1211,9 @@ final class AidenRemoteClient: @unchecked Sendable {
     ) async throws -> [AidenRemoteCapability] {
         let allowed = Set([
             AidenRemoteCapability.tasksRead, .agentsRead, .questionsRespond, .skillsInvoke,
-            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity,
-            .appControlsRead, .appControlsRespond,
+            .runsObserve, .runsControl, .simulatorsMobile, .botCards, .botActivity, .botHandoffs,
+            .botHandoffNotes, .botHandoffOnMac, .botImages, .botIssues,
+            .appControlsRead, .appControlsRespond, .scheduleCards,
         ])
         guard !accepts.isEmpty,
               Set(accepts).count == accepts.count,
@@ -1180,6 +1349,34 @@ final class AidenRemoteClient: @unchecked Sendable {
     func createProvider(_ input: AidenProviderCreation, idempotencyKey: UUID) async throws -> AidenProviderCreationReceipt {
         try await send(method: "POST", path: ["providers"], body: input,
                        headers: ["Idempotency-Key": idempotencyKey.uuidString.lowercased()], acceptedStatus: [201])
+    }
+
+    /// Revision 47: the chat's or Bot's spending limit, or `spending: nil` without one.
+    func spending(owner: AidenSpendingOwner) async throws -> AidenSpendingStatus {
+        try await send(method: "GET", path: try spendingPath(owner))
+    }
+
+    /// Adds the limit once more. The revision makes a repeated tap a
+    /// `revision_conflict` instead of a second allowance.
+    func allowMoreSpending(owner: AidenSpendingOwner, revision: String) async throws -> AidenSpendingStatus {
+        try validateRevision(revision)
+        return try await send(
+            method: "POST",
+            path: try spendingPath(owner) + ["allow-more"],
+            body: AidenBotSessionActionRequest(),
+            headers: ["If-Match": revision]
+        )
+    }
+
+    private func spendingPath(_ owner: AidenSpendingOwner) throws -> [String] {
+        switch owner {
+        case let .chat(chatId):
+            try validateRemoteIdentifier(chatId)
+            return ["chats", chatId, "spending"]
+        case let .bot(botId):
+            try validateBotIdentifier(botId)
+            return ["bots", botId, "spending"]
+        }
     }
 
     func memorySettings() async throws -> AidenMemorySettings {
@@ -1526,6 +1723,43 @@ final class AidenRemoteClient: @unchecked Sendable {
         return html
     }
 
+    /// Revision 46 (`chat-browser-recordings-v1`): the video a completed
+    /// `browser_recording_stop` step in this chat saved. Only MP4 or WebM, at
+    /// most the recorder's 128 MiB limit, with the no-store and nosniff
+    /// headers, is accepted.
+    func browserRecording(chatId: String, recordingId: String) async throws -> AidenBrowserRecordingContent {
+        try validateRemoteIdentifier(chatId)
+        guard AidenBrowserRecordingRecap.isRecordingID(recordingId) else {
+            throw AidenRemoteClientError.invalidResponse
+        }
+        var request = try makeRequest(
+            method: "GET",
+            path: ["chats", chatId, "recordings", recordingId],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("video/mp4, video/webm", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenBrowserRecordingRecap.maxSizeBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              let mimeType = AidenBrowserRecordingRecap.MimeType(rawValue: contentType),
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              !data.isEmpty else {
+            try rejectContractResponse()
+        }
+        return AidenBrowserRecordingContent(data: data, mimeType: mimeType)
+    }
+
     func moveChat(
         id: String,
         revision: String,
@@ -1774,6 +2008,87 @@ final class AidenRemoteClient: @unchecked Sendable {
         )
         guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
         return receipt
+    }
+
+    // MARK: Contract revision 37: Bot hand-offs and pause (`bot:handoffs`)
+
+    /// Answers the hand-off the Bot waits on: Done or Skip, with an optional
+    /// note. The request UUID is the idempotency key, so a retried answer
+    /// replays the same receipt. `409 handoff_expired` means nothing waits.
+    func answerBotHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffAnswerReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        let receipt: AidenBotHandoffAnswerReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "handoffs", waitId, "answer"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Asks the Mac to bring a hand-off (a sign-in) forward. It leaves the
+    /// wait open; `opened` is false when no Aiden window could show it.
+    func openBotHandoffOnMac(
+        botId: String,
+        waitId: String,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotHandoffOpenOnMacReceipt {
+        try validateBotIdentifier(botId)
+        try validateBotWaitIdentifier(waitId)
+        let receipt: AidenBotHandoffOpenOnMacReceipt = try await send(
+            method: "POST",
+            path: ["bots", botId, "handoffs", waitId, "open-on-mac"],
+            body: AidenBotSessionActionRequest(),
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+        guard receipt.waitId == waitId else { throw AidenRemoteClientError.invalidResponse }
+        return receipt
+    }
+
+    /// Contract revision 42 (`bot:issues`): carries out one action a card
+    /// offers. The request UUID is the idempotency key, so a retried action
+    /// replays its receipt instead of running the host action twice.
+    func actOnBotIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        idempotencyKey: UUID
+    ) async throws -> AidenBotIssueActReceipt {
+        try validateBotIdentifier(botId)
+        try AidenRemoteIssueWire.validateID(issueId, field: "issueId")
+        return try await send(
+            method: "POST",
+            path: ["bots", botId, "issues", issueId, "act"],
+            body: request,
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
+    }
+
+    /// Pauses the Bot: a running reply stops, and nothing runs until it is resumed.
+    func pauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try await botSessionAction("pause", botId: botId, idempotencyKey: idempotencyKey)
+    }
+
+    /// Resumes a paused Bot (`DELETE /bots/{botId}/pause`, no body). A reply
+    /// the pause cut short comes back interrupted.
+    func unpauseBot(botId: String, idempotencyKey: UUID) async throws -> AidenBotSessionStateView {
+        try validateBotIdentifier(botId)
+        return try await send(
+            method: "DELETE",
+            path: ["bots", botId, "pause"],
+            headers: idempotencyHeaders(idempotencyKey),
+            acceptedStatus: [200]
+        )
     }
 
     private func botSessionAction(
@@ -2065,6 +2380,40 @@ final class AidenRemoteClient: @unchecked Sendable {
             try rejectContractResponse()
         }
         return AidenBotAvatarContent(data: data, assetRevision: assetRevision)
+    }
+
+    /// Revision 45 (`bot:images`): the bytes of an image the Bot shared, read
+    /// while it is in the Bot's current conversation. Only PNG and JPEG, at
+    /// most the Mac's inline image limit, are accepted.
+    func botSessionImage(botId: String, entryId: String) async throws -> Data {
+        try validateBotIdentifier(botId)
+        try validateRemoteIdentifier(entryId)
+        var request = try makeRequest(
+            method: "GET",
+            path: ["bots", botId, "session", "images", entryId],
+            query: [],
+            body: nil,
+            headers: [:],
+            authenticated: true
+        )
+        request.setValue("image/png, image/jpeg", forHTTPHeaderField: "Accept")
+        let (data, response) = try await boundedData(
+            for: request,
+            maximumBytes: AidenBotSessionWire.maxSharedImageBytes
+        )
+        try validate(response: response, data: data, acceptedStatus: [200])
+        guard let httpResponse = response as? HTTPURLResponse,
+              let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?
+                .split(separator: ";", maxSplits: 1).first?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased(),
+              AidenBotSessionWire.sharedImageMIMETypes.contains(contentType),
+              httpResponse.value(forHTTPHeaderField: "Cache-Control")?.lowercased() == "no-store",
+              httpResponse.value(forHTTPHeaderField: "X-Content-Type-Options")?.lowercased() == "nosniff",
+              !data.isEmpty else {
+            try rejectContractResponse()
+        }
+        return data
     }
 
     func scheduledTasks() async throws -> [AidenScheduledTask] {
@@ -2939,7 +3288,7 @@ final class AidenRemoteClient: @unchecked Sendable {
             guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
                 throw AidenRemoteClientError.invalidEndpoint
             }
-            components.queryItems = query
+            components.percentEncodedQuery = AidenHostQuery.encode(query)
             guard let queryURL = components.url else { throw AidenRemoteClientError.invalidEndpoint }
             url = queryURL
         }
@@ -3019,6 +3368,13 @@ final class AidenRemoteClient: @unchecked Sendable {
 
     private func validateBotIdentifier(_ value: String) throws {
         try validateSafeIdentifier(value, maximumScalars: AidenRemoteProtocol.maxBotIdentifierLength)
+    }
+
+    /// A Bot wait id (`^[A-Za-z0-9-]{1,64}$`) before it goes into a route.
+    private func validateBotWaitIdentifier(_ value: String) throws {
+        guard (try? AidenBotHandoffWire.validateWaitID(value)) != nil else {
+            throw AidenRemoteClientError.invalidResponse
+        }
     }
 
     private func validateRemoteIdentifier(_ value: String) throws {
@@ -3139,7 +3495,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                 code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
             )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
-                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
+                var body = envelope.error
+                body.retryAfterHeaderSeconds = AidenRemoteErrorEnvelope.retryAfterHeaderSeconds(
+                    response.value(forHTTPHeaderField: "Retry-After")
+                )
+                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: body)
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }

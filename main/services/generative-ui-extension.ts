@@ -352,7 +352,7 @@ export function createGenerativeUiExtensionRuntime(
           ? " The user invoked /visualize for this turn; prefer render_artifact when a chart, diagram, dashboard, or interactive mockup would help."
           : "") +
         (options.audience === "remote"
-          ? " This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this Mac: make the first view carry the answer, keep text legible at phone width, and prefer the column layout."
+          ? " This message was sent from a paired device such as a phone. There the user sees each visual as a still image (a snapshot of the column layout) with its text description, so its controls do nothing until they open the chat on this computer: make the first view carry the answer, keep text legible at phone width, and prefer the column layout."
           : ""),
       tools: options.onUiVisual
         ? [
