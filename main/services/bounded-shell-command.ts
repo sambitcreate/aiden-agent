@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 
 export interface BoundedShellCommandOptions {
   command: string;
@@ -8,6 +9,8 @@ export interface BoundedShellCommandOptions {
   /** Combined stdout and stderr bytes kept; more stops the command. */
   maxOutputBytes: number;
   signal?: AbortSignal;
+  /** Written to the command's stdin, which is then closed. Without it stdin is ignored. */
+  input?: string;
 }
 
 export interface BoundedShellCommandResult {
@@ -32,13 +35,19 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
     return Promise.resolve({ stdout: "", stderr: "", exitCode: null, timedOut: false, outputLimitExceeded: false, aborted: true });
   }
   return new Promise<BoundedShellCommandResult>((resolve, reject) => {
+    // stdout and stderr are always pipes; stdin is a pipe only when there is input.
     const child = spawn(options.command, {
       cwd: options.cwd,
       detached: process.platform !== "win32",
       env: options.env,
       shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+      stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    }) as ChildProcessByStdio<Writable | null, Readable, Readable>;
+    if (options.input !== undefined && child.stdin) {
+      // A command may exit without reading its input; a broken pipe is not an error.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(options.input);
+    }
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join as joinPath } from "node:path";
 import { types as utilTypes } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import type {
@@ -44,6 +45,10 @@ import {
   SubagentFileMutatorError,
   type SubagentFileMutatorClient,
 } from "./subagent-file-mutator-io.js";
+import {
+  isProtectedAgentConfigPath,
+  PROTECTED_AGENT_CONFIG_WRITE_MESSAGE,
+} from "../protected-agent-config-paths.js";
 
 export const SUBAGENT_WRITE_FILE_TOOL_NAME = "write_file";
 export const SUBAGENT_EDIT_FILE_TOOL_NAME = "edit_file";
@@ -576,6 +581,15 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
       reservedToolCallIds.delete(context.toolCall.id);
       return blocked("This subagent workspace-write request is invalid or no longer authorized.");
     }
+    // The native helper refuses symbolic links in every component, so the
+    // canonical relative path is the on-disk target.
+    if (
+      isProtectedAgentConfigPath(args.path) ||
+      isProtectedAgentConfigPath(joinPath(input.workspaceRoot, args.path))
+    ) {
+      reservedToolCallIds.delete(context.toolCall.id);
+      return blocked(PROTECTED_AGENT_CONFIG_WRITE_MESSAGE);
+    }
     const lifecycle = admitLifecycle(context.toolCall.id, callerSignal);
     const { signal } = lifecycle;
     let client: SubagentFileMutatorClient | undefined;
@@ -584,6 +598,9 @@ export function createSubagentWorkspaceWriteApprovalBrokerV2(
     try {
       const workspace = await liveWorkspace(signal);
       const root = await pinSubagentWorkspaceRoot(input.workspaceRoot, signal);
+      if (isProtectedAgentConfigPath(joinPath(root.canonicalPath, args.path))) {
+        return blocked(PROTECTED_AGENT_CONFIG_WRITE_MESSAGE);
+      }
       client = createSubagentFileMutatorClient({ workspaceRoot: root, binary: input.binary });
       lifecycle.client = client;
       const preparer = new SubagentFileMutationPreparer();

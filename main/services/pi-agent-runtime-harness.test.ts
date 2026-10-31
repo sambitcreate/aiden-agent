@@ -1630,6 +1630,122 @@ test("without continuation a dropped stream still retries its reply from the sta
   assert.deepEqual(retriedRequest[retriedRequest.length - 1], { role: "user", text: "Answer" });
 });
 
+test("a host Stop callback keeps a finished reply going with its text, and later turns replay it", async () => {
+  let continuationRequest: { role: string; text: string }[] = [];
+  const { core, harness, session } = await managedTestHarness([
+    fauxAssistantMessage("Draft done."),
+    (context) => {
+      continuationRequest = context.messages.map((message) => ({ role: message.role, text: messageText(message) }));
+      return fauxAssistantMessage("Tests pass too.");
+    },
+  ]);
+  const asked: Array<[number, number, string]> = [];
+  const outcome = await harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Fix it") },
+    {
+      maxStopContinuations: 8,
+      onStop: ({ continuations, maxContinuations, finalMessage }) => {
+        asked.push([continuations, maxContinuations, messageText(finalMessage)]);
+        return continuations === 0 ? { continueWith: "Run the tests before you finish." } : undefined;
+      },
+    },
+  );
+  assert.equal(outcome.kind, "completed");
+  assert.equal(messageText(outcome.finalMessage), "Tests pass too.");
+  assert.equal(core.state.callCount, 2);
+  assert.deepEqual(asked, [[0, 8, "Draft done."], [1, 8, "Tests pass too."]]);
+  assert.deepEqual(continuationRequest.slice(-3), [
+    { role: "user", text: "Fix it" },
+    { role: "assistant", text: "Draft done." },
+    { role: "user", text: "Run the tests before you finish." },
+  ]);
+  const journaled = (await session.buildContext()).messages.slice(-3).map((message) => messageText(message));
+  assert.deepEqual(journaled, ["Draft done.", "Run the tests before you finish.", "Tests pass too."]);
+});
+
+test("Stop continuations stop at their cap, and a blank or failing callback completes the reply", async () => {
+  const capped = await managedTestHarness([
+    fauxAssistantMessage("one"),
+    fauxAssistantMessage("two"),
+    fauxAssistantMessage("three"),
+    fauxAssistantMessage("must not run"),
+  ]);
+  const asked: number[] = [];
+  const cappedOutcome = await capped.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    {
+      maxStopContinuations: 2,
+      onStop: ({ continuations }) => {
+        asked.push(continuations);
+        return { continueWith: "Keep going." };
+      },
+    },
+  );
+  assert.equal(cappedOutcome.kind, "completed");
+  assert.equal(messageText(cappedOutcome.finalMessage), "three");
+  assert.equal(capped.core.state.callCount, 3);
+  assert.deepEqual(asked, [0, 1]);
+
+  for (const onStop of [
+    () => ({ continueWith: "   " }),
+    () => {
+      throw new Error("hook host broke");
+    },
+    async () => Promise.reject(new Error("hook host broke")),
+  ]) {
+    const quiet = await managedTestHarness([fauxAssistantMessage("Done."), fauxAssistantMessage("must not run")]);
+    const outcome = await quiet.harness.runManaged(
+      { kind: "append-and-run", message: cutOffPrompt("Go") },
+      { maxStopContinuations: 8, onStop },
+    );
+    assert.equal(outcome.kind, "completed");
+    assert.equal(messageText(outcome.finalMessage), "Done.");
+    assert.equal(quiet.core.state.callCount, 1);
+  }
+});
+
+test("Stop is never asked after a failed or cut-off reply, and the person's Stop wins over a continuation", async () => {
+  let asked = 0;
+  const onStop = () => {
+    asked += 1;
+    return { continueWith: "Keep going." };
+  };
+  const failed = await managedTestHarness(
+    [fauxAssistantMessage("", { stopReason: "error", errorMessage: "invalid request" }), fauxAssistantMessage("must not run")],
+    { maxRetries: 0 },
+  );
+  const failedOutcome = await failed.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    { maxStopContinuations: 8, onStop },
+  );
+  assert.equal(failedOutcome.kind, "provider_failed");
+  const limited = await managedTestHarness([
+    fauxAssistantMessage("Half", { stopReason: "length" }),
+    fauxAssistantMessage("must not run"),
+  ]);
+  const limitedOutcome = await limited.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    { maxStopContinuations: 8, onStop },
+  );
+  assert.equal(limitedOutcome.kind, "provider_failed");
+  assert.equal(asked, 0);
+
+  const stopped = await managedTestHarness([fauxAssistantMessage("Done."), fauxAssistantMessage("must not run")]);
+  const stoppedOutcome = await stopped.harness.runManaged(
+    { kind: "append-and-run", message: cutOffPrompt("Go") },
+    {
+      maxStopContinuations: 8,
+      onStop: () => {
+        // The person presses Stop while the hook decides.
+        stopped.harness.abort();
+        return { continueWith: "Keep going." };
+      },
+    },
+  );
+  assert.notEqual(stoppedOutcome.kind, "provider_failed");
+  assert.equal(stopped.core.state.callCount, 1);
+});
+
 test("managed startup infrastructure failures stay out of the journal and use host taxonomy", async () => {
   const { harness, session } = await managedTestHarness([], {
     streamFn: (model) => {

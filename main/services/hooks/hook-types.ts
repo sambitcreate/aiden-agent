@@ -74,7 +74,13 @@ export type HookStatus =
   | "disabled-after-failures"
   | "unsupported";
 
-export interface HookListing extends HookDefinition {
+export interface HookListing extends Omit<HookDefinition, "event"> {
+  /** `unknown` when the file names an event Aiden does not support; see `configuredEvent`. */
+  event: HookEvent | "unknown";
+  /** The event name exactly as configured. */
+  configuredEvent: string;
+  /** The handler type as configured (`command`, or an unsupported `http`, `prompt`…). */
+  configuredType: string;
   status: HookStatus;
   /** Why it is unsupported, when it is. */
   unsupportedReason?: string;
@@ -117,6 +123,17 @@ export interface HookOutcome {
   additionalContext?: string;
   /** Names of hooks that ran, for the tool row. */
   ranHooks: string[];
+  /** `reason` fenced with fenceAsData, for model-facing text (a tool error, a continuation). */
+  reasonForModel?: string;
+  /** PostToolUse: a hook flagged the tool result (`decision: "block"` or exit 2); `reason` says why. */
+  flaggedResult?: boolean;
+  /** A hook returned `continue: false`: end the turn now, showing `stopReason` to the person. */
+  stopTurn?: boolean;
+  stopReason?: string;
+  /** `systemMessage` text from hooks, shown to the person only, attributed to the hook. */
+  systemMessages?: string[];
+  /** Aiden's own notices for the person, e.g. a hook that failed open. */
+  notices?: string[];
 }
 
 export interface HookRunRecord {

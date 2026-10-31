@@ -32,6 +32,7 @@ import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
 import { boundedToolOutput } from "./tool-output-context.js";
 import { parseProducedFile, type ProducedFile } from "../../renderer/shared/produced-file.js";
 import { resolveSubagentFileMutatorBinary } from "./subagents/subagent-file-mutator-io.js";
+import { assertAgentMayWriteConfigPath } from "./protected-agent-config-paths.js";
 
 const MAX_READ_BYTES = 200_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -1111,6 +1112,7 @@ function makeWriteFile(workspace: WorkspaceRootGuard, binary?: string): AgentToo
         : workspace;
       const { path: p, content } = params as { path: string; content: string };
       const full = await resolveWritableInRoot(activeWorkspace, p, signal);
+      assertAgentMayWriteConfigPath(p, full);
       let before = "";
       let preimage: { identity: PinnedWorkspaceRootIdentity; sha256: string } | undefined;
       try {
@@ -1222,6 +1224,7 @@ function makeEditFile(workspace: WorkspaceRootGuard, binary?: string): AgentTool
         new_string: string;
       };
       const { root, full } = await resolveExistingInRoot(workspace, p, signal);
+      assertAgentMayWriteConfigPath(p, full);
       const handle = await fs.open(
         full,
         fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),

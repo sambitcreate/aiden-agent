@@ -231,6 +231,12 @@ New module `main/services/hooks/`:
 Wiring:
 
 - **Desktop chats.** Call the dispatcher from the host `beforeToolCall` (PreToolUse), from a new `PiAgentRuntimeExtension` registered in the existing registry (PostToolUse, Stop and SessionStart via `transformContext`), and from prompt intake.
+  - As built (`main/services/workspace-chat-hooks.ts`, wired in `llm-client.ts`): ordinary desktop chats whose usage source is `chat`. Scopes are global, then workspace when the chat has a folder, then chat; hooks run in the chat's folder, and a folderless chat's hooks run in the home folder. `session_id` is the chat id.
+  - PreToolUse runs after the Computer Use and Form Fill access checks and before the approval decision. Deny blocks with `Blocked by hook <names>: <reason>`. Ask forces a card (even under Full access or a remembered scope), adds the hook's reason, and offers no remember option. Allow skips the card only where a remembered scope could apply.
+  - The `aiden.hooks` extension appends PostToolUse feedback and context to the tool result, and places SessionStart and UserPromptSubmit context after the current prompt for that turn only; it is never saved as the person's words. A blocked prompt fails the turn before any model call, with the hook's reason as the error.
+  - SessionStart sources are tracked per app process: `startup` for a new chat, `resume` for a chat's first turn after a restart, `compact` for the first turn after compaction.
+  - Stop continues through the harness `onStop` path (`stop_hook_active` on continued turns, at most 8 per person turn), never after an abort, an error, a cut-off or a spending block. Notification fires when an approval card or a question waits. SessionEnd fires, without waiting, when a chat whose hooks ran in this process is deleted.
+  - Not wired, each on purpose: Bot chats, Design Studio, the attended Assistant, routines, Telegram, side questions, ACP harness providers, subagents, title generation, probes and catalog work.
 - **Bots** (Phase 3). The Bot extension's `beforeTool` (`{ block }` only) and `afterResponse` call the same dispatcher with `scope: bot:<id>`.
 - **CLI** (Phase 3). The daemon's existing `tool_call` gate and `before_agent_start` call the dispatcher. It is the same module, because the CLI bundles `main/services` directly. Advertise the capability through `host-platform-capabilities.ts`.
 - **Excluded by design:**
@@ -255,7 +261,8 @@ Wiring:
    - `.claude/settings.json` hooks are never read automatically. Phase 4 adds an explicit "Import hooks from Claude Code / Codex" action that converts the hooks and still requires approval for each one.
 4. **Protect the config.**
    - Add the hooks files (`.aiden/hooks.json`, the profile store) to the paths `write_file`, `edit_file` and the Bot file router refuse.
-   - Fix the existing gap where `.claude` is in `SAFE_HIDDEN_DIRECTORY_NAMES` (`coding-tools.ts:666-675`), which lets the agent write `.claude/settings.json` in a Full-access workspace.
+   - Fix the existing gap where parent `write_file`/`edit_file` (and so Bots) had no protected-path check, which let the agent write `.claude/settings.json` in a Full-access workspace. (`SAFE_HIDDEN_DIRECTORY_NAMES` in `coding-tools.ts` only governs what subagents may read.)
+   - Done in Phase 0: `main/services/protected-agent-config-paths.ts` refuses writes to `.aiden/hooks.json`, `.aiden/hooks/`, `.claude/settings{,.local}.json`, `.claude/hooks/`, `.claude/plugins/`, `.codex/config.toml`, `.codex/hooks.json` and `.codex/hooks/` at any depth, case-insensitively, on both the given and the symlink-resolved path. It applies to parent and Bot file tools, the subagent write broker and ACP client writes. Reads are unchanged. The profile store still needs adding to the Bot protected roots when it lands.
    - `run_command` writes to these files are caught by the digest check, because a changed file disables the hook rather than running it.
 5. **Unattended turns.**
    - Hooks that already exist run on routines, wake-ups and subagents.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -236,6 +236,42 @@ test("implementer Full makes multiple edits without approval cards", async (t) =
     await broker.execute({ toolCallId: id, toolName: "edit_file", arguments: args });
   }
   assert.equal(await readFile(path.join(workspace.folderPath!, "notes.txt"), "utf8"), "three\n");
+  await broker.shutdown();
+});
+
+test("implementer Full cannot write hook or agent settings files but still writes skills", async (t) => {
+  if (process.platform !== "darwin") return;
+  const workspace = await testWorkspace(t);
+  workspace.permission = "full";
+  const root = workspace.folderPath!;
+  await mkdir(path.join(root, ".claude", "skills", "x"), { recursive: true });
+  await writeFile(path.join(root, ".claude", "settings.json"), '{"hooks":{}}\n');
+  const broker = createSubagentWorkspaceWriteApprovalBrokerV2(brokerInput(workspace, {
+    implementerRunGrant: true,
+    parentPermission: "full",
+    requestApproval: async () => { throw new Error("Full must not request approval"); },
+  }));
+  const refusal = /cannot change hook or agent settings files[\s\S]*Settings → Hooks/u;
+  const attempts: Array<["write_file" | "edit_file", Record<string, string>]> = [
+    ["write_file", { path: ".claude/settings.json", content: "{}\n" }],
+    ["write_file", { path: ".claude/settings.local.json", content: "{}\n" }],
+    ["write_file", { path: ".aiden/hooks.json", content: "{}\n" }],
+    ["write_file", { path: ".Codex/Config.toml", content: "x = 1\n" }],
+    ["edit_file", { path: ".claude/settings.json", old_string: "{}", new_string: "[]" }],
+  ];
+  for (const [index, [toolName, args]] of attempts.entries()) {
+    const result = await broker.beforeToolCall(call(toolName, args, `call-protected-${index}`));
+    assert.equal(result?.block, true, args.path);
+    assert.match(result?.reason ?? "", refusal, args.path);
+  }
+  assert.equal(await readFile(path.join(root, ".claude", "settings.json"), "utf8"), '{"hooks":{}}\n');
+  await assert.rejects(stat(path.join(root, ".aiden")), { code: "ENOENT" });
+  await assert.rejects(stat(path.join(root, ".claude", "settings.local.json")), { code: "ENOENT" });
+
+  const skill = { path: ".claude/skills/x/SKILL.md", content: "# x\n" };
+  assert.equal(await broker.beforeToolCall(call("write_file", skill, "call-skill")), undefined);
+  await broker.execute({ toolCallId: "call-skill", toolName: "write_file", arguments: skill });
+  assert.equal(await readFile(path.join(root, ".claude", "skills", "x", "SKILL.md"), "utf8"), "# x\n");
   await broker.shutdown();
 });
 

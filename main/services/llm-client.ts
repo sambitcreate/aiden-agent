@@ -186,6 +186,16 @@ import type { ProviderFailureV1 } from "../../renderer/shared/provider-failure.j
 import type { ChatContextPressureV1 } from "../../renderer/shared/context-pressure.js";
 import { compactionFailureLogMetadata } from "./provider-failure.js";
 import { MAX_CUT_OFF_CONTINUATIONS } from "./cut-off-reply.js";
+import {
+  MAX_STOP_HOOK_CONTINUATIONS,
+  createWorkspaceChatHooks,
+  endWorkspaceChatSession,
+  hookTurnContextText,
+  markWorkspaceChatCompacted,
+  markWorkspaceChatSessionStarted,
+  promptBlockedMessage,
+  workspaceChatSessionStartSource,
+} from "./workspace-chat-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -395,6 +405,7 @@ import {
   resolvePiAgentRuntimeContributionSnapshot,
   resolvePiAgentRuntimeStaticContributions,
   type PiAgentRuntimeExtension,
+  type PiRuntimeStopEvent,
 } from "./pi-agent-runtime-harness.js";
 import {
   MEMORY_EXTENSION_ID,
@@ -2666,6 +2677,25 @@ export const llmClient = {
     // Agent-backed providers (ACP harnesses) own their conversation context:
     // Aiden neither trims nor compacts the transcript they receive.
     const harnessProvider = isAcpHarnessProvider(runtime.provider.id);
+    // Aiden hooks run for ordinary desktop chats only. Bot chats (policy-owned
+    // hooks arrive with Bots), Design Studio runs, the attended Assistant,
+    // routines, Telegram and side questions (their usage source is not
+    // "chat") and ACP harness providers (the agent runs its own tools) start
+    // none; title generation, probes, catalogs and subagents never come
+    // through here.
+    const chatHooks =
+      (options.usageSource ?? "chat") === "chat" &&
+      !preparedBotContext &&
+      !authoritativeBot &&
+      generationProfile.kind !== "design" &&
+      !attendedAssistant &&
+      !harnessProvider
+        ? createWorkspaceChatHooks({
+            chatId: params.chatId,
+            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+          })
+        : undefined;
+    let hookTurnContext: string | undefined;
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.
     const spendingOwner: SpendingOwner = authoritativeBot
@@ -3136,6 +3166,19 @@ export const llmClient = {
             // Journalless runs must not offer VCC recall over an empty
             // in-memory journal; history recall would be dishonest.
             ...(piJournalless ? [] : [recallExtension]),
+            // The person's hooks: PostToolUse feedback on tool results and the
+            // SessionStart/UserPromptSubmit context for this turn only.
+            ...(chatHooks
+              ? [
+                  chatHooks.extension({
+                    promptTimestamp: () =>
+                      currentPromptMessage && "timestamp" in currentPromptMessage
+                        ? currentPromptMessage.timestamp
+                        : undefined,
+                    turnContext: () => hookTurnContext,
+                  }),
+                ]
+              : []),
           ];
       const toolsBeforeAdvisor = resolvePiAgentRuntimeStaticContributions(
         "",
@@ -3378,6 +3421,9 @@ export const llmClient = {
           );
           activeCompactionStepId = undefined;
         }
+        // A completed compaction makes the chat's next turn a SessionStart
+        // `compact` turn, like Claude Code's compact source.
+        if (chatHooks && event.result && !event.aborted) markWorkspaceChatCompacted(params.chatId);
         logger.info("pi", `Finished ${event.reason} compaction for stream ${streamId}.`, {
           aborted: event.aborted,
           tokensBefore: event.result?.tokensBefore,
@@ -3422,6 +3468,41 @@ export const llmClient = {
       const priorVisibleMessages = currentUser
         ? generationChat.messages.filter((message) => message.id !== currentUser.id)
         : generationChat.messages;
+      if (chatHooks) {
+        // SessionStart, then UserPromptSubmit, before the model sees the turn.
+        // Their context rides this turn only (the `aiden.hooks` extension) and
+        // is never saved as the person's words.
+        const sessionStartSource = workspaceChatSessionStartSource(
+          params.chatId,
+          priorVisibleMessages.length > 0,
+        );
+        const sessionStart = sessionStartSource
+          ? await chatHooks.dispatch(
+              "SessionStart",
+              { source: sessionStartSource },
+              { signal: initialization.controller.signal },
+            )
+          : undefined;
+        if (sessionStartSource) markWorkspaceChatSessionStarted(chatHooks.target);
+        const promptSubmit = currentUser
+          ? await chatHooks.dispatch(
+              "UserPromptSubmit",
+              { prompt: currentUser.content },
+              {
+                idempotencyKey: `UserPromptSubmit:${params.chatId}:${streamId}`,
+                signal: initialization.controller.signal,
+              },
+            )
+          : undefined;
+        if (promptSubmit?.blockPrompt || promptSubmit?.stopTurn) {
+          // No model call: the turn fails with the hook's reason as its error.
+          throw new Error(promptBlockedMessage(promptSubmit));
+        }
+        hookTurnContext = hookTurnContextText([
+          sessionStart?.additionalContext,
+          promptSubmit?.additionalContext,
+        ]);
+      }
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork
       // point sits right after the last copied message.
@@ -3788,6 +3869,44 @@ export const llmClient = {
           let browserFileApproval: PreparedBrowserFile | undefined;
           let browserActionApproval: BrowserToolApproval | undefined;
           let scopedRuleTarget: ToolApprovalRuleTarget | undefined;
+          // PreToolUse hooks (docs/plans/aiden-hooks-plan.md §5): deny blocks,
+          // ask forces a card without a remember offer, and allow may only skip
+          // a card a remembered approval scope could already skip.
+          let hookAsk: string | undefined;
+          let hookAllow = false;
+          const runPreToolUseHooks = async () => {
+            if (!chatHooks) return undefined;
+            const hook = await chatHooks.preToolUse({
+              toolCallId: context.toolCall.id,
+              toolName: context.toolCall.name,
+              args: context.args,
+              tools: context.context.tools,
+              signal,
+            });
+            if (hook.kind === "block") {
+              if (!signal?.aborted) {
+                deniedToolCalls.add(context.toolCall.id);
+                timeline.toolFinished(context.toolCall.id, "blocked");
+              }
+              return { block: true, reason: hook.reason };
+            }
+            if (hook.kind === "ask") hookAsk = hook.reason;
+            else if (hook.kind === "allow") hookAllow = true;
+            return undefined;
+          };
+          const notifyApprovalWaiting = () =>
+            chatHooks?.notify(
+              `Aiden needs your permission to use ${context.toolCall.name}`,
+              "permission_prompt",
+            );
+          // Computer Use and Form Fill check the chat's access first.
+          if (
+            context.toolCall.name !== COMPUTER_USE_TOOL_NAME &&
+            context.toolCall.name !== FORM_FILL_TOOL_NAME
+          ) {
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+          }
           if (
             context.toolCall.name === "browser_open" ||
             context.toolCall.name === "browser_navigate"
@@ -3829,6 +3948,28 @@ export const llmClient = {
             }
             const access = await authorizeComputerUseAccess(context.toolCall.id, signal);
             if (!access.allowed) return blockComputerUse(access.reason);
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
+            if (hookAsk) {
+              // A hook asked: this one action needs its own card.
+              const toolCallId = timeline.publicToolCallId(context.toolCall.id);
+              if (!toolCallId) return blockComputerUse("The tool approval step was not initialized.");
+              timeline.toolAwaitingApproval(context.toolCall.id);
+              notifyApprovalWaiting();
+              const hookOutcome = await approvals.request(
+                {
+                  streamId,
+                  toolCallId,
+                  toolName: context.toolCall.name,
+                  summary: `${summarizeToolCall(context.toolCall.name, context.args)}\n\n${hookAsk}`,
+                },
+                signal,
+                owner.documentId,
+              );
+              if (hookOutcome !== "allowed") {
+                return blockComputerUse(toolApprovalBlockReason(hookOutcome, false));
+              }
+            }
             // The chat is allowed, so input actions run without a per-action card.
             try {
               await authorizeAllowedComputerUseAction(
@@ -3862,6 +4003,9 @@ export const llmClient = {
               }
               return { block: true, reason: access.reason };
             }
+            // Form Fill always shows its card; a hook's ask adds its reason there.
+            const hookBlock = await runPreToolUseHooks();
+            if (hookBlock) return hookBlock;
             try {
               const descriptor = await formFill.approvalFor(context.args, signal);
               formFillApproval = descriptor;
@@ -3920,15 +4064,22 @@ export const llmClient = {
               !memoryApproval &&
               !botMcpApproval &&
               !artifactApproval?.required &&
-              !browserFileApproval?.requiresApproval
+              !browserFileApproval?.requiresApproval &&
+              !hookAsk
             ) {
+              // The question card itself is the wait; hooks hear about it.
+              if (context.toolCall.name === ASK_USER_QUESTION_TOOL_NAME) {
+                chatHooks?.notify("Aiden is asking you a question", "elicitation_dialog");
+              }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
             }
             // Only the parent's plain workspace tools can be remembered, and
             // never for Bot-bound turns whose authority is policy-owned.
+            // A hook's ask never offers or uses a remembered approval.
             if (
               workspaceApproval &&
+              !hookAsk &&
               !preparedBotContext &&
               APPROVAL_TOOL_NAMES.has(context.toolCall.name)
             ) {
@@ -3937,6 +4088,11 @@ export const llmClient = {
                 context.args,
                 workspaceId,
               );
+              if (scopedRuleTarget && hookAllow && !signal?.aborted) {
+                // A remembered scope could cover this call, so a hook may too.
+                timeline.toolRunning(context.toolCall.id);
+                return undefined;
+              }
               if (scopedRuleTarget) {
                 let remembered: "chat" | "always" | undefined;
                 try {
@@ -4017,18 +4173,21 @@ export const llmClient = {
             }
             if (memoryApproval) {
               timeline.toolAwaitingApproval(context.toolCall.id);
+              let memoryCardShown = false;
               const requestMemoryApproval = async (
                 summary: string,
                 approvalSignal?: AbortSignal,
               ) => {
                 const toolCallId = timeline.publicToolCallId(context.toolCall.id);
                 if (!toolCallId) throw new Error("The tool approval step was not initialized.");
+                memoryCardShown = true;
+                notifyApprovalWaiting();
                 return approvals.request(
                   {
                     streamId,
                     toolCallId,
                     toolName: context.toolCall.name,
-                    summary,
+                    summary: hookAsk ? `${summary}\n\n${hookAsk}` : summary,
                     details: approvalDetails,
                   },
                   approvalSignal,
@@ -4060,6 +4219,20 @@ export const llmClient = {
                   block: true,
                   reason: memoryDecision.reason,
                 };
+              }
+              if (hookAsk && !memoryCardShown) {
+                // Memory allowed this without asking; the hook's ask still shows a card.
+                const hookOutcome = await requestMemoryApproval(
+                  summarizeToolCall(context.toolCall.name, context.args),
+                  signal,
+                );
+                if (hookOutcome !== "allowed") {
+                  if (!signal?.aborted) {
+                    deniedToolCalls.add(context.toolCall.id);
+                    timeline.toolFinished(context.toolCall.id, "blocked");
+                  }
+                  return { block: true, reason: toolApprovalBlockReason(hookOutcome, false) };
+                }
               }
               timeline.toolRunning(context.toolCall.id);
               return undefined;
@@ -4135,7 +4308,9 @@ export const llmClient = {
               };
             }
           }
+          if (hookAsk) summary = `${summary}\n\n${hookAsk}`;
           timeline.toolAwaitingApproval(context.toolCall.id);
+          notifyApprovalWaiting();
           const approvalOutcome = await approvals.request(
             (() => {
               const toolCallId = timeline.publicToolCallId(context.toolCall.id);
@@ -4907,6 +5082,19 @@ export const llmClient = {
             onContinue: () => {
               continuingCutOffReply = true;
             },
+            // A Stop hook may keep the person's turn going, at most
+            // MAX_STOP_HOOK_CONTINUATIONS times. The harness never asks after
+            // an abort, an error or the person's Stop; a spending block wins.
+            ...(chatHooks
+              ? {
+                  onStop: async (event: PiRuntimeStopEvent) => {
+                    await spendingMeter.settled();
+                    if (await spending.block(spendingOwner).catch(() => undefined)) return undefined;
+                    return chatHooks.onStop(event);
+                  },
+                  maxStopContinuations: MAX_STOP_HOOK_CONTINUATIONS,
+                }
+              : {}),
           },
         );
         pendingPiDurabilitySettlement = agent.pendingDurabilitySettlement();
@@ -5306,6 +5494,8 @@ export const llmClient = {
 
   /** Remove a deleted chat's agent scratch directory. Never throws. */
   forgetDeletedChat(chatId: string): Promise<void> {
+    // SessionEnd for a chat whose hooks ran in this process; never awaited.
+    endWorkspaceChatSession(chatId);
     return acpScratch.forget(chatId);
   },
 
