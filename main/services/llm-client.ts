@@ -1206,6 +1206,8 @@ async function prepareGeneration(
   }
   const permission: GenerationPermission = options.permission ?? workspace?.permission ?? "ask";
   const folderPath = workspace?.folderPath;
+  // Connectors this workspace switched off. Bots keep their own grants.
+  const workspaceDisabledMcpServerIds = botBound ? undefined : workspace?.disabledMcpServerIds;
   // Bot and Assistant prompts retain their exact, separately granted sources.
   const agentsInstructionRoots = !botBound && !assistantMode
     ? {
@@ -1358,7 +1360,9 @@ async function prepareGeneration(
         discoveredSubagentMcpInventory,
         botSubagentMcpConnectionIdentities,
       )
-    : discoveredSubagentMcpInventory;
+    : discoveredSubagentMcpInventory.filter(
+        (scope) => !workspaceDisabledMcpServerIds?.includes(scope.serverId),
+      );
   const subagentShellBinary = resolveSubagentShellRunnerBinary();
   const subagentShellEnabled =
     allowSubagents &&
@@ -1771,6 +1775,7 @@ async function prepareGeneration(
         ? options.allowMcpTools !== false && botConnectionIds!.length > 0
         : options.allowMcpTools,
       mcpServerIds: botContext ? botConnectionIds : options.mcpServerIds,
+      disabledMcpServerIds: workspaceDisabledMcpServerIds,
       mcpServerBindings: options.mcpServerBindings,
       allowSubagents,
       mode: assistantPersonaMode

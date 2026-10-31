@@ -59,6 +59,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
   - blocks the call with "The person did this themselves: …" or the skipped text.
   - The answer memo is read before anything else, so a resume applies the answer without asking again or re-deciding.
 - Unattended turns (`routine:`, `tg:`): a hand-off, or a rule-made ask with no baseline, blocks at once with `ruleUnattendedBlock` or `ruleAskUnattendedBlock`. A run with no `requestHandoff` dep also fails closed with the unattended text.
+- Settings → Bots, routines go ahead (2026-10-31, owner chose option a of the tool audit's Q1): `AppSettings.botRoutinesGoAhead` (off by default; only literal `true` counts, `botRoutinesGoAhead()` in `renderer/shared/bot-rules.ts`). The assembly port `routinesGoAhead()` is read on every call. When every request id of the run is `routine:` (no `tg:`, no person's turn joined) and the tool isn't `computer_use` (the person's Mac), an approval (baseline or rule-made ask, with or without baseline) comes back with `preapproved: true`; `beforeTool` runs its `onAllow` and lets the call through with no memo and no card. Hand-offs and the locked rules are unchanged. Page: `renderer/components/settings/bots-settings.tsx` (section id `bots`); the Rules group on a Bot's profile says what routines do and links there. The CLI durable host has no such port.
 - Memos must be JSON values:
   - The approval memo always writes `kind` and `rule` (null when no rule made it).
   - Memos written before rules have neither field and read as approvals: only `kind === "handoff"` changes the summary.
@@ -90,6 +91,7 @@ Plan: `docs/plans/bot-handoffs-rules-computers-plan.md` §6 and §4.4 (package P
 
 ## Docs
 - `docs/bot-rules.md` (2026-10-21, H1): the rules, what they check and don't, MCP annotations taken at their word, rule hand-off cards, the file and its fail-closed read.
+- Same file, "Routines that go ahead (Settings → Bots)" (2026-10-31); also `docs/bot-routines.md`, `docs/settings-design-system.md` → Bots, README and the aiden-help `bots` topic.
 
 ## Not yet
 - Phones show no rules. A read-only list needs a Bot-detail field (Remote revision 37+).

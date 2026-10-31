@@ -67,7 +67,7 @@ await writeFile(path.join(userData, "config.json"), JSON.stringify({ seeded: tru
 const server = net.createServer(); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = server.address().port; await new Promise((resolve) => server.close(resolve));
 const env = Object.fromEntries(["PATH", "LANG", "TMPDIR", "USER", "SHELL"].filter((key) => process.env[key]).map((key) => [key, process.env[key]]));
-Object.assign(env, { HOME: root, AIDEN_CONFIG_DIR: config, AIDEN_RUNTIME_PROFILE: "production", XDG_CONFIG_HOME: path.join(root, "xdg-config"), XDG_DATA_HOME: path.join(root, "xdg-data"), XDG_CACHE_HOME: path.join(root, "xdg-cache") });
+Object.assign(env, { HOME: root, AIDEN_CONFIG_DIR: config, AIDEN_RUNTIME_PROFILE: "production", AIDEN_ANALYTICS: "0", XDG_CONFIG_HOME: path.join(root, "xdg-config"), XDG_DATA_HOME: path.join(root, "xdg-data"), XDG_CACHE_HOME: path.join(root, "xdg-cache") });
 const executable = path.join(app, "Contents", "MacOS", "Aiden Agent");
 const child = spawn(executable, [`--user-data-dir=${userData}`, `--remote-debugging-port=${port}`], { cwd: root, env, stdio: "ignore" });
 let browser; let page;

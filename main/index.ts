@@ -76,6 +76,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { analyticsService } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -376,6 +377,8 @@ const SHUTDOWN_BUDGET_MS = {
   modelPace: 1_000,
   subagentRuntime: 7_000,
   spending: 1_000,
+  // analyticsService().shutdown() caps its own send at 1.5 s.
+  analytics: 2_000,
   soakReceipt: SUBAGENT_PACKAGED_SOAK_QUIT_FINALIZATION_GRACE_MS,
   remoteAccess: 5_000,
   providerSignIn: 2_000,
@@ -412,7 +415,7 @@ const SHUTDOWN_HARD_CEILING_MS = (() => {
   const b = SHUTDOWN_BUDGET_MS;
   const serial =
     b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
-    b.subagentRuntime + b.spending + b.soakReceipt + b.remoteAccess;
+    b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
   const parallel = Math.max(
     b.providerSignIn,
     b.computerUseStatus,
@@ -518,6 +521,8 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   await settleShutdownStep("main", "Spending and usage limits", SHUTDOWN_BUDGET_MS.spending, () =>
     Promise.all([spending.flush(), usageLimits.flush()]),
   );
+  // Send queued usage data, bounded (the service caps itself at 1.5 s).
+  await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () => analyticsService().shutdown());
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =
@@ -1202,7 +1207,9 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    void analyticsService().onboardingFinished(outcome, selectedProviderId);
+    return result;
   },
 );
 
@@ -2047,6 +2054,9 @@ if (!ownsSingleInstanceLock) {
   });
   app.on("quit", (_event, exitCode) => {
     logger.info("electron-lifecycle", "Application quit", { exitCode });
+    // Last, once the process is really exiting: a death during the awaited
+    // shutdown work still counts as an unclean exit next launch.
+    analyticsService().markCleanExit();
   });
 
   // Only a real content change reaches the renderer, and concurrent triggers
@@ -2541,6 +2551,7 @@ if (!ownsSingleInstanceLock) {
 
       openProcessStartupIpcAdmission();
       startupIpcAdmitted = true;
+      void analyticsService().start();
       writeDiagnosticEvent({
         level: "info",
         area: "app",

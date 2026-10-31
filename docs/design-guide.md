@@ -96,6 +96,7 @@ keeps the summary card.
 Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:
 
 - **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion.
+- **Dialog sizes.** The shared `Dialog` is 440px by default, `large` (680px) for searchable lists, `wide` (860px) for a dialog with its own vertical tab list such as Workspace settings, and `full` for an image's full view. All cap at 85% of the window height and scroll their body.
 - **Surfaces.** Cards, sheets, popovers, and floating panels have no outline: fill and the existing elevation tokens define their edge. Inset row separators and header separators remain.
 - **Fields.** Inputs, textareas, and select triggers rest on the `--surface-input` fill with their neutral resting border; focus deepens the fill to `--surface-control`. No accent border or ring.
 - **Buttons.** Labeled buttons use roomier horizontal padding (12/16/20px for small/medium/large) at the existing heights.

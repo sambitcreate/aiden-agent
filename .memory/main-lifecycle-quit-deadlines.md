@@ -9,7 +9,8 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
 - `shutdownAndQuit` runs every service step through `settleShutdownStep` with
   its budget from `SHUTDOWN_BUDGET_MS` in `main/index.ts`: serial steps first
   (Gemini Live 3 s, parent generations 8 s, background jobs 6 s, model pace
-  1 s, subagents 7 s, spending 1 s, soak receipt 5 s, Remote 5 s), then the
+  1 s, subagents 7 s, spending 1 s, usage data 2 s, soak receipt 5 s, Remote
+  5 s), then the
   independent stores in parallel. A step that times out is logged and skipped.
 - Each budget is at least the service's own internal grace: bot ingress 5.5 s
   (`stopAndSettle` waits 5 s), Computer Use status 5.5 s (5 s grace), devices
@@ -27,14 +28,14 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   its `lstart` matches the recorded `processStartTime` (agent-device 0.21.12's
   own identity check). No SIGKILL escalation. This only helps if the shutdown
   chain reaches `stopAgent` before the process exits. Raising the budget
-  instead would push the hard ceiling past ~54.5 s.
+  instead would push the hard ceiling past ~56.5 s.
 - Parent generations share 8 s between the 6 s generation grace and Gemini
   context-cache deletes (8 s request timeout each). A slow delete reports the
   step unsettled, which skips the soak receipt; cache entries expire on their
   server-side TTL.
 - A hard ceiling (`SHUTDOWN_HARD_CEILING_MS`, unref'd) is derived from the
   budgets: serial sum + the longest parallel branch (bot ingress then bot
-  runtime, 10.5 s) + diagnostics + 5 s slack, about 54.5 s. It calls
+  runtime, 10.5 s) + diagnostics + 5 s slack, about 56.5 s. It calls
   `app.exit(1)` and logs which steps were still pending. It is disarmed only
   when the update installer takes over. Exit code 1 keeps the soak receipt
   fail-closed.
