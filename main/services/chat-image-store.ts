@@ -121,6 +121,8 @@ export function createChatImageStore(
       durableImages.add(sha256);
       return;
     }
+    // Whatever was known about an earlier file at this hash no longer holds.
+    durableImages.delete(sha256);
     await ensureDurableDirectory(await imagesDirectory());
     await ensureDurableDirectory(shard);
     try {
@@ -255,6 +257,7 @@ export function createChatImageStore(
             if (image) defer(age < options.graceMs ? options.graceMs - age : options.graceMs);
             continue;
           }
+          if (image) durableImages.delete(name);
           const removal = fs.rm(target, { force: true });
           if (image) removals.set(name, removal.catch(() => undefined));
           try {

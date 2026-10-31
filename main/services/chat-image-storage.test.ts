@@ -283,6 +283,16 @@ test("a put after a failed sync syncs the existing file again before it succeeds
   synced.length = 0;
   await images.put(PNG_BYTES);
   assert.deepEqual(synced, []);
+
+  // A swept image written again starts over: its new file is synced again
+  // after another failed sync, not trusted from before.
+  await images.sweep(new Set(), { graceMs: 0 });
+  assert.deepEqual(await imageFiles(directory), []);
+  failShard = true;
+  await assert.rejects(images.put(PNG_BYTES), /I\/O error/);
+  synced.length = 0;
+  assert.equal(await images.put(PNG_BYTES), sha);
+  assert.deepEqual(synced, [`file ${sha}`, "shard"]);
 });
 
 test("unused images still inside their grace are swept once it runs out, without another delete", async (t) => {
