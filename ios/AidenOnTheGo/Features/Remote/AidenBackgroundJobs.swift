@@ -129,23 +129,29 @@ struct AidenBackgroundJobsSheet: View {
         NavigationStack {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 List {
-                    Section {
-                        ForEach(model.jobs) { job in
-                            row(job, now: context.date)
-                        }
-                    } footer: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let errorMessage = model.errorMessage {
-                                Text(errorMessage).foregroundStyle(palette.danger)
-                            }
-                            Text("These run on your Mac. Open an address in a browser there.")
-                        }
+                    ForEach(model.jobs) { job in
+                        row(job, now: context.date)
                     }
                 }
                 .overlay {
                     if model.jobs.isEmpty {
                         ContentUnavailableView("Nothing in the background", systemImage: "terminal")
                     }
+                }
+                // Pinned under the rows, so a failed Stop's message is seen however long the list is.
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let errorMessage = model.errorMessage {
+                            Text(errorMessage).foregroundStyle(palette.danger)
+                        }
+                        Text("These run on your Mac. Open an address in a browser there.")
+                            .foregroundStyle(palette.secondary)
+                    }
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(.bar)
                 }
             }
             .navigationTitle("Background jobs")
