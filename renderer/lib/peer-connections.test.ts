@@ -174,7 +174,7 @@ test("attempt IDs are fresh and accepted by main", () => {
 });
 
 
-test("connection recovery names the failing step and suggests actions for the last route", () => {
+test("connection recovery names the failing step and suggests actions for the route it could have used", () => {
   const backoff = status({ kind: "backoff", attempt: 2, retryAt: NOW + 5_000 });
   const dns = peerHostPresentation(host({ activeRouteKind: "tailscale" }), { ...backoff, failure: "dns" }, NOW);
   assert.match(dns.detail!, /resolve.*address/);
@@ -187,4 +187,14 @@ test("connection recovery names the failing step and suggests actions for the la
   const timeout = peerHostPresentation(host(), { ...backoff, failure: "timeout" }, NOW);
   assert.match(timeout.detail!, /didn.t respond in time/);
   assert.equal(timeout.needsRepair, false);
+  const twoRoutes = host({
+    activeRouteKind: "lan",
+    routes: [
+      { id: "lan", kind: "lan", origin: "paired", active: true },
+      { id: "tailnet", kind: "tailscale", origin: "learned", active: false },
+    ],
+  });
+  const mixed = peerHostPresentation(twoRoutes, { ...backoff, failure: "network" }, NOW);
+  assert.match(mixed.detail!, /same network or Tailscale/);
+  assert.doesNotMatch(mixed.detail!, /Local Network permission|same tailnet/);
 });

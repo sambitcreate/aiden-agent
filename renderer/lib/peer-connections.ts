@@ -24,11 +24,16 @@ function seconds(ms: number): string {
   return value === 1 ? "1 second" : `${value} seconds`;
 }
 
-/** Route is last known; failed attempts may also have tried the saved alternatives. */
+/** Failed attempts may have tried any saved route, so mixed routes get route-agnostic help. */
 export function peerConnectionRecovery(host: PeerHostView, failure: PeerHostStatus["failure"]): string {
-  const routeHelp = host.activeRouteKind === "tailscale"
+  // A failure may come from any saved route, so name one network only when the
+  // host has no other kind of route to fall back to.
+  const routeKinds = new Set((host.routes ?? []).map((route) => route.kind));
+  if (host.activeRouteKind) routeKinds.add(host.activeRouteKind);
+  const onlyRouteKind = routeKinds.size === 1 ? [...routeKinds][0] : undefined;
+  const routeHelp = onlyRouteKind === "tailscale"
     ? "On both computers, open Tailscale and check that they are online in the same tailnet. Check its access rules allow Aiden."
-    : host.activeRouteKind === "lan"
+    : onlyRouteKind === "lan"
       ? "Connect both computers to the same network. Check the host firewall and Local Network permission for Aiden."
       : "Check that both computers are awake and connected to the same network or Tailscale.";
   switch (failure) {
