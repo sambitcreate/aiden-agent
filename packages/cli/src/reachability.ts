@@ -346,8 +346,10 @@ export async function waitForTailscaleAddress(endpoint: string, signal: AbortSig
 }
 
 /** Confirm the Tailscale address answers, and say so when it does not. */
-export async function checkTailscaleAddress(agentDir: string, signal: AbortSignal, out: NodeJS.WritableStream, err: NodeJS.WritableStream, wait: typeof waitForTailscaleAddress = waitForTailscaleAddress): Promise<void> {
-  const status = await remoteServerStatus(agentDir);
+export async function checkTailscaleAddress(agentDir: string, signal: AbortSignal, out: NodeJS.WritableStream, err: NodeJS.WritableStream, wait: typeof waitForTailscaleAddress = waitForTailscaleAddress, known?: ServerReachability): Promise<void> {
+  // Reuse the status the prepare step just returned; otherwise ask with the same budget as `remote check`,
+  // since the server's status inspects Tailscale and a short timeout would skip the warm-up.
+  const status = known?.tailscaleConnected && known.tailscaleEndpoint ? known : await remoteServerStatus(agentDir, 20_000);
   const endpoint = status?.tailscaleConnected ? status.tailscaleEndpoint : undefined;
   if (!endpoint || signal.aborted) return;
   out.write(`Checking that ${endpoint} answers. The first time can take up to a minute while Tailscale gets its HTTPS certificate.\n`);
@@ -362,14 +364,15 @@ export async function checkTailscaleAddress(agentDir: string, signal: AbortSigna
  * throw with the same fix pairing would name.
  */
 export async function prepareTailscalePairing(agentDir: string, signal: AbortSignal, out: NodeJS.WritableStream, err: NodeJS.WritableStream, wait: typeof waitForTailscaleAddress = waitForTailscaleAddress): Promise<void> {
+  let prepared: ServerReachability | undefined;
   try {
-    await remoteDaemonCommand(agentDir, "remote", ["tailscale-prepare"]);
+    prepared = await remoteDaemonCommand(agentDir, "remote", ["tailscale-prepare"]) as ServerReachability | undefined;
   } catch (error) {
     // A server started from an older build has no prepare step; pairing connects the route itself.
     if (!/^Usage: remote /u.test(error instanceof Error ? error.message : String(error))) throw error;
     return;
   }
-  if (!signal.aborted) await checkTailscaleAddress(agentDir, signal, out, err, wait);
+  if (!signal.aborted) await checkTailscaleAddress(agentDir, signal, out, err, wait, prepared);
 }
 
 export interface RemoteCheckDependencies {

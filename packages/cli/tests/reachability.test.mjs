@@ -280,7 +280,8 @@ test("Tailscale pairing warms the address before the window opens, and says so w
       });
       // Pairing reads the address's certificate with a short timeout, so the slow first request must come first.
       assert.equal(pairedBeforeWait, false);
-      assert.deepEqual(daemon.asked.slice(0, 3), ["remote tailscale-prepare", "remote status", "remote pair tailscale"]);
+      // The address comes from the prepare step's own answer, so no second (possibly slow) status read can skip the warm-up.
+      assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
       assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Manual code: ABCD-1234/);
       if (answers) assert.doesNotMatch(err.text, /did not answer/);
       else assert.match(err.text, /did not answer yet.*aiden remote check/);
