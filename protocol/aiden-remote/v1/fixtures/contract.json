@@ -3363,7 +3363,7 @@
           "state": "running",
           "startedAt": "2026-10-29T08:58:00.000Z",
           "fromCommand": true,
-          "ports": [3000, 9229]
+          "ports": [3000, 5173]
         },
         {
           "id": "job_00000001",
@@ -3387,7 +3387,7 @@
             "state": "running",
             "startedAt": "2026-10-29T08:58:00.000Z",
             "fromCommand": true,
-            "ports": [3000, 9229]
+            "ports": [3000, 5173]
           },
           {
             "id": "job_1a2b3c4d",
