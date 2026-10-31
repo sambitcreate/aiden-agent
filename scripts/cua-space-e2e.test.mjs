@@ -25,16 +25,21 @@ if (command === "ls") {
   process.stdout.write(process.env.FAKE_CUA_LS ?? "[]");
 } else if (command === "cp") {
   const [source, target] = args.slice(2);
-  if (!target.startsWith("local:")) process.exit(1);
+  if (!target.startsWith("local:")) {
+    // A download from the Space: hand back FAKE_CUA_RESULTS as the run's artifact archive, if set.
+    if (!process.env.FAKE_CUA_RESULTS) process.exit(1);
+    fs.copyFileSync(process.env.FAKE_CUA_RESULTS, target);
+    process.exit(0);
+  }
   fs.copyFileSync(source, path.join(dir, path.basename(target.slice(target.indexOf(":") + 1))));
 } else if (command === "exec") {
   process.exit(Number(process.env.FAKE_CUA_EXEC_STATUS ?? 0));
 }
 `;
 
-// Ignore the developer's git config (signing, hooks) and Space choice, so the fixture behaves the same anywhere.
+// Ignore the developer's git config (signing, hooks) and Space choice and sizing, so the fixture behaves the same anywhere.
 const isolatedEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
-delete isolatedEnv.CUA_SPACE;
+for (const name of ["CUA_SPACE", "CUA_SPACE_CPUS", "CUA_SPACE_MEMORY"]) delete isolatedEnv[name];
 
 async function git(cwd, ...args) {
   await execFileAsync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, env: isolatedEnv });
@@ -61,12 +66,12 @@ async function checkout() {
 
 async function run({ repo, fake }, args, env = {}) {
   try {
-    const { stdout } = await execFileAsync("bash", [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args], {
+    const { stdout, stderr } = await execFileAsync("bash", [path.join(repo, "scripts", "cua-space-e2e.sh"), ...args], {
       env: { ...isolatedEnv, CUA_BIN: path.join(fake, "cua"), FAKE_CUA_DIR: fake, ...env },
     });
-    return { status: 0, stdout };
+    return { status: 0, stdout, stderr };
   } catch (error) {
-    return { status: error.code, stdout: error.stdout };
+    return { status: error.code, stdout: error.stdout, stderr: error.stderr };
   }
 }
 
@@ -164,4 +169,30 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   const recorded = await calls(space.fake);
   assert.ok(recorded.every((call) => call[1] !== "cp"), "--reset copies nothing into the Space");
   assert.deepEqual(recorded.find((call) => call[1] === "exec").slice(2, 6), ["-i", "local:aiden-e2e", "--", "bash"]);
+});
+
+test("brings the run's artifacts back and keeps the previous ones when an archive is unreadable", async (t) => {
+  const space = await checkout();
+  t.after(() => rm(space.root, { recursive: true, force: true }));
+  const { root, repo } = space;
+  const ready = { FAKE_CUA_LS: '[{"id":"local:aiden-e2e","status":"ready"}]' };
+  const out = path.join(repo, "test-results", "cua-space-aiden-e2e");
+
+  const staged = path.join(root, "staged");
+  await mkdir(path.join(staged, "playwright-report", "e2e"), { recursive: true });
+  await writeFile(path.join(staged, "playwright-report", "e2e", "index.html"), "<p>report</p>\n");
+  const archive = path.join(root, "results.tgz");
+  await execFileAsync("tar", ["-czf", archive, "-C", staged, "playwright-report"]);
+  const good = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: archive });
+  assert.equal(good.status, 0);
+  assert.match(good.stdout, /Artifacts copied to/);
+  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+
+  const corrupt = path.join(root, "corrupt.tgz");
+  await writeFile(corrupt, "not a gzip archive");
+  const bad = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: corrupt });
+  assert.equal(bad.status, 0, "the tests' own result still decides the exit status");
+  assert.doesNotMatch(bad.stdout, /Artifacts copied to/);
+  assert.match(bad.stderr, /Could not unpack the run's artifacts/);
+  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
 });

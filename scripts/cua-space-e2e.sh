@@ -193,8 +193,13 @@ set -e
 OUT="$ROOT/test-results/cua-space-$SPACE"
 if "$CUA" sb cp "$REF:/home/cua/test-results-$RUN_ID.tgz" "$WORK/results.tgz" >/dev/null 2>&1; then
   "$CUA" sb exec -i "$REF" -- rm -f "/home/cua/test-results-$RUN_ID.tgz" </dev/null || true
-  rm -rf "$OUT" && mkdir -p "$OUT"
-  tar -xzf "$WORK/results.tgz" -C "$OUT" 2>/dev/null || true
-  echo "Artifacts copied to $OUT"
+  # Unpack beside the previous artifacts and swap only on success, so a bad archive keeps the last good report.
+  mkdir -p "$WORK/results"
+  if tar -xzf "$WORK/results.tgz" -C "$WORK/results"; then
+    rm -rf "$OUT" && mkdir -p "$(dirname "$OUT")" && mv "$WORK/results" "$OUT"
+    echo "Artifacts copied to $OUT"
+  else
+    echo "Could not unpack the run's artifacts; $OUT still holds the previous run's." >&2
+  fi
 fi
 exit $status
