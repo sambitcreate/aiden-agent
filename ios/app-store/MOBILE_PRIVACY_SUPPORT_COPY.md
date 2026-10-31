@@ -12,7 +12,7 @@ Aiden is designed as a local-first macOS and Linux desktop app with an optional 
 
 Aiden Agent stores chat history, workspace configuration, and app settings locally on your desktop. Provider API keys are stored in the operating system's credential store (such as macOS Keychain or a supported Linux Secret Service or KWallet backend) and are not copied into Aiden On The Go or sent to Aiden servers.
 
-Aiden On The Go stores its pairing credential in the iPhone or iPad Keychain. It may keep device-local settings and bounded caches for paired-installation names, workspaces, chats, navigation, and last-known run status. App Intents use a limited App Group cache containing stable identifiers and display names; they do not receive the pairing credential or contact the network. You can remove a paired installation from the mobile app, revoke a device from Aiden Agent, or remove the app and its local data using normal iOS or iPadOS controls.
+Aiden On The Go stores its pairing credential in the iPhone or iPad Keychain. Unsent composer drafts and saved unconfirmed-send records stay in the protected private app container, are excluded from backups, and do not transfer to another phone through backup restore. It may keep device-local settings and bounded caches for paired-installation names, workspaces, chats, navigation, and last-known run status. App Intents use a limited App Group cache containing stable identifiers and display names; they do not receive the pairing credential or contact the network. You can remove a paired installation from the mobile app, revoke a device from Aiden Agent, or remove the app and its local data using normal iOS or iPadOS controls.
 
 ## Mobile remote access
 

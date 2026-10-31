@@ -82,11 +82,13 @@ export function remoteBotTranscriptEntry(entry: AidenRemoteBotSessionEntry): Bot
       return { id: entry.id, type: "notice", notice: entry.notice };
     case "failed_turn":
       return withTime({ id: entry.id, type: "failed_turn" as const, retryText: entry.retryText ?? null }, entry.createdAt);
-    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here. Nor
-    // revision 45 images: without `bot:images` the host sends the line that stands for them.
+    // Revision 45 (`bot:images`): the bytes stay on the host until the transcript reads them
+    // (`useRemoteBotImages`); empty `data` marks an image not read yet.
+    case "shared_image":
+      return { id: entry.id, type: "shared_image", name: entry.name, mimeType: entry.mimeType, size: entry.size, data: "" };
+    // Cards this Mac does not opt into (`bot:cards`); the host never sends them here.
     case "memory_update":
     case "routine_proposal":
-    case "shared_image":
       return null;
   }
 }

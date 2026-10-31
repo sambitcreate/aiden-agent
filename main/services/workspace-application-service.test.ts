@@ -5,6 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { compileAum } from "../../renderer/shared/aiden-ui/compile.js";
 import { AIDEN_UI_CATALOG_VERSION } from "../../renderer/shared/aiden-ui/types.js";
+import { createScratchWorkspaceDirectory } from "./scratch-workspace.js";
 import { WorkspaceArtifactStore } from "./workspace-artifacts/store.js";
 import type { Workspace } from "./types.js";
 import {
@@ -283,4 +284,113 @@ test("removing a workspace drops its artifacts, and a failure there does not und
   };
   await failing.service.remove("workspace-1");
   assert.ok(failing.events.includes("remove-record"));
+});
+
+async function noWorkspaceFixture(t: { after(fn: () => Promise<void>): void }, initial: Workspace[]) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-no-workspace-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const registry = new Map(initial.map((entry) => [entry.id, entry]));
+  const chatOwners = new Set<string>();
+  const trashed: string[] = [];
+  let nextId = 0;
+  const deps = {
+    configStore: {
+      listWorkspaces: async () => [...registry.values()],
+      getWorkspace: async (id: string) => registry.get(id),
+      saveWorkspace: async (value: Workspace, guard?: (current: Workspace | undefined) => void | Promise<void>) => {
+        await guard?.(registry.get(value.id));
+        registry.set(value.id, value);
+        return value;
+      },
+      removeWorkspace: async (id: string) => { registry.delete(id); },
+    },
+    llmClient: { cancelWorkspaceAndSettle: async () => undefined },
+    scheduleService: { cancelWorkspace: async () => undefined, resumeWorkspace: async () => undefined },
+    terminalService: { closeForWorkspace: () => undefined },
+    workspaceMutationGate: new WorkspaceMutationGate(),
+    workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+    createScratchWorkspaceDirectory: async () => { throw new Error("not used"); },
+    realpath: async (value: string) => value,
+    stat: (value: string) => fs.stat(value),
+    removeEmptyDirectory: (value: string) => fs.rmdir(value),
+    noWorkspace: {
+      createDirectory: () => createScratchWorkspaceDirectory(path.join(root, "chat-folders")),
+      workspaceIdsWithChats: async () => new Set(chatOwners),
+      trash: async (folderPath: string) => {
+        trashed.push(folderPath);
+        await fs.rm(folderPath, { recursive: true });
+      },
+    },
+    createId: () => `hidden-${++nextId}`,
+    now: () => 500,
+    logError: () => undefined,
+  } as unknown as WorkspaceApplicationDependencies;
+  return { service: createWorkspaceApplicationService(deps), registry, chatOwners, trashed, root };
+}
+
+const exists = (target: string) => fs.stat(target).then(() => true, () => false);
+
+test("each No workspace chat gets its own hidden folder in Aiden's app data", async (t) => {
+  const app = await noWorkspaceFixture(t, []);
+  const first = await app.service.createNoWorkspace();
+  const second = await app.service.createNoWorkspace();
+  assert.equal(first.noWorkspace, true);
+  assert.equal(first.name, "No workspace");
+  assert.notEqual(first.folderPath, second.folderPath);
+  for (const created of [first, second]) {
+    assert.equal(path.dirname(created.folderPath!), path.join(app.root, "chat-folders"));
+    assert.equal((await fs.stat(created.folderPath!)).isDirectory(), true);
+  }
+  assert.equal(app.registry.size, 2);
+});
+
+test("startup gives the folderless default workspace a hidden folder and keeps its chats", async (t) => {
+  const app = await noWorkspaceFixture(t, [
+    workspace({ id: "default", name: "Workspace", permission: "full" }),
+    workspace({ id: "project", folderPath: "/code/project" }),
+  ]);
+  app.chatOwners.add("default");
+  await app.service.prepareNoWorkspaceChats();
+  const home = app.registry.get("default")!;
+  assert.equal(home.noWorkspace, true);
+  assert.equal(home.permission, "full", "the user's access level is kept");
+  assert.equal(await exists(home.folderPath!), true);
+  assert.equal(app.registry.get("project")?.noWorkspace, undefined);
+
+  // A second start leaves it alone.
+  await app.service.prepareNoWorkspaceChats();
+  assert.equal(app.registry.get("default")?.folderPath, home.folderPath);
+});
+
+test("startup releases hidden folders whose draft was never sent, but never the default home", async (t) => {
+  const app = await noWorkspaceFixture(t, [
+    workspace({ id: "default", name: "No workspace", folderPath: "/data/chat-folders/home", noWorkspace: true }),
+  ]);
+  const abandoned = await app.service.createNoWorkspace();
+  const used = await app.service.createNoWorkspace();
+  app.chatOwners.add(used.id);
+  await app.service.prepareNoWorkspaceChats();
+  assert.equal(app.registry.has(abandoned.id), false);
+  assert.equal(await exists(abandoned.folderPath!), false);
+  assert.deepEqual(app.trashed, [], "an empty folder is simply removed");
+  assert.equal(app.registry.has(used.id), true);
+  assert.equal(app.registry.has("default"), true);
+});
+
+test("deleting the last chat of a No workspace folder moves the folder's files to the Trash", async (t) => {
+  const app = await noWorkspaceFixture(t, [workspace({ id: "project", folderPath: "/code/project" })]);
+  const hidden = await app.service.createNoWorkspace();
+  app.chatOwners.add(hidden.id);
+  await fs.writeFile(path.join(hidden.folderPath!, "notes.md"), "kept until deleted");
+
+  await app.service.releaseNoWorkspaceAfterChat(hidden.id);
+  assert.equal(app.registry.has(hidden.id), true, "a folder still used by a chat stays");
+
+  app.chatOwners.delete(hidden.id);
+  await app.service.releaseNoWorkspaceAfterChat(hidden.id);
+  assert.equal(app.registry.has(hidden.id), false);
+  assert.deepEqual(app.trashed, [hidden.folderPath]);
+
+  await app.service.releaseNoWorkspaceAfterChat("project");
+  assert.equal(app.registry.has("project"), true, "a real workspace is never released with a chat");
 });

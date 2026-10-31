@@ -2,6 +2,7 @@ import { peerHostsApi } from "../ipc";
 import { parseChatForkLineageV1, type ChatForkLineageV1 } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult } from "../../shared/chat-run-input";
 import type { PeerOperation } from "../../shared/peer-operation";
+import { peerAttachmentContent, type PeerAttachmentContent } from "./remote-images";
 import { hostAvailability } from "../sidebar-remote-groups";
 import {
   mintPeerIdempotencyKey,
@@ -536,6 +537,15 @@ export class RemoteHostAdapter implements HostChatAdapter {
   /** The chat's lineage with its summary. It reads the whole chat, so a very long one may not fit the response cap. */
   forkLineage(chatId: string): Promise<HostChatResult<HostChatLineage>> {
     return this.read("messagesWindow", { operation: "chat", resourceId: chatId }, mapHostChatLineage);
+  }
+
+  /** One image's bytes, checked by the host against the chat; a host without the route answers `not_found`. */
+  attachmentContent(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>> {
+    return this.read(
+      "messagesWindow",
+      { operation: "attachmentContent", resourceId: chatId, itemId: attachmentId },
+      peerAttachmentContent,
+    );
   }
 
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
