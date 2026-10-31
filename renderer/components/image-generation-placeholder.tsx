@@ -3,6 +3,7 @@
 // the `.image-scan*` rules in styles.css; numbers come from IMAGE_SCAN_SPEC.
 
 import * as React from "react";
+import { useNowSecond } from "../lib/second-clock";
 import { useReduceMotion } from "../lib/use-reduce-motion";
 import { observeOffscreen } from "../lib/offscreen-pause";
 import type { Attachment } from "../lib/types";
@@ -29,13 +30,7 @@ function usePauseWhenUnseen(ref: React.RefObject<HTMLElement | null>): void {
 }
 
 function useElapsed(startedAt: number, running: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (!running) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), IMAGE_SCAN_SPEC.captionTickMs);
-    return () => window.clearInterval(timer);
-  }, [running]);
+  const now = useNowSecond(running);
   return Math.max(0, now - startedAt);
 }
 
