@@ -345,6 +345,9 @@ async function scanPatterns(
       const name = config.namespace ? `${config.namespace}:${plainName}` : plainName;
       const instructions = body || frontmatter.description || "";
       if (!plainName || !instructions) continue;
+      // The namespace prefix can push an authored name past the catalog's
+      // identity limit; leave such a plugin skill out rather than list it as invalid.
+      if (config.namespace && Array.from(name.normalize("NFKC")).length > SLASH_LIMITS.safeNameCharacters) continue;
 
       skills.push({
         // Priority preserves .aiden > .claude > .agents within each source;

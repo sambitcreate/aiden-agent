@@ -703,6 +703,10 @@ test("malformed plugin metadata and nonboolean enablement fail closed without hi
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
   await enablePlugins(home, { "plugin@shop": true });
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
+  // "unsafe:" plus 75 characters is past the 80-character name limit, so the skill is left out.
+  await installPlugin(home, "unsafe@shop", { review: `---\nname: ${"x".repeat(75)}\n---\nOverlong name.` });
+  await enablePlugins(home, { "plugin@shop": true, "unsafe@shop": true });
+  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
   await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{");
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
 });
