@@ -36,8 +36,11 @@ import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -75,6 +78,7 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { analyticsService } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
@@ -332,6 +336,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
@@ -426,6 +431,8 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     Promise.all([spending.flush(), usageLimits.flush()]).catch(() => undefined),
     new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
   ]);
+  // Send queued usage data, bounded (the service caps itself at 1.5 s).
+  await analyticsService().shutdown();
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =
@@ -543,11 +550,25 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         })
         .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
+      // cleanupApplication() asked any running Foundation Models helper to stop; its
+      // PID is checked asynchronously first, so wait (bounded) for the signal.
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
+      // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+      Promise.race([
+        shutdownAntigravity().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("acp", "Agent harness processes did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("acp", "Agent harness processes did not stop cleanly.", error)),
     ]);
   } catch (error) {
     logger.error(
@@ -1022,7 +1043,9 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    void analyticsService().onboardingFinished(outcome, selectedProviderId);
+    return result;
   },
 );
 
@@ -1828,6 +1851,9 @@ if (!ownsSingleInstanceLock) {
   });
   app.on("quit", (_event, exitCode) => {
     logger.info("electron-lifecycle", "Application quit", { exitCode });
+    // Last, once the process is really exiting: a death during the awaited
+    // shutdown work still counts as an unclean exit next launch.
+    analyticsService().markCleanExit();
   });
 
   // Only a real content change reaches the renderer, and concurrent triggers
@@ -2321,6 +2347,7 @@ if (!ownsSingleInstanceLock) {
 
       openProcessStartupIpcAdmission();
       startupIpcAdmitted = true;
+      void analyticsService().start();
       writeDiagnosticEvent({
         level: "info",
         area: "app",

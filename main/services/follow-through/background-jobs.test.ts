@@ -196,6 +196,51 @@ test("a chat can run at most its share of jobs at once", { skip }, async (t) => 
   assert.equal(jobs.runningCount(), 3);
 });
 
+test("finished jobs across many chats are capped, oldest first, and their logs go too", { skip }, async (t) => {
+  const dir = await tempDir();
+  let clock = 1_000;
+  const changed: string[] = [];
+  const { jobs, start } = harness(dir, { maxFinished: 3, now: () => (clock += 1), onChange: (chatId) => changed.push(chatId) });
+  t.after(() => cleanUp(jobs, dir));
+  let changesBeforeCap = 0;
+  for (const chatId of ["chat-1", "chat-2", "chat-3", "chat-4", "chat-5"]) {
+    if (chatId === "chat-4") changesBeforeCap = changed.length;
+    const job = start("true", chatId);
+    await eventually(() => jobs.get(chatId, job.id)?.state === "exited", `${chatId}'s job to end`);
+  }
+  assert.deepEqual(jobs.list("chat-1"), []);
+  assert.deepEqual(jobs.list("chat-2"), []);
+  assert.deepEqual(
+    ["chat-3", "chat-4", "chat-5"].map((chatId) => jobs.list(chatId).length),
+    [1, 1, 1],
+  );
+  await eventually(
+    async () => (await fs.readdir(path.join(dir, "logs"))).filter((name) => name.endsWith(".log")).length === 3,
+    "the forgotten jobs' logs to be removed",
+  );
+  assert.ok(
+    changed.slice(changesBeforeCap).includes("chat-1"),
+    "a chat whose finished job was dropped hears about it",
+  );
+});
+
+test("over the global cap, the busiest chat gives up a finished job before a quiet chat loses its only one", { skip }, async (t) => {
+  const dir = await tempDir();
+  let clock = 1_000;
+  const { jobs, start } = harness(dir, { maxFinished: 3, now: () => (clock += 1) });
+  t.after(() => cleanUp(jobs, dir));
+  const quiet = start("true", "chat-quiet");
+  await eventually(() => jobs.get("chat-quiet", quiet.id)?.state === "exited", "the quiet chat's job to end");
+  const busy: string[] = [];
+  for (let index = 0; index < 3; index += 1) {
+    const job = start("true", "chat-busy");
+    busy.push(job.id);
+    await eventually(() => jobs.get("chat-busy", job.id)?.state === "exited", `busy job ${index} to end`);
+  }
+  assert.deepEqual(jobs.list("chat-quiet").map((job) => job.id), [quiet.id]);
+  assert.deepEqual(new Set(jobs.list("chat-busy").map((job) => job.id)), new Set(busy.slice(1)));
+});
+
 test("stopping a chat's jobs for deletion forgets them and their logs", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, start } = harness(dir);
