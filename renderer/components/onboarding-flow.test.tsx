@@ -336,7 +336,7 @@ test("the final step is a complete grouped bento gallery with hover descriptions
   );
   assert.match(
     featurePresentation,
-    /Start a chat in any folder, clone a repository, or use a scratch space\. Chats stay grouped with isolated worktrees in one workspace outline\./u,
+    /Start a chat in any folder, clone a repository, use a scratch space, or just chat with no workspace while Aiden keeps a private folder for files and Git\. Chats stay grouped with isolated worktrees in one workspace outline\./u,
   );
   assert.match(
     featurePresentation,

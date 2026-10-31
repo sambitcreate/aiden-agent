@@ -249,7 +249,7 @@ export function createBotToolAssembly(ports: BotToolAssemblyPorts): BotToolAssem
         const verdict = await botToolVerdict(toolName, facts, {
           telegram: turns.some((turn) => turn.telegram),
           routine: turns.some((turn) => turn.routine),
-        });
+        }, call?.args);
         if (!verdict.allowed) return verdict;
         if (call === undefined) return { allowed: true };
         // The baseline: today's approval decision, untouched by any rule.

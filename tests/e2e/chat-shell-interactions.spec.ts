@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { colorContrastRatio, getPresetVariant, resolveThemeTokens } from "../../renderer/shared/appearance";
-import { expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
+import { chooseFolderlessWorkspace, expect, expectSquircleButtons, finishLmStudioOnboarding, test, type AidenE2e } from "./fixtures";
 
 const PASTED_IMAGE_NAME = "Pasted image.png";
 const PRIMARY_MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
@@ -27,6 +27,7 @@ async function pasteImage(page: Parameters<typeof finishLmStudioOnboarding>[0]):
 test("chat shell keeps local interactions isolated and keyboard-accessible", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
 
   const composer = page.locator("textarea");
   const modelPicker = page.getByRole("button", { name: /^Selected model:/u });
@@ -1408,6 +1409,7 @@ for (const mode of [
 test("command palette clears hidden and disabled selection and reselects across back navigation", async ({ aiden }) => {
   const { page } = aiden;
   await finishLmStudioOnboarding(page);
+  await chooseFolderlessWorkspace(page);
   await page.keyboard.press(`${PRIMARY_MODIFIER}+k`);
   const palette = page.locator("[data-command-palette-content]");
   const search = palette.getByRole("combobox");
