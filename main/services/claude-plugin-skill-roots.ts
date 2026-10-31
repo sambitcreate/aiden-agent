@@ -8,7 +8,7 @@ export interface PluginSkillRoot {
   root: string;
   namespace: string;
   scope: "global" | "workspace";
-  searches: Array<{ base: string; maxDepth: number }>;
+  searches: Array<{ base: string; maxDepth: number; baseSkill?: boolean }>;
 }
 
 async function canonicalPath(file: string): Promise<string | undefined> {
@@ -83,7 +83,8 @@ export async function claudePluginSkillRoots(home: string, workspaceRoot?: strin
     const namespace = manifest?.name ?? key.split("@")[0];
     if (typeof namespace !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/u.test(namespace)) continue;
     const custom = typeof manifest?.skills === "string" ? [manifest.skills] : Array.isArray(manifest?.skills) ? manifest.skills : [];
-    const searches = [{ base: "skills", maxDepth: 12 }];
+    // The standard collection holds `<name>/SKILL.md` skills, never one of its own.
+    const searches: PluginSkillRoot["searches"] = [{ base: "skills", maxDepth: 12 }];
     for (const candidate of custom.slice(0, PLUGIN_DISCOVERY_LIMITS.pathsPerPlugin)) {
       if (typeof candidate !== "string" || !candidate || path.isAbsolute(candidate) || candidate.includes("\\")) continue;
       const relative = path.relative(root, path.resolve(root, candidate));
@@ -91,9 +92,9 @@ export async function claudePluginSkillRoots(home: string, workspaceRoot?: strin
       // A manifest may name a skill directory, a collection, or SKILL.md itself.
       // A named SKILL.md is that one file: depth 0 reads it without walking its folder.
       const file = candidate.endsWith("SKILL.md");
-      searches.push({ base: file ? path.dirname(relative) : relative, maxDepth: file ? 0 : 12 });
+      searches.push({ base: file ? path.dirname(relative) : relative, maxDepth: file ? 0 : 12, baseSkill: true });
     }
-    searches.push({ base: "", maxDepth: 0 });
+    searches.push({ base: "", maxDepth: 0, baseSkill: true });
     roots.push({ root, namespace, scope: setting.workspace || install.scope === "project" || install.scope === "local" ? "workspace" : "global", searches });
   }
   return roots;

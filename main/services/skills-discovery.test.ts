@@ -673,6 +673,8 @@ test("manifest collections and root skills use bounded plugin containment and pr
   await fs.mkdir(path.join(root, "extra"));
   await fs.writeFile(path.join(root, "extra", "SKILL.md"), "---\nname: custom\n---\nCustom body.");
   await fs.writeFile(path.join(root, "SKILL.md"), "---\nname: root\n---\nRoot body.");
+  // The standard collection holds `<name>/SKILL.md` skills; a SKILL.md at its top is not one.
+  await fs.writeFile(path.join(root, "skills", "SKILL.md"), "---\nname: collection\n---\nCollection readme.");
   const outside = path.join(home, "outside");
   await writeSkill(outside, "escaped", "Escaped body.");
   await fs.symlink(outside, path.join(root, "linked"));

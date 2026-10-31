@@ -89,7 +89,11 @@ export function parseSkillMd(input: string): { frontmatter: Frontmatter; body: s
 
 interface ScanConfig {
   root: string;
-  searches: Array<{ base: string; maxDepth: number }>;
+  /**
+   * `baseSkill` lets the search base itself be a skill (its own SKILL.md at
+   * depth 0). Collections leave it off, so only `<name>/SKILL.md` counts.
+   */
+  searches: Array<{ base: string; maxDepth: number; baseSkill?: boolean }>;
   source: DiscoveredSkill["source"];
   priority: number;
   namespace?: string;
@@ -268,7 +272,7 @@ async function* boundedSkillPaths(
       entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
       for (const entry of entries) {
         const relative = path.join(current.relative, entry.name);
-        if (entry.file && entry.name === "SKILL.md" && (current.depth >= 1 || config.namespace !== undefined)) {
+        if (entry.file && entry.name === "SKILL.md" && (current.depth >= 1 || search.baseSkill === true)) {
           yield relative;
         } else if (entry.directory && current.depth < search.maxDepth) {
           queue.push({
