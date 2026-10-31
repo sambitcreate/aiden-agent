@@ -425,6 +425,7 @@
         "main/services/acp/prompt.test.ts",
         "main/services/acp/provider.test.ts",
         "main/services/acp/runtime.test.ts",
+        "main/services/acp/scratch-directory.test.ts",
         "main/services/acp/installer.test.ts",
         "main/services/acp/launcher.test.ts",
         "main/services/antigravity/auth.test.ts",

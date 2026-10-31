@@ -36,8 +36,11 @@ import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -333,6 +336,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
@@ -546,11 +550,25 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
         })
         .catch((error) => logger.warn("bot-computers", "Bot computers did not stop cleanly.", error)),
       shutdownDevices(),
+      // cleanupApplication() asked any running Foundation Models helper to stop; its
+      // PID is checked asynchronously first, so wait (bounded) for the signal.
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
       // Bounded so a wedged server cannot hold quit; stdio children that miss
       // the budget are still signalled by their transports' close.
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
+      // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+      Promise.race([
+        shutdownAntigravity().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000).unref()),
+      ])
+        .then((stopped) => {
+          if (!stopped) logger.warn("acp", "Agent harness processes did not stop within the shutdown budget.");
+        })
+        .catch((error) => logger.warn("acp", "Agent harness processes did not stop cleanly.", error)),
     ]);
   } catch (error) {
     logger.error(

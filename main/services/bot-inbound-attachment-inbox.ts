@@ -9,6 +9,14 @@ const SAFE_PROFILE = /^[A-Za-z0-9._-]{1,120}$/u;
 const SAFE_LEAF = /^[A-Za-z0-9._-]{1,200}$/u;
 const DECIMAL_IDENTITY = /^(?:0|[1-9][0-9]*)$/u;
 const MAX_DIAGNOSTIC_BYTES = 4_096;
+// A write that is not done by then is stalled on its volume (a hung network
+// or FUSE mount). The helper is killed so the Bot's ingest and quit can move on.
+const INBOX_WRITE_TIMEOUT_MS = 30_000;
+const INBOX_KILL_SETTLE_MS = 2_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref());
+}
 
 export interface BotInboxWriterRuntimePaths {
   defaultApp: boolean;
@@ -109,6 +117,8 @@ export async function writeBotInboundAttachment(input: {
   leaf: string;
   bytes: Uint8Array;
   testControl?: BotInboxWriterTestControl;
+  /** Kill the helper if the whole write has not finished by then (a stalled volume). */
+  timeoutMs?: number;
 }): Promise<string> {
   const profile = safeComponent(input.profile, SAFE_PROFILE);
   const leaf = safeComponent(input.leaf, SAFE_LEAF);
@@ -162,7 +172,48 @@ export async function writeBotInboundAttachment(input: {
     },
   );
 
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    deadlineTimer = setTimeout(
+      () => reject(new Error("This Bot's Telegram attachment took too long to store.")),
+      input.timeoutMs ?? INBOX_WRITE_TIMEOUT_MS,
+    );
+  });
+  deadline.catch(() => undefined);
+
+  const storedPath = path.join(
+    input.home.homePath,
+    ".aiden",
+    "telegram-inbox",
+    profile,
+    leaf,
+  );
+  let written = false;
+  const writing = writeThroughHelper().then(() => {
+    written = true;
+  });
   try {
+    await Promise.race([deadline, writing]);
+    return storedPath;
+  } catch {
+    // A write that finished just as the deadline fired is still a good write.
+    // One turn of the event loop lets that completion land; a stalled write does not.
+    await new Promise((resolve) => setImmediate(resolve));
+    if (written) return storedPath;
+    child.kill("SIGKILL");
+    // A helper stuck in an uninterruptible filesystem call may not close
+    // promptly even after SIGKILL; do not let that hang the ingest.
+    await Promise.race([closed.catch(() => undefined), delay(INBOX_KILL_SETTLE_MS)]);
+    const diagnostic = (await Promise.race([stderr, delay(INBOX_KILL_SETTLE_MS).then(() => "")])).trim();
+    if (diagnostic.length > 0) {
+      throw new Error(diagnostic);
+    }
+    throw new Error("This Bot's Telegram attachment could not be stored safely.");
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+
+  async function writeThroughHelper(): Promise<void> {
     const writing = writeBytes(child.stdin, input.bytes);
     if (input.testControl) {
       const ready = child.stdio[3];
@@ -186,20 +237,5 @@ export async function writeBotInboundAttachment(input: {
       );
     }
     await input.home.revalidateBeforeEffect();
-    return path.join(
-      input.home.homePath,
-      ".aiden",
-      "telegram-inbox",
-      profile,
-      leaf,
-    );
-  } catch {
-    child.kill("SIGKILL");
-    await closed.catch(() => undefined);
-    const diagnostic = (await stderr).trim();
-    if (diagnostic.length > 0) {
-      throw new Error(diagnostic);
-    }
-    throw new Error("This Bot's Telegram attachment could not be stored safely.");
   }
 }
