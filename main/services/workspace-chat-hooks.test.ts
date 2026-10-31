@@ -12,7 +12,15 @@ import type {
   HookScope,
 } from "./hooks/hook-types.js";
 import {
+  createFauxCore,
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
+import { convertToLlm } from "./pi-legacy-harness.js";
+import { PiAgentRuntimeHarness } from "./pi-agent-runtime-harness.js";
+import {
   MAX_STOP_HOOK_CONTINUATIONS,
+  MAX_TRACKED_HOOK_SESSIONS,
   createWorkspaceChatHooks,
   endWorkspaceChatSession,
   hookTurnContextText,
@@ -357,4 +365,128 @@ test("PreCompact adds no instructions without hooks, without context, or when th
     await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, () => throwing), { trigger: "auto", reason: "threshold" }),
     undefined,
   );
+});
+
+const echoTool: AgentTool = {
+  name: "echo",
+  label: "Echo",
+  description: "Echo.",
+  parameters: Type.Object({}),
+  execute: async () => ({ content: [{ type: "text", text: "echoed" }], details: null }),
+};
+
+/** One chat turn on a faux model: the hooks run in the host gate and the `aiden.hooks` extension, as in llm-client. */
+async function runHookedTurn(hooks: ReturnType<typeof createWorkspaceChatHooks>) {
+  const core = createFauxCore({ provider: `aiden-hooks-${Math.random().toString(36).slice(2)}` });
+  core.setResponses([
+    fauxAssistantMessage([fauxToolCall("echo", {})], { stopReason: "toolUse" }),
+    fauxAssistantMessage("all done"),
+  ]);
+  const harness = new PiAgentRuntimeHarness({
+    convertToLlm,
+    streamFn: core.streamSimple,
+    initialState: { systemPrompt: "Base", thinkingLevel: "off", tools: [echoTool], messages: [], model: core.getModel() },
+    beforeToolCall: async (context, signal) => {
+      const hook = await hooks.preToolUse({
+        toolCallId: context.toolCall.id,
+        toolName: context.toolCall.name,
+        args: context.args,
+        tools: context.context.tools,
+        signal,
+      });
+      return hook.kind === "block" ? { block: true, reason: hook.reason } : undefined;
+    },
+    extensions: [hooks.extension({ promptTimestamp: () => undefined, turnContext: () => undefined })],
+  });
+  await harness.prompt("go");
+  const toolResult = harness.state.messages.find((message) => message.role === "toolResult");
+  const toolText =
+    toolResult && toolResult.role === "toolResult"
+      ? toolResult.content.map((block) => (block.type === "text" ? block.text : "")).join("\n")
+      : "";
+  return { modelRequests: core.state.callCount, toolText };
+}
+
+test("PreToolUse context reaches the model on its tool's result, together with PostToolUse context", async () => {
+  const { dispatcher } = fakeDispatcher({
+    PreToolUse: { additionalContext: fenced("staging is frozen"), ranHooks: ["policy"] },
+    PostToolUse: { additionalContext: fenced("lint clean"), ranHooks: ["lint"] },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher);
+  const { modelRequests, toolText } = await runHookedTurn(hooks);
+  assert.equal(modelRequests, 2);
+  assert.ok(toolText.startsWith("echoed"));
+  assert.ok(toolText.indexOf(fenced("staging is frozen")) > 0);
+  assert.ok(toolText.indexOf(fenced("lint clean")) > toolText.indexOf(fenced("staging is frozen")));
+
+  // With no PostToolUse hook at all, the PreToolUse context still arrives.
+  const preOnly = createWorkspaceChatHooks(
+    { chatId: "c" },
+    fakeDispatcher({ PreToolUse: { additionalContext: fenced("read only"), ranHooks: ["p"] } }).dispatcher,
+  );
+  assert.ok((await runHookedTurn(preOnly)).toolText.includes(fenced("read only")));
+});
+
+test("continue: false from PreToolUse or PostToolUse lets the tool finish, then ends the turn with the stop reason", async () => {
+  for (const event of ["PreToolUse", "PostToolUse"] as const) {
+    const messages: string[][] = [];
+    const { dispatcher, calls } = fakeDispatcher({
+      [event]: { stopTurn: true, stopReason: "deploy window closed", ranHooks: ["gate"] },
+      Stop: { continueTurn: true, reason: "keep going", ranHooks: ["more"] },
+    });
+    const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, {
+      onMessages: (lines) => messages.push(lines),
+    });
+    const { modelRequests, toolText } = await runHookedTurn(hooks);
+    assert.equal(modelRequests, 1, `${event}: no model request after the stop`);
+    assert.ok(toolText.startsWith("echoed"), `${event}: the tool still ran`);
+    assert.deepEqual(messages, [["Stopped by hook gate: deploy window closed"]]);
+    assert.equal(hooks.stopRequested(), "Stopped by hook gate: deploy window closed");
+    // Stop hooks never revive a turn a hook stopped.
+    assert.equal(
+      await hooks.onStop({ finalMessage: {} as never, continuations: 0, maxContinuations: 8, signal: new AbortController().signal }),
+      undefined,
+    );
+    assert.ok(!calls.some((call) => call.event === "Stop"));
+  }
+});
+
+test("hook messages and Aiden's notices go to the person, never into the tool result", async () => {
+  const messages: string[][] = [];
+  const { dispatcher } = fakeDispatcher({
+    PostToolUse: { systemMessages: ["formatted 3 files"], notices: ["A hook timed out and was skipped."], ranHooks: ["fmt"] },
+    UserPromptSubmit: { systemMessages: ["prompt logged"], ranHooks: ["audit"] },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, { onMessages: (lines) => messages.push(lines) });
+  await hooks.dispatch("UserPromptSubmit", { prompt: "hi" });
+  const { toolText } = await runHookedTurn(hooks);
+  assert.deepEqual(messages, [
+    ["Hook audit: prompt logged"],
+    ["Hook fmt: formatted 3 files", "A hook timed out and was skipped."],
+  ]);
+  assert.equal(toolText, "echoed");
+
+  // A listener that throws never breaks the chat.
+  const throwing = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, {
+    onMessages: () => {
+      throw new Error("renderer gone");
+    },
+  });
+  assert.equal((await runHookedTurn(throwing)).modelRequests, 2);
+});
+
+test("this process forgets the least recently started chat once it tracks too many", () => {
+  resetWorkspaceChatSessionsForTests();
+  markWorkspaceChatSessionStarted({ chatId: "first" });
+  markWorkspaceChatSessionStarted({ chatId: "second" });
+  markWorkspaceChatCompacted("second");
+  // Starting "first" again makes it the most recent, so "second" is the oldest.
+  markWorkspaceChatSessionStarted({ chatId: "first" });
+  for (let index = 0; index < MAX_TRACKED_HOOK_SESSIONS - 1; index += 1) {
+    markWorkspaceChatSessionStarted({ chatId: `chat-${index}` });
+  }
+  assert.equal(workspaceChatSessionStartSource("second", true), "resume", "the oldest chat was forgotten, compaction too");
+  assert.equal(workspaceChatSessionStartSource("first", true), undefined);
+  assert.equal(workspaceChatSessionStartSource(`chat-${MAX_TRACKED_HOOK_SESSIONS - 2}`, true), undefined);
+  resetWorkspaceChatSessionsForTests();
 });

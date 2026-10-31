@@ -2731,10 +2731,19 @@ export const llmClient = {
         assistant: attendedAssistant,
         harnessProvider,
       })
-        ? createWorkspaceChatHooks({
-            chatId: params.chatId,
-            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
-          })
+        ? createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            },
+            undefined,
+            {
+              // Hook messages reach the person as notices, never the model.
+              onMessages: (messages) => {
+                sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages });
+              },
+            },
+          )
         : undefined;
     // The agent's hooks tool (plan §9) where chat hooks run on an attended
     // turn. A proposal waits for the owner's card on this Mac, raised from
@@ -3581,12 +3590,25 @@ export const llmClient = {
           : undefined;
         if (promptSubmit?.blockPrompt || promptSubmit?.stopTurn) {
           // No model call: the turn fails with the hook's reason as its error.
-          throw new Error(promptBlockedMessage(promptSubmit));
+          // The prompt stays visible but is marked, so no later turn, fork or
+          // summary ever projects it into a model's context.
+          const blocked = promptBlockedMessage(promptSubmit);
+          if (currentUser) {
+            await chatStore.setPromptHookBlock(params.chatId, currentUser.id, blocked).catch((error: unknown) => {
+              logger.error("hooks", "Could not mark a hook-blocked prompt.", error);
+            });
+          }
+          throw new Error(blocked);
         }
         hookTurnContext = hookTurnContextText([
           sessionStart?.additionalContext,
           promptSubmit?.additionalContext,
         ]);
+      }
+      if (currentUser?.hookBlocked) {
+        // This prompt is being sent now (a retry after the hook changed or was
+        // turned off), so it is no longer a blocked prompt.
+        await chatStore.setPromptHookBlock(params.chatId, currentUser.id, undefined);
       }
       const skillsEnabledForTurn = (await configStore.getSettings()).skillsEnabled !== false;
       // A forked chat's summary of where its source went after the fork

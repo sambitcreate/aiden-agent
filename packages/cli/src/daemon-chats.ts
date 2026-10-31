@@ -14,6 +14,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, basename, join, resolve } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AgentTurnDecision } from "@earendil-works/pi-agent-core";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
 import { ChatActivityRegistry } from "../../../main/services/chat-activity-core.js";
 import type { ChatStartParams } from "../../../main/services/types.js";
@@ -30,7 +31,8 @@ import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
-import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookPostToolAdditions, hookStopContinuation, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
+import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookNoticeLines, hookPostToolAdditions, hookStopContinuation, hookStopMessage, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
+import type { HookOutcome } from "../../../main/services/hooks/hook-types.js";
 import { hookTurnContextText, markWorkspaceChatCompacted, markWorkspaceChatSessionStarted, promptBlockedMessage, workspaceChatHookScopes, workspaceChatSessionStartSource } from "../../../main/services/workspace-chat-hooks.js";
 import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
 
@@ -200,6 +202,20 @@ export function createDaemonChats(agentDir: string) {
         const hookTarget = { chatId: chat.id, ...(workspace.folderPath ? { workspaceRoot: workspace.folderPath } : {}) };
         const hooks = botAdmission ? botSurfaceHooks(chat.botId!, cwd) : createSurfaceHooks({ scopes: workspaceChatHookScopes(hookTarget), cwd, sessionId: chat.id });
         let turnHookContext: string | undefined;
+        // Hook messages reach the person as transcript status events, never the model.
+        const reportHookLines = (messages: readonly string[]) => { if (messages.length) send("chat:status", { streamId, phase: "hook_messages", messages: [...messages] }); };
+        // PreToolUse context waits for its tool's result; a hook's `continue: false` ends the turn after the tool.
+        const preToolContext = new Map<string, string>();
+        let hookStop: string | undefined;
+        const requestHookStop = (outcome: HookOutcome | undefined) => {
+          if (!outcome?.stopTurn || hookStop !== undefined) return;
+          hookStop = hookStopMessage(outcome); reportHookLines([hookStop]);
+        };
+        const dispatchHook = async (...args: Parameters<typeof hooks.dispatch>) => {
+          const outcome = await hooks.dispatch(...args);
+          reportHookLines(hookNoticeLines(outcome));
+          return outcome;
+        };
         const assertAuthority = async () => {
           if (entry.abort.signal.aborted || owner.isDestroyed()) throw new Error("Generation authority was revoked.");
           if (botAdmission) { await botAdmission.revalidateBeforeEffect(); return; }
@@ -261,9 +277,11 @@ export function createDaemonChats(agentDir: string) {
               if (!botAdmission && (event.toolName === "write" || event.toolName === "edit") && daemonWriteTargetsProtectedConfig(cwd, event.input)) return { block: true, reason: PROTECTED_AGENT_CONFIG_WRITE_MESSAGE };
               // PreToolUse runs after Aiden's own rules allowed the call, so a
               // hook can only tighten them; its updatedInput is not applied.
-              const hooked = await hooks.dispatch("PreToolUse", { ...hookToolPayload(daemonHookToolName(event.toolName), event.input), tool_use_id: event.toolCallId },
+              const hooked = await dispatchHook("PreToolUse", { ...hookToolPayload(daemonHookToolName(event.toolName), event.input), tool_use_id: event.toolCallId },
                 { idempotencyKey: `PreToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal });
               if (hooked) await assertAuthority();
+              requestHookStop(hooked);
+              if (hooked?.additionalContext) preToolContext.set(event.toolCallId, hooked.additionalContext);
               if (hooked?.decision === "deny") return { block: true, reason: hookBlockText(hooked) };
               const hookAsks = hooked?.decision === "ask";
               if (hookAsks && (botAdmission || unattended)) return { block: true, reason: `${hookBlockText(hooked)} No one is here to approve it on this turn.` };
@@ -288,12 +306,14 @@ export function createDaemonChats(agentDir: string) {
           });
             pi.on("tool_result", async (event) => {
               const hookToolName = daemonHookToolName(event.toolName);
-              if (!hooks.has("PostToolUse", hookToolName)) return;
-              const outcome = await hooks.dispatch("PostToolUse", {
+              const preContext = preToolContext.get(event.toolCallId);
+              preToolContext.delete(event.toolCallId);
+              const outcome = hooks.has("PostToolUse", hookToolName) ? await dispatchHook("PostToolUse", {
                 ...hookToolPayload(hookToolName, event.input), tool_use_id: event.toolCallId,
                 tool_response: { content: resultText(event.content), is_error: event.isError },
-              }, { idempotencyKey: `PostToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal });
-              const addition = hookPostToolAdditions(outcome);
+              }, { idempotencyKey: `PostToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal }) : undefined;
+              requestHookStop(outcome);
+              const addition = [preContext, hookPostToolAdditions(outcome)].filter(Boolean).join("\n\n");
               return addition ? { content: [...event.content, { type: "text" as const, text: addition }] } : undefined;
             });
             pi.on("session_before_compact", (event) => {
@@ -310,6 +330,12 @@ export function createDaemonChats(agentDir: string) {
           tools: botAdmission ? botTools.map((tool) => tool.name) : workspace.folderPath ? ["read", "bash", "edit", "write", "grep", "find", "ls", ...additionalNames] : [],
         });
         entry.session = session;
+        // A hook's `continue: false` ends the run once the current tool batch finishes.
+        const sessionFinishTurn = session.agent.finishTurn;
+        session.agent.finishTurn = async (turn, signal): Promise<AgentTurnDecision | undefined> => {
+          const decision = await sessionFinishTurn?.(turn, signal);
+          return hookStop !== undefined ? { action: "end" } : decision ?? undefined;
+        };
         await session.bindExtensions({ mode: "rpc" });
         await assertAuthority();
         unsubscribe = session.subscribe((event) => {
@@ -340,12 +366,20 @@ export function createDaemonChats(agentDir: string) {
           const hookContext: (string | undefined)[] = [];
           const source = workspaceChatSessionStartSource(chat.id, chat.messages.some((message) => message.role === "assistant"));
           if (source) {
-            const started = await hooks.dispatch("SessionStart", { source }, { idempotencyKey: `SessionStart:${chat.id}:${streamId}`, signal: entry.abort.signal });
+            const started = await dispatchHook("SessionStart", { source }, { idempotencyKey: `SessionStart:${chat.id}:${streamId}`, signal: entry.abort.signal });
             markWorkspaceChatSessionStarted(hookTarget);
             hookContext.push(started?.additionalContext);
           }
-          const submitted = await hooks.dispatch("UserPromptSubmit", { prompt: input.content }, { idempotencyKey: `UserPromptSubmit:${chat.id}:${streamId}`, signal: entry.abort.signal });
-          if (submitted?.blockPrompt) throw new Error(promptBlockedMessage(submitted));
+          const submitted = await dispatchHook("UserPromptSubmit", { prompt: input.content }, { idempotencyKey: `UserPromptSubmit:${chat.id}:${streamId}`, signal: entry.abort.signal });
+          if (submitted?.blockPrompt || submitted?.stopTurn) {
+            // The prompt never reaches the journal; marking the stored copy keeps forks and summaries from sending it later.
+            const blocked = promptBlockedMessage(submitted);
+            const stored = chat.messages.findLast((message) => message.role === "user");
+            if (stored?.content === input.content) {
+              await chatStore.setPromptHookBlock(chat.id, stored.id, blocked).catch(() => { process.stderr.write("aiden: Could not mark a hook-blocked prompt.\n"); });
+            }
+            throw new Error(blocked);
+          }
           hookContext.push(submitted?.additionalContext);
           turnHookContext = hookTurnContextText(hookContext);
         }
@@ -353,10 +387,10 @@ export function createDaemonChats(agentDir: string) {
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
         if (entry.abort.signal.aborted) throw new Error("Generation cancelled.");
         // Stop hooks may keep a workspace chat's turn going, at most MAX_STOP_HOOK_CONTINUATIONS times.
-        for (let continuation = 0; !botAdmission && continuation < MAX_STOP_HOOK_CONTINUATIONS; continuation += 1) {
+        for (let continuation = 0; !botAdmission && hookStop === undefined && continuation < MAX_STOP_HOOK_CONTINUATIONS; continuation += 1) {
           const ended = produced.at(-1);
           if (entry.abort.signal.aborted || !ended || ended.stopReason === "error" || ended.stopReason === "aborted" || ended.stopReason === "length") break;
-          const stop = await hooks.dispatch("Stop", { stop_hook_active: continuation > 0 }, { idempotencyKey: `Stop:${chat.id}:${streamId}:${continuation}`, signal: entry.abort.signal });
+          const stop = await dispatchHook("Stop", { stop_hook_active: continuation > 0 }, { idempotencyKey: `Stop:${chat.id}:${streamId}:${continuation}`, signal: entry.abort.signal });
           const next = hookStopContinuation(stop);
           if (!next) break;
           await assertAuthority();

@@ -150,7 +150,7 @@ export interface WorkspaceWorktreeApplicationDependencies {
   notifyChanged(): void;
   logError(area: string, message: string, error: unknown): void;
   /**
-   * Runs once a new managed worktree is saved (the `WorktreeCreate` hook).
+   * Runs once a new managed worktree is saved (the `WorktreeSetup` hook).
    * Awaited, so setup finishes before the caller uses the worktree, but it
    * can never undo the creation: a failure is logged and the worktree stays.
    */
@@ -254,13 +254,13 @@ export function createWorkspaceWorktreeApplicationService(
   // restores of the same snapshot are serialized here per process.
   const restoreLocks = new Map<string, Promise<void>>();
 
-  /** The WorktreeCreate hook: never fails or rolls back the saved worktree. */
+  /** The WorktreeSetup hook: never fails or rolls back the saved worktree. */
   const announceCreated = async (event: ManagedWorktreeCreatedEvent): Promise<void> => {
     if (!dependencies.onWorktreeCreated) return;
     try {
       await dependencies.onWorktreeCreated(event);
     } catch (error) {
-      dependencies.logError("hooks", "A WorktreeCreate hook could not finish; the worktree was kept.", error);
+      dependencies.logError("hooks", "A WorktreeSetup hook could not finish; the worktree was kept.", error);
     }
   };
 

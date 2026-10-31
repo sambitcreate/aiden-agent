@@ -10,8 +10,10 @@
  *   withdraws it. The card offers no remembered scope, and it is raised from
  *   inside the tool, so Full access, remembered approvals and a PreToolUse
  *   hook's "allow" never answer it.
- * - `disable` only makes things safer, and only for this chat's workspace and
- *   chat hooks; global and repo (`.aiden/hooks.json`) hooks stay with Settings.
+ * - `disable` turns off only hooks the agent itself proposed for this chat or
+ *   its workspace. A hook the owner added (often a guard meant to hold the
+ *   agent back), a Bot's hook, and global and repo (`.aiden/hooks.json`) hooks
+ *   stay with Settings.
  * - `test` never runs the command. The owner presses Test in Settings → Hooks.
  *
  * Everything a hook or repo file wrote (commands, names, output) reaches the
@@ -115,7 +117,7 @@ interface HooksToolParams {
 const DESCRIPTION = [
   "Read and propose Aiden hooks: shell commands Aiden runs at lifecycle events of this chat (before or after a tool, when a prompt is sent, at session start, when a turn stops).",
   'Actions: "list" shows this chat\'s hooks and pending proposals; "propose" asks the owner to add, change (hookId) or delete (change "delete", hookId) a workspace or chat hook, and waits for their answer on the Mac;',
-  '"disable" turns off a workspace or chat hook (only the owner can turn one back on); "test" shows the last run, since only the owner can run a test from Settings → Hooks; "logs" shows recent runs.',
+  '"disable" turns off a workspace or chat hook an agent proposed (hooks the owner added are turned off only in Settings → Hooks, and only the owner can turn one back on); "test" shows the last run, since only the owner can run a test from Settings → Hooks; "logs" shows recent runs.',
   `Agent hooks stop after at most ${MAX_AGENT_HOOK_TIMEOUT_SECONDS} seconds. Global hooks and a repo's .aiden/hooks.json are managed in Settings → Hooks only. Load the aiden-hooks skill for the hook protocol.`,
 ].join(" ");
 
@@ -310,6 +312,13 @@ export function createHooksTool(deps: HooksToolDependencies): PiRuntimeTool {
     const service = requireService();
     const hookId = requireHookId(params);
     const listing = await findOwn(service, hookId, "turned off");
+    // A hook the owner added may be the guard that holds this agent back, so the
+    // agent may only switch off what an agent proposed.
+    if (listing.source !== "agent") {
+      throw new Error(
+        `Hook ${hookId} was added by the owner, so only they can turn it off. Ask them to switch it off in Settings → Hooks.`,
+      );
+    }
     if (listing.status === "disabled" || listing.status === "disabled-after-failures") {
       return text(`Hook ${hookId} is already off.`);
     }

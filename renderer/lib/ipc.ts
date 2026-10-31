@@ -655,8 +655,12 @@ export const hooksApi = {
   setEnabled: (hookId: string, enabled: boolean) => invoke<boolean>("hooks:setEnabled", hookId, enabled),
   delete: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
   setPaused: (paused: boolean) => invoke<boolean>("hooks:setPaused", paused),
-  /** Runs the hook's command against a sample payload. Only from an explicit Test press. */
-  test: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<HookTestResult>>("hooks:test", hookId)),
+  /**
+   * Runs the hook's command against a sample payload. Only from an explicit Test press,
+   * and only the version with `digest` (the one on screen); a hook that changed since is refused.
+   */
+  test: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookTestResult>>("hooks:test", hookId, digest)),
   runLog: (hookId: string) => invoke<HookRunRecord[]>("hooks:runLog", hookId),
   onChanged: (handler: (event: HooksChangedEvent) => void) =>
     onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
@@ -2069,6 +2073,8 @@ export interface StreamCallbacks {
   onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
+  /** Hook `systemMessage` text, hook notices and a hook's stop reason; never model context. */
+  onHookMessages?: (messages: string[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
 }
 

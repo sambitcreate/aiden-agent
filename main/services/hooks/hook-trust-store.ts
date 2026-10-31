@@ -2,6 +2,10 @@
  * Profile-owned trust state for hooks, never stored in a repo: approved
  * digests per scope, per-hook disable flags, the pause-all switch and
  * consecutive-failure counters. Lives at `<root>/hooks-trust.json`.
+ *
+ * Disable flags and failure counts are keyed by scope and digest, not by hook
+ * id: a repo hook's id is its position in `.aiden/hooks.json`, so inserting a
+ * hook above another would otherwise move a flag onto a different command.
  */
 
 import * as path from "node:path";
@@ -24,9 +28,24 @@ export interface HookTrustState {
   paused: boolean;
   /** Keyed by `hookScopeKey`. */
   approvals: Record<string, HookApprovalRecord[]>;
+  /** `hookStateKey` of each hook the owner turned off. */
   disabled: string[];
-  /** Consecutive failures, and the digest that was auto-disabled at the limit. */
-  failures: Record<string, { consecutive: number; disabledDigest?: string }>;
+  /** Keyed by `hookStateKey`: consecutive failures, and whether the limit turned the hook off. */
+  failures: Record<string, { consecutive: number; autoDisabled?: true }>;
+}
+
+type HookStateTarget = Pick<HookDefinition, "digest" | "scope">;
+
+/** Key for per-hook flags: the scope and the exact digest the flag applies to. */
+export function hookStateKey(hook: HookStateTarget): string {
+  return `${hookScopeKey(hook.scope)}\u0000${hook.digest}`;
+}
+
+const DIGEST = /^[0-9a-f]{64}$/u;
+
+/** Whether a saved key has the `hookStateKey` shape: a scope key, a NUL, then a digest. */
+function isStateKey(key: string): boolean {
+  return key.length > 65 && key.charCodeAt(key.length - 65) === 0 && DIGEST.test(key.slice(-64));
 }
 
 export type HookTrustVerdict = "approved" | "waiting-for-approval" | "changed";
@@ -49,22 +68,24 @@ function sanitizeTrust(raw: unknown): HookTrustState {
           typeof item === "object" &&
           typeof (item as HookApprovalRecord).hookId === "string" &&
           typeof (item as HookApprovalRecord).digest === "string" &&
-          /^[0-9a-f]{64}$/u.test((item as HookApprovalRecord).digest) &&
+          DIGEST.test((item as HookApprovalRecord).digest) &&
           isHookEvent((item as HookApprovalRecord).event) &&
           typeof (item as HookApprovalRecord).matcher === "string",
       );
       if (approvals.length > 0) state.approvals[scope] = approvals.map((item) => ({ ...item, approvedAt: Number(item.approvedAt) || 0 }));
     }
   }
-  if (Array.isArray(record.disabled)) state.disabled = [...new Set(record.disabled.filter((id): id is string => typeof id === "string"))];
+  // Flags saved under the older id keys are dropped: they could point at another hook now.
+  if (Array.isArray(record.disabled)) {
+    state.disabled = [...new Set(record.disabled.filter((key): key is string => typeof key === "string" && isStateKey(key)))];
+  }
   if (record.failures && typeof record.failures === "object") {
-    for (const [id, value] of Object.entries(record.failures as Record<string, unknown>)) {
-      if (!value || typeof value !== "object") continue;
+    for (const [key, value] of Object.entries(record.failures as Record<string, unknown>)) {
+      if (!isStateKey(key) || !value || typeof value !== "object") continue;
       const consecutive = Number((value as { consecutive?: unknown }).consecutive);
-      const disabledDigest = (value as { disabledDigest?: unknown }).disabledDigest;
-      state.failures[id] = {
+      state.failures[key] = {
         consecutive: Number.isFinite(consecutive) && consecutive > 0 ? Math.floor(consecutive) : 0,
-        ...(typeof disabledDigest === "string" ? { disabledDigest } : {}),
+        ...((value as { autoDisabled?: unknown }).autoDisabled === true ? { autoDisabled: true as const } : {}),
       };
     }
   }
@@ -110,66 +131,91 @@ export class HookTrustStore {
     return approvals.some((record) => record.hookId === hook.id) ? "changed" : "waiting-for-approval";
   }
 
-  /** Approve exactly this digest for this hook id, replacing any earlier approval of the id. */
-  approve(hook: Pick<HookDefinition, "id" | "digest" | "scope" | "event" | "matcher">): Promise<void> {
+  /**
+   * Approve exactly this digest for this hook id, replacing any earlier approval of the id. A fresh approval starts with no flags.
+   *
+   * `current` lists the hooks now in the same scope. Repo hook ids follow their
+   * position in the file, so when a new hook takes an approved hook's place, the
+   * earlier approval moves to wherever that unchanged hook now sits instead of
+   * being dropped.
+   */
+  approve(
+    hook: Pick<HookDefinition, "id" | "digest" | "scope" | "event" | "matcher">,
+    current: ReadonlyArray<Pick<HookDefinition, "id" | "digest">> = [],
+  ): Promise<void> {
     const key = hookScopeKey(hook.scope);
-    const others = (this.state.approvals[key] ?? []).filter((record) => record.hookId !== hook.id && record.digest !== hook.digest);
+    const existing = this.state.approvals[key] ?? [];
+    const others: HookApprovalRecord[] = [];
+    for (const record of existing) {
+      if (record.digest === hook.digest) continue;
+      if (record.hookId !== hook.id) {
+        others.push(record);
+        continue;
+      }
+      const moved = current.find((candidate) => candidate.digest === record.digest && candidate.id !== hook.id);
+      if (moved && !existing.some((other) => other.hookId === moved.id)) others.push({ ...record, hookId: moved.id });
+    }
     this.state.approvals[key] = [...others, { hookId: hook.id, digest: hook.digest, event: hook.event, matcher: hook.matcher, approvedAt: this.now() }];
-    this.state.disabled = this.state.disabled.filter((id) => id !== hook.id);
-    delete this.state.failures[hook.id];
+    this.clearFlags(hook);
     return this.save();
   }
 
   /** Forget every approval and flag for a hook id. */
-  revoke(hook: Pick<HookDefinition, "id" | "scope">): Promise<void> {
+  revoke(hook: Pick<HookDefinition, "id" | "digest" | "scope">): Promise<void> {
     const key = hookScopeKey(hook.scope);
-    const remaining = (this.state.approvals[key] ?? []).filter((record) => record.hookId !== hook.id);
+    const all = this.state.approvals[key] ?? [];
+    const remaining = all.filter((record) => record.hookId !== hook.id);
+    for (const record of all) if (record.hookId === hook.id) this.clearFlags({ scope: hook.scope, digest: record.digest });
+    this.clearFlags(hook);
     if (remaining.length > 0) this.state.approvals[key] = remaining;
     else delete this.state.approvals[key];
-    this.state.disabled = this.state.disabled.filter((id) => id !== hook.id);
-    delete this.state.failures[hook.id];
     return this.save();
   }
 
-  isDisabled(hookId: string): boolean {
-    return this.state.disabled.includes(hookId);
+  private clearFlags(hook: HookStateTarget): void {
+    const key = hookStateKey(hook);
+    this.state.disabled = this.state.disabled.filter((entry) => entry !== key);
+    delete this.state.failures[key];
   }
 
-  isDisabledAfterFailures(hook: Pick<HookDefinition, "id" | "digest">): boolean {
-    return this.state.failures[hook.id]?.disabledDigest === hook.digest;
+  isDisabled(hook: HookStateTarget): boolean {
+    return this.state.disabled.includes(hookStateKey(hook));
   }
 
-  setEnabled(hookId: string, enabled: boolean): Promise<void> {
-    if (enabled) {
-      this.state.disabled = this.state.disabled.filter((id) => id !== hookId);
-      delete this.state.failures[hookId];
-    } else if (!this.state.disabled.includes(hookId)) {
-      this.state.disabled.push(hookId);
-    }
+  isDisabledAfterFailures(hook: HookStateTarget): boolean {
+    return this.state.failures[hookStateKey(hook)]?.autoDisabled === true;
+  }
+
+  setEnabled(hook: HookStateTarget, enabled: boolean): Promise<void> {
+    const key = hookStateKey(hook);
+    if (enabled) this.clearFlags(hook);
+    else if (!this.state.disabled.includes(key)) this.state.disabled.push(key);
     return this.save();
   }
 
   /** Count a failure; returns true when this one reached the limit and disabled the hook. */
-  async recordFailure(hook: Pick<HookDefinition, "id" | "digest">): Promise<boolean> {
-    const entry = this.state.failures[hook.id] ?? { consecutive: 0 };
-    if (entry.disabledDigest === hook.digest) return false;
+  async recordFailure(hook: HookStateTarget): Promise<boolean> {
+    const key = hookStateKey(hook);
+    const entry = this.state.failures[key] ?? { consecutive: 0 };
+    if (entry.autoDisabled) return false;
     entry.consecutive += 1;
     const reached = entry.consecutive >= HOOK_FAILURE_LIMIT;
-    if (reached) entry.disabledDigest = hook.digest;
-    this.state.failures[hook.id] = entry;
+    if (reached) entry.autoDisabled = true;
+    this.state.failures[key] = entry;
     await this.save();
     return reached;
   }
 
-  async recordSuccess(hookId: string): Promise<void> {
-    const entry = this.state.failures[hookId];
-    if (!entry || (entry.consecutive === 0 && !entry.disabledDigest)) return;
-    delete this.state.failures[hookId];
+  async recordSuccess(hook: HookStateTarget): Promise<void> {
+    const key = hookStateKey(hook);
+    const entry = this.state.failures[key];
+    if (!entry || (entry.consecutive === 0 && !entry.autoDisabled)) return;
+    delete this.state.failures[key];
     await this.save();
   }
 
-  consecutiveFailures(hookId: string): number {
-    return this.state.failures[hookId]?.consecutive ?? 0;
+  consecutiveFailures(hook: HookStateTarget): number {
+    return this.state.failures[hookStateKey(hook)]?.consecutive ?? 0;
   }
 
   /** Every scope key that has approvals, for listing workspace roots. */

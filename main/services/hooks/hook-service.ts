@@ -8,6 +8,9 @@
  * only propose, and a proposal changes nothing until the owner approves it.
  * A repo's `.aiden/hooks.json` is read and listed, never written, and each of
  * its hooks waits for approval; an edit to an approved one shows as changed.
+ * A workspace hook's digest also covers the in-workspace script files its
+ * command runs (see hook-script-files.ts), read from the folder it runs in,
+ * so editing or swapping a script stops the hook until it is approved again.
  */
 
 import { randomBytes } from "node:crypto";
@@ -28,6 +31,7 @@ import {
 import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue } from "./hook-matcher.js";
 import { mergeHookResults } from "./hook-merge.js";
 import { interpretHookRun, runHookCommand, type HookHandlerResult, type HookRawRun, type ShellRunner } from "./hook-runner.js";
+import { digestWithScriptFiles, hookScriptFiles } from "./hook-script-files.js";
 import {
   HookEntryStore,
   listingDefinition,
@@ -126,6 +130,12 @@ export interface HookDraft {
   name?: string;
 }
 
+/** A saved hook to test, with the digest the owner was shown. */
+export interface HookTestTarget {
+  hookId: string;
+  digest: string;
+}
+
 export interface HookTestResult {
   hookId?: string;
   /** False when the matcher would skip the fixture; the hook ran anyway. */
@@ -160,17 +170,20 @@ export interface HookService {
   rejectProposal(proposalId: string): boolean;
   /** Owner shortcut for Settings: propose as the owner and approve at once. */
   saveHook(input: Omit<HookProposalInput, "origin">): Promise<HookResult<HookListing | undefined>>;
-  /** Approve the hook's current digest. Pass the digest the owner saw to refuse a hook that changed since. */
-  approveDigest(hookId: string, expectedDigest?: string): Promise<HookResult<HookListing>>;
-  setEnabled(hookId: string, enabled: boolean): Promise<void>;
+  /** Approve the hook's current digest, only when it is still the digest the owner was shown. */
+  approveDigest(hookId: string, expectedDigest: string): Promise<HookResult<HookListing>>;
+  /** Turn a hook off or back on. Returns false when there is no such hook. */
+  setEnabled(hookId: string, enabled: boolean): Promise<boolean>;
   /** Removes a stored hook. A repo hook stays in its file but loses its approval. */
   deleteHook(hookId: string): Promise<HookResult<void>>;
   setPaused(paused: boolean): Promise<void>;
   /**
    * Run one hook against a fixture without changing its health or run log.
    * This executes the command, so call it only for an explicit owner action.
+   * A saved hook runs only when `digest` is still its current digest, so a
+   * Test press never runs a command the owner wasn't shown.
    */
-  testHook(target: string | HookDraft, fixturePayload?: Partial<HookPayload>): Promise<HookResult<HookTestResult>>;
+  testHook(target: HookTestTarget | HookDraft, fixturePayload?: Partial<HookPayload>): Promise<HookResult<HookTestResult>>;
   getRunLog(hookId: string): HookRunRecord[];
   onChange(listener: (change: HookChange) => void): () => void;
 }
@@ -218,8 +231,8 @@ function describeTrigger(event: HookEvent, matcher: string): string {
       return "when Aiden sends a notification";
     case "PreCompact":
       return "before the conversation is compacted";
-    case "WorktreeCreate":
-      return "when a worktree is created";
+    case "WorktreeSetup":
+      return "after Aiden sets up a worktree";
     case "RoutineRun":
       return "when a routine runs";
     case "RoutineFailed":
@@ -265,7 +278,7 @@ export function hookFixturePayload(event: HookEvent, cwd: string): HookPayload {
       return { ...base, message: "Aiden needs your approval to run a command.", notification_type: "permission_prompt" };
     case "PreCompact":
       return { ...base, trigger: "manual", custom_instructions: "" };
-    case "WorktreeCreate":
+    case "WorktreeSetup":
       return { ...base, worktree_path: path.join(cwd, ".aiden", "worktrees", "example"), branch: "aiden/example" };
     case "RoutineRun":
       return { ...base, routine_id: "routine-example", routine_name: "Morning summary" };
@@ -326,12 +339,31 @@ export function createHookService(deps: HookServiceDeps): HookService {
     let status: HookListing["status"];
     if (verdict !== "approved") status = verdict;
     else if (trust.isDisabledAfterFailures(listing)) status = "disabled-after-failures";
-    else if (trust.isDisabled(listing.id)) status = "disabled";
+    else if (trust.isDisabled(listing)) status = "disabled";
     else status = "active";
     return { ...listing, status };
   };
 
-  const readRepo = async (workspaceRoot: string): Promise<WorkspaceHooksFile> => {
+  /**
+   * Fold the script files a workspace hook runs into its digest, read from
+   * `cwd` (the workspace root unless the hook runs elsewhere, as WorktreeSetup
+   * hooks do in the new worktree). Other scopes have no fixed folder to read.
+   */
+  const withScripts = async <T extends Pick<HookListing, "scope" | "handler" | "digest">>(listing: T, cwd?: string): Promise<T> => {
+    const root = workspaceRootOf(listing.scope);
+    if (!root || typeof listing.handler?.command !== "string") return listing;
+    const files = await hookScriptFiles(listing.handler.command, { workspaceRoot: root, cwd: cwd ?? root });
+    const digest = digestWithScriptFiles(listing.digest, files);
+    return digest === listing.digest ? listing : { ...listing, digest };
+  };
+
+  /** A stored entry as a listing with its scripts folded in, before trust decides its status. */
+  const storedListing = (entry: StoredHookEntry, cwd?: string): Promise<HookListing> => {
+    const listing = storedEntryListing(entry);
+    return listing.status === "unsupported" ? Promise.resolve(listing) : withScripts(listing, cwd);
+  };
+
+  const readRepo = async (workspaceRoot: string, cwd?: string): Promise<WorkspaceHooksFile> => {
     let file: WorkspaceHooksFile;
     try {
       file = await readWorkspaceFile(workspaceRoot);
@@ -339,7 +371,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
       file = { present: true, hooks: [], problems: [`The hooks file could not be read: ${(error as Error).message}`], warnings: [] };
     }
     for (const hook of file.hooks) repoHookRoots.set(hook.id, workspaceRoot);
-    return file;
+    const hooks = await Promise.all(file.hooks.map((hook) => (hook.status === "unsupported" || hook.event === "unknown" ? hook : withScripts(hook, cwd))));
+    return { ...file, hooks };
   };
 
   const repoHasApprovals = (scope: HookScope): boolean => {
@@ -349,25 +382,24 @@ export function createHookService(deps: HookServiceDeps): HookService {
     return trust.approvalsFor(scope).some((record) => record.hookId.startsWith(prefix));
   };
 
-  const storedListingsIn = (scope: HookScope): HookListing[] =>
-    entries
-      .entries()
-      .filter((entry) => hookScopesEqual(entry.scope, scope))
-      .map((entry) => statusOf(storedEntryListing(entry)));
+  const storedListingsIn = async (scope: HookScope, cwd?: string): Promise<HookListing[]> =>
+    (await Promise.all(entries.entries().filter((entry) => hookScopesEqual(entry.scope, scope)).map((entry) => storedListing(entry, cwd)))).map(statusOf);
 
   const dispatcher = createHookDispatcher({
     run: runOne,
     now,
     source: {
-      async activeHooks(event, scopes) {
+      async activeHooks(event, scopes, cwd) {
         if (hooksOff()) return [];
         const active: HookDefinition[] = [];
         for (const rawScope of scopes) {
           const scope = normalizeHookScope(rawScope);
-          const listings = storedListingsIn(scope);
+          // Scripts are read from where the hook will run, so a different copy
+          // there (a swapped script in a new worktree) reads as changed.
+          const listings = await storedListingsIn(scope, cwd);
           // The repo file is re-read on every fire once one of its hooks is approved,
           // so an edit is caught as `changed` and stops running at once.
-          if (repoHasApprovals(scope)) listings.push(...(await readRepo(workspaceRootOf(scope) as string)).hooks.map(statusOf));
+          if (repoHasApprovals(scope)) listings.push(...(await readRepo(workspaceRootOf(scope) as string, cwd)).hooks.map(statusOf));
           for (const listing of listings) {
             if (listing.status !== "active" || listing.event !== event) continue;
             const definition = listingDefinition(listing);
@@ -387,12 +419,15 @@ export function createHookService(deps: HookServiceDeps): HookService {
           const scope = normalizeHookScope(rawScope);
           return trust
             .approvalsFor(scope)
-            .some((record) => record.event === event && !trust.isDisabled(record.hookId) && !trust.isDisabledAfterFailures({ id: record.hookId, digest: record.digest }) && matches(record.matcher));
+            .some((record) => {
+              const flags = { scope, digest: record.digest };
+              return record.event === event && !trust.isDisabled(flags) && !trust.isDisabledAfterFailures(flags) && matches(record.matcher);
+            });
         });
       },
     },
     health: {
-      recordSuccess: (hook) => trust.recordSuccess(hook.id),
+      recordSuccess: (hook) => trust.recordSuccess(hook),
       recordFailure: (hook) => trust.recordFailure(hook),
     },
     onRun: (hook) => emit({ reason: "run", hookId: hook.id }),
@@ -414,14 +449,32 @@ export function createHookService(deps: HookServiceDeps): HookService {
     return [...byKey.values()];
   };
 
-  /** A hook by id: stored entries first, then a repo file whose hooks were read before. */
+  /** The workspace a repo hook id belongs to: learned from a read, or matched against known workspaces. */
+  const repoRootFor = (hookId: string): string | undefined => {
+    const known = repoHookRoots.get(hookId);
+    if (known) return known;
+    if (!hookId.startsWith("repo:")) return undefined;
+    for (const scope of knownScopes()) {
+      const root = workspaceRootOf(scope);
+      if (root && hookId.startsWith(`${workspaceFileIdPrefix(root)}:`)) return root;
+    }
+    return undefined;
+  };
+
+  /** A hook by id: stored entries first, then a repo file in a known workspace. */
   const findListing = async (hookId: string): Promise<{ listing: HookListing; entry?: StoredHookEntry } | undefined> => {
     const entry = entries.get(hookId);
-    if (entry) return { listing: statusOf(storedEntryListing(entry)), entry };
-    const root = repoHookRoots.get(hookId);
+    if (entry) return { listing: statusOf(await storedListing(entry)), entry };
+    const root = repoRootFor(hookId);
     if (!root) return undefined;
     const listing = (await readRepo(root)).hooks.find((hook) => hook.id === hookId);
     return listing ? { listing: statusOf(listing) } : undefined;
+  };
+
+  /** Anything that changes which hooks may run also drops cached replay outcomes. */
+  const changed = (change: HookChange) => {
+    dispatcher.clearIdempotencyCache();
+    emit(change);
   };
 
   const pruneProposals = () => {
@@ -499,19 +552,29 @@ export function createHookService(deps: HookServiceDeps): HookService {
     return { id, name, event: entry.event, matcher, handler, scope, source, digest };
   };
 
+  /** The proposal with its scripts read now, so the card shows what approval would trust. */
+  const withProposalScripts = async (proposal: HookProposal): Promise<HookProposal> => {
+    if (proposal.action === "delete") return proposal;
+    const definition = await withScripts(proposal.definition);
+    return definition === proposal.definition ? proposal : { ...proposal, definition, digest: definition.digest };
+  };
+
   const applyProposal = async (proposal: HookProposal): Promise<HookResult<HookListing | undefined>> => {
     const existing = entries.get(proposal.hookId);
     if (proposal.action === "delete") {
       if (!existing) return { ok: false, reason: "That hook was already deleted." };
       await entries.remove(proposal.hookId);
-      await trust.revoke(existing);
-      emit({ reason: "hooks", hookId: proposal.hookId });
+      await trust.revoke(storedEntryListing(existing));
+      changed({ reason: "hooks", hookId: proposal.hookId });
       return { ok: true, value: undefined };
     }
     if (proposal.action === "update" && !existing) return { ok: false, reason: "The hook this proposal changes was deleted." };
     if (proposal.action === "create" && existing) return { ok: false, reason: "This proposal was already applied." };
-    const time = now();
     const { definition } = proposal;
+    if ((await withScripts({ ...definition, digest: hookDefinitionFor(definition).digest })).digest !== proposal.digest) {
+      return { ok: false, reason: "A script this hook runs changed after it was proposed; propose it again so the owner sees the current version." };
+    }
+    const time = now();
     const entry: StoredHookEntry = {
       id: definition.id,
       name: definition.name,
@@ -525,8 +588,8 @@ export function createHookService(deps: HookServiceDeps): HookService {
     };
     await entries.upsert(entry);
     await trust.approve(definition);
-    emit({ reason: "hooks", hookId: definition.id });
-    return { ok: true, value: withLastRun(statusOf(storedEntryListing(entry))) };
+    changed({ reason: "hooks", hookId: definition.id });
+    return { ok: true, value: withLastRun(statusOf(await storedListing(entry))) };
   };
 
   return {
@@ -549,7 +612,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
         const key = hookScopeKey(scope);
         if (seen.has(key)) continue;
         seen.add(key);
-        hooks.push(...storedListingsIn(scope).map(withLastRun));
+        hooks.push(...(await storedListingsIn(scope)).map(withLastRun));
         const root = workspaceRootOf(scope);
         if (root) {
           const file = await readRepo(root);
@@ -564,13 +627,14 @@ export function createHookService(deps: HookServiceDeps): HookService {
       pruneProposals();
       const built = buildProposal(input);
       if (!built.ok) return built;
+      const proposal = await withProposalScripts(built.value);
       if (proposals.size >= MAX_PENDING_HOOK_PROPOSALS) {
         const oldest = [...proposals.values()].sort((a, b) => a.createdAt - b.createdAt)[0];
         if (oldest) proposals.delete(oldest.id);
       }
-      proposals.set(built.value.id, built.value);
+      proposals.set(proposal.id, proposal);
       emit({ reason: "proposals" });
-      return built;
+      return { ok: true, value: proposal };
     },
 
     listProposals() {
@@ -596,7 +660,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
     async saveHook(input) {
       const built = buildProposal({ ...input, origin: "owner" });
       if (!built.ok) return built;
-      return applyProposal(built.value);
+      return applyProposal(await withProposalScripts(built.value));
     },
 
     async approveDigest(hookId, expectedDigest) {
@@ -604,47 +668,58 @@ export function createHookService(deps: HookServiceDeps): HookService {
       if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
       const { listing } = found;
       if (listing.status === "unsupported") return { ok: false, reason: listing.unsupportedReason ?? "This hook is not supported." };
-      if (expectedDigest && expectedDigest !== listing.digest) return { ok: false, reason: "The hook changed since it was shown; review it again." };
+      if (typeof expectedDigest !== "string" || !expectedDigest) return { ok: false, reason: "Approving a hook needs the digest that was shown for it." };
+      if (expectedDigest !== listing.digest) return { ok: false, reason: "The hook changed since it was shown; review it again." };
       const definition = listingDefinition(listing);
       if (!definition) return { ok: false, reason: "This hook is not supported." };
-      await trust.approve(definition);
-      emit({ reason: "hooks", hookId });
+      // A repo hook's id is its position in the file; let an approval displaced by
+      // an inserted hook follow the unchanged hook to its new place.
+      const root = found.entry ? undefined : repoRootFor(hookId);
+      await trust.approve(definition, root ? (await readRepo(root)).hooks : []);
+      changed({ reason: "hooks", hookId });
       return { ok: true, value: withLastRun(statusOf(listing)) };
     },
 
     async setEnabled(hookId, enabled) {
-      await trust.setEnabled(hookId, enabled);
-      emit({ reason: "hooks", hookId });
+      const found = await findListing(hookId);
+      if (!found) return false;
+      await trust.setEnabled(found.listing, enabled);
+      changed({ reason: "hooks", hookId });
+      return true;
     },
 
     async deleteHook(hookId) {
       const entry = entries.get(hookId);
       if (entry) {
         await entries.remove(hookId);
-        await trust.revoke(entry);
-        emit({ reason: "hooks", hookId });
+        await trust.revoke(await storedListing(entry));
+        changed({ reason: "hooks", hookId });
         return { ok: true, value: undefined };
       }
       const found = await findListing(hookId);
       if (!found) return { ok: false, reason: `There is no hook with the id ${hookId}.` };
       await trust.revoke(found.listing);
-      emit({ reason: "hooks", hookId });
+      changed({ reason: "hooks", hookId });
       return { ok: true, value: undefined };
     },
 
     async setPaused(paused) {
       await trust.setPaused(paused);
-      emit({ reason: "hooks" });
+      changed({ reason: "hooks" });
     },
 
     async testHook(target, fixturePayload) {
       let definition: HookDefinition | undefined;
-      if (typeof target === "string") {
-        const found = await findListing(target);
-        if (!found) return { ok: false, reason: `There is no hook with the id ${target}.` };
+      const saved = "hookId" in target ? target : undefined;
+      if (saved) {
+        const found = await findListing(saved.hookId);
+        if (!found) return { ok: false, reason: `There is no hook with the id ${saved.hookId}.` };
         if (found.listing.status === "unsupported") return { ok: false, reason: found.listing.unsupportedReason ?? "This hook is not supported." };
+        if (typeof saved.digest !== "string" || saved.digest !== found.listing.digest) {
+          return { ok: false, reason: "The hook changed since it was shown; review it again before testing it." };
+        }
         definition = listingDefinition(found.listing);
-      } else {
+      } else if ("scope" in target) {
         const built = buildProposal({ ...target, origin: "owner" });
         if (!built.ok) return built;
         definition = { ...built.value.definition, id: "hook-test" };
@@ -658,7 +733,7 @@ export function createHookService(deps: HookServiceDeps): HookService {
       return {
         ok: true,
         value: {
-          ...(typeof target === "string" ? { hookId: target } : {}),
+          ...(saved ? { hookId: saved.hookId } : {}),
           matched: fixtureMatches(definition, payload),
           payload,
           exitCode: raw.exitCode,

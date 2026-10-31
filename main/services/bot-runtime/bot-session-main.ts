@@ -441,6 +441,8 @@ const extension: BotExtensionDeps = {
   hooks: {
     cwd: async (botId) => (await botManagedWorkspace.resolve(botId)).homePath,
     attended: botTurnAttended,
+    // A Bot run has no transcript notice row, so hook messages go to the app log.
+    report: (botId, lines) => logger.info("hooks", `Bot ${botId} hook messages.`, lines),
   },
 };
 

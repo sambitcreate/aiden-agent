@@ -1605,6 +1605,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
           },
+          onHookMessages: (messages) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
+            for (const message of messages) toast.info(message);
+          },
           onContextPressure: (pressure) => {
             if (mountedRef.current && generationIntentRef.current === generationIntent) {
               setContextPressure(pressure);

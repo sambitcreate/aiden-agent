@@ -23,10 +23,21 @@ export interface BoundedShellCommandResult {
 }
 
 /**
+ * How long output may keep arriving after the shell exits. Past this, whatever
+ * the command left running in the background still holds the output pipes.
+ */
+export const BOUNDED_SHELL_DRAIN_MS = 250;
+
+/**
  * Runs one shell command in its own process group with a deadline and an
  * output cap. A timeout, the cap or an abort stops the whole group: SIGTERM
  * first, SIGKILL a second later for anything still running. Used by
- * `run_command` and by workspace artifact sources and buttons.
+ * `run_command`, hooks, and workspace artifact sources and buttons.
+ *
+ * The command is finished when its shell exits, not when every process that
+ * inherited its output does: after a short drain for the last output, anything
+ * it left running in the background that still holds the pipes (`sleep 30 &`)
+ * is stopped, so a backgrounded child can't hold the caller to the deadline.
  */
 export function runBoundedShellCommand(options: BoundedShellCommandOptions): Promise<BoundedShellCommandResult> {
   const { signal } = options;
@@ -123,10 +134,12 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
         reject(error);
       })();
     });
-    child.once("close", (exitCode) => {
+    let drain: ReturnType<typeof setTimeout> | undefined;
+    const finish = (exitCode: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      clearTimeout(drain);
       signal?.removeEventListener("abort", abort);
       if (finishTermination && !processGroupExists()) {
         clearTimeout(forceKill);
@@ -144,7 +157,32 @@ export function runBoundedShellCommand(options: BoundedShellCommandOptions): Pro
           aborted,
         });
       })();
+    };
+    const stopReading = (exitCode: number | null) => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      finish(exitCode);
+    };
+    child.once("exit", (exitCode) => {
+      drain = setTimeout(() => {
+        if (settled) return;
+        if (!processGroupExists()) {
+          // Nothing of the command is left, so the pipes are only draining
+          // (a slow machine) or held outside the group (`setsid`); allow a
+          // little longer before giving up on them.
+          drain = setTimeout(() => stopReading(exitCode), 1_000);
+          return;
+        }
+        // The shell is gone but something it started still holds stdout or
+        // stderr. Stop the rest of the group and stop reading.
+        signalProcess("SIGTERM");
+        setTimeout(() => {
+          if (processGroupExists()) signalProcess("SIGKILL");
+        }, 1_000).unref?.();
+        stopReading(exitCode);
+      }, BOUNDED_SHELL_DRAIN_MS);
     });
+    child.once("close", (exitCode) => finish(exitCode));
     signal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => {
       timedOut = true;

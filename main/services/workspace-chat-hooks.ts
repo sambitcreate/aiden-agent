@@ -80,6 +80,14 @@ export type PreToolUseHookResult =
   /** May skip the card only where a remembered approval scope could already apply. */
   | { kind: "allow" };
 
+export interface WorkspaceChatHookOptions {
+  /**
+   * Hook `systemMessage` text, Aiden's hook notices and a hook's stop reason,
+   * for the person only. These never enter model context.
+   */
+  onMessages?: (lines: string[]) => void;
+}
+
 export interface WorkspaceChatHooks {
   readonly target: WorkspaceChatHookTarget;
   has(event: HookEvent, toolName?: string): boolean;
@@ -102,11 +110,18 @@ export interface WorkspaceChatHooks {
   }): Promise<PreToolUseHookResult>;
   /** Fire-and-forget; never delays the card or question it reports. */
   notify(message: string, notificationType: string): void;
+  /**
+   * Set once a PreToolUse or PostToolUse hook returned `continue: false`: the
+   * turn ends after the current tool batch, and this says why.
+   */
+  stopRequested(): string | undefined;
   /** The harness `onStop` callback: a Stop hook may keep the turn going. */
   onStop(event: PiRuntimeStopEvent): Promise<PiRuntimeStopDecision | undefined>;
   /**
    * PostToolUse plus per-turn context (UserPromptSubmit and SessionStart),
    * placed after the current prompt and never saved as the person's words.
+   * PreToolUse context rides on its tool's result, and a hook's stop ends the
+   * turn after the tool batch it came from.
    */
   extension(options: {
     /** The current prompt's timestamp; without one the last user message carries the context. */
@@ -126,6 +141,21 @@ function capitalized(text: string): string {
 
 function modelReason(outcome: HookOutcome, fallback: string): string {
   return (outcome.reasonForModel ?? outcome.reason ?? "").trim() || fallback;
+}
+
+/** Text the person should see after any hook event: hook messages and Aiden's notices. */
+export function hookNoticeLines(outcome: HookOutcome | undefined): string[] {
+  if (!outcome) return [];
+  return [
+    ...(outcome.systemMessages ?? []).map((message) => `${capitalized(hooksLabel(outcome))}: ${message}`),
+    ...(outcome.notices ?? []),
+  ];
+}
+
+/** What the person sees when a hook's `continue: false` ends the turn. */
+export function hookStopMessage(outcome: HookOutcome): string {
+  const reason = (outcome.stopReason ?? "").trim();
+  return `Stopped by ${hooksLabel(outcome)}${reason ? `: ${reason}` : "."}`;
 }
 
 /** What the person sees when a UserPromptSubmit hook refuses the prompt. */
@@ -170,7 +200,24 @@ function textOf(result: AfterToolCallContext["result"]): string {
 export function createWorkspaceChatHooks(
   target: WorkspaceChatHookTarget,
   dispatcher: () => HookDispatcher = getHookDispatcher,
+  options: WorkspaceChatHookOptions = {},
 ): WorkspaceChatHooks {
+  const report = (lines: string[]) => {
+    if (lines.length === 0 || !options.onMessages) return;
+    try {
+      options.onMessages(lines);
+    } catch {
+      // Showing a hook's message never breaks the chat.
+    }
+  };
+  /** PreToolUse context waiting for its tool's result, by tool call id. */
+  const preToolContext = new Map<string, string>();
+  let stopReason: string | undefined;
+  const requestStop = (outcome: HookOutcome) => {
+    if (!outcome.stopTurn || stopReason !== undefined) return;
+    stopReason = hookStopMessage(outcome);
+    report([stopReason]);
+  };
   const scopes = workspaceChatHookScopes(target);
   const cwd = workspaceChatHookCwd(target);
   const base: Omit<HookDispatchContext, "idempotencyKey" | "signal"> = {
@@ -189,8 +236,9 @@ export function createWorkspaceChatHooks(
     if (!has(event, typeof payload.aiden_tool_name === "string" ? payload.aiden_tool_name : undefined)) {
       return undefined;
     }
+    let outcome: HookOutcome;
     try {
-      return await dispatcher().dispatch(
+      outcome = await dispatcher().dispatch(
         event,
         { ...payload, hook_event_name: event, session_id: target.chatId, cwd },
         {
@@ -202,6 +250,8 @@ export function createWorkspaceChatHooks(
     } catch {
       return undefined;
     }
+    report(hookNoticeLines(outcome));
+    return outcome;
   };
   const toolPayload = (toolName: string, input: unknown) => ({
     tool_name: claudeToolName(toolName),
@@ -220,6 +270,8 @@ export function createWorkspaceChatHooks(
         signal,
       });
       if (!outcome) return { kind: "none" };
+      // `continue: false` lets this call finish (unless denied) and then ends the turn.
+      requestStop(outcome);
       if (outcome.decision === "deny") {
         return { kind: "block", reason: `Blocked by ${hooksLabel(outcome)}: ${modelReason(outcome, "no reason given")}` };
       }
@@ -244,6 +296,7 @@ export function createWorkspaceChatHooks(
         }
         replaceArgsInPlace(args, validated);
       }
+      if (outcome.additionalContext) preToolContext.set(toolCallId, outcome.additionalContext);
       if (outcome.decision === "ask") {
         return {
           kind: "ask",
@@ -257,8 +310,10 @@ export function createWorkspaceChatHooks(
       if (!has("Notification")) return;
       void dispatch("Notification", { message, notification_type: notificationType }).catch(() => {});
     },
+    stopRequested: () => stopReason,
     async onStop(event) {
       // Pi ended the reply on its own; the person's Stop and errors never get here.
+      if (stopReason !== undefined) return undefined;
       if (event.continuations >= MAX_STOP_HOOK_CONTINUATIONS || !has("Stop")) return undefined;
       const outcome = await dispatch(
         "Stop",
@@ -300,27 +355,36 @@ export function createWorkspaceChatHooks(
         },
         afterToolCall: async (context, signal): Promise<AfterToolCallResult | undefined> => {
           const toolName = context.toolCall.name;
-          if (!has("PostToolUse", toolName)) return undefined;
-          const outcome = await dispatch(
-            "PostToolUse",
-            {
-              ...toolPayload(toolName, context.args),
-              tool_response: { content: textOf(context.result), is_error: context.isError },
-            },
-            { idempotencyKey: `PostToolUse:${target.chatId}:${context.toolCall.id}`, signal },
-          );
-          if (!outcome) return undefined;
           const additions: string[] = [];
-          if (outcome.flaggedResult) {
-            const reason = outcome.reasonForModel ?? (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
-            additions.push(`${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`);
+          const preContext = preToolContext.get(context.toolCall.id);
+          preToolContext.delete(context.toolCall.id);
+          if (preContext) additions.push(preContext);
+          const outcome = has("PostToolUse", toolName)
+            ? await dispatch(
+                "PostToolUse",
+                {
+                  ...toolPayload(toolName, context.args),
+                  tool_response: { content: textOf(context.result), is_error: context.isError },
+                },
+                { idempotencyKey: `PostToolUse:${target.chatId}:${context.toolCall.id}`, signal },
+              )
+            : undefined;
+          if (outcome) {
+            requestStop(outcome);
+            if (outcome.flaggedResult) {
+              const reason =
+                outcome.reasonForModel ?? (outcome.reason ? fenceAsData("Hook feedback", outcome.reason) : undefined);
+              additions.push(`${capitalized(hooksLabel(outcome))} flagged this result.${reason ? `\n${reason}` : ""}`);
+            }
+            if (outcome.additionalContext) additions.push(outcome.additionalContext);
           }
-          if (outcome.additionalContext) additions.push(outcome.additionalContext);
           if (additions.length === 0) return undefined;
           return {
             content: [...context.result.content, { type: "text", text: additions.join("\n\n") }],
           };
         },
+        // A hook's `continue: false` ends the run once this turn's tools finish.
+        finishTurn: () => (stopReason !== undefined ? { action: "end" } : undefined),
       };
     },
   };
@@ -355,6 +419,12 @@ export async function preCompactSummaryInstructions(
  */
 const startedSessions = new Map<string, WorkspaceChatHookTarget>();
 const compactedSessions = new Set<string>();
+/**
+ * Chats this process remembers at most. The least recently started chat is
+ * forgotten first; it only means its next turn reports `resume` again and its
+ * deletion fires no SessionEnd.
+ */
+export const MAX_TRACKED_HOOK_SESSIONS = 512;
 
 export function workspaceChatSessionStartSource(
   chatId: string,
@@ -367,8 +437,16 @@ export function workspaceChatSessionStartSource(
 
 /** Called once the turn that asked for a source has dispatched SessionStart. */
 export function markWorkspaceChatSessionStarted(target: WorkspaceChatHookTarget): void {
+  // Delete first so the chat becomes the most recent entry.
+  startedSessions.delete(target.chatId);
   startedSessions.set(target.chatId, target);
   compactedSessions.delete(target.chatId);
+  while (startedSessions.size > MAX_TRACKED_HOOK_SESSIONS) {
+    const oldest = startedSessions.keys().next().value;
+    if (oldest === undefined) break;
+    startedSessions.delete(oldest);
+    compactedSessions.delete(oldest);
+  }
 }
 
 /** A compaction finished: the next turn starts a `compact` session. */

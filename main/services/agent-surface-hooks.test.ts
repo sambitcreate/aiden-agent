@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { botSurfaceHooks, hookBlockText, hookPostToolAdditions, hookStopContinuation, runWorktreeCreateHooks } from "./agent-surface-hooks.js";
+import { botSurfaceHooks, hookBlockText, hookPostToolAdditions, hookStopContinuation, runWorktreeSetupHooks } from "./agent-surface-hooks.js";
 import type { HookDispatcher, HookOutcome } from "./hooks/hook-types.js";
 
 const answering = (outcome: HookOutcome): HookDispatcher => ({ hasHooks: () => true, dispatch: async () => outcome });
@@ -51,14 +51,14 @@ test("PostToolUse adds a flagged line and hook context after the result, or noth
   assert.equal(text, "Hook scan flagged this result.\n<fenced>secret</fenced>\n\nextra");
 });
 
-test("a WorktreeCreate hook that throws reports nothing instead of failing the worktree", async () => {
-  const lines = await runWorktreeCreateHooks(
+test("a WorktreeSetup hook that throws reports nothing instead of failing the worktree", async () => {
+  const lines = await runWorktreeSetupHooks(
     { sourceFolderPath: "/src", sourceRoot: "/src", worktreePath: "/wt", workspacePath: "/wt", workspaceId: "ws", branch: "b" },
     () => ({ hasHooks: () => true, dispatch: async () => { throw new Error("boom"); } }),
   );
   assert.deepEqual(lines, []);
   assert.deepEqual(
-    await runWorktreeCreateHooks(
+    await runWorktreeSetupHooks(
       { sourceFolderPath: "/src", sourceRoot: "/src", worktreePath: "/wt", workspacePath: "/wt", workspaceId: "ws", branch: "b" },
       () => answering({ ranHooks: ["setup"], notices: ["Hook setup timed out."] }),
     ),

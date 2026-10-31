@@ -220,6 +220,13 @@ export interface ParseHooksOptions {
 }
 
 /** Parse a whole `{ "hooks": { … } }` document (already JSON-decoded). */
+function unknownEventReason(configuredEvent: string): string {
+  if (configuredEvent === "WorktreeCreate") {
+    return "Claude Code's WorktreeCreate replaces how a worktree is created, which Aiden doesn't support. Aiden's WorktreeSetup runs after it creates one.";
+  }
+  return `"${configuredEvent}" is not an event Aiden supports.`;
+}
+
 export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): ParsedHooksFile {
   const result: ParsedHooksFile = { hooks: [], problems: [], warnings: [] };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -267,7 +274,7 @@ export function parseHooksConfig(raw: unknown, options: ParseHooksOptions): Pars
         }
         const id = `${options.idPrefix}:${configuredEvent}:${groupIndex}.${handlerIndex}`;
         const validation = validateHookHandler(rawHandler);
-        const reason = !known ? `"${configuredEvent}" is not an event Aiden supports.` : groupReason ?? (validation.ok ? undefined : validation.reason);
+        const reason = !known ? unknownEventReason(configuredEvent) : groupReason ?? (validation.ok ? undefined : validation.reason);
         const handler: HookCommandHandler = validation.ok ? validation.handler : { type: "command", command: validation.command };
         const configuredType = validation.ok ? "command" : validation.configuredType;
         if (validation.ok) result.warnings.push(...validation.warnings);

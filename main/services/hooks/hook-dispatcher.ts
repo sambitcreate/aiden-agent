@@ -3,9 +3,12 @@
  *
  * - Only hooks the source reports as active run (approved digest, enabled,
  *   not paused, not disabled after failures).
+ * - The same handler configured in several scopes (say, a global hook copied
+ *   into a repo file) runs once; the first scope's copy is kept.
  * - Matching hooks run in parallel, a few at a time.
  * - An idempotency key caches the outcome, so a durable replay of the same
- *   tool call never re-runs a hook.
+ *   tool call never re-runs a hook. The cache is cleared whenever the owner
+ *   changes which hooks may run, so a replay never reuses a stale answer.
  * - Nothing dispatched from inside a hook run triggers hooks again.
  * - Three consecutive failures disable a hook until it is re-enabled.
  * - Each hook keeps a short in-memory run log.
@@ -13,6 +16,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { claudeToolInput, claudeToolName, aidenToolName } from "./hook-aliases.js";
+import { clampHookTimeout } from "./hook-config.js";
 import { compileHookMatcher, matcherMatchesTool, matcherMatchesValue, type CompiledHookMatcher } from "./hook-matcher.js";
 import { mergeHookResults, type HookMergeEntry } from "./hook-merge.js";
 import { interpretHookRun, runHookCommand, type HookRawRun } from "./hook-runner.js";
@@ -42,8 +46,11 @@ export function isInsideHookRun(): boolean {
 const TOOL_EVENTS: ReadonlySet<HookEvent> = new Set(["PreToolUse", "PostToolUse"]);
 
 export interface HookDispatcherSource {
-  /** Active hooks for `event` in `scopes`, in scope order. Called on every dispatch, so drift is caught each fire. */
-  activeHooks(event: HookEvent, scopes: readonly HookScope[]): Promise<HookDefinition[]>;
+  /**
+   * Active hooks for `event` in `scopes`, in scope order. Called on every
+   * dispatch, so drift is caught each fire. `cwd` is where they will run.
+   */
+  activeHooks(event: HookEvent, scopes: readonly HookScope[], cwd: string): Promise<HookDefinition[]>;
   /** Cheap, synchronous and conservative: false only when no active hook can match. */
   mayHaveActiveHooks(event: HookEvent, scopes: readonly HookScope[], toolName?: string): boolean;
 }
@@ -70,6 +77,32 @@ export interface HookDispatcherOptions {
 export interface AidenHookDispatcher extends HookDispatcher {
   getRunLog(hookId: string): HookRunRecord[];
   lastRun(hookId: string): HookRunRecord | undefined;
+  /** Forget cached outcomes; call whenever approvals, switches or pause change. */
+  clearIdempotencyCache(): void;
+}
+
+/** Two hooks with the same key do exactly the same thing for the same event. */
+function handlerKey(hook: HookDefinition): string {
+  const { handler } = hook;
+  return JSON.stringify([
+    hook.event,
+    hook.matcher,
+    handler.command,
+    clampHookTimeout(handler.timeout),
+    handler.failClosed === true,
+    [...(handler.envAllow ?? [])].sort(),
+  ]);
+}
+
+/** Keep the first of each identical handler, in scope order. */
+export function dedupeHooks(hooks: readonly HookDefinition[]): HookDefinition[] {
+  const seen = new Set<string>();
+  return hooks.filter((hook) => {
+    const key = handlerKey(hook);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Fill in Claude spellings so Claude Code scripts read Aiden's payloads unchanged. */
@@ -110,6 +143,9 @@ class BoundedMap<K, V> {
   }
   delete(key: K): void {
     this.map.delete(key);
+  }
+  clear(): void {
+    this.map.clear();
   }
 }
 
@@ -198,12 +234,12 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
   const execute = async (event: HookEvent, payload: HookPayload, context: HookDispatchContext): Promise<HookOutcome> => {
     let hooks: HookDefinition[];
     try {
-      hooks = await options.source.activeHooks(event, context.scopes);
+      hooks = await options.source.activeHooks(event, context.scopes, context.cwd);
     } catch (error) {
       return { ranHooks: [], notices: [`Aiden could not load hooks: ${error instanceof Error ? error.message : String(error)}`] };
     }
     const normalized = normalizeHookPayload(event, payload, context);
-    const selected = hooks.filter((hook) => hook.event === event && matches(hook, event, normalized));
+    const selected = dedupeHooks(hooks.filter((hook) => hook.event === event && matches(hook, event, normalized)));
     if (selected.length === 0 || context.signal?.aborted) return { ranHooks: [] };
     const entries = await hookRunScope.run(true, () => runBounded(selected, concurrency, (hook) => runOne(hook, event, normalized, context)));
     return mergeHookResults(event, entries, normalized);
@@ -238,6 +274,9 @@ export function createHookDispatcher(options: HookDispatcherOptions): AidenHookD
     lastRun(hookId) {
       const log = runLogs.get(hookId);
       return log?.[log.length - 1];
+    },
+    clearIdempotencyCache() {
+      outcomes.clear();
     },
   };
 }

@@ -17,7 +17,7 @@ export const HOOK_EVENTS = [
   "SubagentStop",
   "Notification",
   "PreCompact",
-  "WorktreeCreate",
+  "WorktreeSetup",
   "RoutineRun",
   "RoutineFailed",
 ] as const;

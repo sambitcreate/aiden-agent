@@ -12,7 +12,12 @@ import { remoteDaemonCommand } from "./daemon-control.ts";
 import { acquireLease } from "./state.ts";
 import { workspaceStore } from "./workspaces.ts";
 
-export const HOOKS_USAGE = "Usage: hooks list | approve <id> [digest] | disable <id> | enable <id> | pause | resume | test <id>";
+export const HOOKS_USAGE = "Usage: hooks list | approve <id> <digest> | disable <id> | enable <id> | pause | resume | test <id> <digest>";
+
+/** Commands that let a hook run, which only a person at a terminal may give. */
+const INTERACTIVE_ACTIONS = new Set(["approve", "enable"]);
+
+const DIGEST = /^[0-9a-f]{64}$/u;
 
 /** At most this much of a test run's output is printed. */
 const TEST_OUTPUT_CHARS = 4_000;
@@ -104,8 +109,10 @@ export async function hooksCommand(agentDir: string, service: HookService, args:
       };
     }
     case "approve": {
+      // The digest is the one `hooks list` showed: approval covers exactly what was read.
       const [id, digest, ...extra] = rest;
-      if (!id || extra.length > 0) throw new Error(HOOKS_USAGE);
+      if (!id || !digest || extra.length > 0) throw new Error(HOOKS_USAGE);
+      if (!DIGEST.test(digest)) throw new Error(`${digest} is not a hook digest. Copy it from \`aiden hooks list\`.`);
       await everyHook(agentDir, service);
       const approved = await service.approveDigest(id, digest);
       if (!approved.ok) throw new Error(approved.reason);
@@ -115,7 +122,7 @@ export async function hooksCommand(agentDir: string, service: HookService, args:
     case "enable": {
       const id = requireId(rest[0], rest.slice(1));
       if (!(await everyHook(agentDir, service)).hooks.some((hook) => hook.id === id)) throw new Error(`There is no hook with the id ${id}.`);
-      await service.setEnabled(id, action === "enable");
+      if (!(await service.setEnabled(id, action === "enable"))) throw new Error(`There is no hook with the id ${id}.`);
       const hook = (await everyHook(agentDir, service)).hooks.find((item) => item.id === id);
       return hook ? hookRow(hook) : { id, enabled: action === "enable" };
     }
@@ -126,11 +133,14 @@ export async function hooksCommand(agentDir: string, service: HookService, args:
       return { paused: action === "pause" };
     }
     case "test": {
-      const id = requireId(rest[0], rest.slice(1));
+      const [id, digest, ...extra] = rest;
+      if (!id || !digest || extra.length > 0) throw new Error(HOOKS_USAGE);
+      if (!DIGEST.test(digest)) throw new Error(`${digest} is not a hook digest. Copy it from \`aiden hooks list\`.`);
       if (!hostPlatformCapabilities().hooks) throw new Error("Hooks run only on macOS and Linux.");
       await everyHook(agentDir, service);
-      // Runs the command against a fixture payload, without touching its health or run log.
-      const tested = await service.testHook(id);
+      // Runs the command against a fixture payload, without touching its health or run log,
+      // and only when it is still the hook whose digest was shown.
+      const tested = await service.testHook({ hookId: id, digest });
       if (!tested.ok) throw new Error(tested.reason);
       const { value } = tested;
       return {
@@ -144,8 +154,23 @@ export async function hooksCommand(agentDir: string, service: HookService, args:
   }
 }
 
-/** `aiden hooks …` from the shell: through the running daemon, else directly under the serve lease. */
-export async function hooksAdminCommand(agentDir: string, args: string[]): Promise<unknown> {
+export interface HooksAdminOptions {
+  /** Whether a person is at a terminal; defaults to stdin and stdout both being TTYs. */
+  isInteractive?: () => boolean;
+}
+
+const terminalAttached = () => process.stdin.isTTY === true && process.stdout.isTTY === true;
+
+/**
+ * `aiden hooks …` from the shell: through the running daemon, else directly under the serve lease.
+ * `approve` and `enable` need a terminal, so an agent's shell command or a
+ * script cannot approve a hook it wrote. This keeps honest automation out; it
+ * is not a boundary against code already running as this user.
+ */
+export async function hooksAdminCommand(agentDir: string, args: string[], options: HooksAdminOptions = {}): Promise<unknown> {
+  if (INTERACTIVE_ACTIONS.has(args[0] ?? "") && !(options.isInteractive ?? terminalAttached)()) {
+    throw new Error(`aiden hooks ${args[0]} must be run by a person at a terminal: stdin and stdout must both be a TTY.`);
+  }
   try { return await remoteDaemonCommand(agentDir, "hooks", args); }
   catch (error) { if (!["ENOENT", "ECONNREFUSED"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
   const release = acquireLease(join(agentDir, "serve"));

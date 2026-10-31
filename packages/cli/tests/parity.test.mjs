@@ -2208,9 +2208,19 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   assert.equal(listed.hooks.length, 1, JSON.stringify(listed));
   assert.equal(listed.hooks[0].status, "waiting-for-approval");
   assert.equal(listed.hooks[0].scope, `workspace:${workspace.folderPath}`);
-  const approved = await api.hooksAdminCommand(dir, ["approve", listed.hooks[0].id]);
+  const [{ id, digest }] = listed.hooks;
+  const atTerminal = { isInteractive: () => true };
+  // Without a person at a terminal (an agent's shell command, a script), approve and enable are refused.
+  await assert.rejects(api.hooksAdminCommand(dir, ["approve", id, digest], { isInteractive: () => false }), /person at a terminal/u);
+  await assert.rejects(api.hooksAdminCommand(dir, ["enable", id], { isInteractive: () => false }), /person at a terminal/u);
+  // Approval names the digest that was read: without it, or with another hook's, nothing is approved.
+  await assert.rejects(api.hooksAdminCommand(dir, ["approve", id], atTerminal), /Usage: hooks/u);
+  await assert.rejects(api.hooksAdminCommand(dir, ["approve", id, "0".repeat(64)], atTerminal), /changed/u);
+  await assert.rejects(api.hooksAdminCommand(dir, ["test", id], atTerminal), /Usage: hooks/u);
+  assert.equal((await api.hooksAdminCommand(dir, ["list"])).hooks[0].status, "waiting-for-approval");
+  const approved = await api.hooksAdminCommand(dir, ["approve", id, digest], atTerminal);
   assert.equal(approved.status, "active");
-  await assert.rejects(api.hooksAdminCommand(dir, ["approve"]), /Usage: hooks/u);
+  await assert.rejects(api.hooksAdminCommand(dir, ["approve"], atTerminal), /Usage: hooks/u);
 
   const hooks = await api.startCliHooks(dir);
   t.after(() => api.stopCliHooks(hooks));
@@ -2238,4 +2248,97 @@ test("daemon chats run approved hooks after Aiden's own rules, and file tools ca
   assert.match(toolResult(2), /No writes here\./u);
   assert.equal(existsSync(join(repo, "out.txt")), false);
   assert.equal(hooks.getRunLog(listed.hooks[0].id).length, 1, "the hook ran once, for the write it matched");
+});
+
+test("daemon chats keep hook-blocked prompts from the model, carry PreToolUse context, end on continue:false, and send hook messages", async (t) => {
+  const dir = temporary(t), repo = join(dir, "repo"), requests = [];
+  mkdirSync(join(repo, ".aiden"), { recursive: true });
+  writeFileSync(join(repo, "notes.txt"), "release notes");
+  const blockPrompt = JSON.stringify({ decision: "block", reason: "Secrets stay out of prompts." });
+  const preRead = JSON.stringify({ systemMessage: "Policy checked the read.", hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "PRE-CONTEXT-42" } });
+  const stopAfterList = JSON.stringify({ continue: false, stopReason: "deploy window closed" });
+  writeFileSync(join(repo, ".aiden", "hooks.json"), JSON.stringify({ hooks: {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: `grep sk-live >/dev/null && printf '%s' '${blockPrompt}' || true` }] }],
+    PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: `printf '%s' '${preRead}'` }] }],
+    PostToolUse: [{ matcher: "LS", hooks: [{ type: "command", command: `printf '%s' '${stopAfterList}'` }] }],
+  } }));
+  const replies = [
+    { tool: { id: "read-notes", name: "read", arguments: { path: "notes.txt" } } },
+    { text: "Read them." },
+    { tool: { id: "list-folder", name: "ls", arguments: { path: "." } } },
+    { text: "Forked reply." },
+  ];
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    const reply = replies[requests.length - 1] ?? { text: "Unexpected request." };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const delta = reply.tool ? { role: "assistant", tool_calls: [{ index: 0, id: reply.tool.id, type: "function", function: { name: reply.tool.name, arguments: JSON.stringify(reply.tool.arguments) } }] } : { role: "assistant", content: reply.text };
+    response.write(`data: ${JSON.stringify({ id: "hooks", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "hooks", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: reply.tool ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", repo]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+  const listed = await api.hooksAdminCommand(dir, ["list"]);
+  assert.equal(listed.hooks.length, 3, JSON.stringify(listed));
+  for (const hook of listed.hooks) await api.hooksAdminCommand(dir, ["approve", hook.id, hook.digest], { isInteractive: () => true });
+  const hooks = await api.startCliHooks(dir);
+  t.after(() => api.stopCliHooks(hooks));
+  const daemon = api.createDaemonChats(dir);
+  t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "hooked", title: "Hooked", workspaceId: workspace.id });
+  const events = [];
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  const turn = async (chatId, streamId, content) => {
+    const admission = daemon.llmClient.beginChatTurn(chatId, streamId, "test"); assert.ok(admission);
+    try {
+      await daemon.chatStore.appendMessage(chatId, { role: "user", content });
+      admission.settleAsyncWork();
+      await daemon.llmClient.start(streamId, { chatId, workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content }] }, owner, { usageSource: "chat" });
+      await daemon.llmClient.waitForChatIdle(chatId);
+    } finally { admission.release(); }
+    return events.filter((event) => event.value?.streamId === streamId);
+  };
+  const hookMessages = (streamEvents) => streamEvents.filter((event) => event.channel === "chat:status" && event.value.phase === "hook_messages").flatMap((event) => event.value.messages);
+
+  // Turn N: the hook blocks the prompt before any model request, and the stored copy is marked.
+  const blocked = await turn("hooked", "blocked", "deploy with key sk-live-BLOCKED-7f3a");
+  assert.match(blocked.find((event) => event.channel === "chat:error")?.value.message ?? "", /Secrets stay out of prompts\./u);
+  assert.equal(requests.length, 0);
+  assert.match((await daemon.chatStore.get("hooked")).messages.find((message) => message.content.includes("sk-live"))?.hookBlocked?.reason ?? "", /Secrets stay out/u);
+
+  // Turn N+1: the blocked prompt is not in the request, PreToolUse context reaches the tool result,
+  // and the hook's systemMessage reaches the person but never the model.
+  const read = await turn("hooked", "read", "Read the notes");
+  assert.equal(read.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(read));
+  assert.equal(requests.length, 2);
+  for (const request of requests) assert.doesNotMatch(JSON.stringify(request), /sk-live/u);
+  const readResult = JSON.stringify(requests[1].messages.filter((message) => message.role === "tool").at(-1));
+  assert.match(readResult, /release notes/u);
+  assert.match(readResult, /PRE-CONTEXT-42/u);
+  assert.ok(hookMessages(read).some((line) => line.includes("Policy checked the read.")), JSON.stringify(read));
+  for (const request of requests) assert.doesNotMatch(JSON.stringify(request), /Policy checked the read/u);
+
+  // PostToolUse continue:false: the tool runs, then the turn ends with no further model request.
+  const listed2 = await turn("hooked", "list", "List the folder");
+  assert.equal(listed2.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(listed2));
+  assert.equal(requests.length, 3, "no model request after the hook stopped the turn");
+  assert.ok(hookMessages(listed2).some((line) => /^Stopped by hook.*: deploy window closed$/u.test(line)), JSON.stringify(hookMessages(listed2)));
+  assert.ok(listed2.some((event) => event.channel === "chat:tool" && event.value.phase === "result"));
+
+  // A fork that copies the blocked prompt keeps it marked, and its first turn never sends it.
+  const source = await daemon.chatStore.get("hooked");
+  const lastReply = source.messages.findLast((message) => message.role === "assistant" && message.content === "Read them.");
+  const forks = api.createCliChatForks(daemon, { configStore: { getWorkspace: async () => ({ id: workspace.id }) }, mutationGate: { admit: () => ({ signal: { aborted: false }, release() {} }) } });
+  const fork = await forks.service.fork({ chatId: "hooked", forkAt: { messageId: lastReply.id, position: "after" } }, forks);
+  assert.ok(fork.messages.find((message) => message.content.includes("sk-live"))?.hookBlocked, "the fork keeps the mark");
+  const forked = await turn(fork.id, "forked", "Anything else?");
+  assert.equal(forked.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(forked));
+  assert.equal(requests.length, 4);
+  assert.match(JSON.stringify(requests[3]), /Read the notes/u);
+  assert.doesNotMatch(JSON.stringify(requests[3]), /sk-live/u);
 });

@@ -103,6 +103,7 @@ import {
   hookAskText,
   hookBlockText,
   hookContextText,
+  hookNoticeLines,
   hookPostToolAdditions,
   hookStopContinuation,
   hookToolPayload,
@@ -341,6 +342,12 @@ export interface BotHookDeps {
   attended(requestIds: readonly (string | undefined)[]): boolean;
   /** Absent: the process-wide dispatcher. */
   dispatcher?: () => HookDispatcher;
+  /**
+   * Hook messages and Aiden's hook notices for the person, from each hook
+   * that runs (a replay never repeats them). They never reach the model.
+   * Must not throw.
+   */
+  report?(botId: string, lines: readonly string[]): void;
 }
 
 export class BotAccessChangedError extends Error {
@@ -394,6 +401,8 @@ interface PreToolHookMemo {
   [key: string]: JsonValue;
   kind: "none" | "block" | "ask";
   text: string | null;
+  /** The hook's context for the model, added to the tool's result. Memos kept before it existed lack it; readers use `?? null`. */
+  context: string | null;
 }
 
 /** Text a PostToolUse hook or a Stop hook returned for this task, or null for none. */
@@ -547,7 +556,22 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       // A Bot whose folder can't be read runs no hooks this time; nothing else changes.
       return undefined;
     }
-    hookClient = botSurfaceHooks(botId, cwd, hookDeps.dispatcher);
+    const client = botSurfaceHooks(botId, cwd, hookDeps.dispatcher);
+    hookClient = {
+      ...client,
+      dispatch: async (...args) => {
+        const outcome = await client.dispatch(...args);
+        const lines = hookNoticeLines(outcome);
+        if (lines.length > 0) {
+          try {
+            hookDeps.report?.(botId, lines);
+          } catch {
+            // Reporting is best effort; the hook's answer still applies.
+          }
+        }
+        return outcome;
+      },
+    };
     return hookClient;
   }
 
@@ -628,13 +652,13 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
       signal: context.abortSignal,
     });
     if (context.abortSignal?.aborted) throw new Error("The turn stopped before the hook answered.");
-    let answer: PreToolHookMemo = { kind: "none", text: null };
+    let answer: PreToolHookMemo = { kind: "none", text: null, context: outcome?.additionalContext ?? null };
     if (outcome?.decision === "deny") {
-      answer = { kind: "block", text: hookBlockText(outcome) };
+      answer = { kind: "block", text: hookBlockText(outcome), context: null };
     } else if (outcome?.decision === "ask") {
       answer = deps.hooks!.attended(requestIds)
-        ? { kind: "ask", text: hookAskText(outcome) }
-        : { kind: "block", text: `${hookBlockText(outcome)} No one is here to approve it on this turn.` };
+        ? { kind: "ask", text: hookAskText(outcome), context: outcome.additionalContext ?? null }
+        : { kind: "block", text: `${hookBlockText(outcome)} No one is here to approve it on this turn.`, context: null };
     }
     // `allow` and `updatedInput` change nothing: the Bot's rules already decided, on these arguments.
     return api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, answer, context);
@@ -862,9 +886,10 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         if (result.output === undefined) return undefined;
         const client = await botHooks();
         if (client === undefined) return undefined;
+        // PreToolUse context for this call, kept in its memo, joins PostToolUse's additions.
+        const preContext = (await api.memo<PreToolHookMemo>(PRE_TOOL_HOOK_MEMO, context))?.context ?? null;
         let stored = await api.memo<HookTextMemo>(POST_TOOL_HOOK_MEMO, context);
-        if (stored === undefined) {
-          if (!client.has("PostToolUse", call.name)) return undefined;
+        if (stored === undefined && client.has("PostToolUse", call.name)) {
           const text = result.output
             .filter((block): block is { type: "text"; text: string } => block.type === "text")
             .map((block) => block.text)
@@ -876,8 +901,9 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           );
           stored = await api.memo<HookTextMemo>(POST_TOOL_HOOK_MEMO, { text: hookPostToolAdditions(outcome) ?? null }, context);
         }
-        if (stored.text === null) return undefined;
-        return { ...result, output: [...result.output, { type: "text" as const, text: stored.text }] };
+        const additions = [preContext, stored?.text ?? null].filter((text): text is string => typeof text === "string" && text.length > 0);
+        if (additions.length === 0) return undefined;
+        return { ...result, output: [...result.output, { type: "text" as const, text: additions.join("\n\n") }] };
       },
     }),
   ];

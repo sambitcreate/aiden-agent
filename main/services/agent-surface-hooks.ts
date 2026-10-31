@@ -15,10 +15,12 @@ import { claudeToolInput, claudeToolName } from "./hooks/hook-aliases.js";
 import { hookScopesFor } from "./hooks/hook-config.js";
 import { getHookDispatcher } from "./hooks/index.js";
 import type { HookDispatcher, HookEvent, HookOutcome, HookPayload, HookScope } from "./hooks/hook-types.js";
-import { MAX_STOP_HOOK_CONTINUATIONS } from "./workspace-chat-hooks.js";
+import { MAX_STOP_HOOK_CONTINUATIONS, hookNoticeLines, hookStopMessage } from "./workspace-chat-hooks.js";
 
 /** Stop hooks keep one run going at most this many times, on every surface. */
 export { MAX_STOP_HOOK_CONTINUATIONS };
+/** Hook messages and notices read the same on every surface. */
+export { hookNoticeLines, hookStopMessage };
 
 /** Where one surface's hooks run and whose they are. */
 export interface SurfaceHookTarget {
@@ -175,17 +177,9 @@ export function hookContextText(context: string | undefined): string | undefined
   return `[Aiden hook] Context from the person's hooks for this turn:\n\n${context}`;
 }
 
-/** Text the person should see after an observe-only event: hook messages and Aiden's notices. */
-export function hookNoticeLines(outcome: HookOutcome | undefined): string[] {
-  if (!outcome) return [];
-  return [
-    ...(outcome.systemMessages ?? []).map((message) => `${capitalized(hooksLabel(outcome))}: ${message}`),
-    ...(outcome.notices ?? []),
-  ];
-}
 
-/** What a WorktreeCreate hook is told about the new managed worktree. */
-export interface WorktreeCreateHookInput {
+/** What a WorktreeSetup hook is told about the new managed worktree. */
+export interface WorktreeSetupHookInput {
   /** The source workspace's folder: its hooks (global, then that workspace's) are the ones that run. */
   sourceFolderPath: string;
   /** The source checkout's top level. */
@@ -200,12 +194,12 @@ export interface WorktreeCreateHookInput {
 }
 
 /**
- * Runs WorktreeCreate hooks in the new worktree and waits for them (each is
+ * Runs WorktreeSetup hooks in the new worktree and waits for them (each is
  * bounded by its own timeout). Returns the lines the person should see; a
  * failing hook never throws here, so the worktree is never undone.
  */
-export async function runWorktreeCreateHooks(
-  input: WorktreeCreateHookInput,
+export async function runWorktreeSetupHooks(
+  input: WorktreeSetupHookInput,
   dispatcher?: () => HookDispatcher,
 ): Promise<string[]> {
   const hooks = createSurfaceHooks(
@@ -213,9 +207,9 @@ export async function runWorktreeCreateHooks(
     dispatcher,
   );
   const outcome = await hooks.dispatch(
-    "WorktreeCreate",
+    "WorktreeSetup",
     { worktree_path: input.worktreePath, branch: input.branch, source_root: input.sourceRoot },
-    { idempotencyKey: `WorktreeCreate:${input.workspaceId}` },
+    { idempotencyKey: `WorktreeSetup:${input.workspaceId}` },
   );
   return hookNoticeLines(outcome);
 }

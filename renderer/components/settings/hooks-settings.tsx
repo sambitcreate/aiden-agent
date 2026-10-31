@@ -245,7 +245,7 @@ function HookDetailSheet({
     setTesting(true);
     setTestError(null);
     try {
-      setTestResult(await hooksApi.test(listing.id));
+      setTestResult(await hooksApi.test(listing.id, listing.digest));
     } catch (error) {
       setTestResult(null);
       setTestError(errorMessage(error, "The test could not run."));
@@ -857,7 +857,7 @@ export function HooksSettings() {
   const setEnabled = async (listing: HookListing, enabled: boolean) => {
     setEnabledOverrides((current) => new Map(current).set(listing.id, enabled));
     try {
-      await hooksApi.setEnabled(listing.id, enabled);
+      if (!(await hooksApi.setEnabled(listing.id, enabled))) throw new Error("Hook not found.");
       await refresh();
     } catch {
       toast.error(enabled ? `Couldn’t turn on ${listing.name}.` : `Couldn’t turn off ${listing.name}.`);

@@ -1009,3 +1009,34 @@ test("(hk4) a Stop hook that always says keep going ends after the shared cap", 
     await harness.close(ctx);
   }
 });
+
+test("(hk5) PreToolUse context joins PostToolUse's in the tool result; hook messages reach the person, never the model", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("understood"),
+  ]);
+  const hooks = fakeHooks({
+    PreToolUse: () => ({ additionalContext: "<hook-data>PRE-CONTEXT</hook-data>", systemMessages: ["Policy checked the lookup."], ranHooks: ["guard"] }),
+    PostToolUse: () => ({ additionalContext: "<hook-data>POST-CONTEXT</hook-data>", notices: ["A hook failed open."], ranHooks: ["after"] }),
+  });
+  const deps = withHooks(recordingDeps({ tools: [{ tool, replay: "unsafe" }] }), hooks);
+  const reported: string[] = [];
+  deps.hooks!.report = (_botId, lines) => {
+    reported.push(...lines);
+    throw new Error("a broken reporter changes nothing");
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.equal(tool.executions.length, 1);
+    const [result] = await toolResults(root);
+    const text = result!.content.map((part) => part.text ?? "").join("\n");
+    assert.match(text, /PRE-CONTEXT[\s\S]*POST-CONTEXT/u);
+    assert.doesNotMatch(text, /Policy checked|failed open/u);
+    assert.ok(reported.some((line) => line.includes("Policy checked the lookup.")), JSON.stringify(reported));
+    assert.ok(reported.includes("A hook failed open."), JSON.stringify(reported));
+  } finally {
+    await harness.close(ctx);
+  }
+});

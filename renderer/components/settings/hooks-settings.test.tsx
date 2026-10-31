@@ -312,6 +312,6 @@ test("the detail sheet tests only on the Test press, and asks first for a hook t
   const confirm = await screen.findByRole("alertdialog");
   assert.deepEqual(callsTo("hooks:test"), []);
   fireEvent.click(within(confirm).getByRole("button", { name: "Run once" }));
-  await waitFor(() => assert.deepEqual(callsTo("hooks:test"), [["workspace:shop:PreToolUse:0"]]));
+  await waitFor(() => assert.deepEqual(callsTo("hooks:test"), [["workspace:shop:PreToolUse:0", digest("b")]], "the test is pinned to the version on screen"));
   await screen.findByText("lint ok");
 });

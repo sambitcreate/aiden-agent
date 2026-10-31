@@ -67,7 +67,7 @@ export const HOOK_EVENT_DESCRIPTIONS: Record<HookEvent, string> = {
   SubagentStop: "When a subagent finishes.",
   Notification: "When Aiden shows you a notice.",
   PreCompact: "Before a long chat is compacted.",
-  WorktreeCreate: "When Aiden creates a worktree.",
+  WorktreeSetup: "After Aiden creates a managed worktree, to set it up.",
   RoutineRun: "After a Bot routine run succeeds.",
   RoutineFailed: "When a Bot routine fails.",
 };

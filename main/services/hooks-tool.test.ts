@@ -176,7 +176,7 @@ test("global and repo hooks can't be turned off or changed from a chat", async (
   await fs.writeFile(path.join(f.workspace, ".aiden", "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "./repo-check.sh" }] }] } }));
   const repo = (await f.service.listHooks(f.context.scopes)).hooks.find((hook) => hook.source === "workspace-file");
   assert.ok(repo);
-  assert.ok((await f.service.approveDigest(repo.id)).ok);
+  assert.ok((await f.service.approveDigest(repo.id, repo.digest)).ok);
 
   const tool = f.tool(["allowed"]);
   await assert.rejects(call(tool, { action: "disable", hookId: global.value.id }), /Global hooks/u);
@@ -190,16 +190,39 @@ test("global and repo hooks can't be turned off or changed from a chat", async (
   assert.equal(statuses.get(repo.id), "active");
 });
 
-test("a workspace or chat hook can be turned off, but not back on", async (t) => {
+test("a hook an agent proposed can be turned off, but not back on", async (t) => {
   const f = await fixture(t);
-  const saved = await f.service.saveHook({ scope: { kind: "chat", chatId: "chat-1" }, event: "Stop", handler: { type: "command", command: "./lint.sh" } });
-  assert.ok(saved.ok && saved.value);
+  const proposal = await f.service.proposeHook({ scope: { kind: "chat", chatId: "chat-1" }, event: "Stop", handler: { type: "command", command: "./lint.sh" } });
+  assert.ok(proposal.ok);
+  const applied = await f.service.approveProposal(proposal.value.id);
+  assert.ok(applied.ok && applied.value);
+  const hookId = applied.value.id;
   const tool = f.tool();
-  assert.match(await call(tool, { action: "disable", hookId: saved.value.id }), /Turned off/u);
-  const after = (await f.service.listHooks(f.context.scopes)).hooks.find((hook) => hook.id === saved.value?.id);
+  assert.match(await call(tool, { action: "disable", hookId }), /Turned off/u);
+  const after = (await f.service.listHooks(f.context.scopes)).hooks.find((hook) => hook.id === hookId);
   assert.equal(after?.status, "disabled");
   assert.equal(f.service.dispatcher.hasHooks("Stop", f.context.scopes), false);
-  assert.match(await call(tool, { action: "disable", hookId: saved.value.id }), /already off/u);
+  assert.match(await call(tool, { action: "disable", hookId }), /already off/u);
+});
+
+test("a workspace or chat hook the owner added can't be turned off from a chat", async (t) => {
+  const f = await fixture(t);
+  const guard = await f.service.saveHook({
+    scope: { kind: "workspace", workspaceRoot: f.workspace },
+    event: "PreToolUse",
+    matcher: "run_command",
+    handler: { type: "command", command: "./guard.sh" },
+  });
+  const chat = await f.service.saveHook({ scope: { kind: "chat", chatId: "chat-1" }, event: "Stop", handler: { type: "command", command: "./lint.sh" } });
+  assert.ok(guard.ok && guard.value && chat.ok && chat.value);
+  const tool = f.tool();
+  for (const hookId of [guard.value.id, chat.value.id]) {
+    await assert.rejects(call(tool, { action: "disable", hookId }), /Settings → Hooks/u, hookId);
+  }
+  const statuses = new Map((await f.service.listHooks(f.context.scopes)).hooks.map((hook) => [hook.id, hook.status]));
+  assert.equal(statuses.get(guard.value.id), "active", "the owner's guard keeps running");
+  assert.equal(statuses.get(chat.value.id), "active");
+  assert.equal(f.service.dispatcher.hasHooks("PreToolUse", f.context.scopes, "run_command"), true);
 });
 
 test("test never runs the hook, and logs come back fenced and bounded", async (t) => {

@@ -138,6 +138,9 @@ export function registerHandlers(): void {
         workspace.folderPath && !workspace.noWorkspace ? [{ workspaceRoot: workspace.folderPath, name: workspace.name }] : [],
       ),
     broadcast: (change) => ipcMain.broadcast(HOOKS_CHANGED_CHANNEL, change),
+    requireSender: (event) => {
+      rendererDocumentOwner(event as IpcMainInvokeEvent, () => new Error("Hooks settings need the active window."));
+    },
   });
   registerAnalyticsHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),

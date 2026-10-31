@@ -151,7 +151,9 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
       // The person's global and Bot hooks, run in the Bot's working directory.
-      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended },
+      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended,
+        // A Bot run has no transcript notice row, so hook messages go to the daemon log.
+        report: (botId, lines) => { for (const line of lines) process.stderr.write(`aiden: Bot ${botId} hook: ${line.replace(/[\r\n]+/gu, " ").slice(0, 500)}\n`); } },
       readmit: async (botId) => {
         if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
         try { await admitted(botId, async () => {}); return { ok: true }; }

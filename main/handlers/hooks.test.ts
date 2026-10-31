@@ -38,14 +38,19 @@ async function fixture(t: test.TestContext, options: { started?: boolean; env?: 
     ],
     broadcast: (change) => void broadcasts.push(change),
     env: options.env,
+    // Stands in for `rendererDocumentOwner`: only an Aiden window's document passes.
+    requireSender: (event) => {
+      if ((event as { aidenWindow?: boolean }).aidenWindow !== true) throw new Error("Hooks settings need the active window.");
+    },
   });
-  const invoke = async (channel: string, ...args: unknown[]) => {
+  const invokeFrom = async (event: unknown, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     assert.ok(handler, channel);
-    return handler({}, ...args);
+    return handler(event, ...args);
   };
+  const invoke = (channel: string, ...args: unknown[]) => invokeFrom({ aidenWindow: true }, channel, ...args);
   const list = async () => (await invoke("hooks:list")) as HooksOverview;
-  return { base, workspace, runs, broadcasts, invoke, list, service };
+  return { base, workspace, runs, broadcasts, invoke, invokeFrom, list, service, channels: () => [...handlers.keys()] };
 }
 
 test("the list covers global hooks and each workspace's repo file, with workspace names", async (t) => {
@@ -139,6 +144,7 @@ test("switches, pause, delete and the run log go through the service; Test runs 
   assert.equal((await f.list()).hooks[0]?.status, "disabled");
   await assert.rejects(f.invoke("hooks:setEnabled", id, "false"), /Invalid hooks request/u);
   assert.equal(await f.invoke("hooks:setEnabled", id, true), true);
+  assert.equal(await f.invoke("hooks:setEnabled", "global:missing", false), false, "an unknown hook is not reported as switched");
 
   assert.equal(await f.invoke("hooks:setPaused", true), true);
   assert.equal((await f.list()).paused, true);
@@ -146,7 +152,12 @@ test("switches, pause, delete and the run log go through the service; Test runs 
   await f.invoke("hooks:setPaused", false);
 
   assert.deepEqual(f.runs, [], "nothing runs until Test is pressed");
-  const tested = (await f.invoke("hooks:test", id)) as { ok: boolean; value?: { exitCode: number | null } };
+  await assert.rejects(f.invoke("hooks:test", id), /Invalid hooks request/u, "Test needs the digest on screen");
+  const stale = (await f.invoke("hooks:test", id, "0".repeat(64))) as { ok: boolean; reason?: string };
+  assert.equal(stale.ok, false, "a digest for another version is refused");
+  assert.match(stale.reason ?? "", /changed since it was shown/u);
+  assert.deepEqual(f.runs, [], "a refused test runs nothing");
+  const tested = (await f.invoke("hooks:test", id, saved.value.digest)) as { ok: boolean; value?: { exitCode: number | null } };
   assert.equal(tested.ok, true);
   assert.equal(tested.value?.exitCode, 0);
   assert.deepEqual(f.runs, ["./done.sh"]);
@@ -190,4 +201,33 @@ test("before the service starts the list says so, and writes are refused", async
   assert.equal(overview.available, false);
   assert.equal(overview.disabledByEnvironment, true);
   await assert.rejects(f.invoke("hooks:setPaused", true), /still starting/u);
+});
+
+test("every hooks channel refuses a sender that is not an Aiden window before touching the service", async (t) => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.workspace, ".aiden", "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "./check.sh" }] }] } }));
+  const repo = (await f.list()).hooks[0];
+  assert.ok(repo);
+  const before = f.broadcasts.length;
+  const calls: Array<[string, ...unknown[]]> = [
+    ["hooks:list"],
+    ["hooks:save", { scope: { kind: "global" }, event: "Stop", command: "./x.sh" }],
+    ["hooks:approveDigest", repo.id, repo.digest],
+    ["hooks:setEnabled", repo.id, false],
+    ["hooks:setPaused", true],
+    ["hooks:test", repo.id, repo.digest],
+    ["hooks:runLog", repo.id],
+    ["hooks:delete", repo.id],
+    ["hooks:approveProposal", "proposal-1"],
+    ["hooks:rejectProposal", "proposal-1"],
+  ];
+  assert.deepEqual(calls.map(([channel]) => channel).sort(), f.channels().sort(), "the check covers every registered channel");
+  for (const [channel, ...args] of calls) {
+    await assert.rejects(f.invokeFrom({}, channel, ...args), /need the active window/u, channel);
+  }
+  assert.deepEqual(f.runs, [], "nothing ran");
+  assert.equal(f.broadcasts.length, before, "nothing changed");
+  const after = await f.list();
+  assert.equal(after.paused, false);
+  assert.deepEqual(after.hooks.map((hook) => [hook.id, hook.status]), [[repo.id, "waiting-for-approval"]]);
 });

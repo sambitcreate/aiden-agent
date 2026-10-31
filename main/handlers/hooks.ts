@@ -1,6 +1,6 @@
 // Settings → Hooks over IPC. Every argument is checked here before it reaches
 // the hook service; `hooks:test` runs a command, so the renderer calls it only
-// from the Test button.
+// from the Test button, with the digest of the version it shows.
 
 import path from "node:path";
 import { HOOK_EVENTS, type HookEvent, type HookListing, type HookScope } from "../services/hooks/hook-types.js";
@@ -60,10 +60,21 @@ export interface HookHandlerDependencies<Event> {
   broadcast(change: HookChange): void;
   /** For the `AIDEN_HOOKS=0` note before the service has started. */
   env?: NodeJS.ProcessEnv;
+  /** Throws unless the request came from a window that owns a renderer document. */
+  requireSender(event: Event): void;
 }
 
 export function registerHookHandlers<Event>(dependencies: HookHandlerDependencies<Event>): void {
   let subscribedTo: HookService | undefined;
+
+  // Every channel checks its sender first: hooks run commands, so a frame that
+  // is not an Aiden window never reaches the service.
+  const handle = (channel: string, handler: (event: Event, ...args: unknown[]) => unknown): void => {
+    dependencies.handle(channel, async (event, ...args) => {
+      dependencies.requireSender(event);
+      return handler(event, ...args);
+    });
+  };
 
   const ready = (): HookService => {
     const service = dependencies.service();
@@ -88,7 +99,7 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     return labels;
   };
 
-  dependencies.handle("hooks:list", async (): Promise<HooksOverview> => {
+  handle("hooks:list", async (): Promise<HooksOverview> => {
     const service = dependencies.service();
     if (!service) {
       return {
@@ -124,11 +135,11 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     };
   });
 
-  dependencies.handle("hooks:approveProposal", async (_event, proposalId) => ready().approveProposal(id(proposalId)));
+  handle("hooks:approveProposal", async (_event, proposalId) => ready().approveProposal(id(proposalId)));
 
-  dependencies.handle("hooks:rejectProposal", async (_event, proposalId) => ready().rejectProposal(id(proposalId)));
+  handle("hooks:rejectProposal", async (_event, proposalId) => ready().rejectProposal(id(proposalId)));
 
-  dependencies.handle("hooks:save", async (_event, request) => {
+  handle("hooks:save", async (_event, request) => {
     const input = plainObject(request);
     const scopeInput = plainObject(input.scope);
     let scope: HookScope;
@@ -159,25 +170,26 @@ export function registerHookHandlers<Event>(dependencies: HookHandlerDependencie
     });
   });
 
-  dependencies.handle("hooks:approveDigest", async (_event, hookId, digest) => {
+  handle("hooks:approveDigest", async (_event, hookId, digest) => {
     if (typeof digest !== "string" || !DIGEST.test(digest)) invalid();
     // The digest the owner saw: a hook that changed since then is refused, not approved.
     return ready().approveDigest(id(hookId), digest);
   });
 
-  dependencies.handle("hooks:setEnabled", async (_event, hookId, enabled) => {
-    await ready().setEnabled(id(hookId), bool(enabled));
-    return true;
-  });
+  handle("hooks:setEnabled", async (_event, hookId, enabled) => ready().setEnabled(id(hookId), bool(enabled)));
 
-  dependencies.handle("hooks:delete", async (_event, hookId) => ready().deleteHook(id(hookId)));
+  handle("hooks:delete", async (_event, hookId) => ready().deleteHook(id(hookId)));
 
-  dependencies.handle("hooks:setPaused", async (_event, paused) => {
+  handle("hooks:setPaused", async (_event, paused) => {
     await ready().setPaused(bool(paused));
     return true;
   });
 
-  dependencies.handle("hooks:test", async (_event, hookId) => ready().testHook(id(hookId)));
+  handle("hooks:test", async (_event, hookId, digest) => {
+    if (typeof digest !== "string" || !DIGEST.test(digest)) invalid();
+    // Like approval, a test runs only the version the owner is looking at.
+    return ready().testHook({ hookId: id(hookId), digest });
+  });
 
-  dependencies.handle("hooks:runLog", async (_event, hookId) => ready().getRunLog(id(hookId)));
+  handle("hooks:runLog", async (_event, hookId) => ready().getRunLog(id(hookId)));
 }

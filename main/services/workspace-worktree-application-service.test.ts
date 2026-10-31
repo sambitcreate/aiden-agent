@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Workspace } from "./types.js";
 import { createWorkspaceWorktreeApplicationService, type WorkspaceWorktreeApplicationDependencies } from "./workspace-worktree-application-service.js";
-import { runWorktreeCreateHooks } from "./agent-surface-hooks.js";
+import { runWorktreeSetupHooks } from "./agent-surface-hooks.js";
 import type { HookDispatcher, HookPayload, HookScope } from "./hooks/hook-types.js";
 
 const owner = {
@@ -741,11 +741,11 @@ const hookSource: Workspace = {
   updatedAt: 2,
 };
 
-test("a new managed worktree runs the source workspace's WorktreeCreate hooks inside the new checkout", async () => {
+test("a new managed worktree runs the source workspace's WorktreeSetup hooks inside the new checkout", async () => {
   const events: string[] = [];
   const runs: Array<{ payload: HookPayload; scopes: HookScope[]; cwd: string; key?: string }> = [];
   const dispatcher: HookDispatcher = {
-    hasHooks: (event) => event === "WorktreeCreate",
+    hasHooks: (event) => event === "WorktreeSetup",
     dispatch: async (_event, payload, context) => {
       events.push("hook");
       runs.push({ payload, scopes: context.scopes, cwd: context.cwd, key: context.idempotencyKey });
@@ -755,7 +755,7 @@ test("a new managed worktree runs the source workspace's WorktreeCreate hooks in
   const notices: string[] = [];
   const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
     onWorktreeCreated: async (event) => {
-      notices.push(...await runWorktreeCreateHooks({
+      notices.push(...await runWorktreeSetupHooks({
         sourceFolderPath: event.sourceFolderPath,
         sourceRoot: event.sourceRoot,
         worktreePath: event.worktreePath,
@@ -779,7 +779,7 @@ test("a new managed worktree runs the source workspace's WorktreeCreate hooks in
   assert.deepEqual(notices, ["Hook install: dependencies installed"]);
 });
 
-test("a WorktreeCreate hook that fails never rolls back the new worktree", async () => {
+test("a WorktreeSetup hook that fails never rolls back the new worktree", async () => {
   const events: string[] = [];
   const service = createWorkspaceWorktreeApplicationService(creationOnlyDeps(hookSource, events, {
     onWorktreeCreated: async () => { throw new Error("npm install failed"); },
