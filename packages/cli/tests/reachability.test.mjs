@@ -123,6 +123,25 @@ test("the server checklist reports the Tailscale route and whether its address a
   assert.match(api.serverChecklist(undefined, facts, false)[0].text, /not running/);
 });
 
+test("a Serve path Aiden cannot simply connect gets its own fix, not the reconnect hint", async () => {
+  const facts = await api.readTailscaleFacts(tailscaleRunner(), linux);
+  const routeItem = (tailscaleRouteState) => api.serverChecklist({ connectionMode: "tailscale", tailscaleConnected: false, tailscaleRouteState }, facts, false).at(-1);
+  for (const [state, fix] of [
+    ["reconciliation_required", /aiden remote tailscale-reconcile/],
+    ["other_aiden_live", /Another running Aiden install owns/],
+    ["other_aiden_stale", /aiden remote tailscale-review/],
+    ["unrelated_conflict", /already points somewhere else/],
+    ["funnel_conflict", /Funnel is on for HTTPS port 443/],
+  ]) {
+    const item = routeItem(state);
+    assert.equal(item.state, "fail", state);
+    assert.match(item.text, fix, state);
+    assert.doesNotMatch(item.text, /aiden remote network/, state);
+  }
+  // A route nobody holds is one `remote network` can connect.
+  assert.match(routeItem("available").text, /not connected\. Run `aiden remote network tailscale`/);
+});
+
 /** A control socket that answers like a running server and records what it was asked. */
 async function fakeDaemon(answer) {
   const dir = mkdtempSync(join(tmpdir(), "aiden-reach-"));
@@ -239,6 +258,26 @@ test("a Tailscale setup problem found while preparing opens no pairing window an
     assert.deepEqual(daemon.asked, ["remote tailscale-prepare"]);
     assert.match(err.text, /Could not open a Tailscale pairing window\. Tailscale is not signed in.*sudo tailscale up/);
     assert.equal(out.text, "");
+  } finally {
+    daemon.close();
+  }
+});
+
+test("pairing through a server from an older build skips the prepare step and still opens the window", async () => {
+  const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  // An older server has no `tailscale-prepare` and answers with its usage line, as the router does for an unknown command.
+  const daemon = await fakeDaemon((command, args) => {
+    if (args[0] === "tailscale-prepare") return new Error("Usage: remote status|devices|pair lan|tailscale|tailscale-connect|tailscale-reconcile");
+    if (args[0] === "pair") return pairing;
+    return { sessionId: "pairing_test", state: "failed" };
+  });
+  const out = sink(), err = sink();
+  try {
+    await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async () => assert.fail("no address wait without the prepare step"));
+    assert.deepEqual(daemon.asked.slice(0, 2), ["remote tailscale-prepare", "remote pair tailscale"]);
+    assert.ok(!daemon.asked.includes("remote status"));
+    assert.match(out.text, /Manual code: ABCD-1234/);
+    assert.doesNotMatch(err.text, /Could not open/);
   } finally {
     daemon.close();
   }

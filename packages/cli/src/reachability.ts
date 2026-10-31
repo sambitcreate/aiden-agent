@@ -153,6 +153,8 @@ export interface ServerReachability {
   tailscaleEndpoint?: string;
   tailscaleConnected?: boolean;
   tailscaleErrorCode?: string;
+  /** What holds Aiden's Serve path (`AidenTailscaleRouteState`), when the server inspected it. */
+  tailscaleRouteState?: string;
   /** The server is running with Remote off (`--no-remote`). */
   remoteOff?: boolean;
   /** A server holds the control socket but did not answer in time (busy or stuck). */
@@ -183,6 +185,22 @@ export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): P
   }
 }
 
+/**
+ * The fix for a Serve path Aiden cannot simply connect: an unfinished change,
+ * a route another install or another program holds, or a public Funnel.
+ * Reconnecting through `remote network` would only fail with the same message.
+ */
+function routeStateMessage(state: string | undefined): string | undefined {
+  switch (state) {
+    case "reconciliation_required": return tailscaleSetupMessage("tailscale_reconciliation_required");
+    case "other_aiden_live": return tailscaleSetupMessage("tailscale_route_live");
+    case "other_aiden_stale":
+    case "unrelated_conflict": return tailscaleSetupMessage("tailscale_route_conflict");
+    case "funnel_conflict": return tailscaleSetupMessage("tailscale_funnel_conflict");
+    default: return undefined;
+  }
+}
+
 /** How the running server can be reached. `answered` is the live Tailscale check, when one ran. */
 export function serverChecklist(server: ServerReachability | undefined, facts: TailscaleFacts, cloud: boolean, answered?: boolean): CheckItem[] {
   if (!server) return [{ state: "fail", text: "The Aiden server is not running. Start it with `aiden service install` or `aiden serve`." }];
@@ -204,7 +222,8 @@ export function serverChecklist(server: ServerReachability | undefined, facts: T
     return items;
   }
   if (!server.tailscaleConnected) {
-    const reason = server.tailscaleErrorCode ? tailscaleSetupMessage(`tailscale_${server.tailscaleErrorCode}`) : undefined;
+    const reason = (server.tailscaleErrorCode ? tailscaleSetupMessage(`tailscale_${server.tailscaleErrorCode}`) : undefined)
+      ?? routeStateMessage(server.tailscaleRouteState);
     items.push({ state: "fail", text: reason ?? `Tailscale: Aiden's route is not connected. Run \`aiden remote network ${mode}\` to connect it.` });
     return items;
   }
