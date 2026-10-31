@@ -11,6 +11,7 @@ import test from "node:test";
 
 const execFileAsync = promisify(execFile);
 const runner = fileURLToPath(new URL("./cua-space-e2e.sh", import.meta.url));
+const guest = fileURLToPath(new URL("./cua-space-e2e-guest.sh", import.meta.url));
 
 // A stand-in for the cua CLI: records every call, keeps files copied into the Space, and answers
 // `sb ls` / `sb exec` from the environment.
@@ -52,6 +53,7 @@ async function checkout() {
   await mkdir(path.join(repo, "scripts"), { recursive: true });
   await mkdir(fake);
   await copyFile(runner, path.join(repo, "scripts", "cua-space-e2e.sh"));
+  await copyFile(guest, path.join(repo, "scripts", "cua-space-e2e-guest.sh"));
   await writeFile(path.join(repo, "package-lock.json"), '{"lockfileVersion":3}\n');
   await writeFile(path.join(repo, "tracked.ts"), "export {};\n");
   await writeFile(path.join(repo, "removed.ts"), "export {};\n");
@@ -108,6 +110,11 @@ test("syncs uncommitted work into the Space but keeps untracked secrets and dele
     assert.ok(!files.includes(excluded), `${excluded} stays on the host`);
   }
 
+  assert.equal(
+    await readFile(path.join(fake, `aiden-run-${archive.slice("aiden-src-".length, -".tgz".length)}.sh`), "utf8"),
+    await readFile(guest, "utf8"),
+    "the guest script copied into the Space is scripts/cua-space-e2e-guest.sh",
+  );
   const exec = (await calls(fake)).find((call) => call[1] === "exec");
   const runId = archive.slice("aiden-src-".length, -".tgz".length);
   const lockHash = createHash("sha256").update(await readFile(path.join(repo, "package-lock.json"))).digest("hex");
@@ -210,4 +217,48 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   assert.match(missing.stderr, /This run left no artifacts/);
   assert.doesNotMatch((await run(space, ["--run", "true"], ready)).stderr, /artifacts/);
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+});
+
+// The guest half runs inside the Space; these run it on the host with stand-ins for the Space's tools.
+async function guestRun({ flockStatus, curlStatus = 22 }) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-"));
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  await mkdir(home);
+  await mkdir(bin);
+  await writeFile(path.join(bin, "flock"), `#!/bin/sh\nexit ${flockStatus}\n`);
+  await writeFile(path.join(bin, "curl"), `#!/bin/sh\nexit ${curlStatus}\n`);
+  await chmod(path.join(bin, "flock"), 0o755);
+  await chmod(path.join(bin, "curl"), 0o755);
+  const script = path.join(home, "aiden-run-test.sh");
+  const source = path.join(home, "aiden-src-test.tgz");
+  await copyFile(guest, script);
+  await writeFile(source, "");
+  let result;
+  try {
+    const { stdout } = await execFileAsync("bash", [script, "test", "lockhash", "--run", "true"], {
+      env: { ...isolatedEnv, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, AIDEN_E2E_LOCK: path.join(root, "lock") },
+    });
+    result = { status: 0, stdout };
+  } catch (error) {
+    result = { status: error.code, stdout: error.stdout };
+  }
+  return { root, home, ...result, leftovers: await readdir(home) };
+}
+
+test("the guest refuses a busy Space and cleans up its copied files", async (t) => {
+  const busy = await guestRun({ flockStatus: 1 });
+  t.after(() => rm(busy.root, { recursive: true, force: true }));
+  assert.equal(busy.status, 75);
+  assert.match(busy.stdout, /SPACE_BUSY/);
+  assert.deepEqual(busy.leftovers, [], "the run script and source archive are removed");
+});
+
+test("the guest stops at a failed Node install instead of running on", async (t) => {
+  const failed = await guestRun({ flockStatus: 0 });
+  t.after(() => rm(failed.root, { recursive: true, force: true }));
+  assert.equal(failed.status, 2);
+  assert.match(failed.stdout, /NODE_INSTALL_FAILED/);
+  assert.doesNotMatch(failed.stdout, /APT_|NPM_|E2E_BUILD/);
+  assert.deepEqual(failed.leftovers, [], "the run script and source archive are removed");
 });
