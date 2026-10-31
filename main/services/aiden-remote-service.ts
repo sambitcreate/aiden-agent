@@ -757,12 +757,14 @@ export class AidenRemoteService {
           configureServer(lanServer);
           // macOS Bonjour commonly resolves both A and AAAA records. The IPv6
           // wildcard is dual-stack by default, so one listener serves both.
-          // Hosts and containers whose kernel has IPv6 disabled cannot open
-          // an IPv6 socket at all; they fall back to the IPv4 wildcard.
+          // Hosts without IPv6 fall back to the IPv4 wildcard: a kernel built
+          // without it cannot open the socket (EAFNOSUPPORT), and one with it
+          // turned off by sysctl cannot bind "::" (EADDRNOTAVAIL).
           try {
             await listen(lanServer, candidate, "::");
           } catch (error) {
-            if ((error as NodeJS.ErrnoException | undefined)?.code !== "EAFNOSUPPORT") throw error;
+            const code = (error as NodeJS.ErrnoException | undefined)?.code;
+            if (code !== "EAFNOSUPPORT" && code !== "EADDRNOTAVAIL") throw error;
             await listen(lanServer, candidate, "0.0.0.0");
           }
           await this.options.afterListenerBound?.({ transport: "lan", port: candidate });
