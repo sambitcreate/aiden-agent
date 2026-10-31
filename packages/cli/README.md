@@ -155,7 +155,7 @@ Server chats have no schedule tool, so the model can't create or change schedule
 | `speech status\|download\|select\|delete <id>\|transcribe <pcm16-file> <model-id>` | On-device transcription models used by Remote dictation |
 | `search <query>`, `import <file>`, `export <session.jsonl> [output]` | Find, import and export conversations |
 | `files list\|read`, `git status\|review\|branches\|worktrees`, `worktree list\|create\|remove` | Workspace files, Git and managed worktrees |
-| `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]` | Product help and Memory, Web Search and Skills settings |
+| `app help [query]\|status\|get <topic>\|set <control> <value> <revision> [operation-id]` | Product help; shows Memory, Web Search and Skills settings and changes Memory and Web Search (Skills are read-only on the server) |
 | `help`, `--version` | Command list and version |
 
 Notes:

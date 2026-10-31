@@ -26,7 +26,7 @@ Bare `aiden` prints the command list (with `serve` first). The old flags (`-p`, 
 ## What stays
 
 - `aiden serve` and everything it runs: server chats through Pi's SDK (`createAgentSession`), Bots and durable Bots, the scheduler, Remote HTTPS/SSE and pairing, Telegram (unchanged), MCP, memory, web search, advisor, artifact export and subagents.
-- Admin commands: `auth`, `workspace`, `mcp`, `provider`, `schedule`, `bots`, `remote`, `telegram`, `speech`, `catalog`, `web-search`, `insights`, `search`, `import`, `export`, `files`, `git`, `worktree`, `app` (help, status, get and set for Memory, Web Search and Skills), `serve stop|status`, `help` and `--version`.
+- Admin commands: `auth`, `workspace`, `mcp`, `provider`, `schedule`, `bots`, `remote`, `telegram`, `speech`, `catalog`, `web-search`, `insights`, `search`, `import`, `export`, `files`, `git`, `worktree`, `app` (help; status and get for Memory, Web Search and Skills; set for Memory and Web Search, since Skills are read-only on the server), `serve stop|status`, `help` and `--version`.
 - `extensions/aiden-settings.ts`, which is a settings reader used by app controls, web search and memory scope, not a UI.
 - `@earendil-works/pi-coding-agent` as a dependency at the exact desktop pin (1.4.0); the server uses its SDK.
 - The bundle layout and rebrand contract (`dist/app/cli.js` plus the generated `dist/app/package.json`), the no-telemetry enforcement, and the manual-only network posture for models.dev, Artificial Analysis and OpenRouter benchmark data.
