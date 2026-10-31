@@ -604,6 +604,36 @@ test("a Stop that cannot see the processes leaves the job running, and a later S
   assert.equal((await jobs.stop("chat-1", id, "person")).state, "stopped");
 });
 
+test("after a Stop that could not see the processes, a job that then ends by itself reads as ended", { skip }, async (t) => {
+  const dir = await tempDir();
+  let lookupsFail = false;
+  const { jobs } = harness(dir, {
+    listeningPorts: null,
+    processGroupMembers: async (pgid) => {
+      if (lookupsFail) throw new Error("ps timed out");
+      return defaultProcessGroupMembers(pgid);
+    },
+  });
+  t.after(() => cleanUp(jobs, dir));
+  const id = newBackgroundJobId();
+  const quit = path.join(dir, "quit");
+  const result = await leaveServerRunning(
+    dir,
+    id,
+    `setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(quit)})) process.exit(0); }, 25);\n`,
+  );
+  assert.ok(await jobs.adopt({ id, chatId: "chat-1", workspaceId: "ws-1", cwd: dir, command: "x &", processGroup: result.leftoverProcessGroup! }));
+  lookupsFail = true;
+  assert.equal((await jobs.stop("chat-1", id, "person")).state, "running");
+  lookupsFail = false;
+  // The Stop never reached it; it ends on its own later.
+  await fs.writeFile(quit, "");
+  await eventually(() => jobs.list("chat-1")[0]?.state !== "running", "the job to end by itself");
+  const ended = jobs.list("chat-1")[0]!;
+  assert.equal(ended.state, "exited", "not shown as stopped by the person");
+  assert.equal(ended.endReason, undefined);
+});
+
 test("what a command leaves running is not taken over past the chat's job limit", { skip }, async (t) => {
   const dir = await tempDir();
   const { jobs, start } = harness(dir, { listeningPorts: null, maxRunningPerChat: 1 });

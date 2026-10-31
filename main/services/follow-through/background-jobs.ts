@@ -726,6 +726,8 @@ export class BackgroundJobs {
     }
     this.options.log?.("An adopted background job could not be confirmed stopped; it stays listed.");
     job.adoptedStop = undefined;
+    // Not stopping any more: a later end of its own reads as one, and the output limit still applies.
+    job.stopRequested = undefined;
     return false;
   }
 
