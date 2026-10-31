@@ -156,7 +156,9 @@ final class AidenPinnedServerSessionDelegate: NSObject, URLSessionTaskDelegate, 
         expectedFingerprint: String,
         trustPolicy: AidenServerTrustPolicy
     ) {
-        self.expectedHost = expectedHost
+        // DNS names are case-insensitive and URLSession reports challenge
+        // hosts in lowercase, while a discovered Bonjour name keeps its case.
+        self.expectedHost = expectedHost.lowercased()
         self.expectedPort = expectedPort ?? 443
         self.expectedFingerprint = expectedFingerprint
         self.trustPolicy = trustPolicy
@@ -164,21 +166,18 @@ final class AidenPinnedServerSessionDelegate: NSObject, URLSessionTaskDelegate, 
 
     func allowsRedirect(to destination: URL) -> Bool {
         destination.scheme?.lowercased() == "https" &&
-            destination.host == expectedHost &&
+            destination.host?.lowercased() == expectedHost &&
             (destination.port ?? 443) == expectedPort
     }
 
-    func urlSession(
-        _ session: URLSession,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
+    /// Pins the server for one challenge. Every challenge callback below lands
+    /// here, so the pin is checked whichever one URLSession chooses to call.
+    func handle(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              challenge.protectionSpace.host == expectedHost,
+              challenge.protectionSpace.host.lowercased() == expectedHost,
               challenge.protectionSpace.port == expectedPort,
               let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
+            return (.cancelAuthenticationChallenge, nil)
         }
 
         do {
@@ -188,15 +187,38 @@ final class AidenPinnedServerSessionDelegate: NSObject, URLSessionTaskDelegate, 
                 expectedFingerprint: expectedFingerprint,
                 policy: trustPolicy
             )
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            return (.useCredential, URLCredential(trust: serverTrust))
         } catch let error as AidenServerTrustError {
             failureLock.lock()
             recordedTrustError = error
             failureLock.unlock()
-            completionHandler(.cancelAuthenticationChallenge, nil)
+            return (.cancelAuthenticationChallenge, nil)
         } catch {
-            completionHandler(.cancelAuthenticationChallenge, nil)
+            return (.cancelAuthenticationChallenge, nil)
         }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let (disposition, credential) = handle(challenge)
+        completionHandler(disposition, credential)
+    }
+
+    /// The task-level callback. Requests made with the async `bytes(for:)` API
+    /// can deliver server trust here instead of to the session-level callback;
+    /// without it they fall back to default system trust, which rejects the
+    /// desktop's private certificate authority.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let (disposition, credential) = handle(challenge)
+        completionHandler(disposition, credential)
     }
 
     func urlSession(
@@ -221,8 +243,18 @@ final class AidenSealedBootstrapSessionDelegate: NSObject, URLSessionTaskDelegat
     private let expectedPort: Int
 
     init(endpoint: URL) {
-        expectedHost = endpoint.host ?? ""
+        expectedHost = endpoint.host?.lowercased() ?? ""
         expectedPort = endpoint.port ?? 443
+    }
+
+    func handle(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              challenge.protectionSpace.host.lowercased() == expectedHost,
+              challenge.protectionSpace.port == expectedPort,
+              let serverTrust = challenge.protectionSpace.serverTrust else {
+            return (.cancelAuthenticationChallenge, nil)
+        }
+        return (.useCredential, URLCredential(trust: serverTrust))
     }
 
     func urlSession(
@@ -230,14 +262,18 @@ final class AidenSealedBootstrapSessionDelegate: NSObject, URLSessionTaskDelegat
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              challenge.protectionSpace.host == expectedHost,
-              challenge.protectionSpace.port == expectedPort,
-              let serverTrust = challenge.protectionSpace.serverTrust else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-        completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        let (disposition, credential) = handle(challenge)
+        completionHandler(disposition, credential)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        let (disposition, credential) = handle(challenge)
+        completionHandler(disposition, credential)
     }
 
     func urlSession(

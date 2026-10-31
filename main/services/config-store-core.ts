@@ -214,15 +214,17 @@ function normalizePortableConfig(value: unknown): {
 }
 
 function normalizeWorkspace(workspace: Workspace): Workspace {
-  // Only a literal `true` marks a scratch workspace; anything else is dropped.
-  const { scratch, disabledSkills, disabledMcpServerIds, ...w } = workspace;
+  // Only a literal `true` marks a scratch or No workspace record; anything else is dropped.
+  const { scratch, noWorkspace, disabledSkills, disabledMcpServerIds, ...w } = workspace;
   return {
     ...w,
     ...(scratch === true ? { scratch } : {}),
+    ...(noWorkspace === true ? { noWorkspace } : {}),
     name: w.name.trim() || "Workspace",
     permission: PERMISSIONS.has(w.permission) ? w.permission : "ask",
     ...(typeof w.memoryEnabled === "boolean" ? { memoryEnabled: w.memoryEnabled } : {}),
-    ...workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds }),
+    // No workspace chats always use the global skills and connectors.
+    ...(noWorkspace === true ? {} : workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds })),
     managedWorktree:
       w.managedWorktree &&
       typeof w.managedWorktree.repositoryPath === "string" &&

@@ -565,6 +565,30 @@ test("workspace skill and connector off-lists survive restarts, and a damaged li
   assert.equal("disabledSkills" in ((await next.getWorkspace("client")) ?? {}), false);
 });
 
+test("a workspace keeps only a literal No workspace mark across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  // No workspace chats use the global skills and connectors, so an off-list is never kept for them.
+  await h.store.saveWorkspace({
+    ...base,
+    id: "chat",
+    name: "No workspace",
+    folderPath: "/x/chats/kind-fern-hike",
+    noWorkspace: true,
+    disabledSkills: ["deploy"],
+    disabledMcpServerIds: ["gmail"],
+  });
+  await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", noWorkspace: 1 as unknown as true });
+  const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
+  assert.equal(listed.get("chat")?.noWorkspace, true);
+  assert.equal("noWorkspace" in (listed.get("odd") ?? {}), false);
+  await h.store.saveWorkspace({ ...listed.get("chat")!, permission: "full" });
+  const chat = await h.store.getWorkspace("chat");
+  assert.equal(chat?.noWorkspace, true);
+  assert.equal("disabledSkills" in (chat ?? {}), false);
+  assert.equal("disabledMcpServerIds" in (chat ?? {}), false);
+});
+
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);

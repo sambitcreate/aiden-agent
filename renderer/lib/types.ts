@@ -263,6 +263,12 @@ export interface Workspace {
    * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
    */
   scratch?: true;
+  /**
+   * Set on the hidden workspace behind a "No workspace" chat: one per chat, in
+   * Aiden's app-data `chats/` folder, using global settings. Never listed as a
+   * workspace row or choice. Device-local; Remote projections leave it out.
+   */
+  noWorkspace?: true;
   createdAt: number;
   updatedAt: number;
 }

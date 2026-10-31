@@ -31,6 +31,7 @@ test("only a workspace with a folder has its own settings; chats without one fol
   assert.equal(workspaceHasOwnSettings({ folderPath: "/projects/site" }), true);
   assert.equal(workspaceHasOwnSettings({}), false);
   assert.equal(workspaceHasOwnSettings(undefined), false);
+  assert.equal(workspaceHasOwnSettings({ folderPath: "/x/chats/kind-fern-hike", noWorkspace: true }), false);
 });
 
 test("switching an entry off and on again leaves the stored list as it was", () => {

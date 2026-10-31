@@ -2,15 +2,21 @@
 // workspace's chats can use, and why a switch can or can't change.
 
 import { mcpServerOffersTools } from "../shared/mcp-exposure";
+import { isNoWorkspace } from "./no-workspace";
 import type { SkillSource } from "../shared/slash-commands";
 import type { McpServer, Workspace } from "./types";
 import type { WorkspaceSkillChoice } from "../../main/services/skill-registry";
 
 export type WorkspaceSettingsTab = "general" | "skills" | "connectors";
 
-/** Only a workspace bound to a folder has its own settings; chats without one use Settings. */
-export function workspaceHasOwnSettings(workspace: Pick<Workspace, "folderPath"> | undefined): boolean {
-  return Boolean(workspace?.folderPath);
+/**
+ * Only a workspace bound to a folder has its own settings. Chats without one,
+ * including No workspace chats in their hidden managed folders, use Settings.
+ */
+export function workspaceHasOwnSettings(
+  workspace: Pick<Workspace, "folderPath" | "noWorkspace"> | undefined,
+): boolean {
+  return Boolean(workspace?.folderPath) && !isNoWorkspace(workspace);
 }
 
 /** Adds or removes one entry, keeping the stored list sorted and free of repeats. */

@@ -14,7 +14,7 @@ Each folder workspace can switch off specific skills and connectors (MCP servers
 4. Phones get no new screens; chats started from a phone obey the desktop's choices with no Remote protocol change.
 5. The CLI should become a CLI-only version of the desktop app, so it gets the same settings in a follow-up.
 6. Built-in tools (web search, browser, image generation, computer use) are not part of v1.
-7. Chats without a workspace use Settings. A managed folder for them is a separate piece of work.
+7. Chats without a workspace use Settings. No workspace chats (#667) run in a hidden managed folder but still have no Workspace settings, and the config store never keeps an off-list on them.
 8. A skill switched off for a workspace is hidden from the model, but typing `$` and its name still runs it.
 9. `⇧⌘,` opens Workspace settings; it was checked against the command catalog, reserved keys and the native menus.
 

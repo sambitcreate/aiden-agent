@@ -203,6 +203,7 @@ async function ambientContextOptions(
     skillsEnabled,
     skillSnapshot,
     new Set(tools.map((tool) => tool.name)),
+    workspace?.noWorkspace === true,
   );
   const systemPrompt = await withAgentsInstructionsEstimate(hostPrompt, instructionRoots);
   const options: GenerationContextOptions = {

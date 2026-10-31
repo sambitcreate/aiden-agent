@@ -118,7 +118,9 @@ export function WorkspaceSettingsDialog() {
   const returnTo = React.useRef<HTMLElement | null>(null);
   const { active } = useActiveWorkspace();
   const workspaces = useWorkspaces();
-  const workspace = workspaces.data?.find((candidate) => candidate.id === request?.workspaceId);
+  const found = workspaces.data?.find((candidate) => candidate.id === request?.workspaceId);
+  // No workspace chats use the global settings, so they never get this pop-up.
+  const workspace = workspaceHasOwnSettings(found) ? found : undefined;
 
   const show = React.useCallback((next: OpenRequest) => {
     returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -143,7 +145,7 @@ export function WorkspaceSettingsDialog() {
     activeHasSettings,
   );
 
-  // The workspace was removed while its settings were open.
+  // The workspace was removed while its settings were open, or never had its own.
   React.useEffect(() => {
     if (open && workspaces.isSuccess && !workspace) setOpen(false);
   }, [open, workspace, workspaces.isSuccess]);
