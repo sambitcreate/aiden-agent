@@ -366,12 +366,15 @@ test("unused images still inside their grace are swept once it runs out, without
   await store.remove(chat.id);
   assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
 
+  // The sweep removes the file first and its marker after, so wait for both.
+  const marker = path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed");
+  const markerGone = async () => fs.access(marker).then(() => false, () => true);
   const deadline = Date.now() + 5_000;
-  while ((await imageFiles(directory)).length > 0 && Date.now() < deadline) {
+  while (((await imageFiles(directory)).length > 0 || !(await markerGone())) && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.deepEqual(await imageFiles(directory), []);
-  await assert.rejects(fs.access(path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed")), { code: "ENOENT" });
+  await assert.rejects(fs.access(marker), { code: "ENOENT" });
 });
 
 test("the window's image link serves the stored bytes and revalidates by hash", async (t) => {
