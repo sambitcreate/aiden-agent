@@ -26,6 +26,7 @@ one starts unassigned.
 | `⌘[` / `⌘]` | Go back / go forward |
 | `⇧⌘M` | Change model |
 | `⌘,` | Open Settings |
+| `⇧⌘,` | Workspace settings for the workspace in use (also from the message box) |
 | `⌘B` | Toggle sidebar |
 | `⌘O` / `⇧⌘O` | Open workspace in preferred editor / Open folder… |
 | `⌘J` / `⇧⌘E` | Toggle terminal / Toggle Environment |

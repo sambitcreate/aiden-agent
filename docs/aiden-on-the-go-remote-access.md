@@ -140,6 +140,15 @@ successful chat synchronization. “Syncing chats” means the secure connection
 but the chat feed is not ready. “Recently active” describes recent contact, not a live
 connection guarantee.
 
+When a paired desktop cannot connect, its row distinguishes address lookup, network
+routing, a refused connection, a timeout, secure connection failure, and an unreadable
+response when the transport can identify the cause. Recovery steps point to Tailscale
+online status and access rules, or the local network, firewall, and Local Network
+permission for the last known route. A refused connection asks you to open Aiden and
+turn on Control this device on the other computer. The displayed route is the last
+successful route; Aiden may also have tried its saved alternatives. These hints do
+not probe Tailscale or change permissions. Identity changes still require re-pairing.
+
 Paired desktop computers can learn local-network and Tailscale alternatives through
 their verified connection. Aiden checks each route's certificate and paired identity
 before using it, switches when a route fails, and checks for a preferred local route
@@ -148,7 +157,16 @@ routes** is selected. The computer still needs to be awake with Aiden running.
 
 A send whose response is lost remains a saved, unconfirmed request. Reopening the
 conversation restores its notice. **Retry** uses that exact request and its original
-key within the safe retry window; it never runs automatically. When the window ends,
+key within the safe retry window; it never runs automatically. A send the host refuses
+as busy (`429 rate_limited` with `retryable: true`) is different: nothing was added to
+the chat, so Aiden On The Go for iPhone and Android saves the same request under a new
+key and sends it again on its own after the delay the host asked for
+(`details.retryAfterSeconds`, else the `Retry-After` header, held between 1 and 60
+seconds). If three automatic resends are refused as busy too, the request stays saved
+for **Retry** and the notice says Aiden Agent is still busy and the message wasn’t sent,
+so retrying is safe. A
+`429` the host marks `retryable: false` fails the send and returns the text to the
+composer. When the window ends,
 review the conversation on the host before dismissing the notice and making a new
 attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records

@@ -66,3 +66,9 @@ All seven features now work on Android emulators. Docs: `docs/devices.md` § "De
 - Changed: `device-features.ts`, `device-recording.ts`, `device-feature-ipc.ts`, `device-host.ts` (`env`), `local-device-host.ts`, `device-service.ts` (`shutdownLocal`), `device-hub-proxy.ts` (logcat), and `handlers/devices.ts`.
 - Renderer: `device-ax.ts`, `device-event-log.ts`, `device-clipboard.ts`, `device-stream.ts` (`androidMultiTouchMessages`), and the overlay, event-log, clipboard, record, erase, sections, and viewer components.
 - E2E: the second test in `environment-devices-android.spec.ts`. The fake hub serves the accessibility snapshot, logcat SSE, `/api/text`, and `/api/devices/shutdown`. The fake `emulator` sleeps on `-avd` until the fake `adb emu kill` kills it.
+
+## 2026-10-29: failed-recording sweep (audit 09, F8)
+
+- `device-recording.ts` arms a sweep (`DEVICE_RECORDING_FAILED_TTL_MS`, 1 h; deps `failedTtlMs`) when an entry turns `failed` while still listed; it runs `removeEntry` (deletes the partial temp file and the entry). `removeEntry` clears the sweep after its own awaits, because a stop during removal can fail the entry and arm one.
+- Ready (finished, unsaved) recordings are not swept: the viewer offers them for saving when it next mounts for that chat and device, and chat deletion, the device going away, or quit still remove them. Sweeping those would lose a recording the person made; owner decision if disk use matters more.
+- Tests: `device-recording.test.ts` "a failed recording nobody discarded is deleted with its file after an hour…" and "a failed recording the viewer discards leaves no sweep behind".

@@ -2436,10 +2436,16 @@ const skillInvocation = {
   source: "workspace" as const,
 };
 
-test("remote skill turn rejects while its workspace is changing", async () => {
+test("remote skill turn rejects while its workspace is changing, keeping its attachment for the resend", async () => {
   const app = fixture(chat({ workspaceId: "workspace-9" }), {
     deviceSupportsSkillInvocation: async () => true,
     resolveSkillInvocation: async () => resolvedSkill,
+  });
+  const notes = await app.service.uploadAttachment("device-1", "chat-1", {
+    name: "diff-notes.md",
+    mimeType: "text/markdown",
+    kind: "text",
+    text: "# Diff notes",
   });
   const endMutation = workspaceMutationGate.begin("workspace-9");
   try {
@@ -2447,6 +2453,7 @@ test("remote skill turn rejects while its workspace is changing", async () => {
       app.service.startTurn("device-1", "chat-1", "skill-gated-000001", {
         text: "check this diff",
         skill: skillInvocation,
+        attachmentIds: [notes.id],
       }),
       (error: unknown) =>
         (error as { code?: string; status?: number }).code === "rate_limited" &&
@@ -2456,12 +2463,23 @@ test("remote skill turn rejects while its workspace is changing", async () => {
   } finally {
     endMutation();
   }
-  // Once the workspace settles the same turn is admitted again.
+  // Once the workspace settles, the phone's resend under a fresh key is
+  // admitted with the same attachment, which the refused send gave back.
   const retry = await app.service.startTurn("device-1", "chat-1", "skill-gated-retry1", {
     text: "check this diff",
     skill: skillInvocation,
+    attachmentIds: [notes.id],
   });
   assert.equal(retry.status, "accepted");
+  assert.deepEqual(retry.message.attachments?.map((attachment) => attachment.name), ["diff-notes.md"]);
+  // Spent by the accepted send: a third send can no longer use it.
+  await assert.rejects(
+    app.service.startTurn("device-1", "chat-1", "skill-gated-again1", {
+      text: "check this diff",
+      attachmentIds: [notes.id],
+    }),
+    (error: unknown) => (error as { status?: number }).status === 409,
+  );
 });
 
 test("remote skill turn aborts the append when its workspace changes mid-prepare", async () => {

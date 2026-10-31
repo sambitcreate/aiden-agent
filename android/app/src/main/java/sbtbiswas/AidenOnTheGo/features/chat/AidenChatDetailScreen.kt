@@ -202,6 +202,8 @@ fun AidenChatDetailScreen(
     val presentedError by viewModel.presentedError.collectAsStateWithLifecycle()
     val pendingSend by viewModel.pendingSend.collectAsStateWithLifecycle()
     val sendRecoveryError by viewModel.sendRecoveryError.collectAsStateWithLifecycle()
+    val isWaitingToRetryRateLimitedSend by viewModel.isWaitingToRetryRateLimitedSend.collectAsStateWithLifecycle()
+    val isPendingSendRefusedBecauseBusy by viewModel.isPendingSendRefusedBecauseBusy.collectAsStateWithLifecycle()
     val isStartingSend by viewModel.isStarting.collectAsStateWithLifecycle()
     val isRetryingInput by viewModel.isSubmittingRunInput.collectAsStateWithLifecycle()
     val hasOlderMessages by viewModel.hasOlderMessages.collectAsStateWithLifecycle()
@@ -648,8 +650,7 @@ fun AidenChatDetailScreen(
                 }
                 if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-                        Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
-                            else "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message.",
+                        Text(aidenSendRecoveryMessage(sendRecoveryError, pendingSend, isWaitingToRetryRateLimitedSend, isPendingSendRefusedBecauseBusy),
                             style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                         Row {
                             TextButton(onClick = { viewModel.send(retry = true) }, enabled = viewModel.canRetrySend) { Text("Retry message") }

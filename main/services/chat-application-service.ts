@@ -86,11 +86,17 @@ export interface ChatApplicationDependencies {
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
-  followThrough?: { deleteChat(chatId: string): Promise<void> };
+  followThrough?: {
+    deleteChat(chatId: string): Promise<void>;
+    /** The delete rolled back before its durable boundary: the retained chat's answers count again. */
+    restoreChat?(chatId: string): void;
+  };
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
+  /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
+  forgetDeletedChat?: (chatId: string) => Promise<void>;
   /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
   afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
@@ -294,6 +300,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       const finishDeletion = deps.llmClient.beginChatDeletion(chatId);
       let finishAttachmentDeletion: (() => void) | undefined;
       let releaseAdmission = false;
+      let chatRemoved = false;
       let rollForwardPublished = false;
       const publishRollForward = () => {
         if (rollForwardPublished) return;
@@ -375,8 +382,13 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           assertRenameAllowedFromChat(chat, options);
           await options.assertCurrent?.(chat);
         });
+        chatRemoved = true;
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
+        // Scratch cleanup is best effort and must not delay the delete reply.
+        void deps.forgetDeletedChat?.(chatId).catch((error: unknown) =>
+          deps.logError("chats", "Could not remove the deleted chat's agent scratch folder.", error),
+        );
         await deps.afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId)).catch((error: unknown) => {
           deps.logError("workspace", "Could not release the deleted chat's folder.", error);
         });
@@ -394,6 +406,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         }
         deps.releaseChatContext?.(chatId);
         if (releaseAdmission) {
+          // Admission reopening without a removed chat means the delete rolled back
+          // before any durable tombstone, so the chat stays in use.
+          if (!chatRemoved) deps.followThrough?.restoreChat?.(chatId);
           finishAttachmentDeletion?.();
           finishDeletion();
         }

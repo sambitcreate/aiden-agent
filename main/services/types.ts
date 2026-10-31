@@ -147,6 +147,14 @@ export interface Workspace {
   permission: WorkspacePermission;
   /** Workspace-scoped durable memory. Omitted means enabled. */
   memoryEnabled?: boolean;
+  /**
+   * Skills (by canonical name) switched off for this workspace's chats. The
+   * model can't see or call them here; typing `$skill` still runs one.
+   * Omitted means every skill that is on in Settings is on here too.
+   */
+  disabledSkills?: string[];
+  /** Connector (MCP server) ids this workspace's chats can't use. Omitted means none. */
+  disabledMcpServerIds?: string[];
   /** Present only for worktrees created and owned by Aiden. */
   managedWorktree?: ManagedWorktree;
   /**
@@ -801,6 +809,12 @@ export interface AppSettings {
   cacheWarmingEnabled?: boolean;
   /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
   usageLimitWaitHours?: import("../../renderer/shared/usage-limits.js").UsageLimitWaitHours;
+  /**
+   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * changes instead of waiting for the person. Never lowers Hand off to me rules,
+   * the password and money rules, or chat turns. Absent means off.
+   */
+  botRoutinesGoAhead?: boolean;
   /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
   spendingLimits?: import("../../renderer/shared/spending.js").SpendingLimitsSettings;
   lastProviderId?: string;

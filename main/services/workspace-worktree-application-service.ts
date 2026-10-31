@@ -1,3 +1,4 @@
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import { MAX_PROVISIONED_BYTES } from "./managed-worktree-provisioner.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -293,6 +294,8 @@ export function createWorkspaceWorktreeApplicationService(
       name: displayName(resolved.workspace, branch, requestedName),
       folderPath: worktree.workspacePath,
       permission: resolved.workspace.permission,
+      // A worktree starts with its project's skill and connector choices.
+      ...workspaceCapabilityFields(resolved.workspace),
       managedWorktree: {
         repositoryPath: worktree.repositoryPath,
         worktreePath: worktree.path,
@@ -761,6 +764,7 @@ export function createWorkspaceWorktreeApplicationService(
           name: displayName(resolved.workspace, snapshot.branch, requestedName),
           folderPath: result.worktree.workspacePath,
           permission: resolved.workspace.permission,
+          ...workspaceCapabilityFields(resolved.workspace),
           managedWorktree: {
             repositoryPath: result.worktree.repositoryPath,
             worktreePath: result.worktree.path,
