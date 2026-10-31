@@ -137,6 +137,20 @@ test("aiden serve in a terminal shows a LAN pairing code that the server is wait
   assert.match(pairing.sessionId, /^pairing_/);
 });
 
+test("aiden serve --no-pair in a terminal serves Remote without minting a pairing code", { skip: !hasScript && "needs util-linux script for a pseudo-terminal" }, async (t) => {
+  const { env } = sandbox(t);
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  const { output } = await startServing(t, "script", ["-qfec", `${quote(process.execPath)} ${quote(cli)} serve --no-pair`, "/dev/null"], env, /Aiden Remote listening/);
+  // A window would open right after the server is ready; give it the time the default run needs to show one.
+  const settled = Date.now() + 2_000;
+  while (Date.now() < settled) {
+    assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  assert.doesNotMatch(output.stdout + output.stderr, /Manual code|aiden-pair:/);
+  assert.equal(json(runCli(["serve", "status"], env)).remote.on, true);
+});
+
 /** A Remote service double that records the transport operations Tailscale pairing performs. */
 function tailscalePairingDouble({ connectionMode = "lan", tailscaleConnected = false, node, connectError, deniedAfterConnect = false }) {
   const calls = [];
