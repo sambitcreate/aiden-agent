@@ -48,7 +48,7 @@ export async function runCli(argv: string[], _appDir: string): Promise<void> {
 			// `aiden mcp` commands retry it and report the same error.
 			process.stderr.write(`aiden: MCP migration deferred (${error instanceof Error ? error.message : String(error)})\n`);
 		}
-		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
+		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(Number(process.exitCode ?? 0));
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		await exitAfterFlush(1);

@@ -83,7 +83,7 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * over Tailscale and every other server pairs over LAN. Resolves the opened
  * window's session id, so a caller whose server keeps running can close it.
  */
-export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<string | undefined> {
+export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr, waitForAddress?: typeof import("./reachability.ts").waitForTailscaleAddress): Promise<string | undefined> {
   const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
   // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
   const guessed = !requested && mode === undefined;
@@ -91,6 +91,11 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   if (signal.aborted) return;
   let pairing: AidenRemoteDesktopPairing;
   try {
+    if (transport === "tailscale") {
+      const { prepareTailscalePairing, waitForTailscaleAddress } = await import("./reachability.ts");
+      await prepareTailscalePairing(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
+      if (signal.aborted) return;
+    }
     pairing = await remoteDaemonCommand(agentDir, "remote", ["pair", transport]) as AidenRemoteDesktopPairing;
   } catch (error) {
     // Tailscale failures already name the setup step and the command to retry with.
