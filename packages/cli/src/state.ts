@@ -41,8 +41,11 @@ function lockOwnerIsLive(lock: string): boolean {
   return false;
 }
 
-/** Exclusive across processes; contention is explicit instead of losing updates. */
-export function acquireLease(file: string): () => void {
+/**
+ * Exclusive across processes; contention is explicit instead of losing updates.
+ * `details` adds diagnostic fields to owner.json (never the protocol fields).
+ */
+export function acquireLease(file: string, details?: Record<string, unknown>): () => void {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const lock = `${file}.lock`;
   const releaseGuard = tryAcquireProcessLifetimeLock(leaseGuardPath(file), cliLeaseHelperPath());
@@ -57,7 +60,7 @@ export function acquireLease(file: string): () => void {
     }
     mkdirSync(lock, { mode: 0o700 });
     mayHavePublished = true;
-    atomicJson(`${lock}/owner.json`, { protocol: "flock-v1", pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now(), token: randomUUID() });
+    atomicJson(`${lock}/owner.json`, { ...details, protocol: "flock-v1", pid: process.pid, argv: process.argv.slice(0, 5), startedAt: Date.now(), token: randomUUID() });
   } catch (error) {
     try { if (mayHavePublished) rmSync(lock, { recursive: true, force: true }); }
     finally { releaseGuard(); }
