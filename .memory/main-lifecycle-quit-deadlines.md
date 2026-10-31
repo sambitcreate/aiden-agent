@@ -11,7 +11,9 @@ Branch `claude/audit-fix-main-lifecycle`, from the main-lifecycle audit
   (Gemini Live 3 s, parent generations 8 s, background jobs 6 s, model pace
   1 s, subagents 7 s, spending 1 s, usage data 2 s, soak receipt 5 s, Remote
   5 s), then the
-  independent stores in parallel. A step that times out is logged and skipped.
+  independent stores in parallel (including the Foundation Models helper stop,
+  2 s, and agent harness processes, 4 s). A step that times out is logged and
+  skipped.
 - Each budget is at least the service's own internal grace: bot ingress 5.5 s
   (`stopAndSettle` waits 5 s), Computer Use status 5.5 s (5 s grace), devices
   8 s (recordings 2 s + SSH 5 s + local `daemon stop` 10 s exceed it). When the

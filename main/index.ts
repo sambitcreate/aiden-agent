@@ -37,8 +37,11 @@ import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -350,6 +353,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
@@ -401,6 +405,10 @@ const SHUTDOWN_BUDGET_MS = {
   // identity-checked SIGTERM of the daemon from main.
   devices: 8_000,
   mcpServers: 3_000,
+  // settleFoundationModelsHelperStops() waits up to its own 1.5 s.
+  foundationModelsHelper: 2_000,
+  // Agent harness processes get TERM, then KILL after their grace.
+  agentHarness: 4_000,
   // flushSubagentRuntimeDiagnostics + flushDiagnosticJournal + flushDiagnosticHealth.
   diagnostics: 3_000,
 } as const;
@@ -428,6 +436,8 @@ const SHUTDOWN_HARD_CEILING_MS = (() => {
     b.botComputers,
     b.devices,
     b.mcpServers,
+    b.foundationModelsHelper,
+    b.agentHarness,
   );
   return serial + parallel + b.diagnostics + 5_000;
 })();
@@ -617,12 +627,21 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       // The helpers' own stop timeouts can outlast this budget; end any still running before quit.
       if (outcome.status === "timed-out") terminateDeviceHelperCommands();
     }),
+    // cleanupApplication() asked any running Foundation Models helper to stop; its
+    // PID is checked asynchronously first, so wait (bounded) for the signal.
+    settleShutdownStep("main", "Foundation Models helper", SHUTDOWN_BUDGET_MS.foundationModelsHelper, () =>
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
+    ),
     // Stdio children that miss the budget are still signalled by their transports' close.
     settleShutdownStep("main", "MCP servers", SHUTDOWN_BUDGET_MS.mcpServers, () =>
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
     ),
+    // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+    settleShutdownStep("acp", "Agent harness processes", SHUTDOWN_BUDGET_MS.agentHarness, () => shutdownAntigravity()),
   ]);
   await flushSubagentRuntimeDiagnostics(1_000);
   await flushDiagnosticJournal(1_000);

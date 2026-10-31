@@ -77,3 +77,31 @@ test("the hook lives on a path BROWSER parsing cannot split", () => {
   assert.match(hookDirectory("/Users/me/Library/Application Support/Aiden Agent/acp", "/tmp"), /^\/tmp\/aiden-acp-hooks-/u);
   assert.match(hookDirectory("/odd:path", "/tmp"), /^\/tmp\//u);
 });
+
+test("quit stops every agent the launcher started, including sign-in agents no session owns", async () => {
+  const stateDir = tempDir();
+  const ledger = new AcpPidLedger(path.join(stateDir, "processes.json"));
+  const released = { count: 0 };
+  const runtimeLauncher = launcher(stateDir, ledger, released);
+  const signIn = await runtimeLauncher.launch("auth", stateDir);
+  const validation = await runtimeLauncher.launchWith("validate", stateDir, {}, {
+    runtimeDir: stateDir,
+    asset: { url: "", sha256: "", archiveBytes: 0, members: [], executable: "", args: [] },
+    release() {},
+  });
+  // A chat launch that is still starting when quit begins.
+  const starting = runtimeLauncher.launch("chat", stateDir);
+  const startingOutcome = starting.then(
+    (launched) => launched,
+    (error: unknown) => error,
+  );
+  await runtimeLauncher.shutdown();
+  assert.equal(signIn.process.alive, false);
+  assert.equal(validation.process.alive, false);
+  const late = await startingOutcome;
+  assert.ok(late instanceof Error, "a launch that finished starting after quit is refused");
+  await assert.rejects(runtimeLauncher.launch("chat", stateDir), /shutting down/u);
+  assert.deepEqual(ledger.snapshot(), []);
+  assert.deepEqual(readdirSync(path.join(stateDir, "tmp")), []);
+  assert.equal(released.count, 2, "the chat leases are returned; the validation lease was an override");
+});

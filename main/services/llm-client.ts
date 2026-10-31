@@ -36,8 +36,7 @@ import { attachWorkspaceToolOutputs } from "./tool-output-runtime.js";
 import { type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { convertToLlm, DEFAULT_COMPACTION_SETTINGS } from "./pi-legacy-harness.js";
 import { createInitialSystemMessage, toToolDeclaration, type AssistantMessage } from "@earendil-works/pi-ai";
-import { access, mkdir, mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { app, ipcMain, logger } from "../platform.js";
 import { buildAgentTools, buildSchedulingTools } from "./tools.js";
@@ -256,6 +255,7 @@ import { GenerationTimelineProjector, safeToolIssueDetails } from "./generation-
 import { canHostAcpHarness, createAcpGenerationHost } from "./acp/generation-host.js";
 import { acpHosts } from "./acp/hosts.js";
 import { captureRootIdentity } from "./acp/client-files.js";
+import { createAcpScratchDirectories } from "./acp/scratch-directory.js";
 import { isAcpHarnessProvider } from "../../renderer/shared/acp-harness.js";
 import { advisorRuntime } from "./advisor-runtime-main.js";
 import { ADVISOR_TOOL_NAME } from "./advisor-runtime.js";
@@ -2287,29 +2287,10 @@ async function prepareGeneration(
   };
 }
 
-const acpScratchFallbacks = new Map<string, Promise<string>>();
-
-/** Working directory for an agent turn in a chat without a folder. It grants no file access. */
-async function acpScratchDir(chatId: string): Promise<string> {
-  const safe = chatId.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 80) || "chat";
-  const directory = join(app.getPath("userData"), "acp", "scratch", safe);
-  try {
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    return directory;
-  } catch (error) {
-    // Never fail a generation over its working directory; this one grants no
-    // file access either way.
-    logger.warn("acp", "Could not prepare the agent scratch directory.", error);
-    // A private directory, never the shared temp folder itself, reused for the
-    // chat so its agent session is not rebuilt on every turn.
-    let fallback = acpScratchFallbacks.get(chatId);
-    if (!fallback) {
-      fallback = mkdtemp(join(tmpdir(), "aiden-acp-scratch-")).catch(() => tmpdir());
-      acpScratchFallbacks.set(chatId, fallback);
-    }
-    return fallback;
-  }
-}
+const acpScratch = createAcpScratchDirectories({
+  root: () => join(app.getPath("userData"), "acp", "scratch"),
+  onPrepareError: (error) => logger.warn("acp", "Could not prepare the agent scratch directory.", error),
+});
 
 export const llmClient = {
   /**
@@ -4849,7 +4830,7 @@ export const llmClient = {
                     }),
                   }
                 : {}),
-              scratchDir: await acpScratchDir(params.chatId),
+              scratchDir: await acpScratch.directoryFor(params.chatId),
               permission: () => permission,
               timeline,
               requestApproval: (prompt, approvalSignal) => approvals.request(prompt, approvalSignal, owner.documentId),
@@ -5197,7 +5178,17 @@ export const llmClient = {
     if (!owner || (ownerDocumentId !== undefined && owner.documentId !== ownerDocumentId)) {
       return false;
     }
-    if (initialization?.cancelRequested || generation?.cancelRequested) return false;
+    if (initialization?.cancelRequested || generation?.cancelRequested) {
+      // Quitting after Stop re-issues the abort for a turn that is still
+      // unwinding (and any child it started meanwhile). The person's Stop
+      // origin stays, so the reply is not offered for resume.
+      if (origin === "application_shutdown") {
+        generation?.agent.abort();
+        subagentRuntimeRegistry.abortGeneration(streamId);
+        approvals.cancelStream(streamId);
+      }
+      return false;
+    }
     if (initialization) {
       initialization.cancelRequested = true;
       initialization.cancellationOrigin = origin;
@@ -5311,6 +5302,11 @@ export const llmClient = {
   async stopChatWork(chatId: string): Promise<boolean> {
     cancelChatGenerations(chatId, "user_stop");
     return waitForChatSettlement(chatId, () => this.isChatBusy(chatId));
+  },
+
+  /** Remove a deleted chat's agent scratch directory. Never throws. */
+  forgetDeletedChat(chatId: string): Promise<void> {
+    return acpScratch.forget(chatId);
   },
 
   /** Close generation admission before chat deletion performs its first await. */

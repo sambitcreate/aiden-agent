@@ -54,6 +54,14 @@ export class AcpConnection {
   private handlers: AcpClientHandlers;
   private readonly connection: ClientSideConnection;
   private readonly exitFailure: Promise<never>;
+  /**
+   * Callers waiting on the agent's exit. One subscriber on `exitFailure` fans
+   * out to them, so a long-lived agent does not accumulate a reaction (and the
+   * request closures it retains) for every request, prompt and cancel.
+   */
+  private readonly exitWaiters = new Set<(error: unknown) => void>();
+  private exitError: unknown;
+  private hasExitError = false;
 
   constructor(
     readonly process: AcpProcess,
@@ -91,7 +99,39 @@ export class AcpConnection {
       const detail = exit.signal ? `signal ${exit.signal}` : `code ${exit.code ?? "unknown"}`;
       throw new AcpHarnessError("process_exit", `The agent stopped unexpectedly (${detail}).`);
     });
-    this.exitFailure.catch(() => undefined);
+    this.exitFailure.catch((error: unknown) => {
+      this.exitError = error;
+      this.hasExitError = true;
+      for (const waiter of [...this.exitWaiters]) waiter(error);
+      this.exitWaiters.clear();
+    });
+  }
+
+  /** Calls `onExit` if the agent exits; the returned function unsubscribes. */
+  private onExitFailure(onExit: (error: unknown) => void): () => void {
+    if (this.hasExitError) {
+      onExit(this.exitError);
+      return () => undefined;
+    }
+    this.exitWaiters.add(onExit);
+    return () => this.exitWaiters.delete(onExit);
+  }
+
+  /** `operation`, or the agent's exit failure if it exits first. */
+  private raceExit<T>(operation: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const unsubscribe = this.onExitFailure(reject);
+      operation.then(
+        (value) => {
+          unsubscribe();
+          resolve(value);
+        },
+        (error: unknown) => {
+          unsubscribe();
+          reject(error);
+        },
+      );
+    });
   }
 
   setHandlers(handlers: AcpClientHandlers): void {
@@ -181,14 +221,14 @@ export class AcpConnection {
 
   /** No deadline: a turn may legitimately run for a long time. */
   prompt(request: PromptRequest): Promise<PromptResponse> {
-    return Promise.race([this.connection.prompt(request), this.exitFailure]).catch((error: unknown) =>
+    return this.raceExit(this.connection.prompt(request)).catch((error: unknown) =>
       this.preferExitError(error),
     );
   }
 
   async cancel(sessionId: string): Promise<void> {
     if (!this.process.alive) return;
-    await Promise.race([this.connection.cancel({ sessionId }), this.exitFailure]).catch(() => undefined);
+    await this.raceExit(this.connection.cancel({ sessionId })).catch(() => undefined);
   }
 
   logout(signal?: AbortSignal): Promise<unknown> {
@@ -229,11 +269,13 @@ export class AcpConnection {
     if (signal?.aborted) return Promise.reject(abortError());
     return new Promise<T>((resolve, reject) => {
       let settled = false;
+      let unsubscribeExit = () => {};
       const finish = (callback: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
+        unsubscribeExit();
         callback();
       };
       const timer = setTimeout(
@@ -261,7 +303,7 @@ export class AcpConnection {
           );
         },
       );
-      this.exitFailure.catch((error: unknown) => finish(() => reject(error)));
+      if (!settled) unsubscribeExit = this.onExitFailure((error: unknown) => finish(() => reject(error)));
     });
   }
 }
