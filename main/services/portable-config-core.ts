@@ -26,7 +26,8 @@ import { normalizeLanguageIntent } from "../../renderer/shared/voice-language.js
 import * as fs from "fs/promises";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
-import { DataStore, DataStoreExternalChangeError } from "./data-store.js";
+import { ensurePrivateDirectory, hardenPrivateFile } from "./private-storage.js";
+import { DataStore, DataStoreExternalChangeError, isDataStoreRecoveryFile } from "./data-store.js";
 import {
   isGenerationThinkingLevel,
   type GenerationThinkingLevel,
@@ -933,6 +934,7 @@ async function fileEqualsContents(contents: Buffer, target: string): Promise<boo
 async function writeFileAtomicallyIfAbsent(
   contents: Buffer,
   destination: string,
+  ownedPublicationPaths: Set<string>,
 ): Promise<boolean> {
   if (await exists(destination)) return false;
   const staged = path.join(
@@ -940,8 +942,10 @@ async function writeFileAtomicallyIfAbsent(
     `.${path.basename(destination)}.${randomUUID()}.tmp`,
   );
   let published = false;
+  ownedPublicationPaths.add(destination);
+  ownedPublicationPaths.add(staged);
   try {
-    await fs.writeFile(staged, contents, { flag: "wx" });
+    await fs.writeFile(staged, contents, { flag: "wx", mode: 0o600 });
     const stagedHandle = await fs.open(staged, "r");
     try {
       await stagedHandle.sync();
@@ -965,6 +969,8 @@ async function writeFileAtomicallyIfAbsent(
     }
   } finally {
     await fs.rm(staged, { force: true }).catch(() => undefined);
+    ownedPublicationPaths.delete(staged);
+    ownedPublicationPaths.delete(destination);
   }
   return published;
 }
@@ -972,9 +978,10 @@ async function writeFileAtomicallyIfAbsent(
 async function ensureCompleteLegacyArchive(
   sourceContents: Buffer,
   destination: string,
+  ownedPublicationPaths: Set<string>,
 ): Promise<string> {
   if (await fileEqualsContents(sourceContents, destination)) return destination;
-  if (await writeFileAtomicallyIfAbsent(sourceContents, destination)) return destination;
+  if (await writeFileAtomicallyIfAbsent(sourceContents, destination, ownedPublicationPaths)) return destination;
   if (await fileEqualsContents(sourceContents, destination)) return destination;
 
   // An older non-atomic migration may already have left the canonical archive
@@ -990,7 +997,7 @@ async function ensureCompleteLegacyArchive(
   const recovery = `${destination}.recovery-${new Date()
     .toISOString()
     .replace(/[:.]/g, "-")}-${randomUUID()}`;
-  if (!(await writeFileAtomicallyIfAbsent(sourceContents, recovery))) {
+  if (!(await writeFileAtomicallyIfAbsent(sourceContents, recovery, ownedPublicationPaths))) {
     throw new Error("Could not preserve the legacy config recovery archive.");
   }
   return recovery;
@@ -1111,7 +1118,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. Environment and header values, and a custom server's OAuth client secret, are not stored here: each keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Connectors. |
+| \`mcpServers\` | MCP server definitions. Environment and header values, and a custom server's OAuth client secret, are not stored here: each keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand is moved to encrypted storage when Aiden ingests the file, even while launch is pending. If secure storage is unavailable, the local connector stays blocked. Local commands added by hand run only after explicit review and approval in Settings → Connectors. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1119,12 +1126,23 @@ trips in both directions. Invalid JSON is ignored in favour of the built-in
 defaults, and nothing is written back until you next change one of these settings
 from the UI.
 
+On macOS and Linux this directory is private (0700), and configuration and
+migration/recovery files are owner-only (0600). The directory may be a symlink
+(for example from a dotfile manager) when the link, the folder holding it and the
+folder it points to all belong to you; that folder is then made private. A
+symlinked or hard-linked config file, or foreign ownership, blocks access. Use a dedicated
+owned directory for AIDEN_CONFIG_DIR, never your home or a shared directory.
+Windows permissions depend on its ACLs; chmod is not an equivalent guarantee.
+
 ## What is deliberately not here
 
 **API keys and OAuth tokens, plus MCP environment and header values.** They are
 encrypted against this machine's keychain and stay in Aiden's application-support
 folder. After copying \`config.json\` to a new machine your providers appear with no
 key attached and MCP servers ask for their values again; re-enter them there.
+The generic launch card keeps saved values masked. Review and approve opens the
+exact command, arguments and stored environment overrides in a native confirmation;
+Cancel is the default, and changed values require a fresh review.
 
 **Model lists.** \`providers[].models\` is discovery output rather than
 configuration, so it is cached per machine and refilled when you refresh a
@@ -1232,6 +1250,25 @@ export function createPortableConfigStores(
     ) => void;
   } = {},
 ) {
+  const archivePublicationPaths = new Set<string>();
+  async function protectConfigDirectory(root: string, portableDirectory: boolean, ownedPublicationPaths: readonly string[] = []): Promise<void> {
+    const ownedPaths = [...ownedPublicationPaths, ...archivePublicationPaths];
+    ensurePrivateDirectory(root);
+    const file = path.join(root, PORTABLE_CONFIG_FILENAME);
+    hardenPrivateFile(file, ownedPaths);
+    for (const entry of await fs.readdir(root)) {
+      const archive = `${LOCAL_CONFIG_FILENAME}${LEGACY_CONFIG_ARCHIVE_SUFFIX}`;
+      const isArchive = !portableDirectory && (entry === archive ||
+        /^config\.json\.pre-aiden-dir\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry));
+      const isCorrupt = /^config\.json\.invalid-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u.test(entry);
+      const isConflict = /^config\.json\.conflict-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(entry);
+      if (isArchive && (await fs.lstat(path.join(root, entry))).isDirectory()) continue;
+      const isStaged = /^\.config\.json(?:\.pre-aiden-dir(?:\.recovery-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})?)?\.[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.tmp$/u.test(entry);
+      if (isArchive || isCorrupt || isConflict || isStaged || isDataStoreRecoveryFile(entry, file)) hardenPrivateFile(path.join(root, entry), ownedPaths);
+    }
+  }
+  const protectPortable = (ownedPaths: readonly string[] = []) => protectConfigDirectory(portableRoot(), true, ownedPaths);
+  const protectLocal = async (ownedPaths: readonly string[] = []) => protectConfigDirectory(localRoot ? localRoot() : (await import("../platform.js")).app.getPath("userData"), false, ownedPaths);
   const portable = new DataStore<PortableConfigShape>(
     PORTABLE_CONFIG_FILENAME,
     emptyPortableConfig(),
@@ -1239,6 +1276,8 @@ export function createPortableConfigStores(
     // This is the one file a person edits by hand, so a JSON typo must not be
     // silently overwritten with defaults the next time anything writes.
     {
+      beforeAccess: protectPortable,
+      fileMode: 0o600,
       maxBytes: PORTABLE_CONFIG_MAX_BYTES,
       normalize: normalizePortableSkillBounds,
       isSafe: portableSkillBoundsAreSafe,
@@ -1267,6 +1306,8 @@ export function createPortableConfigStores(
     { workspaces: [], seeded: false },
     localRoot,
     {
+      beforeAccess: protectLocal,
+      fileMode: 0o600,
       maxBytes: PORTABLE_CONFIG_MAX_BYTES,
       normalize: normalizeLocalConfigShape,
       isSafe: isLocalConfigShapeSafe,
@@ -1296,7 +1337,7 @@ export function createPortableConfigStores(
   /** Seed the README if absent. Never overwrites a copy the user has edited. */
   async function ensureReadme(): Promise<void> {
     const target = path.join(portableRoot(), PORTABLE_README_FILENAME);
-    await fs.mkdir(path.dirname(target), { recursive: true });
+    await protectPortable();
     try {
       await fs.writeFile(target, portableReadme(), { encoding: "utf-8", flag: "wx" });
     } catch (error) {
@@ -1494,7 +1535,7 @@ export function createPortableConfigStores(
         throw new Error("Cannot archive a legacy config that was not loaded from disk.");
       }
       await testHooks.beforeLegacyArchive?.();
-      await ensureCompleteLegacyArchive(loadedLegacyContents, archivePath);
+      await ensureCompleteLegacyArchive(loadedLegacyContents, archivePath, archivePublicationPaths);
     }
 
     try {
