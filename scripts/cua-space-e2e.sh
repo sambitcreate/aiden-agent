@@ -195,11 +195,14 @@ if "$CUA" sb cp "$REF:/home/cua/test-results-$RUN_ID.tgz" "$WORK/results.tgz" >/
   "$CUA" sb exec -i "$REF" -- rm -f "/home/cua/test-results-$RUN_ID.tgz" </dev/null || true
   # Unpack beside the previous artifacts and swap only on success, so a bad archive keeps the last good report.
   mkdir -p "$WORK/results"
-  if tar -xzf "$WORK/results.tgz" -C "$WORK/results"; then
+  if tar -xzf "$WORK/results.tgz" -C "$WORK/results" && [ -n "$(ls -A "$WORK/results")" ]; then
     rm -rf "$OUT" && mkdir -p "$(dirname "$OUT")" && mv "$WORK/results" "$OUT"
     echo "Artifacts copied to $OUT"
   else
-    echo "Could not unpack the run's artifacts; $OUT still holds the previous run's." >&2
+    echo "The run's artifacts were unreadable or empty; $OUT still holds the previous run's." >&2
   fi
+elif [ "${1:-}" != "--run" ]; then
+  # --run never writes an archive; a Playwright run that left none (busy Space, failed setup or build) says so.
+  echo "This run left no artifacts; $OUT still holds the previous run's." >&2
 fi
 exit $status

@@ -171,7 +171,7 @@ test("--reset succeeds on a clean Space and surfaces real failures", async (t) =
   assert.deepEqual(recorded.find((call) => call[1] === "exec").slice(2, 6), ["-i", "local:aiden-e2e", "--", "bash"]);
 });
 
-test("brings the run's artifacts back and keeps the previous ones when an archive is unreadable", async (t) => {
+test("brings the run's artifacts back and keeps the previous ones when an archive is unreadable, empty or missing", async (t) => {
   const space = await checkout();
   t.after(() => rm(space.root, { recursive: true, force: true }));
   const { root, repo } = space;
@@ -193,6 +193,21 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   const bad = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: corrupt });
   assert.equal(bad.status, 0, "the tests' own result still decides the exit status");
   assert.doesNotMatch(bad.stdout, /Artifacts copied to/);
-  assert.match(bad.stderr, /Could not unpack the run's artifacts/);
+  assert.match(bad.stderr, /artifacts were unreadable or empty/);
+  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+
+  // A guest that found nothing to pack still writes a valid, empty archive.
+  const empty = path.join(root, "empty.tgz");
+  await execFileAsync("tar", ["-czf", empty, "--files-from", "/dev/null"]);
+  const hollow = await run(space, ["--run", "true"], { ...ready, FAKE_CUA_RESULTS: empty });
+  assert.doesNotMatch(hollow.stdout, /Artifacts copied to/);
+  assert.match(hollow.stderr, /artifacts were unreadable or empty/);
+  assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
+
+  // No archive at all: a Playwright run warns, while --run (which never writes one) stays quiet.
+  const missing = await run(space, ["tests/e2e/example.spec.ts"], ready);
+  assert.equal(missing.status, 0);
+  assert.match(missing.stderr, /This run left no artifacts/);
+  assert.doesNotMatch((await run(space, ["--run", "true"], ready)).stderr, /artifacts/);
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
 });
