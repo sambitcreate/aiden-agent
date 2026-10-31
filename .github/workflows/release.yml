@@ -154,6 +154,12 @@ jobs:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
 
+      - name: Verify the built app carries the analytics key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: grep -qF "$AIDEN_POSTHOG_PROJECT_KEY" build/main/index.js || { echo "::error::The built main bundle does not carry the analytics project key."; exit 1; }
+
       # Source maps are excluded from app.asar; keep them for symbolication.
       # The name must not match the publish job's release-* download pattern.
       - name: Keep source maps for crash symbolication
@@ -261,6 +267,7 @@ jobs:
           set -euo pipefail
           npm run models:refresh
           npm run dist:linux
+          grep -qF "$AIDEN_POSTHOG_PROJECT_KEY" build/main/index.js || { echo "::error::The built main bundle does not carry the analytics project key."; exit 1; }
           node scripts/verify-linux-package.mjs release/linux-distribution
           node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb

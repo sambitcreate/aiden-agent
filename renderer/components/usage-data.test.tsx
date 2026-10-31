@@ -143,6 +143,32 @@ for (const [button, choice] of [
   });
 }
 
+test("turning usage data back on in Settings answers an open notice and closes it", async () => {
+  let saved = status({ noticePending: true });
+  const calls = installBotTestIpc({
+    "analytics:status": () => saved,
+    "analytics:setEnabled": (enabled) => (saved = status({ enabled: enabled as boolean, noticePending: !enabled })),
+  });
+  render(
+    <>
+      <UsageDataNotice />
+      <UsageDataSettings />
+    </>,
+  );
+  await flush();
+  const notice = () => screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" });
+
+  fireEvent.click(screen.getByRole("switch", SWITCH));
+  await flush();
+  assert.ok(notice(), "turning usage data off leaves the notice waiting");
+
+  fireEvent.click(screen.getByRole("switch", SWITCH));
+  await flush();
+  assert.deepEqual(channelCalls(calls, "analytics:setEnabled"), [[false], [true]]);
+  assert.equal(notice(), null);
+  assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), []);
+});
+
 test("the notice stays hidden when main has nothing pending", async () => {
   installBotTestIpc({ "analytics:status": () => status({ noticePending: false }) });
   render(<UsageDataNotice />);

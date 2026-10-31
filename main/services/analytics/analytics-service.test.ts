@@ -304,6 +304,19 @@ test("switching off then back on while the opt-out is still sending leaves it on
   assert.equal(created[1]!.state(), "open");
 });
 
+test("switching usage data back on in Settings while the notice waits answers it and starts sending", async (t) => {
+  const h = harness();
+  t.after(h.cleanup);
+  await h.service.start();
+  await h.service.setEnabled(false);
+  assert.equal(h.transports.length, 0);
+
+  const status = await h.service.setEnabled(true);
+
+  assert.deepEqual(status, { enabled: true, envDisabled: false, hasKey: true, noticePending: false });
+  assert.deepEqual(h.names(), ["app_opened", "app_active"]);
+});
+
 test("the notice's Turn off records the notice as seen and sends nothing", async (t) => {
   const h = harness();
   t.after(h.cleanup);

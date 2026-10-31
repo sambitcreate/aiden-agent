@@ -16,6 +16,7 @@ import { Button, Dialog, type DialogLayer, Field, FieldSet, Switch, Text, toast 
 
 export const USAGE_DATA_LABEL = "Share anonymous usage and crash data";
 export const USAGE_DATA_SUMMARY = "Helps improve Aiden. Never includes your chats, files or keys.";
+const NOTICE_ANSWERED_EVENT = "aiden:usage-notice-answered";
 export const USAGE_DATA_ENV_DISABLED = "Turned off by your environment (DO_NOT_TRACK)";
 const SAVE_FAILED = "Aiden could not save the usage data setting.";
 
@@ -58,6 +59,8 @@ export function useUsageDataSetting(): UsageDataSetting {
       (next) => {
         confirmed.current = next;
         if (request === latestRequest.current) setStatus(next);
+        // Switching it on in Settings answers the notice, so an open notice closes.
+        if (!next.noticePending) window.dispatchEvent(new Event(NOTICE_ANSWERED_EVENT));
       },
       () => {
         if (request !== latestRequest.current) return;
@@ -254,8 +257,11 @@ export function UsageDataNotice() {
       },
       () => {},
     );
+    const close = () => setAnswered(true);
+    window.addEventListener(NOTICE_ANSWERED_EVENT, close);
     return () => {
       cancelled = true;
+      window.removeEventListener(NOTICE_ANSWERED_EVENT, close);
     };
   }, []);
 

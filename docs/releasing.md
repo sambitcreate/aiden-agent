@@ -195,7 +195,7 @@ its history scan, before changing visibility.
    | `APPLE_API_KEY_P8`           | Complete private `.p8` key contents                                 |
    | `MACOS_CERTIFICATE_P12`      | Base64-encoded Developer ID Application certificate and private key |
    | `MACOS_CERTIFICATE_PASSWORD` | Password used when exporting that `.p12`                            |
-   | `AIDEN_POSTHOG_PROJECT_KEY`  | PostHog project API key for usage data; a release fails without it  |
+   | `AIDEN_POSTHOG_PROJECT_KEY`  | PostHog project key; the release checks the built app carries it    |
 
 4. Keep `RELEASES_ENABLED` unset while configuring the environment. Set the non-secret
    repository variable to `true` only when the first public beta is approved. The workflow uses

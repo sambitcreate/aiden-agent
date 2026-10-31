@@ -319,7 +319,9 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
       return inOrder(async () => {
         try {
           if (enabled) {
-            await options.store.update(enableAnalytics);
+            // Switching usage data on in Settings is a choice made with the
+            // description in view, so it also answers the notice.
+            await options.store.update((state) => markNoticeShown(enableAnalytics(state), now()));
             await activateIfAllowed();
           } else {
             await turnOff();
