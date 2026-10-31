@@ -34,7 +34,7 @@ export function peerConnectionRecovery(host: PeerHostView, failure: PeerHostStat
   switch (failure) {
     case "dns": return `This computer couldn't resolve the other computer's address. ${routeHelp}`;
     case "refused": return "The other computer refused the connection. Open Aiden there and turn on Control this device in Settings → Connections. Check its firewall allows Aiden.";
-    case "timeout": return `The connection timed out before the other computer answered. ${routeHelp}`;
+    case "timeout": return `The other computer didn't respond in time. ${routeHelp}`;
     case "network": return `This computer has no network route to the other computer. ${routeHelp}`;
     case "tls": return "The secure connection failed. Check the date and time on both computers, update Aiden, then reconnect.";
     case "invalid_response": return "The other computer returned an unreadable response. Update Aiden on both computers, then reconnect.";

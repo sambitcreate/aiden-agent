@@ -185,6 +185,6 @@ test("connection recovery names the failing step and suggests actions for the la
   const refused = peerHostPresentation(host(), { ...backoff, failure: "refused" }, NOW);
   assert.match(refused.detail!, /refused.*Open Aiden.*Control this device/);
   const timeout = peerHostPresentation(host(), { ...backoff, failure: "timeout" }, NOW);
-  assert.match(timeout.detail!, /timed out/);
+  assert.match(timeout.detail!, /didn.t respond in time/);
   assert.equal(timeout.needsRepair, false);
 });
