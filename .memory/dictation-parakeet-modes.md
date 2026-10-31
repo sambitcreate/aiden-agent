@@ -9,7 +9,7 @@
 - **Settings keys:**
   - `dictationActivationMode` (`toggle|hold|hybrid`);
   - `dictationDictionary` (`{from,to}[]`);
-  - `localVoiceIdleUnloadMinutes` (integer 0–1440, 0 = never; default 10).
+  - `localVoiceIdleUnloadMinutes` (integer 0–1440, 0 = never; default 10, 30 since 2026-10-22, see `.memory/voice-dictation-speed.md`).
   - `dictationHoldToTalk` stays the release-capable flag. The Linux `linuxHoldSettings.apply` path is keyed on it, so choosing a mode also sets it.
   - `runtimeSettingsFrom` drops invalid shapes of all three keys.
 - **Coordinator:**

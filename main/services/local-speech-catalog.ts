@@ -1,18 +1,34 @@
-// Curated on-device speech catalog. Every archive is a k2-fsa sherpa-onnx
-// release asset pinned by exact byte size and SHA-256; nothing here is
-// fetched at runtime. Scores are relative display hints from Handy's
-// catalog.json at f6b3f82 (score / 100).
+// Curated on-device speech catalog. sherpa-onnx models are k2-fsa release
+// archives; the transcribe.cpp model is one GGUF file at a fixed Hugging Face
+// revision (the file Handy ships). Every download is pinned by exact byte
+// size and SHA-256; nothing here is fetched at runtime. Scores are relative
+// display hints from Handy's catalog.json at f6b3f82 (score / 100).
 
 export const SPEECH_MODEL_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models";
+export const TRANSCRIBE_CPP_MODEL_REPOSITORY = "https://huggingface.co/handy-computer";
 
-export type SpeechModelFamily = "nemo-transducer" | "nemo-canary" | "whisper" | "sense-voice" | "moonshine-v2";
+export type SpeechModelFamily =
+  | "nemo-transducer"
+  | "nemo-canary"
+  | "whisper"
+  | "sense-voice"
+  | "moonshine-v2"
+  /** Parakeet as a GGUF file, run by transcribe.cpp on the GPU. */
+  | "parakeet-gguf";
+
+/** A host that can run a model limited to one platform. */
+export interface SpeechModelHost {
+  platform: NodeJS.Platform;
+  arch: string;
+}
 
 export interface SpeechModelSpec {
   id: string;
   name: string;
   description: string;
   family: SpeechModelFamily;
-  archive: { url: string; bytes: number; sha256: string };
+  /** A `tar.bz2` release archive (the default) or a single model `file`. */
+  archive: { url: string; bytes: number; sha256: string; format?: "tar.bz2" | "file" };
   /** Role → relative path inside the installed directory. */
   files: Readonly<Record<string, string>>;
   languages: readonly string[];
@@ -24,8 +40,19 @@ export interface SpeechModelSpec {
   };
   accuracy: number;
   speed: number;
+  /** The first recommended model a host can run is its recommendation. */
   recommended: boolean;
   license: { name: string; url: string; attribution?: string };
+  /** Weight format shown in Settings (default int8). */
+  quant?: string;
+  /**
+   * The only host that can run this model. Models without one run anywhere
+   * sherpa-onnx does, the CLI included; a host-limited model is offered by the
+   * desktop app on that host only.
+   */
+  host?: SpeechModelHost;
+  /** Fast enough to re-decode while the user speaks, for live dictation text. */
+  livePreview?: boolean;
 }
 
 const PARAKEET_V3_LANGUAGES = [
@@ -50,7 +77,28 @@ const TRANSDUCER_FILES = {
   tokens: "tokens.txt",
 } as const;
 
+export const PARAKEET_V3_METAL_ID = "parakeet-v3-metal";
+
 export const SPEECH_MODELS: readonly SpeechModelSpec[] = Object.freeze<SpeechModelSpec[]>([
+  {
+    id: PARAKEET_V3_METAL_ID,
+    name: "Parakeet TDT 0.6B v3 · Metal",
+    description: "Parakeet v3 on this Mac's GPU. About 2.5 times faster, and shows words as you speak.",
+    family: "parakeet-gguf",
+    archive: {
+      url: `${TRANSCRIBE_CPP_MODEL_REPOSITORY}/parakeet-tdt-0.6b-v3-gguf/resolve/85ac09ea12fc4b1112fa76810059364bc6adc9de/parakeet-tdt-0.6b-v3-Q8_0.gguf`,
+      bytes: 739_508_576,
+      sha256: "5859f77944efcd8eafa23a6350731960b2b55b2203df51f319665c807d802cc7",
+      format: "file",
+    },
+    files: { model: "parakeet-tdt-0.6b-v3-Q8_0.gguf" },
+    languages: PARAKEET_V3_LANGUAGES,
+    capabilities: { autoDetect: true, languageHint: false, translateToEnglish: false, maxWindowSeconds: null },
+    accuracy: 0.9, speed: 0.95, recommended: true, license: NVIDIA_CC_BY,
+    quant: "Q8_0",
+    host: { platform: "darwin", arch: "arm64" },
+    livePreview: true,
+  },
   {
     id: "parakeet-v3",
     name: "Parakeet TDT 0.6B v3",
@@ -128,6 +176,23 @@ export const SILERO_VAD = Object.freeze({
 
 export function speechModel(id: string): SpeechModelSpec | undefined {
   return SPEECH_MODELS.find((model) => model.id === id);
+}
+
+/** Models any host can run: the CLI's catalog and the default for a model manager. */
+export const PORTABLE_SPEECH_MODELS: readonly SpeechModelSpec[] = Object.freeze(
+  SPEECH_MODELS.filter((model) => !model.host),
+);
+
+/** The models the desktop app offers on `host`, in catalog order. */
+export function speechModelsForHost(host: SpeechModelHost): readonly SpeechModelSpec[] {
+  return SPEECH_MODELS.filter(
+    (model) => !model.host || (model.host.platform === host.platform && model.host.arch === host.arch),
+  );
+}
+
+/** The one model a catalog recommends: its first recommended entry. */
+export function recommendedSpeechModelId(catalog: readonly SpeechModelSpec[]): string | null {
+  return catalog.find((model) => model.recommended)?.id ?? null;
 }
 
 export function formatSizeLabel(bytes: number): string {

@@ -1,12 +1,18 @@
-// The renderer's chat mutations: rename, a model-titled rename, delete, append,
-// and dismissing a Computer Use continue callout.
+// The renderer's chat mutations: rename, a model-titled rename, a chat's own
+// model choice, delete, append, and dismissing a Computer Use continue callout.
 // Each asks its service to refuse a chat another Aiden feature owns (a Design
 // project's hidden chat). The handlers live here, apart from chats.ts, so they
 // load without Electron and the refusal is pinned by invoking them; chats.ts
 // registers them under the same channels.
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "node:crypto";
-import { appendReconciliationFailureMessage } from "../../renderer/shared/chat-message-contract.js";
+import {
+  appendReconciliationFailureMessage,
+  MAX_MODEL_ID_BYTES,
+  MAX_MODEL_ID_CHARS,
+  MAX_PROVIDER_ID_BYTES,
+  MAX_PROVIDER_ID_CHARS,
+} from "../../renderer/shared/chat-message-contract.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import {
   appendChatMessageWithReconciliation,
@@ -31,13 +37,24 @@ export function asString(value: unknown, name: string): string {
   return value;
 }
 
+function boundedId(value: unknown, name: string, maxChars: number, maxBytes: number): string {
+  const text = asString(value, name);
+  if (text.length > maxChars || Buffer.byteLength(text, "utf8") > maxBytes || !text.trim()) {
+    throw new Error(`Invalid ${name}.`);
+  }
+  return text;
+}
+
 /** The app singletons these handlers use; chats.ts passes the real ones. */
 export interface RendererChatMutationDeps {
   chatStore: Pick<
     ReturnType<typeof createChatStore>,
     "get" | "appendMessage" | "setComputerUsePendingContinue"
   >;
-  chatApplicationService: Pick<ReturnType<typeof createChatApplicationService>, "rename" | "remove">;
+  chatApplicationService: Pick<
+    ReturnType<typeof createChatApplicationService>,
+    "rename" | "setModelSelection" | "remove"
+  >;
   chatTitleService: {
     renameWithFoundationModels(chatId: string, options: { rejectFeatureOwned?: boolean }): Promise<unknown>;
   };
@@ -83,6 +100,15 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
 
     renameWithFoundationModels: async (_event: IpcMainInvokeEvent, id: unknown) =>
       chatTitleService.renameWithFoundationModels(asString(id, "id"), { rejectFeatureOwned: true }),
+
+    /** Pick the model this chat answers with; other chats keep theirs. */
+    setModel: async (_event: IpcMainInvokeEvent, id: unknown, providerId: unknown, model: unknown) =>
+      chatApplicationService.setModelSelection(
+        asString(id, "id"),
+        boundedId(providerId, "providerId", MAX_PROVIDER_ID_CHARS, MAX_PROVIDER_ID_BYTES),
+        boundedId(model, "model", MAX_MODEL_ID_CHARS, MAX_MODEL_ID_BYTES),
+        { rejectFeatureOwned: true },
+      ),
 
     /** Clear the post-restart "continue Computer Use" marker without resuming. */
     dismissComputerUseContinue: async (_event: IpcMainInvokeEvent, id: unknown) =>

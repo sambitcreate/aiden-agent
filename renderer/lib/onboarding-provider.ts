@@ -144,11 +144,13 @@ export function onboardingModelDescription(platform: string): string {
 /** Platform filtering must preserve setup and privacy disclosures for available features. */
 export function visibleOnboardingFeatures<T extends { id: string; description: string }>(
   features: readonly T[],
-  capabilities: { computerUse: boolean; bots: boolean; platform: string },
+  capabilities: { computerUse: boolean; bots: boolean; botComputers: boolean; platform: string },
 ): T[] {
   return features.filter((feature) =>
     (capabilities.computerUse || feature.id !== "computerUse") &&
-    (capabilities.bots || feature.id !== "bots"),
+    (capabilities.bots || feature.id !== "bots") &&
+    // A Bot's own macOS VM needs Apple silicon, and a Bot to give it to.
+    ((capabilities.botComputers && capabilities.bots) || feature.id !== "botComputers"),
   ).map((feature) => feature.id === "models"
     ? { ...feature, description: onboardingModelDescription(capabilities.platform) }
     : feature.id === "commands" && capabilities.platform === "linux"

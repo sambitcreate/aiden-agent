@@ -48,7 +48,12 @@ export function BotMessageActions({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className={`group relative flex min-w-0 items-start gap-1 ${align === "end" ? "flex-row-reverse" : ""}`} data-bot-message>
+        <div
+          className={`group relative flex min-w-0 items-start gap-1 ${align === "end" ? "flex-row-reverse" : ""}`}
+          data-bot-message
+          // The Bot's own messages are the replies ⌥↑ and ⌥↓ step through.
+          data-transcript-reply={align === "start" ? "" : undefined}
+        >
           <div className="min-w-0 flex-1">{children}</div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -57,6 +62,7 @@ export function BotMessageActions({
                 variant="toolbar"
                 size="small"
                 aria-label={`Message actions for ${from}’s message`}
+                data-message-action
                 className="shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 motion-reduce:transition-none"
               >
                 <Ellipsis />

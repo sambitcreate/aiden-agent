@@ -37,6 +37,33 @@ test("TLS identity persists one P-256 server key and renews without changing its
   }
 });
 
+test("TLS identity reissues its certificate for a new LAN name and keeps the pin", async () => {
+  const directory = await temporaryDirectory();
+  try {
+    const first = await loadOrCreateAidenRemoteTlsIdentity({ directory, hostnames: ["Mac"] });
+    assert.equal(new X509Certificate(first.certificate).checkHost("sambits-macbook-max.local"), undefined);
+
+    const renamed = await loadOrCreateAidenRemoteTlsIdentity({
+      directory,
+      hostnames: ["sambits-macbook-max.local", "Mac"],
+    });
+    const certificate = new X509Certificate(renamed.certificate);
+    assert.equal(certificate.checkHost("sambits-macbook-max.local"), "sambits-macbook-max.local");
+    assert.equal(certificate.checkHost("mac.local"), "mac.local");
+    assert.notEqual(renamed.certificate, first.certificate);
+    assert.equal(renamed.serverSpkiSha256, first.serverSpkiSha256);
+    assert.equal(renamed.caCertificate, first.caCertificate);
+
+    const restarted = await loadOrCreateAidenRemoteTlsIdentity({
+      directory,
+      hostnames: ["sambits-macbook-max.local"],
+    });
+    assert.equal(restarted.certificate, renamed.certificate);
+  } finally {
+    await fs.rm(directory, { force: true, recursive: true });
+  }
+});
+
 test("TLS identity directory and every persisted identity file are owner-only", async () => {
   const directory = await temporaryDirectory();
   try {

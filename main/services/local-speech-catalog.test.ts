@@ -4,15 +4,31 @@ import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
+  PORTABLE_SPEECH_MODELS,
   SPEECH_MODELS,
   SILERO_VAD,
   formatSizeLabel,
   languagesLabel,
+  recommendedSpeechModelId,
   speechModel,
+  speechModelsForHost,
 } from "./local-speech-catalog.js";
 
-test("exactly one model is recommended and it is Parakeet v3", () => {
-  assert.deepEqual(SPEECH_MODELS.filter((m) => m.recommended).map((m) => m.id), ["parakeet-v3"]);
+test("Apple silicon Macs are recommended the Metal Parakeet v3; every other host the sherpa one", () => {
+  assert.equal(recommendedSpeechModelId(speechModelsForHost({ platform: "darwin", arch: "arm64" })), "parakeet-v3-metal");
+  assert.equal(recommendedSpeechModelId(speechModelsForHost({ platform: "darwin", arch: "x64" })), "parakeet-v3");
+  assert.equal(recommendedSpeechModelId(speechModelsForHost({ platform: "linux", arch: "x64" })), "parakeet-v3");
+  assert.equal(recommendedSpeechModelId(PORTABLE_SPEECH_MODELS), "parakeet-v3");
+});
+
+test("host-limited models are offered on their host only, and never to the portable (CLI) catalog", () => {
+  const ids = (models: readonly { id: string }[]) => models.map((model) => model.id);
+  assert.ok(ids(speechModelsForHost({ platform: "darwin", arch: "arm64" })).includes("parakeet-v3-metal"));
+  for (const host of [{ platform: "darwin", arch: "x64" }, { platform: "linux", arch: "arm64" }] as const) {
+    assert.ok(!ids(speechModelsForHost(host)).includes("parakeet-v3-metal"), `${host.platform}-${host.arch}`);
+  }
+  assert.ok(!ids(PORTABLE_SPEECH_MODELS).includes("parakeet-v3-metal"));
+  assert.ok(PORTABLE_SPEECH_MODELS.every((model) => model.family !== "parakeet-gguf"));
 });
 
 test("ids are unique, path-safe and resolvable", () => {
@@ -25,9 +41,15 @@ test("ids are unique, path-safe and resolvable", () => {
   assert.equal(speechModel("nope"), undefined);
 });
 
-test("archives are pinned to the k2-fsa release with real digests and sizes", () => {
+test("downloads are pinned to a fixed source with real digests and sizes", () => {
   for (const m of SPEECH_MODELS) {
-    assert.ok(m.archive.url.startsWith("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"), m.id);
+    if (m.archive.format === "file") {
+      // One GGUF at a fixed Hugging Face revision, and it is the model's only file.
+      assert.match(m.archive.url, /^https:\/\/huggingface\.co\/handy-computer\/[a-z0-9.-]+\/resolve\/[0-9a-f]{40}\/[^/]+\.gguf$/, m.id);
+      assert.deepEqual(Object.values(m.files), [m.archive.url.slice(m.archive.url.lastIndexOf("/") + 1)], m.id);
+    } else {
+      assert.ok(m.archive.url.startsWith("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"), m.id);
+    }
     assert.match(m.archive.sha256, /^[0-9a-f]{64}$/, m.id);
     assert.ok(Number.isSafeInteger(m.archive.bytes) && m.archive.bytes > 1_000_000, m.id);
   }

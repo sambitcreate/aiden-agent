@@ -578,7 +578,7 @@ Follow `AGENTS.md` test guidance:
 
 ### Commands
 ```bash
-# Node 22.22.3 (see .github/workflows/ci.yml; this checkout has no .nvmrc)
+# Node 22.23.4 (see .github/workflows/ci.yml; this checkout has no .nvmrc)
 npm run type-check
 npm run lint
 npm run test:ci-policy

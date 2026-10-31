@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "@playwright/test";
-import { expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
+import { chooseFolderlessWorkspace, expect, finishLmStudioOnboarding, test, waitForToastsToClear } from "./fixtures";
 
 function contextBar(page: Page) {
   return page.locator('[role="group"][aria-label="Composer workspace bar"]');
@@ -592,7 +592,7 @@ test.describe("folder workspaces", () => {
 
 test("a workspace without a folder keeps only folder-free tools", async ({ aiden }) => {
   const { page } = aiden;
-  await startPersistedChat(page);
+  await startPersistedChat(page, () => chooseFolderlessWorkspace(page));
   await expect(page.locator('[data-workspace-tool="review"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="files"]')).toHaveCount(0);
   await expect(page.locator('[data-workspace-tool="browser"]')).toBeVisible();

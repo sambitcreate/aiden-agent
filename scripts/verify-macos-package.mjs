@@ -21,6 +21,14 @@ import {
   assertCuaDriverArtifactProvenance,
   packagedComputerUsePaths,
 } from "./computer-use-signing-pins.mjs";
+import {
+  LUME_APP_TREE,
+  LUME_ARTIFACT_PROVENANCE,
+  LUME_ENTITLEMENTS,
+  assertLumeArtifactProvenance,
+  lumeRequirement,
+  packagedLumePaths,
+} from "./bot-computers-lume-pins.mjs";
 import { verifyAidenFuses } from "./configure-electron-fuses.mjs";
 import {
   MAX_MODELS_DEV_SNAPSHOT_BYTES,
@@ -42,6 +50,18 @@ const reviewedLicenseNoticePath = path.join(
   "computer-use",
   "LICENSE.cua-driver.md",
 );
+const reviewedLumeProvenancePath = path.join(
+  repositoryRoot,
+  "resources",
+  "bot-computers",
+  "lume-artifact.json",
+);
+const reviewedLumeLicenseNoticePath = path.join(
+  repositoryRoot,
+  "resources",
+  "bot-computers",
+  "LICENSE.lume.md",
+);
 const reviewedHelperInfoPlistPath = path.join(
   repositoryRoot,
   "native",
@@ -53,6 +73,16 @@ const PACKAGED_SUBAGENT_INFERENCE_WORKER_ENTRY = "build/main/subagent-inference-
 const PACKAGED_SUBAGENT_INFERENCE_RUNTIME_ENTRY = "build/main/subagent-inference-worker-runtime.js";
 const PACKAGED_LOCAL_SPEECH_WORKER_ENTRY = "build/main/local-speech-worker.js";
 const PACKAGED_SILERO_VAD_RESOURCE = path.join("speech", "silero_vad.onnx");
+// transcribe.cpp (Parakeet on Metal) loads these with dlopen, which cannot read
+// inside app.asar, so each must be an unpacked regular file.
+export const PACKAGED_METAL_SPEECH_ENTRIES = Object.freeze([
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libtranscribe.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-base.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-cpu.dylib",
+  "node_modules/@transcribe-cpp/darwin-arm64-metal/libggml-metal.dylib",
+  "node_modules/@koromix/koffi-darwin-arm64/darwin_arm64/koffi.node",
+]);
 const MAX_SUBAGENT_INFERENCE_WORKER_BYTES = 16 * 1024 * 1024;
 const MAX_LOCAL_SPEECH_WORKER_BYTES = 4 * 1024 * 1024;
 const REQUIRED_NODE_PTY_HELPER_ENTRIES = Object.freeze([
@@ -411,6 +441,22 @@ export async function verifyPackagedLocalSpeechWorker(appAsar) {
     throw new Error(
       "Packaged on-device transcription worker must be a bounded packed regular file.",
     );
+  }
+}
+
+/** The Metal speech engine's native libraries ship unpacked beside app.asar. */
+export async function verifyPackagedMetalSpeechEngine(appAsar) {
+  await assertRegularFile(appAsar);
+  for (const entryPath of PACKAGED_METAL_SPEECH_ENTRIES) {
+    const entry = statFile(appAsar, entryPath, false);
+    if (!entry || entry.unpacked !== true || "files" in entry || "link" in entry) {
+      throw new Error(`Packaged Metal speech library must be ASAR-unpacked: ${entryPath}`);
+    }
+    const file = path.join(`${appAsar}.unpacked`, entryPath);
+    const info = await assertRegularFile(file);
+    if (info.size === 0) {
+      throw new Error(`Packaged Metal speech library is empty: ${file}`);
+    }
   }
 }
 
@@ -786,6 +832,92 @@ export async function verifyExactComputerUseHelperTree(helperApp) {
   }
 }
 
+/** Lume keeps exactly the two entitlements its upstream signature grants. */
+export function assertLumeEntitlements(entitlements) {
+  assertExactTrueEntitlements(
+    entitlements,
+    LUME_ENTITLEMENTS,
+    "Lume must keep exactly its upstream virtualization entitlements",
+  );
+}
+
+/** Lume ships for Apple silicon only; the universal-helper check does not apply. */
+export function assertLumeArchitecture(architectureDisplay) {
+  const architectures = architectureDisplay.trim().split(/\s+/u).filter(Boolean);
+  if (architectures.length !== 1 || architectures[0] !== "arm64") {
+    throw new Error(`Lume must be an arm64-only executable: ${architectures.join(",") || "none"}`);
+  }
+}
+
+/**
+ * The packaged Lume bundle must be the pinned upstream release, untouched:
+ * reviewed provenance and notice, the exact bundle tree, the binary's size and
+ * hash (checked before any tool reads it), bundle identity, the deep upstream
+ * signature, its two entitlements, and the embedded provisioning profile.
+ */
+export async function verifyPackagedLume(
+  appPath,
+  {
+    runCommand = run,
+    hash = sha256,
+    reviewedProvenance = reviewedLumeProvenancePath,
+    reviewedLicense = reviewedLumeLicenseNoticePath,
+  } = {},
+) {
+  const paths = packagedLumePaths(appPath);
+  assertLumeArtifactProvenance(JSON.parse(await readFile(reviewedProvenance, "utf8")));
+  await verifyReviewedResource(paths.outerProvenance, reviewedProvenance);
+  await verifyReviewedResource(paths.outerLicenseNotice, reviewedLicense);
+
+  const bundle = await lstat(paths.lumeApp);
+  if (!bundle.isDirectory() || bundle.isSymbolicLink() || (await realpath(paths.lumeApp)) !== paths.lumeApp) {
+    throw new Error(`Expected a regular non-symlinked lume.app: ${paths.lumeApp}`);
+  }
+  const tree = (await collectComputerUseHelperTree(paths.lumeApp)).sort();
+  if (JSON.stringify(tree) !== JSON.stringify([...LUME_APP_TREE])) {
+    throw new Error(`The packaged lume.app tree differs from the pinned release: ${tree.join(", ")}`);
+  }
+  const binary = await assertRegularFile(paths.binary);
+  assertComputerUseExecutableMode(binary.mode, paths.binary);
+  if (binary.size !== LUME_ARTIFACT_PROVENANCE.binaryBytes) {
+    throw new Error(`Packaged Lume size mismatch: ${binary.size} bytes`);
+  }
+  const binaryHash = await hash(paths.binary);
+  if (binaryHash !== LUME_ARTIFACT_PROVENANCE.binarySha256) {
+    throw new Error(
+      `Packaged Lume hash mismatch: expected ${LUME_ARTIFACT_PROVENANCE.binarySha256}, received ${binaryHash}`,
+    );
+  }
+  const profile = await assertRegularFile(paths.provisioningProfile);
+  if (profile.size === 0) throw new Error("The packaged Lume provisioning profile is empty.");
+
+  const plistValue = async (key) =>
+    (await runCommand("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", paths.infoPlist])).stdout.trim();
+  if ((await plistValue("CFBundleIdentifier")) !== LUME_ARTIFACT_PROVENANCE.bundleIdentifier) {
+    throw new Error(`Unexpected Lume bundle identifier in ${paths.infoPlist}`);
+  }
+  if ((await plistValue("CFBundleVersion")) !== LUME_ARTIFACT_PROVENANCE.bundleVersion) {
+    throw new Error(`Unexpected Lume bundle version in ${paths.infoPlist}`);
+  }
+  await runCommand("/usr/bin/codesign", [
+    "--verify",
+    "--deep",
+    "--strict",
+    "--verbose=2",
+    `-R=${lumeRequirement()}`,
+    paths.lumeApp,
+  ]);
+  const entitlements = await runCommand("/usr/bin/codesign", [
+    "--display",
+    "--xml",
+    "--entitlements",
+    "/dev/stdout",
+    paths.binary,
+  ]);
+  assertLumeEntitlements(entitlements.stdout);
+  assertLumeArchitecture((await runCommand("/usr/bin/lipo", ["-archs", paths.binary])).stdout);
+}
+
 export async function verifyMacPackage(appPath) {
   if (process.platform !== "darwin") {
     throw new Error("Packaged macOS verification can only run on macOS.");
@@ -879,6 +1011,7 @@ export async function verifyMacPackage(appPath) {
   await verifyPackagedSlimness(appAsar);
   await verifyPackagedSubagentInferenceWorker(appAsar);
   await verifyPackagedLocalSpeechWorker(appAsar);
+  await verifyPackagedMetalSpeechEngine(appAsar);
   await verifyPackagedVccWorker(appAsar);
   await verifyPackagedNodePtyResources(appAsar);
   await verifyPackagedGenerativeUiLibraries(paths.app);
@@ -1055,6 +1188,8 @@ export async function verifyMacPackage(appPath) {
     identifier: CUA_DRIVER_SIGNING_IDENTIFIER,
     teamId: CUA_DRIVER_SIGNING_TEAM_ID,
   });
+
+  await verifyPackagedLume(paths.app);
 
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.helperApp));
   assertMinimalComputerUseEntitlements(await readEntitlements(paths.broker));

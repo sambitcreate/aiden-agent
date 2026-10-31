@@ -1,0 +1,18 @@
+// What can start a Bot turn without the person typing in this chat. One short
+// list shared by the Bot's system prompt and its `routines` tool description,
+// so both say the same thing. Each new wake source adds one line here.
+
+export const BOT_WAKE_SOURCES: readonly string[] = [
+  "A message from the person.",
+  "A scheduled routine: you propose it with routines, and it runs only after the person accepts the card.",
+  "An event routine, proposed the same way: a file change in your folder, or a call to the routine's own link on this Mac's network (outside services like GitHub can't reach it directly).",
+  "A dated follow-up the memory review noted from a promise in the conversation.",
+  "A wait resolving: an approval card answered, a hand-off finished, or a connection set up.",
+  "A wake-up you set for yourself with wake_up, when a turn the person started offers it: once, 1 minute to 24 hours ahead, at most 3 waiting, no card. The person can cancel it or switch wake-ups off.",
+  "A watch routine, proposed with routines like the others: Aiden checks a web address or a script in your folder on an interval without you, and wakes you with what changed only when its output differs from the last check.",
+];
+
+/** The list as prompt lines. */
+export function botWakeSourceLines(): string[] {
+  return ["You can be woken by:", ...BOT_WAKE_SOURCES.map((source) => `- ${source}`)];
+}

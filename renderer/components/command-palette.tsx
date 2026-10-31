@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import {
   ArrowLeft,
@@ -13,6 +13,7 @@ import {
   FolderDown,
   FolderPlus,
   Keyboard,
+  MessageCircle,
   MessageSquare,
   Moon,
   Palette,
@@ -47,12 +48,19 @@ import {
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
+import { NO_WORKSPACE_LABEL, isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { useOpenWorkspacePathRow, useWorkspacePathIntake } from "../lib/use-workspace-path-intake";
 import type { WorkspacePathRow } from "../lib/workspace-menu";
 import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
 import { useWorkspacePathPreferences } from "../lib/use-workspace-path-preferences";
-import { providersApi, settingsApi } from "../lib/ipc";
-import { readModelSelectionRevision, useModelSelection } from "../lib/use-model-selection";
+import { botsApi, providersApi, settingsApi } from "../lib/ipc";
+import { botChatPath } from "../lib/bot-routes";
+import {
+  readActiveChatModelTarget,
+  readModelSelectionRevision,
+  useActiveChatModelTarget,
+  useModelSelection,
+} from "../lib/use-model-selection";
 import { createModelEntries, isUsable, visibleModelEntries } from "../lib/model-picker-data";
 import { availableSettingsDestinations } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
@@ -85,6 +93,7 @@ import {
 const MODE_LABELS: Record<CommandPaletteMode, string> = {
   root: "Commands",
   chats: "Chats",
+  bots: "Bots",
   newChatIn: "New chat in",
   models: "Models",
   providers: "Providers",
@@ -153,6 +162,9 @@ export function AppCommandPalette({
     settings.data?.hiddenModelsByProvider,
     settings.data !== undefined,
   );
+  // In an open chat with messages, a model change applies to that chat only.
+  const chatModelTarget = useActiveChatModelTarget();
+  const currentModel = chatModelTarget?.selection ?? selection;
   const [query, setQuery] = React.useState("");
   const [activeResult, setActiveResult] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -180,14 +192,25 @@ export function AppCommandPalette({
     () => (providers.data ?? []).filter((provider) => !isUsable(provider)),
     [providers.data],
   );
-  const rootCommands = React.useMemo(() => {
-    const order = new Map(recentCommands.map((id, index) => [id, index]));
-    return paletteCommands(capabilities).sort(
-      (left, right) =>
-        (order.get(left.id) ?? Number.POSITIVE_INFINITY) -
-        (order.get(right.id) ?? Number.POSITIVE_INFINITY),
-    );
-  }, [capabilities, recentCommands]);
+  // Not memoized: which commands something on screen handles changes as views mount.
+  const recentOrder = new Map(recentCommands.map((id, index) => [id, index]));
+  const rootCommands = paletteCommands(capabilities, canExecute).sort(
+    (left, right) =>
+      (recentOrder.get(left.id) ?? Number.POSITIVE_INFINITY) -
+      (recentOrder.get(right.id) ?? Number.POSITIVE_INFINITY),
+  );
+  const bots = useQuery({
+    queryKey: [...queryKeys.bots, "active"],
+    queryFn: () => botsApi.list(false),
+    enabled: capabilities.bots && palette.open && palette.mode === "bots",
+  });
+  const botResults = React.useMemo(
+    () => (bots.data ?? []).map((bot) => ({
+      bot,
+      result: paletteResult(`bot:${bot.id}`, [bot.name, bot.description ?? ""]),
+    })),
+    [bots.data],
+  );
   const chatResults = React.useMemo(
     () => [...(chats.data ?? [])]
       .sort((left, right) => right.updatedAt - left.updatedAt)
@@ -250,6 +273,9 @@ export function AppCommandPalette({
       })),
     [activeId, allChats.data, workspaces],
   );
+  const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
+  const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
+  const noWorkspaceResult = staticPaletteResult("No workspace just chat global settings");
   const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
   const cloneResult = staticPaletteResult("Clone repository… git url github");
   // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
@@ -284,8 +310,11 @@ export function AppCommandPalette({
   }));
   // One inventory owns both rendering and selection, including static actions,
   // disabled states and force-mounted retry rows in every palette mode.
+  // Appearance rows also answer a typed search at the top level ("dark").
+  const rootAppearance = query.trim() ? appearanceResults : [];
   const resultsByMode: Record<CommandPaletteMode, PaletteResult[]> = {
-    root: rootResults.map(({ result }) => result),
+    root: [...rootResults.map(({ result }) => result), ...rootAppearance.map(({ result }) => result)],
+    bots: botResults.map(({ result }) => result),
     chats: [
       newChatResult,
       ...(chats.isError ? [chatRetryResult] : []),
@@ -293,7 +322,12 @@ export function AppCommandPalette({
     ],
     newChatIn: pathIntake.pathQuery
       ? pathRowResult ? [pathRowResult] : []
-      : [...workspaceResults.map(({ result }) => result), openFolderResult, cloneResult],
+      : [
+          ...workspaceResults.map(({ result }) => result),
+          ...(noWorkspaceHomeId ? [noWorkspaceResult] : []),
+          openFolderResult,
+          cloneResult,
+        ],
     models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
       : [...modelResults, ...unavailableResults].map(({ result }) => result),
     providers: [
@@ -320,6 +354,7 @@ export function AppCommandPalette({
   useCommandHandler("model.change", () => palette.openMode("models"));
   useCommandHandler("provider.manage", () => palette.openMode("providers"));
   useCommandHandler("settings.search", () => palette.openMode("settings"));
+  useCommandHandler("bots.search", () => palette.openMode("bots"), capabilities.bots);
 
   React.useEffect(() => {
     if (palette.open) setQuery("");
@@ -353,6 +388,7 @@ export function AppCommandPalette({
       if (commandId === "model.change") return enterMode("models");
       if (commandId === "provider.manage") return enterMode("providers");
       if (commandId === "settings.search") return enterMode("settings");
+      if (commandId === "bots.search") return enterMode("bots");
       close();
       requestAnimationFrame(() => execute(commandId));
     },
@@ -416,6 +452,7 @@ export function AppCommandPalette({
   const selectModel = async (providerId: string, model: string) => {
     const epoch = ++modelSelectionEpoch.current;
     const selectionRevision = readModelSelectionRevision();
+    const targetChatId = readActiveChatModelTarget()?.chatId;
     // This action belongs to the palette session where the click happened.
     // Close that session synchronously so a delayed provider revalidation
     // cannot close a newer session the user opens while this work is pending.
@@ -434,7 +471,14 @@ export function AppCommandPalette({
         toast.error("That model is no longer available. The model list has been refreshed.");
         return;
       }
-      selection.select(providerId, model);
+      if (targetChatId) {
+        // The pick belongs to the chat that was open; drop it if that chat closed.
+        const target = readActiveChatModelTarget();
+        if (target?.chatId !== targetChatId) return;
+        target.select(providerId, model);
+      } else {
+        selection.select(providerId, model);
+      }
       rememberCommand("model.change");
       toast.success(`Model changed to ${model}`);
     } catch (error) {
@@ -662,6 +706,7 @@ export function AppCommandPalette({
                 ? rootResults.map(({ definition, result }) => {
                     const Icon = CATEGORY_ICON[definition.category];
                     const opensMode = [
+                      "bots.search",
                       "chat.search",
                       "chat.newIn",
                       "model.change",
@@ -687,6 +732,55 @@ export function AppCommandPalette({
                     );
                   })
                 : null}
+
+              {palette.mode === "root"
+                ? rootAppearance.map((item) => (
+                    <PaletteResultItem
+                      key={item.mode}
+                      result={item.result}
+                      onSelect={() => void setAppearance(item.mode)}
+                      aria-current={appearanceMode === item.mode ? "true" : undefined}
+                      className="min-h-11 px-3"
+                    >
+                      <item.icon className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                      {appearanceMode === item.mode ? (
+                        <>
+                          <span className="sr-only">Current</span>
+                          <Check aria-hidden="true" className="ml-auto size-4 text-accent-text" />
+                        </>
+                      ) : null}
+                    </PaletteResultItem>
+                  ))
+                : null}
+
+              {palette.mode === "bots" ? (
+                <>
+                  {bots.isLoading ? (
+                    <CommandItem forceMount disabled value="Loading Bots" className="min-h-11 px-3">
+                      <RefreshCw className="size-4 animate-spin text-secondary" />
+                      <span>Loading Bots…</span>
+                    </CommandItem>
+                  ) : null}
+                  {botResults.map(({ bot, result }) => (
+                    <PaletteResultItem
+                      key={bot.id}
+                      result={result}
+                      onSelect={() => {
+                        if (!allowNavigation()) return;
+                        rememberCommand("bots.search");
+                        close();
+                        void navigate(botChatPath(bot.id));
+                      }}
+                      className="min-h-11 px-3"
+                    >
+                      <Bot className="size-4 shrink-0 text-secondary" />
+                      <span className="min-w-0 flex-1 truncate">{bot.name}</span>
+                      {bot.description ? <ItemDetail>{bot.description}</ItemDetail> : null}
+                    </PaletteResultItem>
+                  ))}
+                </>
+              ) : null}
 
               {palette.mode === "chats" ? (
                 <>
@@ -803,10 +897,29 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ))}
+                  {noWorkspaceHomeId ? (
+                    <PaletteResultItem
+                      result={noWorkspaceResult}
+                      onSelect={() => startChatIn(noWorkspaceHomeId)}
+                      aria-current={noWorkspaceCurrent ? "true" : undefined}
+                      className="mt-1 min-h-11 px-3"
+                    >
+                      <MessageCircle className="size-4 shrink-0 text-secondary" />
+                      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span className="min-w-0 shrink truncate">{NO_WORKSPACE_LABEL}</span>
+                        <span className="min-w-0 flex-1 truncate text-small text-tertiary">
+                          Just chat, with your global settings
+                        </span>
+                      </span>
+                      {noWorkspaceCurrent ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
+                    </PaletteResultItem>
+                  ) : null}
                   <PaletteResultItem
                     result={openFolderResult}
                     onSelect={openFolderForChat}
-                    className="mt-1 min-h-11 px-3"
+                    className={noWorkspaceHomeId ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
                   >
                     <FolderPlus className="size-4 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate">Open folder…</span>
@@ -843,8 +956,8 @@ export function AppCommandPalette({
                   modelResults
                     .map(({ entry, result }) => {
                       const selected =
-                        selection.providerId === entry.providerId &&
-                        selection.model === entry.model;
+                        currentModel.providerId === entry.providerId &&
+                        currentModel.model === entry.model;
                       return (
                         <PaletteResultItem
                           key={entry.value}

@@ -45,6 +45,29 @@ test("abandoned drafts never persist; first send creates exactly one conversatio
   expect((await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([sent.id]);
 });
 
+test("Back from Settings reopens an empty new agent instead of a missing chat", async ({ aiden }) => {
+  const { page, userDataDir } = aiden;
+  await finishLmStudioOnboarding(page);
+  const draftRow = page.locator("[data-sidebar] [data-draft-chat]");
+  const composer = page.locator("textarea");
+  const draftId = await draftRow.getAttribute("data-draft-chat");
+  expect(draftId).toBeTruthy();
+  for (let visit = 0; visit < 2; visit++) {
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    await page.getByRole("button", { name: "Back to app", exact: true }).click();
+    await expect(composer).toBeEditable();
+    await expect(page.getByText(/no longer available/u)).toHaveCount(0);
+    await expect(composer).not.toHaveAttribute("placeholder", /no longer available/u);
+    // The same blank agent comes back, still renderer-only.
+    await expect(draftRow).toHaveCount(1);
+    expect(await draftRow.getAttribute("data-draft-chat")).toBe(draftId);
+    expect(await regularChats(userDataDir)).toEqual([]);
+  }
+  await composer.fill("Sent after a trip to Settings");
+  await composer.press("Enter");
+  await expect.poll(async () => (await regularChats(userDataDir)).map((chat) => chat.id)).toEqual([draftId]);
+});
+
 test("startup migration removes legacy empty chats once and keeps sent conversations", async ({ aiden }) => {
   await finishLmStudioOnboarding(aiden.page);
   await aiden.page.locator("textarea").fill("Keep this real conversation");
@@ -150,7 +173,7 @@ test("late first-send receipt cannot navigate back or start a response in a diff
   await aiden.app.evaluate(() => (globalThis as unknown as { releaseDraftReceipt: () => void }).releaseDraftReceipt());
   // The published sidebar receipt proves the late save completed without
   // selecting or generating the previously committed conversation.
-  await expect(aiden.page.locator("[data-sidebar]").getByRole("button", { name: /Committed before navigating away/u })).toBeVisible();
+  await expect(aiden.page.locator("[data-sidebar]").getByRole("button", { name: /^Committed before navigating away/u })).toBeVisible();
   expect(aiden.page.url()).toBe(destination);
   await expect(aiden.page.locator("textarea")).toHaveValue("Keep the new draft here");
   const [chat] = await regularChats(aiden.userDataDir);
@@ -279,7 +302,7 @@ test("the sidebar + starts a draft in its workspace and reuses only an empty dra
   expect(chat.messages.filter((message) => message.role === "user").map((message) => message.content))
     .toEqual(["Started from the sidebar plus"]);
   await expect(draftRows).toHaveCount(0);
-  await expect(sidebar.getByRole("button", { name: /Started from the sidebar plus/u })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: /^Started from the sidebar plus/u })).toBeVisible();
 });
 
 test("New chat in… opens a draft in the chosen workspace from the chevron, the shortcut and the menu", async ({ aiden }) => {
@@ -295,9 +318,9 @@ test("New chat in… opens a draft in the chosen workspace from the chevron, the
   await page.getByRole("button", { name: "New Agent", exact: true }).hover();
   await page.getByRole("button", { name: "New chat in…", exact: true }).click();
   await expect(search).toBeFocused();
-  // Most recent first: the new workspace was added after the default one.
+  // Folder workspaces come first; the new chat is in No workspace, which is marked current.
   await expect(options.nth(0)).toHaveText(/^Palette target/u);
-  await expect(options.nth(1)).toHaveText(/current$/u);
+  await expect(options.nth(1)).toHaveText(/^No workspace.*current$/u);
   await expect(page.getByRole("option", { name: /^Open folder…/u })).toBeVisible();
   await expect(options.nth(1)).toHaveAttribute("aria-current", "true");
   // Esc returns to the command list, then closes the palette.
@@ -368,4 +391,33 @@ test("New chat in… opens a typed path as a workspace and offers Clone", async 
   await expect(palette).toHaveCount(0);
   await expect(composer).toBeFocused();
   await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in palette-folder?");
+});
+
+test("New chat in… Open folder… lets the picker make a new folder and starts the chat there", async ({ aiden }) => {
+  const { page, app } = aiden;
+  const newFolder = path.join(aiden.rootDir, "brand-new-project");
+  await finishLmStudioOnboarding(page);
+  // Stand in for Finder: record what Aiden asks the picker for, then return
+  // the folder a person made with its New Folder button.
+  await app.evaluate(({ dialog }, folder) => {
+    const asked: Electron.OpenDialogOptions[] = [];
+    (globalThis as unknown as { folderPickerOptions: typeof asked }).folderPickerOptions = asked;
+    dialog.showOpenDialog = (async (...args: unknown[]) => {
+      asked.push(args[args.length - 1] as Electron.OpenDialogOptions);
+      return { canceled: false, filePaths: [folder] };
+    }) as typeof dialog.showOpenDialog;
+  }, newFolder);
+  await mkdir(newFolder);
+
+  await page.getByRole("button", { name: "New Agent", exact: true }).focus();
+  await page.keyboard.press("ControlOrMeta+Shift+N");
+  await page.getByRole("option", { name: /^Open folder…/u }).click();
+  await expect(page.locator("[data-command-palette-content]")).toHaveCount(0);
+  await expect(page.locator("[data-new-chat-headline]")).toHaveText("What should we build in brand-new-project?");
+
+  const asked = await app.evaluate(() =>
+    (globalThis as unknown as { folderPickerOptions: Electron.OpenDialogOptions[] }).folderPickerOptions);
+  expect(asked).toHaveLength(1);
+  // createDirectory is what shows the New Folder button in the macOS picker.
+  expect(asked[0].properties).toEqual(expect.arrayContaining(["openDirectory", "createDirectory"]));
 });

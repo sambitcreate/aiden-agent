@@ -154,6 +154,8 @@ export interface AidenRemoteServiceOptions {
   simulators?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["simulators"];
   /** Host platform for the opt-in `/health?detail=host` descriptor. */
   hostPlatform?: import("./aiden-remote-protocol.js").AidenRemoteHostPlatform;
+  /** Bot event routines' links (`POST /hooks/bot-routines/{token}`). */
+  botRoutineWebhook?: AidenRemoteRouterDependencies["botRoutineWebhook"];
   workspaceApi?: (
     instanceId: string,
   ) =>
@@ -176,6 +178,7 @@ export interface AidenRemoteServiceOptions {
         appControls?: typeof remoteAppControls;
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
+        spending?: AidenRemoteRouterDependencies["spending"];
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
@@ -214,6 +217,7 @@ export interface AidenRemoteServiceOptions {
         appControls?: typeof remoteAppControls;
         providers?: Pick<AidenRemoteProviderService, "create">;
         memorySettings?: Pick<AidenRemoteMemorySettingsService, "get" | "update">;
+        spending?: AidenRemoteRouterDependencies["spending"];
         usage?: { summary(range: UsageDateRange): Promise<UsageSummary> };
         readAloud?: AidenRemoteTtsService;
         speech?: Pick<AidenRemoteSpeechService, "status" | "select" | "startDownload" | "cancelDownload" | "deleteModel" | "transcribe">;
@@ -561,21 +565,26 @@ export class AidenRemoteService {
       const tlsIdentity = await this.options.loadTlsIdentity();
       const workspaceApi = await this.options.workspaceApi?.(state.instanceId);
       this.settleRemoteApi = workspaceApi?.settle;
+      let pairingRequests: AidenRemotePairingRequestService | null = null;
       const pairing = new AidenRemotePairingService(
         state.instanceId,
         this.options.state,
         undefined,
-        this.options.notifyPairingChanged,
+        () => {
+          pairingRequests?.cancelOpen();
+          this.options.notifyPairingChanged?.();
+        },
         () => this.activeState?.displayName ?? state.displayName,
         this.options.botCapabilitiesSupported,
         // Desktop pairing earns host-wide run authority only where it is served.
         () => Boolean(workspaceApi?.hostFeed && workspaceApi.hostRuns && workspaceApi.chats),
       );
-      const pairingRequests = this.options.pairingRequestSettings
+      pairingRequests = this.options.pairingRequestSettings
         ? new AidenRemotePairingRequestService({
             instanceId: state.instanceId,
             devices: this.options.state,
-            accepting: () => this.acceptPairingRequests !== false,
+            accepting: () => this.acceptPairingRequests === true,
+            admission: () => pairing.admissionWindow(),
             resolveTransport: (transport) =>
               this.resolvePairingRequestTransport(transport, tlsIdentity),
             displayName: () => this.activeState?.displayName ?? state.displayName,
@@ -600,6 +609,7 @@ export class AidenRemoteService {
         ...(workspaceApi ?? {}),
         ...(this.options.simulators ? { simulators: this.options.simulators } : {}),
         ...(this.options.hostPlatform ? { platform: this.options.hostPlatform } : {}),
+        ...(this.options.botRoutineWebhook ? { botRoutineWebhook: this.options.botRoutineWebhook } : {}),
         connectionMode: () => this.activeState?.connectionMode ?? state.connectionMode,
         peerRoutes: async () => {
           const current = await this.options.state.snapshot();

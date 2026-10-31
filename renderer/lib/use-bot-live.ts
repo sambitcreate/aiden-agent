@@ -14,6 +14,11 @@ export interface BotLiveView {
   snapshot: BotLiveSnapshot | null;
   /** True when the last subscribe failed and no snapshot arrived; `reload` retries. */
   failed: boolean;
+  /**
+   * True while `snapshot` is the view this window last had of the Bot, shown
+   * at once while the fresh subscription answers. Events are not applied to it.
+   */
+  stale: boolean;
   /** Re-subscribes for a fresh snapshot (for example after a connection changed). */
   reload(): void;
 }
@@ -21,9 +26,40 @@ export interface BotLiveView {
 interface LiveState {
   snapshot: BotLiveSnapshot | null;
   failed: boolean;
+  stale: boolean;
 }
 
-const EMPTY_STATE: LiveState = { snapshot: null, failed: false };
+const EMPTY_STATE: LiveState = { snapshot: null, failed: false, stale: false };
+
+/** How many Bots' last views this window remembers for an instant reopen. */
+const REMEMBERED_VIEWS = 8;
+
+/**
+ * The last fresh snapshot per Bot, kept after its store closes so coming back
+ * to a Bot shows its conversation on the first frame instead of a skeleton.
+ * Bounded, newest last; a Bot that is forgotten is dropped.
+ */
+const rememberedViews = new Map<string, BotLiveSnapshot>();
+
+function rememberView(snapshot: BotLiveSnapshot): void {
+  rememberedViews.delete(snapshot.botId);
+  rememberedViews.set(snapshot.botId, snapshot);
+  while (rememberedViews.size > REMEMBERED_VIEWS) {
+    const oldest = rememberedViews.keys().next().value;
+    if (oldest === undefined) break;
+    rememberedViews.delete(oldest);
+  }
+}
+
+/** Forgets a Bot's remembered view (for example once it is deleted). */
+export function forgetBotLiveView(botId: string): void {
+  rememberedViews.delete(botId);
+}
+
+/** Test seam: clears every remembered view. */
+export function resetBotLiveViewsForTests(): void {
+  rememberedViews.clear();
+}
 
 /**
  * One Bot's live subscription, shared by every consumer in this window. Main
@@ -45,7 +81,11 @@ class BotLiveStore {
     private readonly botId: string,
     private readonly adopt: (store: BotLiveStore) => void,
     private readonly release: (store: BotLiveStore) => void,
-  ) {}
+  ) {
+    // Reopening a Bot starts from its remembered view, so the first render shows
+    // the conversation, not a skeleton, while the fresh snapshot is read.
+    this.state = this.remembered();
+  }
 
   getState = (): LiveState => this.state;
 
@@ -73,9 +113,13 @@ class BotLiveStore {
     };
   };
 
-  /** Restarts the subscription for every consumer of this Bot, not only the caller. */
+  /**
+   * Restarts the subscription for every consumer of this Bot, not only the
+   * caller. The view on screen stays, marked stale, until the fresh snapshot
+   * lands: a reload after a connection changed must not blank the chat.
+   */
   reload = (): void => {
-    if (this.stopRun !== null) this.restart();
+    if (this.stopRun !== null) this.restart(true, false);
   };
 
   private publish(next: LiveState): void {
@@ -88,11 +132,17 @@ class BotLiveStore {
    * the last view on screen, still flagged as failed, until the new snapshot
    * arrives; a retry that fails too leaves that view in place.
    */
-  private restart(keepView = false): void {
+  private restart(keepView = false, flagFailed = true): void {
     const kept = keepView ? this.state.snapshot : null;
     this.stop();
-    this.publish(kept ? { snapshot: kept, failed: true } : EMPTY_STATE);
+    this.publish(kept ? { snapshot: kept, failed: flagFailed, stale: true } : this.remembered());
     this.start(kept);
+  }
+
+  /** The starting state: the Bot's remembered view, stale, or nothing. */
+  private remembered(): LiveState {
+    const view = rememberedViews.get(this.botId);
+    return view ? { snapshot: view, failed: false, stale: true } : EMPTY_STATE;
   }
 
   private stop(): void {
@@ -116,7 +166,8 @@ class BotLiveStore {
       current = next;
       shown = true;
       retries = 0;
-      this.publish({ snapshot: next, failed: false });
+      rememberView(next);
+      this.publish({ snapshot: next, failed: false, stale: false });
     };
 
     const subscribe = () => {
@@ -140,9 +191,9 @@ class BotLiveStore {
           if (!active || request !== latestRequest) return;
           buffered = [];
           if (!shown) {
-            // Nothing new to show: say so, keeping any view a join retry kept,
-            // and let the person retry (`reload`).
-            this.publish({ snapshot: kept, failed: true });
+            // Nothing new to show: say so, keeping any view a join retry kept
+            // (or the remembered one), and let the person retry (`reload`).
+            this.publish({ snapshot: kept ?? this.state.snapshot, failed: true, stale: true });
             return;
           }
           // A re-subscribe after a gap failed: keep the last view and try again
@@ -153,7 +204,7 @@ class BotLiveStore {
               if (active && request === latestRequest) subscribe();
             }, RESUBSCRIBE_DELAY_MS * retries);
           } else {
-            this.publish({ snapshot: this.state.snapshot, failed: true });
+            this.publish({ snapshot: this.state.snapshot, failed: true, stale: true });
           }
         });
     };
@@ -218,7 +269,7 @@ export function useBotLive(botId: string | undefined): BotLiveView {
   // Each Bot has its own store, so a switch swaps in the new Bot's state in the
   // same render: the old Bot's conversation is never shown under the new id.
   const state = React.useSyncExternalStore(store.subscribe, store.getState);
-  const { snapshot, failed } = state;
+  const { snapshot, failed, stale } = state;
   const reload = store.reload;
-  return React.useMemo(() => ({ snapshot, failed, reload }), [snapshot, failed, reload]);
+  return React.useMemo(() => ({ snapshot, failed, stale, reload }), [snapshot, failed, stale, reload]);
 }

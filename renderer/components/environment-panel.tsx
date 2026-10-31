@@ -37,6 +37,7 @@ import {
 import { ContextBreakdown, contextApproaching } from "./context-breakdown";
 import { ContextPips, contextPercentLabel } from "./context-tiles";
 import { QuickViewMoveStatus, QuickViewSection, type QuickViewSectionProps } from "./quick-view-section";
+import { subagentRunTranscriptTarget } from "./subagent-chips";
 import { SubagentStatusGroups } from "./subagent-status-groups";
 import {
   DEFAULT_QUICK_VIEW_LAYOUT,
@@ -188,7 +189,8 @@ export interface EnvironmentPanelContextValue {
     layout: { inline: boolean; width: number; stacked?: boolean } | null,
   ) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
-  showTools: (tab?: EnvironmentPanelTab) => void;
+  /** `returnTarget` is where focus goes when the panel closes, for callers whose own control is about to unmount. */
+  showTools: (tab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => void;
   showQuickView: () => void;
   activateSurface: (surface: EnvironmentSurface) => void;
   toggleTools: () => void;
@@ -312,7 +314,7 @@ function initialEnvironmentSurfaceState(
 }
 
 export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) {
-  const { activeId } = useActiveWorkspace();
+  const { activeId, active: activeWorkspace } = useActiveWorkspace();
   const terminal = useWorkspaceTerminal();
   const [contextDetails, setContextDetails] = React.useState<ChatContextDetails | null>(null);
   const { subagents: subagentsEnabled, devices: devicesEnabled } = useAppCapabilities();
@@ -461,7 +463,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
 
   const showTools = React.useCallback(
-    (nextTab?: EnvironmentPanelTab) => {
+    (nextTab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => {
       const resolvedTab = nextTab
         ? normalizeEnvironmentPanelTab(nextTab, subagentsEnabled, devicesEnabled)
         : "new-tab";
@@ -469,7 +471,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       const focusOutsideSurface =
         activeElement instanceof HTMLElement &&
         !shouldRestoreEnvironmentFocus(activeElement, "tools");
-      if (!surfaceState.toolsOpen || focusOutsideSurface) rememberFocus("tools");
+      if (returnTarget?.isConnected) toolsReturnFocusRef.current = returnTarget;
+      else if (!surfaceState.toolsOpen || focusOutsideSurface) rememberFocus("tools");
       dispatchSurface({ type: "show-tools", tab: resolvedTab });
     },
     [devicesEnabled, rememberFocus, subagentsEnabled, surfaceState.toolsOpen],
@@ -482,10 +485,8 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     if (!focusInsideClosingSurface) return;
     const returnRef = surface === "tools" ? toolsReturnFocusRef : quickViewReturnFocusRef;
     const replacementChip =
-      surface === "tools"
-        ? Array.from(
-            document.querySelectorAll<HTMLElement>("[data-subagent-chip-run-id]"),
-          ).find((element) => element.dataset.subagentChipRunId === returnSubagentRunIdRef.current)
+      surface === "tools" && returnSubagentRunIdRef.current
+        ? subagentRunTranscriptTarget(returnSubagentRunIdRef.current)
         : null;
     const storedTarget = returnRef.current;
     const fallbackSelector =
@@ -586,7 +587,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
 
   const openFile = React.useCallback(
     (path: string) => {
-      if (activeId) {
+      if (activeId && path) {
         setFileRequest({
           id: ++fileRequestIdRef.current,
           path,
@@ -740,7 +741,6 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   const openSubagent = React.useCallback(
     (runId: string, returnTarget?: HTMLElement | null) => {
       if (!subagentsEnabled) return;
-      if (returnTarget?.isConnected) toolsReturnFocusRef.current = returnTarget;
       returnSubagentRunIdRef.current = runId;
       subagentDetailRequestRef.current = undefined;
       setSelectedSubagentRunId(runId);
@@ -754,7 +754,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       setSubagentFocusDetailVersion((version) => version + 1);
       setSubagentDetailRequestVersion((version) => version + 1);
       setSubagentDetailError(null);
-      showTools("subagents");
+      showTools("subagents", returnTarget);
     },
     [showTools, subagentViews, subagentsEnabled],
   );
@@ -1256,7 +1256,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
   );
   return (
     <EnvironmentPanelContext.Provider value={value}>
-      <LinkOpenerProvider workspaceId={activeId ?? null}>
+      <LinkOpenerProvider
+        workspaceId={activeId ?? null}
+        workspaceFolder={activeWorkspace?.folderPath ?? null}
+        onOpenWorkspaceFile={openFile}
+      >
         {subagentsEnabled ? (
           <SubagentLiveAnnouncer
             ownerKey={subagentPanelOwnerKey(subagents.chatId, subagents.workspaceId)}

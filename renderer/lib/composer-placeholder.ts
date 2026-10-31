@@ -12,6 +12,8 @@ export const NEW_CHAT_COMPOSER_PLACEHOLDERS = [
 ] as const;
 
 export const FOLLOW_UP_COMPOSER_PLACEHOLDER = "Follow up";
+/** After the user denies an approval, the composer asks what to do instead. */
+export const DENIED_APPROVAL_COMPOSER_PLACEHOLDER = "Tell Aiden what to do instead";
 export const UNAVAILABLE_COMPOSER_PLACEHOLDER = "Choose a chat model to start";
 /** Readiness copy for a chat whose response is still running elsewhere. */
 export const BACKGROUND_RESPONSE_READINESS_MESSAGE = "Response continues in the background…";

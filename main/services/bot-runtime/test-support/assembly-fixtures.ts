@@ -19,13 +19,21 @@ import { botMcpLiveToolGrantFacts } from "../../bot-tool-authority.js";
 import type { SubagentMcpRemoteTool } from "../../subagents/subagent-mcp-read.js";
 import type { RegisteredSkill, SkillRegistrySnapshot } from "../../skill-registry.js";
 import { skillToolKey } from "../../skill-registry-core.js";
+import type { BotHandoffAnswer } from "../../../../renderer/shared/bot-handoffs.js";
+import type { BotRule } from "../../../../renderer/shared/bot-rules.js";
 import type {
   BotApprovalRequest,
-  BotApprovalRequirement,
   BotExtensionDeps,
+  BotRuleHandoffRecord,
+  BotRuleHandoffRequest,
   BotToolCallCheck,
 } from "../bot-extension.js";
-import { createBotToolAssembly, type BotAdmission, type BotToolCandidate } from "../bot-tool-assembly.js";
+import {
+  createBotToolAssembly,
+  type BotAdmission,
+  type BotLiveApproval,
+  type BotToolCandidate,
+} from "../bot-tool-assembly.js";
 import { createBotToolFacts } from "../bot-tool-facts.js";
 import { botIngressAllowsTool } from "../bot-tool-policy.js";
 import { fakeBot } from "./fixtures.js";
@@ -211,6 +219,8 @@ export interface AssemblyState {
    */
   liveMailTools: SubagentMcpRemoteTool[];
   skillSnapshot: SkillRegistrySnapshot;
+  /** The Bot has its own computer (Bot computers set up and given). */
+  hasComputer?: boolean;
 }
 
 export function assemblyState(authority: BotRuntimeEffectiveAuthority, supportsImages = true): AssemblyState {
@@ -245,11 +255,20 @@ export interface AssemblyDepsOptions {
   /** Candidate tools for the current authority (stand-ins for discovered tools). */
   candidates: (authority: BotRuntimeEffectiveAuthority) => BotToolCandidate[];
   approve?: (request: BotApprovalRequest) => Promise<"allow" | "deny">;
-  approvalFor?: (toolName: string, call: BotToolCallCheck) => Promise<BotApprovalRequirement | null | undefined>;
+  approvalFor?: (toolName: string, call: BotToolCallCheck) => Promise<BotLiveApproval | undefined>;
+  /** The Bot's effective rules, read on every call. Absent: no rules port. */
+  rules?: () => readonly BotRule[] | Promise<readonly BotRule[]>;
+  /** Answers rule hand-off cards. Absent: no one to ask (rule hand-offs block). */
+  requestHandoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
+  botName?: string;
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
   approvals: BotApprovalRequest[];
+  /** Rule hand-off cards asked, in order. */
+  handoffs: BotRuleHandoffRequest[];
+  /** Rule hand-off rows recorded, one per tool call. */
+  records: BotRuleHandoffRecord[];
 }
 
 /** Extension deps that run the real assembly over `state`. */
@@ -263,6 +282,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
           admission,
           supportsImages: state.supportsImages,
           fileLocations: admission.authority.files.botHome ? 1 : 0,
+          hasComputer: state.hasComputer === true,
           catalog: async () => state.catalog,
           mcpTools: async () => MAIL_BUILT_TOOLS,
           liveMcpTools: async () =>
@@ -276,9 +296,13 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
         ? {}
         : { approvalFor: (_botId: string, toolName: string, call: BotToolCallCheck) => options.approvalFor!(toolName, call) }),
     },
+    ...(options.rules === undefined ? {} : { rules: async () => options.rules!() }),
+    ...(options.botName === undefined ? {} : { botName: async () => options.botName }),
   });
   const deps: AssemblyDeps = {
     approvals: [],
+    handoffs: [],
+    records: [],
     loadBot: async (botId) => fakeBot(botId),
     systemSections: async (_bot, offered) => ["BASE", "PERSONA", "AUTHORITY", assembly.guidance("bot-1", offered.toolNames)],
     currentTools: (bot, turn) => assembly.currentTools(bot.id, turn),
@@ -287,6 +311,18 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     requestApproval: async (request) => {
       deps.approvals.push(request);
       return options.approve ? options.approve(request) : "allow";
+    },
+    ...(options.requestHandoff === undefined
+      ? {}
+      : {
+          requestHandoff: async (request: BotRuleHandoffRequest) => {
+            deps.handoffs.push(request);
+            return options.requestHandoff!(request);
+          },
+        }),
+    // Idempotent per tool call, as production is.
+    recordHandoff: async (record) => {
+      if (!deps.records.some((entry) => entry.toolCallId === record.toolCallId)) deps.records.push(record);
     },
     readmit: async () => ({ ok: true }),
     imageInput: async () => state.supportsImages,

@@ -7,6 +7,7 @@ import type { McpStatus } from "../../renderer/shared/mcp-status.js";
 import { McpLiveStatusRegistry } from "../services/mcp-status-events.js";
 import { createMcpStdioApprovalStore, type McpStdioApprovalStore } from "../services/mcp-stdio-approvals.js";
 import { mcpStdioLaunchFingerprint } from "../services/mcp-field-secrets-core.js";
+import { mcpMacAppStatus, openMcpMacApp, type McpMacAppProbe } from "../services/mcp-mac-apps.js";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,21 +23,47 @@ const noApprovals: McpStdioApprovalStore = {
   forget: async () => undefined,
 };
 
+/** A Mac with iMCP installed in /Applications and not running. */
+function macWithImcp(opened: string[]): McpMacAppProbe {
+  return {
+    platform: "darwin",
+    homedir: "/Users/me",
+    isExecutable: async (file) => file === "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    bundleInfo: async (bundle, key) => (bundle === "/Applications/iMCP.app" && key === "CFBundleIdentifier" ? "co.dododo.iMCP" : undefined),
+    isRunning: async () => false,
+    open: async (bundle) => { opened.push(bundle); },
+  };
+}
+
 function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegistry(), approvals = noApprovals) {
   const handlers = new Map<string, (event: string, ...args: unknown[]) => unknown>();
   const log: string[] = [];
+  const opened: string[] = [];
   const drafts: Array<{ server: McpServer; credentials: McpDraftCredentials }> = [];
   let destroyed = false;
   let waiting = new Set<string>();
   const admitted: string[] = [];
   let savedChanged = false;
-  let signIn = { authorized: true, needsSignIn: false };
+  let signIn = { authorized: true, needsSignIn: false, hasSession: true };
+  const invalidated = new Set<() => void>();
+  const authorizations: Array<{ server: McpServer; signal: AbortSignal }> = [];
+  let authorizeResult: { authorized: true; connectionError?: string } = { authorized: true };
+  let authorizeGate: Promise<void> = Promise.resolve();
   const connected: McpStatus = { connected: true, toolCount: 3, tools: ["a", "b", "c"], serverCapabilities: {} };
   const deps: McpControlDependencies<string> = {
     handle: (channel, handler) => { handlers.set(channel, handler); },
     owner(event) {
       if (event !== "settings") throw new Error("Untrusted document");
-      return { isDestroyed: () => destroyed };
+      return {
+        isDestroyed: () => destroyed,
+        onInvalidated: (listener: () => void) => { invalidated.add(listener); return () => invalidated.delete(listener); },
+      };
+    },
+    authorize: async (server, _isCurrent, signal) => {
+      authorizations.push({ server, signal });
+      await authorizeGate;
+      signal.throwIfAborted();
+      return authorizeResult;
     },
     configured: async (id) => saved.find((server) => server.id === id),
     cancelAuthorization: (id) => { const had = waiting.delete(id); log.push(`cancel:${id}:${had}`); return had; },
@@ -63,12 +90,18 @@ function setup(saved: McpServer[] = [linear], registry = new McpLiveStatusRegist
     },
     approveLaunch: (server, fingerprint) => approvals.approveShown(server, fingerprint),
     launchApproved: (server) => approvals.isApproved(server),
+    macAppStatus: (preset) => mcpMacAppStatus(preset, macWithImcp(opened)),
+    openMacApp: (preset) => openMcpMacApp(preset, macWithImcp(opened)),
   };
   registerMcpControlHandlers(deps);
   const invoke = (channel: string, event: string, ...args: unknown[]) =>
     Promise.resolve().then(() => handlers.get(channel)!(event, ...args));
   return {
-    invoke, log, drafts, admitted,
+    invoke, log, drafts, admitted, authorizations, opened,
+    setAuthorizeResult: (result: typeof authorizeResult) => { authorizeResult = result; },
+    holdAuthorize: () => { let release!: () => void; authorizeGate = new Promise((resolve) => { release = resolve; }); return release; },
+    invalidate: () => { destroyed = true; for (const listener of invalidated) listener(); },
+    watchers: () => invalidated.size,
     changeSaved: () => { savedChanged = true; },
     setSignIn: (state: typeof signIn) => { signIn = state; },
     destroy: () => { destroyed = true; },
@@ -84,6 +117,40 @@ test("cancel sign-in reports whether a sign-in was waiting and requires the live
   await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "foreign", linear.id), /Untrusted/u);
   ipc.destroy();
   await assert.rejects(ipc.invoke("mcp:cancelAuthorize", "settings", linear.id), /active application document/u);
+});
+
+test("authorize runs browser sign-in only for OAuth servers from the live document and reports a kept sign-in's connection error", async () => {
+  const apiKeyPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.auth.kind === "apiKey")!);
+  const ipc = setup();
+  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", { ...linear, name: "  Linear  " }), { authorized: true });
+  assert.equal(ipc.authorizations[0]?.server.id, linear.id);
+  ipc.setAuthorizeResult({ authorized: true, connectionError: "MCP HTTP request failed with status 503" });
+  assert.deepEqual(await ipc.invoke("mcp:authorize", "settings", linear), { authorized: true, connectionError: "MCP HTTP request failed with status 503" });
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", apiKeyPreset), /does not use browser sign-in/u);
+  const localPreset = serverFromPreset(MCP_PRESETS.find((candidate) => candidate.id === "figma-desktop")!);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", localPreset), /does not use browser sign-in/u);
+  // A connector marked unavailable is refused before any sign-in starts.
+  const hostedFigma = { id: "preset-figma", name: "Figma", transport: "http", url: "https://mcp.figma.com/mcp", oauth: true, presetId: "figma", enabled: true };
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", hostedFigma), /isn’t approved yet/u);
+  await assert.rejects(ipc.invoke("mcp:testDraft", "settings", hostedFigma), /isn’t approved yet/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { id: "files", name: "Files", transport: "stdio", command: "npx", enabled: true }), /does not use browser sign-in/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauth: false }), /does not use browser sign-in/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", { ...linear, oauthClientId: " padded " }), /OAuth client ID/u);
+  await assert.rejects(ipc.invoke("mcp:authorize", "foreign", linear), /Untrusted/u);
+  assert.equal(ipc.authorizations.length, 2);
+  assert.equal(ipc.watchers(), 0, "each sign-in stops watching its document");
+});
+
+test("authorize is aborted when its document goes away", async () => {
+  const ipc = setup();
+  const release = ipc.holdAuthorize();
+  const pending = ipc.invoke("mcp:authorize", "settings", linear);
+  await new Promise((resolve) => setImmediate(resolve));
+  ipc.invalidate();
+  release();
+  await assert.rejects(pending, /no longer active/u);
+  assert.equal(ipc.authorizations[0]?.signal.aborted, true);
+  await assert.rejects(ipc.invoke("mcp:authorize", "settings", linear), /active application document/u);
 });
 
 test("sign out stops a waiting sign-in first, then clears the configured OAuth server", async () => {
@@ -119,11 +186,12 @@ test("testing a draft validates like save and never lends saved sign-in to a cha
 
 test("a draft borrowing saved credentials is tested only under admission for that saved record, with its sign-in state", async () => {
   const ipc = setup();
-  ipc.setSignIn({ authorized: false, needsSignIn: true });
+  ipc.setSignIn({ authorized: false, needsSignIn: true, hasSession: true });
   const status = (await ipc.invoke("mcp:testDraft", "settings", { ...linear, name: "Renamed" })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);
   assert.equal(status.authorized, false);
   assert.equal(status.needsSignIn, true);
+  assert.equal(status.hasSession, true, "Sign out stays available for a broken sign-in");
   // A brand-new draft borrows nothing: no admission, no sign-in fields.
   const fresh = (await ipc.invoke("mcp:testDraft", "settings", { id: "new", name: "New", transport: "stdio", command: "npx", enabled: true })) as McpStatus;
   assert.deepEqual(ipc.admitted, [linear.id]);
@@ -225,4 +293,24 @@ test("local servers added outside Aiden are listed with what they run and approv
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", linear.id, pending!.fingerprint), /Only local/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "settings", "files", "nope"), /Invalid launch fingerprint/u);
   await assert.rejects(ipc.invoke("mcp:approveLaunch", "foreign", "files", pending!.fingerprint), /Untrusted/u);
+});
+
+test("Mac app status and Open serve only a Mac app connector, from the live document", async () => {
+  const ipc = setup();
+  assert.deepEqual(await ipc.invoke("mcp:macAppStatus", "settings", "imcp"), {
+    supported: true,
+    installed: true,
+    command: "/Applications/iMCP.app/Contents/MacOS/imcp-server",
+    open: false,
+  });
+  assert.deepEqual(await ipc.invoke("mcp:openMacApp", "settings", "imcp"), { opened: true });
+  assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"]);
+  for (const presetId of ["notion", "figma-desktop", "unknown", "", 42]) {
+    await assert.rejects(ipc.invoke("mcp:macAppStatus", "settings", presetId), /Mac app|presetId/u, String(presetId));
+    await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", presetId), /Mac app|presetId/u, String(presetId));
+  }
+  await assert.rejects(ipc.invoke("mcp:openMacApp", "foreign", "imcp"), /Untrusted/u);
+  ipc.destroy();
+  await assert.rejects(ipc.invoke("mcp:openMacApp", "settings", "imcp"), /active application document/u);
+  assert.deepEqual(ipc.opened, ["/Applications/iMCP.app"], "nothing else was opened");
 });

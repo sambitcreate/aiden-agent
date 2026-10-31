@@ -25,6 +25,7 @@ import { createBotManagedWorkspaceService } from "../bot-managed-workspace.js";
 import { BotMutationGate } from "../bot-mutation-gate.js";
 import { createBotStore } from "../bot-store-core.js";
 import { createChatStore } from "../chat-store-core.js";
+import { BotRulesUnavailableError, createBotRuleStore, type BotRuleStore } from "../bot-rules/store.js";
 import { BotSessionError, createBotSessionService, type BotSessionRuntime } from "./bot-session-service.js";
 import { botDirectoryName } from "./harness-host.js";
 import { recordingDeps } from "./test-support/fixtures.js";
@@ -60,10 +61,15 @@ function png(width: number, height: number): Buffer {
 
 const normalizer: BotAvatarNormalizer = { async normalize() { return png(512, 512); } };
 
+/** Stands in for the Bot's browser partition on disk (Electron's `Partitions/aiden-bot-<dir>`). */
+function browserPartitionPath(profile: string, botId: string): string {
+  return path.join(profile, "Partitions", `aiden-bot-${botDirectoryName(botId)}`);
+}
+
 /** One process's view of the profile: fresh store instances, as after a restart. */
 function openProfile(
   profile: string,
-  options: { wipe?: boolean; failPhotoDeleteOnce?: boolean } = {},
+  options: { wipe?: boolean; failPhotoDeleteOnce?: boolean; failBrowserClearOnce?: boolean } = {},
 ) {
   const service = path.join(profile, "bot-service");
   const botStore = createBotStore({ root: () => profile });
@@ -102,6 +108,7 @@ function openProfile(
   const avatars = createFileBotAvatarStore({ root: () => path.join(profile, "bot-avatar-store"), normalizer });
   const clearedJournals: string[] = [];
   let photoFailures = options.failPhotoDeleteOnce ? 1 : 0;
+  let browserFailures = options.failBrowserClearOnce ? 1 : 0;
   const app = createBotApplicationService({
     botStore,
     chatStore,
@@ -118,6 +125,13 @@ function openProfile(
       }
       await avatars.deleteBot(botId);
     },
+    deleteBotBrowserProfile: async (botId) => {
+      if (browserFailures > 0) {
+        browserFailures -= 1;
+        throw new Error("Aiden quit while clearing the Bot's browser.");
+      }
+      await fs.rm(browserPartitionPath(profile, botId), { recursive: true, force: true });
+    },
     ...(options.wipe === false
       ? {}
       : {
@@ -127,7 +141,7 @@ function openProfile(
           },
         }),
   });
-  return { app, botStore, capabilityStore, managedWorkspace, chatStore, avatars, clearedJournals };
+  return { profile, app, botStore, capabilityStore, managedWorkspace, chatStore, avatars, clearedJournals };
 }
 
 type Profile = ReturnType<typeof openProfile>;
@@ -137,7 +151,7 @@ async function sessionFor(
   opened: Profile,
   fauxModels: FauxModels,
   routines: Map<string, string[]>,
-  options: { quitAfterSessionDestroyed?: boolean } = {},
+  options: { quitAfterSessionDestroyed?: boolean; rules?: BotRuleStore } = {},
 ): Promise<BotSessionRuntime> {
   return createBotSessionService({
     profileDir: profile,
@@ -151,6 +165,7 @@ async function sessionFor(
         if (options.quitAfterSessionDestroyed) throw new Error("Aiden quit right after erasing the session.");
         routines.delete(botId);
       },
+      async (botId) => options.rules?.forgetBot(botId),
       (botId) => opened.app.deleteBot({ botId }),
     ],
   });
@@ -171,7 +186,11 @@ async function createBotWithData(opened: Profile, name: string) {
   });
   const home = await opened.app.resolveManagedWorkspace(bot.id);
   await fs.writeFile(path.join(home.homePath, "memory.md"), `${name} remembers.`);
-  return { bot, chat, homePath: home.homePath };
+  // The Bot signed in to a site in its own browser.
+  const partition = browserPartitionPath(opened.profile, bot.id);
+  await fs.mkdir(partition, { recursive: true });
+  await fs.writeFile(path.join(partition, "Cookies"), `${name}-session=1`);
+  return { bot, chat, homePath: home.homePath, partition };
 }
 
 /** Everything a deleted Bot must no longer have, checked against the stores on disk. */
@@ -187,6 +206,7 @@ async function assertErased(profile: string, botId: string, homePath: string, ch
   assert.equal(await fresh.chatStore.get(chatId), null, "chat row");
   assert.deepEqual(await fresh.chatStore.listByBot(botId), [], "chat rows");
   assert.equal(await fresh.avatars.metadata(OWNER, botId), null, "photo");
+  assert.equal(existsSync(browserPartitionPath(profile, botId)), false, "browser sign-ins");
   assert.equal(existsSync(path.join(profile, "bots", botDirectoryName(botId))), false, "session directory");
 }
 
@@ -222,6 +242,7 @@ test("deleting a Bot mid-turn stops the provider and erases its session, photo, 
     // The other Bot keeps everything.
     assert.equal(routines.has(survivor.bot.id), true);
     assert.equal(await fs.readFile(path.join(survivor.homePath, "memory.md"), "utf8"), "Survivor remembers.");
+    assert.equal(await fs.readFile(path.join(survivor.partition, "Cookies"), "utf8"), "Survivor-session=1");
     assert.notEqual(await opened.avatars.metadata(OWNER, survivor.bot.id), null);
     assert.equal((await opened.app.getCanonicalChat(survivor.bot.id))?.id, survivor.chat.id);
   } finally {
@@ -260,6 +281,32 @@ test("a delete interrupted between steps leaves the Bot listed and finishes on r
   await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /quit while erasing the photo/u);
   assert.equal((await crashed.app.list()).length, 1);
 
+  const restarted = openProfile(profile);
+  await restarted.app.initialize();
+  assert.deepEqual(await restarted.app.list(), []);
+  await assertErased(profile, second.bot.id, second.homePath, second.chat.id);
+});
+
+test("a delete that stops while clearing the Bot's browser keeps the Bot listed and clears its sign-ins on retry or restart", async () => {
+  const profile = await tempProfile();
+  const opened = openProfile(profile, { failBrowserClearOnce: true });
+  await opened.app.initialize();
+  const first = await createBotWithData(opened, "First");
+  const second = await createBotWithData(opened, "Second");
+
+  await assert.rejects(opened.app.deleteBot({ botId: first.bot.id }), /clearing the Bot's browser/u);
+  assert.equal((await opened.app.list()).some(({ id }) => id === first.bot.id), true, "the Bot stays listed");
+  assert.equal(existsSync(first.partition), true, "its sign-ins are still there to clear");
+
+  // Retry in the same process.
+  await opened.app.deleteBot({ botId: first.bot.id });
+  await assertErased(profile, first.bot.id, first.homePath, first.chat.id);
+  assert.equal(existsSync(second.partition), true, "another Bot keeps its sign-ins");
+
+  // Interrupted again, then the app restarts instead of retrying.
+  const crashed = openProfile(profile, { failBrowserClearOnce: true });
+  await crashed.app.initialize();
+  await assert.rejects(crashed.app.deleteBot({ botId: second.bot.id }), /clearing the Bot's browser/u);
   const restarted = openProfile(profile);
   await restarted.app.initialize();
   assert.deepEqual(await restarted.app.list(), []);
@@ -409,4 +456,42 @@ test("legacy Bot transcripts are wiped once, and the Bot keeps working afterward
   await again.app.initialize();
   assert.equal((await again.chatStore.get(chat.id))?.messages.length, 1);
   assert.deepEqual(again.clearedJournals, []);
+});
+
+test("deleting a Bot erases its rules; a later edit is refused and never brings its directory back", async () => {
+  const profile = await tempProfile();
+  const opened = openProfile(profile);
+  await opened.app.initialize();
+  const doomed = await createBotWithData(opened, "Doomed");
+  const survivor = await createBotWithData(opened, "Survivor");
+  const knownBot = async (botId: string) => (await opened.botStore.get(botId)) != null;
+  const rules = createBotRuleStore({ profileDir: profile, knownBot });
+  assert.equal((await rules.update(doomed.bot.id, 0, { type: "add_custom", text: "order food", behavior: "hand_off" })).ok, true);
+  assert.equal(
+    (await rules.update(survivor.bot.id, 0, { type: "set_behavior", ruleId: "default.delete", behavior: "hand_off" })).ok,
+    true,
+  );
+  const doomedDirectory = path.join(profile, "bots", botDirectoryName(doomed.bot.id));
+  assert.equal(existsSync(path.join(doomedDirectory, "rules.json")), true);
+  const session = await sessionFor(profile, opened, createFauxModels([]), new Map(), { rules });
+  try {
+    await session.deleteBot(doomed.bot.id);
+    assert.equal(existsSync(doomedDirectory), false);
+    await assert.rejects(
+      rules.update(doomed.bot.id, 1, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      BotRulesUnavailableError,
+    );
+    // After a restart the Bot store no longer knows it, so a fresh store refuses too.
+    const restarted = createBotRuleStore({ profileDir: profile, knownBot });
+    await assert.rejects(
+      restarted.update(doomed.bot.id, 0, { type: "add_custom", text: "book a flight", behavior: "ask" }),
+      BotRulesUnavailableError,
+    );
+    assert.equal(existsSync(doomedDirectory), false, "no edit brings the deleted Bot's directory back");
+    await assertErased(profile, doomed.bot.id, doomed.homePath, doomed.chat.id);
+    const kept = await restarted.rules(survivor.bot.id);
+    assert.equal(kept.find((rule) => rule.id === "default.delete")?.behavior, "hand_off");
+  } finally {
+    await session.shutdown();
+  }
 });

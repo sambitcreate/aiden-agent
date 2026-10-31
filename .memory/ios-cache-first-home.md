@@ -10,4 +10,4 @@ Plan: `docs/plans/cache-first-loading-states-plan.md`, PR #516.
 - Opening a Recents row uses `cachedWorkspaceChat` first; top five transcripts are prefetched after a refresh unless `AidenNetworkAvailability.isConstrained` (Low Data Mode).
 - Prefetch saves with `saveFetchedChat(..., updatesSummary: false)` so the Mac's unread/attention row state survives. A chat opened from cache reloads when `connectionState` becomes `.connected` (`chatLoadEpoch` bump); the epoch task calls `AidenChatViewModel.reload`, which waits for a cancelled load to unwind instead of being dropped by the `isLoading` guard. A failed Usage read with nothing saved sets `usageLoadFailed`, shown with Try Again.
 - Tests: `AidenCacheFirstHomeTests` in `AidenChatTests.swift`.
-- Not yet: Usage disk cache, cold-cache transcript skeleton, Workspaces directory/chat list (I3) and later phases.
+- Not yet: Usage disk cache, cold-cache transcript skeleton, Workspaces directory/chat list (I3) and later phases. The write side (instant opens, optimistic toggles/rename/remove, saved `/server` features) landed 2026-10-21; see `.memory/instant-ui-optimistic-updates.md`.

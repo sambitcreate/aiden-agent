@@ -1,8 +1,8 @@
 // Shared microphone-capture → transcription helpers, consumed by both the
 // composer mic button (use-voice-recorder) and the global dictation pill.
-// Recording runs through MediaRecorder; the recorded blob is either sent to a
-// cloud provider, or (for the on-device provider) decoded and resampled to
-// 16 kHz mono PCM in the renderer and transcribed locally via sherpa-onnx.
+// Cloud recordings run through MediaRecorder and the blob is sent to the
+// provider. On-device recordings are captured as 16 kHz mono PCM (pcm-recorder)
+// and handed straight to the local model with no decode step.
 
 import { voiceApi } from "./ipc-voice";
 import type { VoiceProvider } from "./types";
@@ -114,7 +114,36 @@ export async function ensureMicrophoneAccess(): Promise<boolean> {
  * Transcribe a recorded blob through the selected provider.
  * Resolves the trimmed transcript ("" when no speech was detected).
  */
-export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Promise<string> {
+export function transcribeBlob(blob: Blob, options: TranscribeOptions): Promise<string> {
+  return withTranscriptionDeadline(options, (scoped, beforeDispatch) =>
+    convertAndTranscribeBlob(blob, scoped, beforeDispatch),
+  );
+}
+
+/**
+ * On-device transcription of audio already captured as 16 kHz mono PCM16.
+ * Resolves the trimmed transcript ("" when no speech was detected).
+ */
+export function transcribePcm16(
+  pcm: Int16Array<ArrayBuffer>,
+  options: Omit<TranscribeOptions, "provider" | "model">,
+): Promise<string> {
+  return withTranscriptionDeadline({ ...options, provider: "local" }, async (scoped, beforeDispatch) => {
+    if (!scoped.localModel) {
+      throw new Error("Download and select an on-device model in Settings → Voice.");
+    }
+    beforeDispatch();
+    return (await voiceApi.transcribeLocal(pcm.buffer, scoped.localModel, scoped.operationId)).trim();
+  });
+}
+
+function withTranscriptionDeadline(
+  options: TranscribeOptions,
+  transcribe: (
+    options: TranscribeOptions & { operationId: string; signal: AbortSignal },
+    beforeDispatch: () => void,
+  ) => Promise<string>,
+): Promise<string> {
   const operationId = options.operationId;
   if (!operationId) throw new Error("Voice transcription operation identity is missing.");
   options.signal?.throwIfAborted();
@@ -141,10 +170,7 @@ export async function transcribeBlob(blob: Blob, options: TranscribeOptions): Pr
     }
     signal.throwIfAborted();
   };
-  return deadline.run(
-    convertAndTranscribeBlob(blob, { ...options, operationId, signal }, beforeDispatch),
-    onTimeout,
-  );
+  return deadline.run(transcribe({ ...options, operationId, signal }, beforeDispatch), onTimeout);
 }
 
 async function convertAndTranscribeBlob(

@@ -14,7 +14,7 @@ export function selectedMcpServers(
     const server = byId.get(id);
     if (!server) throw new Error(`The approved MCP server "${id}" no longer exists.`);
     if (!server.enabled) throw new Error(`MCP server "${server.name}" is disabled.`);
-    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model. Turn it on in Settings → Plugins or edit this task.`);
+    if (!mcpServerOffersTools(server)) throw new Error(`MCP server "${server.name}" is off for the model. Turn it on in Settings → Connectors or edit this task.`);
     return server;
   });
 }

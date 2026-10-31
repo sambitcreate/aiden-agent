@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
+import { suggestConnectionCandidate } from "../bot-runtime/bot-tool-candidates.js";
+import type { BotToolCall } from "../bot-runtime/tool-adapter.js";
 import { getMcpPreset, serverFromPreset } from "../mcp-presets.js";
 import type { McpServer } from "../types.js";
 import {
+  connectionSourceIdFor,
   createSuggestConnectionTool,
   isBotConnectionReady,
+  resolveConnectCardStatus,
   type SuggestConnectionDeps,
 } from "./suggest-connection.js";
 
@@ -67,6 +72,60 @@ test("already connected plugins are refused without a card", async () => {
   assert.equal((result.details as { status: string }).status, "already_connected");
   assert.match(text(result), /already connected/iu);
   assert.deepEqual(asked, ["gmail"]);
+});
+
+test("an app connected in Aiden but left out of this Bot's access gets a card to add it", async () => {
+  const { tool, cards } = harness({
+    isConnected: (pluginId) => pluginId === "notion",
+    botLacksConnection: (botId, pluginId) => botId === "bot-a" && pluginId === "notion",
+  });
+  const result = await tool.execute("call-1", { pluginId: "notion", reason: "Keep your notes." });
+  assert.equal((result.details as { status: string }).status, "suggested");
+  assert.deepEqual(cards.map(({ card }) => [card.pluginId, card.status]), [["notion", "pending"]]);
+  assert.match(text(result), /doesn't include it/u);
+  assert.doesNotMatch(text(result), /already connected/iu);
+});
+
+test("an app the Bot has but this chat's narrower access leaves out gets no card and no claim it works", async () => {
+  const { tool, cards } = harness({
+    isConnected: (pluginId) => pluginId === "notion",
+    botLacksConnection: () => false,
+    chatLacksConnection: (botId, pluginId) => botId === "bot-a" && pluginId === "notion",
+  });
+  const result = await tool.execute("call-1", { pluginId: "notion", reason: "Keep your notes." });
+  assert.equal((result.details as { status: string }).status, "chat_restricted");
+  assert.equal(cards.length, 0, "Add to this Bot could not change this chat's access");
+  assert.match(text(result), /can't use it here/u);
+  assert.doesNotMatch(text(result), /Use it instead/u);
+});
+
+test("a pending card reads connected, add to this Bot, not now, or still waiting", async () => {
+  const card: ConnectCardEntry = { type: "connect_card", pluginId: "notion", reason: "Inbox.", status: "pending" };
+  const connected = new Set<string>();
+  const lacking = new Set<string>();
+  const dismissed = new Set<string>();
+  const deps = {
+    isConnected: (pluginId: string) => connected.has(pluginId),
+    botLacksConnection: (botId: string, sourceId: string) => lacking.has(`${botId}:${sourceId}`),
+    isDismissed: (botId: string, pluginId: string) => dismissed.has(`${botId}:${pluginId}`),
+  };
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "pending");
+  dismissed.add("bot-a:notion");
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "dismissed");
+  dismissed.clear();
+  connected.add("notion");
+  const notionServer = connectionSourceIdFor("notion")!;
+  lacking.add(`bot-a:${notionServer}`);
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "needs_access");
+  assert.equal(await resolveConnectCardStatus("bot-b", card, deps), "connected", "another Bot has it");
+  // Not now on Add to this Bot settles the card; nothing was granted.
+  dismissed.add("bot-a:notion");
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "dismissed");
+  assert.ok(lacking.has(`bot-a:${notionServer}`));
+  // Once the Bot can use the app, the card reads Connected even after Not now.
+  lacking.clear();
+  assert.equal(await resolveConnectCardStatus("bot-a", card, deps), "connected");
+  assert.equal(connectionSourceIdFor("gmail"), undefined, "apps reached through Composio have no connection of their own");
 });
 
 test("plugins dismissed for this Bot are refused, but other Bots are unaffected", async () => {
@@ -167,4 +226,38 @@ test("a plugin counts as connected only when its preset is enabled and signed in
   servers = [{ ...notion, url: "https://attacker.invalid/mcp" }, composio];
   assert.equal(await isBotConnectionReady("notion", deps), false);
   assert.equal(await isBotConnectionReady("not-a-plugin", deps), false);
+});
+
+test("bound to a Bot call, the card is written into that call's conversation, and a card the chat still shows is pending", async () => {
+  // The calling conversation as a call reads it: newest first.
+  const log: EntryRecord[] = [];
+  const call = {
+    entries: async () => [...log].reverse(),
+    appendEntry: async (kind: string, data: unknown) => {
+      log.push({ id: log.length + 1, kind, data } as unknown as EntryRecord);
+    },
+  } as unknown as BotToolCall;
+  const candidate = suggestConnectionCandidate("bot-a", { isConnected: () => false, isDismissed: () => false });
+  const suggest = async () =>
+    ((await candidate.bind!(call).execute("call-1", { pluginId: "notion", reason: "Keep plans in Notion." })).details as { status: string })
+      .status;
+
+  assert.equal(await suggest(), "suggested");
+  assert.deepEqual(
+    log.map((entry) => [entry.kind, (entry.data as unknown as ConnectCardEntry).pluginId, (entry.data as unknown as ConnectCardEntry).status]),
+    [["aiden.connect-card", "notion", "pending"]],
+  );
+  assert.equal(await suggest(), "pending", "the card already waits in the chat");
+  assert.equal(log.length, 1);
+
+  // A compaction whose kept context starts after the card: the chat no longer shows it, so it may be offered again.
+  log.push({ id: log.length + 1, kind: "pi.compaction", head: log.length + 1 } as unknown as EntryRecord);
+  assert.equal(await suggest(), "suggested");
+  assert.equal(log.filter((entry) => entry.kind === "aiden.connect-card").length, 2);
+
+  await assert.rejects(
+    candidate.tool.execute("call-2", { pluginId: "gmail", reason: "Read your mail." }),
+    /needs a Bot conversation/u,
+    "unbound, it writes nowhere",
+  );
 });

@@ -1,3 +1,4 @@
+import { AidenRemoteBotSessionService, projectBotSessionState } from "../../../main/services/aiden-remote-bot-session.js";
 import { createCliBotAvatars } from "./bot-avatars.ts";
 import { AidenRemoteBotService } from "../../../main/services/aiden-remote-bots.js";
 import { AidenRemoteBotFileService } from "../../../main/services/aiden-remote-bot-files.js";
@@ -10,7 +11,7 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 
 export function createCliRemoteBots(agentDir: string, instanceId: string, runtime: Awaited<ReturnType<typeof createCliBots>>, daemon: ReturnType<typeof createDaemonChats>, chatApi: Awaited<ReturnType<typeof createCliRemoteChats>>,
   idempotency: AidenIdempotencyLedger, persistIdempotency: (value: AidenIdempotencySnapshot) => Promise<void>) {
-  const bots = new AidenRemoteBotService({ avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, chatStore: daemon.chatStore, idempotency, persistIdempotency,
+  const bots = new AidenRemoteBotService({ avatar: createCliBotAvatars(agentDir, instanceId), application: runtime.application, ...(runtime.durable ? { deleteBot: runtime.durable.runtime.deleteBot, sessionStates: async (ids: readonly string[]) => new Map(await Promise.all(ids.map(async (id) => [id, projectBotSessionState(await runtime.durable!.runtime.state(id)).state] as const))) } : {}), chatStore: daemon.chatStore, idempotency, persistIdempotency,
     inbox: { list: (deviceId, input) => createBotInboxProjectionService({
       listBots: () => runtime.application.list(), listChatMetadata: () => daemon.chatStore.list(),
       projectBatch: async (request) => mergeBotInboxActivityPreviews(request, await chatApi.streams.projectChatActivities(deviceId, request.map(({ chatId }) => chatId))),
@@ -30,5 +31,10 @@ export function createCliRemoteBots(agentDir: string, instanceId: string, runtim
     },
   });
   const botFiles = new AidenRemoteBotFileService({ instanceId, botAudienceId: CLI_BOT_OWNER_AUDIENCE_ID, authority: runtime.authority, chats: daemon.chatStore });
-  return { bots, botFiles };
+  const botSessions = runtime.durable ? new AidenRemoteBotSessionService({ bots,
+    runtime: async () => runtime.durable!.runtime, routines: runtime.routines, presets: runtime.durable.presets, approvals: runtime.durable.approvals, memory: runtime.durable.memory,
+    // A pause or unpause from `aiden bots` changes only the state; open phone streams hear it here.
+    stateChanges: runtime.durable.stateChanges,
+  }) : undefined;
+  return { bots, botFiles, ...(botSessions ? { botSessions } : {}) };
 }

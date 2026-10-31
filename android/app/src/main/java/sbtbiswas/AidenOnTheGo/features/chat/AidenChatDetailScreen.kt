@@ -96,6 +96,7 @@ import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMark
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.AidenActivityMarkKind
 import sbtbiswas.AidenOnTheGo.features.shared.activitymarks.aidenActivityMarkForTool
 import sbtbiswas.AidenOnTheGo.models.*
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
 import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
 import sbtbiswas.AidenOnTheGo.notifications.AidenRemoteLiveNotificationManager
@@ -237,6 +238,14 @@ fun AidenChatDetailScreen(
     val follow = rememberAidenTranscriptFollowState(listState)
 
     val readAloudClient by coordinator.client.collectAsStateWithLifecycle()
+    // Revision 47: a Workspace chat's total, or a Bot chat's month, re-read after each reply
+    // settles and after a send the Mac refused.
+    val spending = remember(chatId) { AidenSpendingNoticeState() }
+    val spendingTransport = readAloudClient.takeIf { serverInfo?.supportsSpendingLimits == true }
+    val spendingOwner = chat?.botId?.let { AidenSpendingOwner.Bot(it) } ?: AidenSpendingOwner.Chat(chatId)
+    LaunchedEffect(spendingOwner, spendingTransport, isStreaming, chat?.messages?.size, sendRecoveryError) {
+        spending.refresh(spendingOwner, spendingTransport)
+    }
     val readAloud = remember(readAloudClient, chatId) {
         AidenReadAloudPlayback(context.applicationContext, scope, readAloudClient, chatId) {
             readAloudClient != null && coordinator.client.value === readAloudClient
@@ -586,8 +595,6 @@ fun AidenChatDetailScreen(
                     exit = aidenBannerExit(reduceMotion)
                 ) {
                     pendingApproval?.let { approval ->
-                        val isAutomation = AidenApprovalPresentation.isAutomation(approval.toolName)
-                        val requiresDesktopConfirmation = AidenApprovalPresentation.requiresDesktopConfirmation(approval)
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -596,59 +603,12 @@ fun AidenChatDetailScreen(
                             colors = CardDefaults.cardColors(containerColor = palette.raised),
                             shape = MaterialTheme.shapes.extraLarge
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (isAutomation) Icons.Default.Schedule else Icons.Default.Warning,
-                                        contentDescription = null,
-                                        tint = palette.warning,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = AidenApprovalPresentation.title(approval.toolName),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = palette.warning
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = AidenApprovalPresentation.oneLineSummary(approval.summary),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = palette.foreground
-                                )
-                                if (!approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_review_only),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (isAutomation && !approval.hasRequiredWriteCapability) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_schedule_write_required),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                } else if (requiresDesktopConfirmation) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = stringResource(R.string.chat_approval_confirm_on_desktop),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = palette.secondary
-                                    )
-                                }
-                                if (approval.canRespond) {
-                                    Spacer(modifier = Modifier.height(10.dp))
-                                    AidenApprovalActions(
-                                        approval = approval,
-                                        enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
-                                        onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) }
-                                    )
-                                }
-                            }
+                            AidenApprovalCardContent(
+                                approval = approval,
+                                enabled = connectionState == AidenConnectionState.CONNECTED && !isRespondingToApproval && !isStopping,
+                                onRespond = { decision, scope -> viewModel.respondToApproval(decision, approval.id, scope) },
+                                modifier = Modifier.padding(16.dp)
+                            )
                         }
                     }
                 }
@@ -673,6 +633,19 @@ fun AidenChatDetailScreen(
                     }
                 }
 
+                spending.spending?.let { current ->
+                    AidenSpendingNotice(
+                        spending = current,
+                        botName = null,
+                        isAllowing = spending.isAllowing,
+                        canAllow = coordinator.installationStore.activeInstallation?.hasNegotiatedAccess(
+                            if (chat?.botId != null) AidenRemoteCapability.BOT_WRITE else AidenRemoteCapability.CHAT_WRITE
+                        ) == true,
+                        errorMessage = spending.errorMessage,
+                        onAllowMore = { scope.launch { spending.allowMore(spendingTransport) } },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
                 if ((pendingSend != null || sendRecoveryError != null) && !isStartingSend && !isRetryingInput) {
                     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
                         Text(sendRecoveryError ?: if (pendingSend?.canRetry() == true) "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
@@ -952,6 +925,16 @@ fun AidenChatDetailScreen(
             }
         }
 
+        // Revision 46: a browser recording's Play reads the video from a Mac that serves it.
+        val canPlayBrowserRecordings = remember(serverInfo, viewModel) { viewModel.canPlayBrowserRecordings }
+        val recordingPlayback = remember(viewModel, canPlayBrowserRecordings) {
+            if (canPlayBrowserRecordings) {
+                AidenBrowserRecordingPlayback(load = viewModel::browserRecording, release = viewModel::releaseBrowserRecording)
+            } else {
+                null
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -960,160 +943,162 @@ fun AidenChatDetailScreen(
                 // own bottom inset still makes the latest message fully reachable.
                 .padding(top = padding.calculateTopPadding())
         ) {
-            LazyColumn(
-                reverseLayout = true,
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .aidenTranscriptFollow(follow)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(
-                    top = 16.dp,
-                    bottom = padding.calculateBottomPadding() + 16.dp
-                )
-            ) {
-                // Only a chat with nothing saved previews its transcript; a saved one renders
-                // at once and refreshes underneath.
-                if (chat == null && isLoadingTranscript) {
-                    item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
-                }
-
-                // When streaming, active generation is the latest item (index 0 in reverse layout)
-                if (showsLiveCard) {
-                    item(key = LIVE_STREAM_ITEM_KEY) {
-                        // Per-token state is read inside the item so each
-                        // update recomposes only this card, not the screen.
-                        val liveText by liveTextState
-                        val reasoning by liveReasoningState
-                        val tools by liveToolsState
-                        val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
-                        val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
-                        val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
-                        ActiveStreamingCard(
-                            liveText = liveText,
-                            reasoning = reasoning,
-                            tools = tools,
-                            activityTimeline = activityTimeline,
-                            isBotChat = isBotChat,
-                            palette = palette,
-                            onCopyMessage = onCopyMessage,
-                            onOpenMessageUrl = onOpenMessageUrl,
-                            liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
-                            isWaitingForNetwork = isWaitingForNetwork,
-                            pendingApprovalToolName = livePendingApproval?.toolName,
-                            isActive = isStreaming
-                        )
-                        AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
-                    }
-                }
-
-                itemsIndexed(
-                    items = reversedMessages,
-                    key = { _, msg -> msg.id }
-                ) { index, message ->
-                    val pos = calculateClusterPosition(index, reversedMessages)
-                    val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
-                    val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
-                        if (!canForkMessages) return@remember null
-                        val actions = AidenMessageForkActions(
-                            onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
-                                { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
-                            } else null,
-                            onForkWithSummary = if (canForkMessagesWithSummary &&
-                                AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
-                            ) {
-                                { forkWithSummaryMessageId = message.id }
-                            } else null,
-                            onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
-                                { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
-                            } else null
-                        )
-                        actions.takeUnless { it.isEmpty }
+            CompositionLocalProvider(LocalAidenBrowserRecordingPlayback provides recordingPlayback) {
+                LazyColumn(
+                    reverseLayout = true,
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .aidenTranscriptFollow(follow)
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(
+                        top = 16.dp,
+                        bottom = padding.calculateBottomPadding() + 16.dp
+                    )
+                ) {
+                    // Only a chat with nothing saved previews its transcript; a saved one renders
+                    // at once and refreshes underneath.
+                    if (chat == null && isLoadingTranscript) {
+                        item(key = "transcript_skeleton") { AidenTranscriptSkeleton() }
                     }
 
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (message.role == AidenChatRole.USER) {
-                        UserMessageRow(
-                            message = message,
-                            position = pos,
-                            showFooter = isLastInCluster,
-                            palette = palette,
-                            loadAttachmentImage = loadAttachmentImage,
-                            onCopy = onCopyMessage,
-                            onShare = onShareMessage,
-                            onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage,
-                            forkActions = forkActions
-                        )
-                    } else {
-                        val readAloudEligible = !isStreaming &&
-                            serverInfo?.features?.contains("tts-v1") == true &&
-                            chat?.messages?.lastOrNull()?.id == message.id &&
-                            message.isReadAloudEligible
-                        // Remembered per message so settled rows stay skippable.
-                        val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
-                            { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
-                        }
-                        AssistantMessageRow(
-                            message = message,
-                            position = pos,
-                            isLastInCluster = isLastInCluster,
-                            isBotChat = isBotChat,
-                            palette = palette,
-                            loadAttachmentImage = loadAttachmentImage,
-                            onCopy = onCopyMessage,
-                            onShare = onShareMessage,
-                            onSelectText = onSelectMessageText,
-                            onAskAbout = onAskAboutMessage,
-                            onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
-                            readAloudActive = readAloud.activeMessageId == message.id,
-                            appControlsAvailable = viewModel.canReadAppControls,
-                            appControlsCache = viewModel.appControlsCache,
-                            loadAppControls = viewModel::loadAppControls,
-                            applyAppControl = viewModel::applyAppControl,
-                            onOpenUrl = onOpenMessageUrl,
-                            forkActions = forkActions,
-                            isPinnedToStreamingEdge = isPinnedToStreamingEdge,
-                            imageArrivalRevealGenerationId = message.timeline?.generationId
-                                ?.takeIf { it in imageArrivalRevealIds },
-                            onImageArrivalRevealed = viewModel::finishImageArrivalReveal,
-                            onOpenVisual = onOpenVisual
-                        )
-                    }
-                    // The summary stands where the copied conversation ends.
-                    if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
-                        forkSummaryCard()
-                    }
-                    }
-                }
-
-                // The top of the reversed transcript: where this fork came from.
-                if (forkLineage != null) {
-                    item(key = "fork_lineage") {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            AidenForkLineageRow(
-                                source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                    // When streaming, active generation is the latest item (index 0 in reverse layout)
+                    if (showsLiveCard) {
+                        item(key = LIVE_STREAM_ITEM_KEY) {
+                            // Per-token state is read inside the item so each
+                            // update recomposes only this card, not the screen.
+                            val liveText by liveTextState
+                            val reasoning by liveReasoningState
+                            val tools by liveToolsState
+                            val activityTimeline by viewModel.activityTimeline.collectAsStateWithLifecycle()
+                            val isWaitingForNetwork by viewModel.isWaitingForNetwork.collectAsStateWithLifecycle()
+                            val livePendingApproval by viewModel.pendingApproval.collectAsStateWithLifecycle()
+                            ActiveStreamingCard(
+                                liveText = liveText,
+                                reasoning = reasoning,
+                                tools = tools,
+                                activityTimeline = activityTimeline,
+                                isBotChat = isBotChat,
                                 palette = palette,
-                                onOpenSource = onNavigateToChat
+                                onCopyMessage = onCopyMessage,
+                                onOpenMessageUrl = onOpenMessageUrl,
+                                liveStart = AidenTurnElapsed.liveStart(activityTimeline, rawMessages),
+                                isWaitingForNetwork = isWaitingForNetwork,
+                                pendingApprovalToolName = livePendingApproval?.toolName,
+                                isActive = isStreaming
                             )
-                            if (!forkSummaryAnchored) forkSummaryCard()
+                            AidenStreamingFollowTrigger(follow, liveText.length + reasoning.length)
                         }
                     }
-                }
 
-                // Last in reverse layout, so it sits above the oldest message.
-                // Earlier pages join the end of the list, leaving the anchored
-                // rows and the reader's position where they were.
-                if (hasOlderMessages) {
-                    item(key = "load_earlier_messages") {
-                        AidenLoadEarlierMessages(
-                            isLoading = isLoadingEarlierMessages,
-                            onClick = {
-                                follow.detach()
-                                viewModel.loadEarlierMessages()
+                    itemsIndexed(
+                        items = reversedMessages,
+                        key = { _, msg -> msg.id }
+                    ) { index, message ->
+                        val pos = calculateClusterPosition(index, reversedMessages)
+                        val isLastInCluster = pos == MessageClusterPosition.LAST || pos == MessageClusterPosition.SINGLE
+                        val forkActions = remember(message.id, rawMessages, canForkMessages, canForkMessagesWithSummary) {
+                            if (!canForkMessages) return@remember null
+                            val actions = AidenMessageForkActions(
+                                onForkFromHere = if (AidenChatForkEligibility.canForkFrom(rawMessages, message.id)) {
+                                    { viewModel.fork(message.id, AidenChatForkPosition.AFTER) }
+                                } else null,
+                                onForkWithSummary = if (canForkMessagesWithSummary &&
+                                    AidenChatForkEligibility.canForkWithSummary(rawMessages, message.id)
+                                ) {
+                                    { forkWithSummaryMessageId = message.id }
+                                } else null,
+                                onEditInFork = if (AidenChatForkEligibility.canEditInFork(rawMessages, message.id)) {
+                                    { viewModel.fork(message.id, AidenChatForkPosition.BEFORE) }
+                                } else null
+                            )
+                            actions.takeUnless { it.isEmpty }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (message.role == AidenChatRole.USER) {
+                            UserMessageRow(
+                                message = message,
+                                position = pos,
+                                showFooter = isLastInCluster,
+                                palette = palette,
+                                loadAttachmentImage = loadAttachmentImage,
+                                onCopy = onCopyMessage,
+                                onShare = onShareMessage,
+                                onSelectText = onSelectMessageText,
+                                onAskAbout = onAskAboutMessage,
+                                forkActions = forkActions
+                            )
+                        } else {
+                            val readAloudEligible = !isStreaming &&
+                                serverInfo?.features?.contains("tts-v1") == true &&
+                                chat?.messages?.lastOrNull()?.id == message.id &&
+                                message.isReadAloudEligible
+                            // Remembered per message so settled rows stay skippable.
+                            val onReadAloudMessage = remember(readAloud, voiceInput, message.id) {
+                                { voiceInput.cancelDiscardingRecording(); readAloud.toggle(message.id) }
                             }
-                        )
+                            AssistantMessageRow(
+                                message = message,
+                                position = pos,
+                                isLastInCluster = isLastInCluster,
+                                isBotChat = isBotChat,
+                                palette = palette,
+                                loadAttachmentImage = loadAttachmentImage,
+                                onCopy = onCopyMessage,
+                                onShare = onShareMessage,
+                                onSelectText = onSelectMessageText,
+                                onAskAbout = onAskAboutMessage,
+                                onReadAloud = if (readAloudEligible) onReadAloudMessage else null,
+                                readAloudActive = readAloud.activeMessageId == message.id,
+                                appControlsAvailable = viewModel.canReadAppControls,
+                                appControlsCache = viewModel.appControlsCache,
+                                loadAppControls = viewModel::loadAppControls,
+                                applyAppControl = viewModel::applyAppControl,
+                                onOpenUrl = onOpenMessageUrl,
+                                forkActions = forkActions,
+                                isPinnedToStreamingEdge = isPinnedToStreamingEdge,
+                                imageArrivalRevealGenerationId = message.timeline?.generationId
+                                    ?.takeIf { it in imageArrivalRevealIds },
+                                onImageArrivalRevealed = viewModel::finishImageArrivalReveal,
+                                onOpenVisual = onOpenVisual
+                            )
+                        }
+                        // The summary stands where the copied conversation ends.
+                        if (forkSummaryAnchored && forkSummary?.afterMessageId == message.id) {
+                            forkSummaryCard()
+                        }
+                        }
+                    }
+
+                    // The top of the reversed transcript: where this fork came from.
+                    if (forkLineage != null) {
+                        item(key = "fork_lineage") {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AidenForkLineageRow(
+                                    source = forkSource ?: AidenChatForkSource.Resolving(forkLineage.chatId),
+                                    palette = palette,
+                                    onOpenSource = onNavigateToChat
+                                )
+                                if (!forkSummaryAnchored) forkSummaryCard()
+                            }
+                        }
+                    }
+
+                    // Last in reverse layout, so it sits above the oldest message.
+                    // Earlier pages join the end of the list, leaving the anchored
+                    // rows and the reader's position where they were.
+                    if (hasOlderMessages) {
+                        item(key = "load_earlier_messages") {
+                            AidenLoadEarlierMessages(
+                                isLoading = isLoadingEarlierMessages,
+                                onClick = {
+                                    follow.detach()
+                                    viewModel.loadEarlierMessages()
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -1397,14 +1382,29 @@ private fun AssistantMessageRow(
     val visuals = message.visuals.orEmpty()
     // Rows for the visuals that render; an html visual without a snapshot is left to its notice.
     val rowVisuals = aidenVisualsWithRows(message)
-    val chronologicalRows = if (isBotChat) null else
-        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals)
     val progressText = projection?.progressText ?: ""
     // Visual snapshots render inside their visual rows, never as ordinary attachments.
     val attachments = aidenVisibleMessageAttachments(message.attachments.orEmpty(), visuals)
-    val imageAttachments = aidenEligibleImageAttachments(attachments, visuals)
-    val imageIds = imageAttachments.mapTo(mutableSetOf()) { it.id }
+    val eligibleImages = aidenEligibleImageAttachments(attachments, visuals)
+    val imageIds = eligibleImages.mapTo(mutableSetOf()) { it.id }
     val fallbackAttachments = attachments.filterNot { it.id in imageIds }
+    // Each image sits beneath the step that produced it; the rest trail the reply.
+    val chronologicalRows = if (isBotChat) null else
+        AidenChronologicalProjection.rows(message.text, message.reasoning.orEmpty(), message.timeline, rowVisuals, eligibleImages)
+    val placedImageIds = chronologicalRows?.let(AidenChronologicalProjection::placedImageIds).orEmpty()
+    val imageAttachments = eligibleImages.filterNot { it.id in placedImageIds }
+    val revealAttachmentId = imageArrivalRevealGenerationId?.let {
+        AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
+    }
+    val renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = { images ->
+        AidenMessageImageAttachments(
+            attachments = images,
+            edge = AidenMessageMediaEdge.LEADING,
+            loadData = loadAttachmentImage,
+            revealAttachmentId = revealAttachmentId,
+            onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
+        )
+    }
     val renderVisual: @Composable (AidenChatVisual) -> Unit = { visual ->
         AidenVisualRow(
             visual = visual,
@@ -1430,7 +1430,8 @@ private fun AssistantMessageRow(
                     palette = palette,
                     onCopy = onCopy,
                     onOpenUrl = onOpenUrl,
-                    renderVisual = renderVisual
+                    renderVisual = renderVisual,
+                    renderImages = renderImages
                 )
             }
         } else {
@@ -1454,6 +1455,22 @@ private fun AssistantMessageRow(
                 step.questionnaireRecap?.let { recap ->
                     key(step.id) {
                         AidenQuestionnaireRecapStack(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            AidenAgentActivityPresentation.extractionSteps(timeline).forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            AidenAgentActivityPresentation.recordingSteps(timeline).forEach { step ->
+                step.recordingRecap?.let { recap ->
+                    key("recording-${step.id}") {
+                        AidenBrowserRecordingCard(recording = recap, palette = palette)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1522,15 +1539,7 @@ private fun AssistantMessageRow(
         }
         if (imageAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
-            AidenMessageImageAttachments(
-                attachments = imageAttachments,
-                edge = AidenMessageMediaEdge.LEADING,
-                loadData = loadAttachmentImage,
-                revealAttachmentId = imageArrivalRevealGenerationId?.let {
-                    AidenImageGenerationPlaceholderState.arrivalRevealAttachmentId(message)
-                },
-                onArrivalRevealed = { imageArrivalRevealGenerationId?.let(onImageArrivalRevealed) }
-            )
+            renderImages(imageAttachments)
         }
         fallbackAttachments.forEach { attachment ->
             Spacer(modifier = Modifier.height(8.dp))
@@ -1740,11 +1749,17 @@ internal fun ActiveStreamingCard(
     val visualizingLabel = AidenAgentActivityPresentation.visualizingLabel(activityTimeline)
     val imagePlaceholders = remember(activityTimeline) { AidenImageGenerationPlaceholderState.items(activityTimeline) }
     val chronologicalRows = remember(isBotChat, liveText, reasoning, activityTimeline) {
-        if (isBotChat) null else AidenChronologicalProjection.rows(liveText, reasoning, activityTimeline)
+        if (isBotChat) null else AidenChronologicalProjection.rows(
+            liveText, reasoning, activityTimeline, imageSlots = imagePlaceholders.map { it.id }
+        )
     }
+    // Placeholders sit beneath their step, like the image each becomes; the rest follow the reply.
+    val placedImageSlots = chronologicalRows?.let(AidenChronologicalProjection::placedImageSlots).orEmpty()
     // Without chronological rows, the timeline still lists the calls and their recaps.
     val fallbackToolSteps = AidenAgentActivityPresentation.liveToolSteps(activityTimeline)
     val fallbackQuestionnaires = AidenAgentActivityPresentation.questionnaireSteps(activityTimeline)
+    val fallbackExtractions = AidenAgentActivityPresentation.extractionSteps(activityTimeline)
+    val fallbackRecordings = AidenAgentActivityPresentation.recordingSteps(activityTimeline)
     val showsLiveToolRows = AidenAgentActivityPresentation.showsLiveToolRows(tools, activityTimeline)
     val fallbackShowsActivity = fallbackToolSteps.isNotEmpty() || fallbackQuestionnaires.isNotEmpty() || showsLiveToolRows
     // Recaps that already sprang in during this reply. The card moves between the
@@ -1770,9 +1785,12 @@ internal fun ActiveStreamingCard(
                     live = true,
                     onCopy = onCopyMessage,
                     onOpenUrl = onOpenMessageUrl,
+                    renderImageSlot = { call ->
+                        AidenImageGenerationPlaceholderList(imagePlaceholders.filter { it.id == call }, palette)
+                    },
                     enteredRecaps = enteredRecaps
                 )
-                AidenImageGenerationPlaceholderList(imagePlaceholders, palette)
+                AidenImageGenerationPlaceholderList(imagePlaceholders.filterNot { it.id in placedImageSlots }, palette)
                 if (visualizingLabel != null && chronologicalRows.none { row ->
                     row.kind == AidenChronologicalRow.Kind.TOOL &&
                         row.steps.any { it.toolName == "render_artifact" && it.isActive }
@@ -1851,6 +1869,22 @@ internal fun ActiveStreamingCard(
                     key(step.id) {
                         val firstAppearance = remember { enteredRecaps.add(step.id) }
                         AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            fallbackExtractions.forEach { step ->
+                step.extractionRecap?.let { recap ->
+                    key("extraction-${step.id}") {
+                        AidenWebExtractRecapCard(recap = recap, palette = palette)
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+            fallbackRecordings.forEach { step ->
+                step.recordingRecap?.let { recap ->
+                    key("recording-${step.id}") {
+                        AidenBrowserRecordingCard(recording = recap, palette = palette)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
@@ -1951,6 +1985,10 @@ private fun AidenChronologicalTranscript(
     onCopy: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     renderVisual: @Composable (AidenChatVisual) -> Unit = {},
+    // A settled message's images beneath their step; the live reply has none.
+    renderImages: @Composable (List<AidenMessageAttachment>) -> Unit = {},
+    // A live generate_image placeholder beneath its step.
+    renderImageSlot: @Composable (String) -> Unit = {},
     // Step ids of recaps already shown in this live reply; null for a settled message.
     enteredRecaps: MutableSet<String>? = null
 ) {
@@ -1991,7 +2029,15 @@ private fun AidenChronologicalTranscript(
                             AidenQuestionnaireRecapStack(recap = recap, palette = palette, animateEntrance = firstAppearance)
                         }
                     }
+                    AidenChronologicalRow.Kind.EXTRACTION -> {
+                        row.extraction?.let { recap -> AidenWebExtractRecapCard(recap = recap, palette = palette) }
+                    }
+                    AidenChronologicalRow.Kind.RECORDING -> {
+                        row.recording?.let { recap -> AidenBrowserRecordingCard(recording = recap, palette = palette) }
+                    }
                     AidenChronologicalRow.Kind.VISUAL -> row.visual?.let { renderVisual(it) }
+                    AidenChronologicalRow.Kind.IMAGES -> renderImages(row.images)
+                    AidenChronologicalRow.Kind.IMAGE_SLOT -> row.imageSlot?.let { renderImageSlot(it) }
                 }
             }
         }
@@ -2039,26 +2085,32 @@ private fun AidenChronologicalReasoningCard(
         }
         return
     }
-    var expanded by rememberSaveable(row.id) { mutableStateOf(active) }
-    var userControlled by rememberSaveable(row.id) { mutableStateOf(false) }
-    LaunchedEffect(row.id, active) {
-        if (active && !userControlled) {
-            kotlinx.coroutines.delay(1_000)
-            if (!userControlled) expanded = false
-        }
-    }
+    // The card never opens or closes on its own: a fast model's many short thoughts
+    // would otherwise move the transcript. Only the reader's tap expands it.
+    var expanded by rememberSaveable(row.id) { mutableStateOf(false) }
     val reduceMotion = aidenReduceMotion()
     val chevronRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
         animationSpec = AidenMotion.spatial(reduceMotion),
         label = "reasoning_chevron"
     )
+    // While thinking, the collapsed row rolls the latest finished line in place. It keeps
+    // its last text after thinking ends so it can fade out; stored reasoning shows none.
+    val liveLine = remember(row.text, active) { if (active) AidenReasoningLine.latest(row.text) else "" }
+    var lastLine by remember(row.id) { mutableStateOf("") }
+    SideEffect { if (liveLine.isNotEmpty()) lastLine = liveLine }
+    val shownLine = liveLine.ifEmpty { lastLine }
+    val lineAlpha by animateFloatAsState(
+        targetValue = if (liveLine.isNotEmpty() && !expanded) 1f else 0f,
+        animationSpec = AidenMotion.nonSpatial(reduceMotion),
+        label = "reasoning_line_alpha"
+    )
+    val lineRise = with(LocalDensity.current) { 4.dp.roundToPx() }
     Surface(color = palette.raised, shape = MaterialTheme.shapes.medium) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) {
-                    userControlled = true
                     expanded = !expanded
                 }
             ) {
@@ -2066,9 +2118,39 @@ private fun AidenChronologicalReasoningCard(
                     label = if (active) stringResource(R.string.chat_reasoning_thinking) else row.steps.firstOrNull()?.let(AidenAgentActivityPresentation::line) ?: stringResource(R.string.chat_reasoning_thought),
                     active = active,
                     style = MaterialTheme.typography.labelMedium,
-                    color = palette.secondary,
-                    modifier = Modifier.weight(1f)
+                    color = palette.secondary
                 )
+                // Always composed, one line tall, so the row's height never changes; only
+                // its opacity does. The label stays the accessible name.
+                AnimatedContent(
+                    targetState = shownLine,
+                    transitionSpec = {
+                        // A new line rises in as the old one goes; nothing resizes.
+                        val enter = if (reduceMotion) {
+                            EnterTransition.None
+                        } else {
+                            fadeIn(AidenMotion.nonSpatial(false)) +
+                                slideInVertically(AidenMotion.spatial(false)) { lineRise }
+                        }
+                        (enter togetherWith ExitTransition.None).using(null)
+                    },
+                    contentAlignment = Alignment.CenterStart,
+                    label = "reasoning_line",
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 10.dp)
+                        .graphicsLayer { alpha = lineAlpha }
+                        .clearAndSetSemantics {}
+                ) { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Normal,
+                        color = palette.secondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Icon(
                     imageVector = Icons.Default.ExpandMore,
                     contentDescription = if (expanded) stringResource(R.string.chat_reasoning_collapse) else stringResource(R.string.chat_reasoning_expand),

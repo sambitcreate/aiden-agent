@@ -241,6 +241,30 @@ test("skill grants bind identity and content without projecting content or paths
   );
 });
 
+test("a Bot computer is an ordinary capability; an unknown kind fails closed", () => {
+  const withComputer = inventory();
+  withComputer.otherCapabilities.push({
+    kind: "computer",
+    label: "Bot computer",
+    description: "Use its own computer.",
+    available: true,
+    capabilityFingerprint: digest("bot-computer-runtime-policy"),
+  });
+  const result = snapshot(withComputer);
+  const option = result.catalog.otherCapabilities.find(({ label }) => label === "Bot computer");
+  assert.equal(option?.available, true);
+  assert.doesNotMatch(JSON.stringify(result.catalog), /"computer"/u, "the public option carries no private kind");
+
+  const unknown = inventory();
+  unknown.otherCapabilities.push({
+    kind: "virtual_machine" as never,
+    label: "VM",
+    available: true,
+    capabilityFingerprint: digest("vm"),
+  });
+  assert.throws(() => snapshot(unknown), /ordinary capability 2 is invalid/u);
+});
+
 test("catalog fails closed on duplicates, invalid effects, missing required file modes, and opaque collisions", () => {
   const duplicate = inventory();
   duplicate.connections.push(structuredClone(duplicate.connections[0]!));

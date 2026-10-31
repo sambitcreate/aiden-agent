@@ -61,7 +61,39 @@ test("a search step shows its query; a connection step names the app and shows n
     app: "Notion",
   });
   assert.deepEqual(botStepDescriptor("ask_user_question", {}), { kind: "waiting", label: "Asked you a question" });
+  assert.deepEqual(
+    botStepDescriptor("hand_off", { action: "Enter the 2FA code", open: { url: "https://bank.example/verify" } }),
+    { kind: "waiting", label: "Handed you a step" },
+    "a hand-off is not a question, and its card already shows what it asks",
+  );
+  assert.deepEqual(
+    botStepDescriptor("sign_in", { site: "github.com", why: "To read your issues." }),
+    { kind: "waiting", label: "Asked you to sign in" },
+    "a sign-in reads as what it asked, and its card already names the site",
+  );
+  assert.deepEqual(
+    botStepDescriptor("codemode", { code: "return await tools.notion__search({ query: \"private plans\" });" }),
+    { kind: "working", label: "Ran a script" },
+    "a codemode script reads as one step and never shows its code",
+  );
   assert.deepEqual(botStepDescriptor("read_file", "not an object"), { kind: "reading", label: "Read 1 file" });
+});
+
+test("a step in the Bot's own computer shows its intent, never the text it types", () => {
+  assert.deepEqual(botStepDescriptor("computer", { action: "click", coordinate: [10, 20], intent: "Click Place order" }), {
+    kind: "app",
+    label: "Used its computer",
+    detail: "Click Place order",
+    app: "its computer",
+  });
+  const typed = botStepDescriptor("computer", { action: "type", text: "hunter2 my password", intent: "Type the search terms" });
+  assert.equal(typed.detail, "Type the search terms");
+  assert.doesNotMatch(JSON.stringify(typed), /hunter2/u);
+  assert.deepEqual(botStepDescriptor("computer", { action: "capture" }), { kind: "app", label: "Used its computer", app: "its computer" });
+  assert.deepEqual(
+    botStepDescriptor("computer_shell", { command: "brew install ffmpeg", description: "Install ffmpeg" }),
+    { kind: "command", label: "Ran a command", detail: "Install ffmpeg" },
+  );
 });
 
 test("an argument of thousands of spaces is cut without stalling the main process", () => {

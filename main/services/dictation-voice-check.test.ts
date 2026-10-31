@@ -19,8 +19,10 @@ function subject(answers: Array<VoiceProviderResolution | Error>) {
 }
 
 test("an on-device press warms the model it resolved", async () => {
-  const { check, warmed } = subject([{ kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true }]);
-  assert.deepEqual(await check.resolveVoice(), { ok: true });
+  const local = { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true } as const;
+  const { check, warmed } = subject([local]);
+  // The pill records with the same answer instead of asking main again.
+  assert.deepEqual(await check.resolveVoice(), { ok: true, voice: local });
   await check.warmUp();
   assert.deepEqual(warmed, ["parakeet-v3"]);
 });

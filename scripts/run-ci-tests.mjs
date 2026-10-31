@@ -1,6 +1,6 @@
-/* global console, process */
+/* global console, process, URL */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import { createInterface } from "node:readline";
 import { createRequire } from "node:module";
@@ -15,6 +15,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
+const failureDigestReporter = fileURLToPath(new URL("./ci-failure-digest-reporter.mjs", import.meta.url));
 const nodeExecutable = process.execPath;
 const LANE_ALIASES = new Map([
   ["core", "core-git"],
@@ -138,20 +139,31 @@ function parallelTestFlags(laneCount) {
   // TAP reporter. They also share one machine: split Node's default per-process
   // file concurrency between them so wall-clock budget tests are not starved.
   const workers = Math.max(1, Math.floor((os.availableParallelism() - 1) / Math.max(1, laneCount)));
-  return ["--test-reporter=spec", `--test-concurrency=${workers}`];
+  return ["--test-reporter=spec", "--test-reporter-destination=stdout", `--test-concurrency=${workers}`];
+}
+
+function reporterFlags(options, laneCount, digest) {
+  // Naming a second reporter means naming the first: keep Node's own choice
+  // (spec on a terminal, TAP otherwise) unless the lanes run side by side.
+  const output = options.parallel
+    ? parallelTestFlags(laneCount)
+    : [`--test-reporter=${process.stdout.isTTY ? "spec" : "tap"}`, "--test-reporter-destination=stdout"];
+  return [...output, `--test-reporter=${failureDigestReporter}`, `--test-reporter-destination=${digest}`];
 }
 
 function unitCommands(lane, options, laneCount) {
   // Some .mjs tests import TypeScript with .js specifiers. Preserve the tsx
   // resolver used by the original npm test graph for the whole ordinary lane.
+  const digest = path.join(os.tmpdir(), `aiden-ci-failures-${lane.name}-${process.pid}.txt`);
   return [{
     id: `${lane.name}:tests`,
     lane: lane.name,
     files: lane.files,
+    digest,
     command: [
       nodeExecutable,
       tsxCli,
-      ...(options.parallel ? parallelTestFlags(laneCount) : []),
+      ...reporterFlags(options, laneCount, digest),
       "--test",
       ...lane.files,
     ],
@@ -279,6 +291,7 @@ function runCommand(command, label, { prefix } = {}) {
 async function timedRun(command, options, timings, runOptions) {
   console.log(`\n[ci] ${command.id}: ${commandText(command.command)}`);
   if (options.dryRun) return;
+  if (command.digest) rmSync(command.digest, { force: true });
   const started = Date.now();
   const record = (status) => timings.push({ id: command.id, lane: command.lane, files: command.files.length, seconds: (Date.now() - started) / 1000, status });
   try {
@@ -318,9 +331,29 @@ export async function executePlan(plan, options) {
     }
     for (const command of preserved) await timedRun(command, options, timings);
   } finally {
+    if (!options.dryRun) printFailureDigests(plan.unitCommands);
     if (options.summary) printTimingSummary(timings);
   }
   return timings;
+}
+
+/** Each lane's failed tests again, after all of its output. */
+function printFailureDigests(commands) {
+  for (const command of commands) {
+    if (!command.digest) continue;
+    let digest = "";
+    try {
+      digest = readFileSync(command.digest, "utf8").trim();
+    } catch {
+      // A lane that never started, or a reporter that never ran, wrote nothing.
+    }
+    rmSync(command.digest, { force: true });
+    if (!digest) continue;
+    console.log(`\nFailed tests in ${command.id}:\n\n${digest}`);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Failed tests in ${command.id}\n\n\`\`\`\n${digest}\n\`\`\`\n\n`);
+    }
+  }
 }
 
 function printTimingSummary(timings) {

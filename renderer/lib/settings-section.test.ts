@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assistantSettingsSections,
   availableSettingsDestinations,
   matchesSettingsSearch,
   parseSettingsSearch,
@@ -10,13 +11,13 @@ import {
 
 test("capability-aware settings destinations hide Computer Use everywhere", () => {
   assert.equal(
-    availableSettingsDestinations({ computerUse: false, devices: true }).some(
+    availableSettingsDestinations({ computerUse: false, devices: true, botComputers: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     false,
   );
   assert.equal(
-    availableSettingsDestinations({ computerUse: true, devices: true }).some(
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers: true }).some(
       (destination) => destination.id === "computerUse",
     ),
     true,
@@ -24,14 +25,32 @@ test("capability-aware settings destinations hide Computer Use everywhere", () =
 });
 
 test("capability-aware settings destinations hide Simulator without the devices capability", () => {
-  const ids = (capabilities: { computerUse: boolean; devices: boolean }) =>
+  const ids = (capabilities: { computerUse: boolean; devices: boolean; botComputers: boolean }) =>
     availableSettingsDestinations(capabilities).map((destination) => destination.id);
-  assert.equal(ids({ computerUse: true, devices: false }).includes("simulator"), false);
-  assert.equal(ids({ computerUse: true, devices: true }).includes("simulator"), true);
-  const linux = ids({ computerUse: false, devices: false });
+  assert.equal(ids({ computerUse: true, devices: false, botComputers: true }).includes("simulator"), false);
+  assert.equal(ids({ computerUse: true, devices: true, botComputers: true }).includes("simulator"), true);
+  const linux = ids({ computerUse: false, devices: false, botComputers: false });
   assert.equal(linux.includes("simulator"), false);
   assert.equal(linux.includes("computerUse"), false);
-  assert.equal(linux.length, SETTINGS_DESTINATIONS.length - 2);
+  assert.equal(linux.includes("botComputers"), false);
+  assert.equal(linux.length, SETTINGS_DESTINATIONS.length - 3);
+});
+
+test("Bot computers appear only on Apple silicon, in Agent, and are found by VM words", () => {
+  const ids = (botComputers: boolean) =>
+    availableSettingsDestinations({ computerUse: true, devices: true, botComputers }).map((destination) => destination.id);
+  assert.equal(ids(false).includes("botComputers"), false, "an Intel Mac has Computer Use but no Bot computers");
+  assert.equal(ids(true).includes("botComputers"), true);
+  assert.equal(SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers")?.group, "Agent");
+  const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "botComputers");
+  assert.ok(destination);
+  for (const term of ["virtual machine", "vm", "lume", "macos", "bot computer"]) {
+    assert.ok(matchesSettingsSearch(destination, term), term);
+  }
+  assert.equal(parseSettingsSection("botComputers"), "botComputers");
+  // The assistant never offers a page this Mac can't show.
+  assert.equal(assistantSettingsSections({ devices: true, botComputers: false }).includes("botComputers"), false);
+  assert.equal(assistantSettingsSections({ devices: true, botComputers: true }).includes("botComputers"), true);
 });
 
 test("accepts known settings deep links and rejects arbitrary search values", () => {
@@ -63,17 +82,12 @@ test("parses the Gemini Live settings deep link", () => {
   });
 });
 
-test("Plugins navigation advertises MCP, connectors, and the plugin directory", () => {
+test("Connectors navigation is found by its name, MCP, and the apps it connects", () => {
   const destination = SETTINGS_DESTINATIONS.find((entry) => entry.id === "mcp");
   assert.ok(destination);
-  assert.equal(destination.title, "Plugins");
-  assert.deepEqual(destination.keywords, [
-    "mcp",
-    "connections",
-    "protocol",
-    "plugins",
-    "connectors",
-  ]);
+  assert.equal(destination.title, "Connectors");
+  // The former names stay findable.
+  for (const keyword of ["mcp", "plugins", "integrations", "composio"]) assert.ok(destination.keywords.includes(keyword), keyword);
 });
 
 test("Web Search navigation advertises provider routing and privacy controls", () => {
@@ -153,7 +167,7 @@ test("Image Generation is an Agent destination reachable by deep link and model 
   }
   // Every platform shows it; no capability gates image generation.
   assert.ok(
-    availableSettingsDestinations({ computerUse: false, devices: false }).some(
+    availableSettingsDestinations({ computerUse: false, devices: false, botComputers: false }).some(
       (entry) => entry.id === "imageGeneration",
     ),
   );

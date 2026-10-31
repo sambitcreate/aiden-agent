@@ -561,6 +561,58 @@ test("a Mac opts into a host's Bot activity frames only when the host serves the
   assert.deepEqual(await negotiated(["bot-durable-session-v1"]), []);
 });
 
+test("a Mac asks for a host's Bot hand-offs in a call of its own, after the rest, only when the host lists them", async () => {
+  const negotiate = async (serverCapabilities: string[] | undefined, refuse: (accepts: string[]) => boolean = () => false) => {
+    const held = new Set(["chat:read", "bot:read", "bot:write"]);
+    const { store, requests, stored } = scripted(
+      {
+        capabilities: [...held],
+        features: ["bot-durable-session-v1", "bot-activity-v1"],
+        ...(serverCapabilities ? { serverCapabilities } : {}),
+      },
+      (input) => {
+        if (input.path !== "/device/capabilities") return { ok: true };
+        const accepts = (input.body as { accepts: string[] }).accepts;
+        // A host that does not know a name refuses the whole request.
+        if (refuse(accepts)) throw new PeerTransportError("request_failed", 400);
+        for (const grant of accepts) held.add(grant);
+        return { capabilities: [...held] };
+      },
+    );
+    await store.request("host_a", { path: "/bots" });
+    return {
+      bodies: requests.filter((request) => request.path === "/device/capabilities").map((request) => request.body),
+      grants: stored()[0]!.capabilities,
+    };
+  };
+  const lists = ["chat:read", "bot:read", "bot:write", "bot:cards", "bot:activity", "bot:handoffs"];
+  const both = await negotiate(lists);
+  assert.deepEqual(both.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }]);
+  assert.ok(both.grants.includes("bot:activity") && both.grants.includes("bot:handoffs"));
+
+  // A refused hand-off request costs the Mac none of the grants the first call won.
+  const refused = await negotiate(lists, (accepts) => accepts.includes("bot:handoffs"));
+  assert.deepEqual(refused.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }]);
+  assert.ok(refused.grants.includes("bot:activity"));
+  assert.equal(refused.grants.includes("bot:handoffs"), false);
+
+  // Hand-offs have no feature token: a host that does not list them, or lists nothing, is never asked.
+  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:activity"])).bodies, [{ accepts: ["bot:activity"] }]);
+  assert.deepEqual((await negotiate(undefined)).bodies, [{ accepts: ["bot:activity"] }]);
+  // With nothing else to ask for, the hand-off call still goes alone.
+  assert.deepEqual((await negotiate(["chat:read", "bot:read", "bot:write", "bot:handoffs"])).bodies, [{ accepts: ["bot:handoffs"] }]);
+
+  // Revision 40: a host that also lists bot:handoff-notes is asked for it the same way; a v0.61.0 host above never was.
+  const notes = await negotiate([...lists, "bot:handoff-notes"]);
+  assert.deepEqual(notes.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:handoff-notes"] }]);
+  assert.ok(notes.grants.includes("bot:handoff-notes"));
+
+  // Revision 45: a host that lists bot:images is asked for it alone too, so this Mac draws Bots' shared images.
+  const images = await negotiate([...lists, "bot:images"]);
+  assert.deepEqual(images.bodies, [{ accepts: ["bot:activity"] }, { accepts: ["bot:handoffs"] }, { accepts: ["bot:images"] }]);
+  assert.ok(images.grants.includes("bot:images"));
+});
+
 test("a lost opt-in answer is asked again on the next reconnect; a refusal is not", async () => {
   const attempts = async (failure: PeerTransportError) => {
     let calls = 0;
@@ -586,6 +638,30 @@ test("a lost opt-in answer is asked again on the next reconnect; a refusal is no
   };
   assert.deepEqual(await attempts(new PeerTransportError("unavailable")), { asked: 2, granted: true });
   assert.deepEqual(await attempts(new PeerTransportError("request_failed", 403)), { asked: 1, granted: false });
+
+  // A credential the host no longer takes is neither: the call fails the way any other call would.
+  let calls = 0;
+  const { store, requests } = scripted(
+    {
+      capabilities: ["chat:read", "bot:read", "bot:write"],
+      features: ["bot-durable-session-v1", "bot-activity-v1"],
+      serverCapabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"],
+    },
+    (input) => {
+      if (input.path !== "/device/capabilities") return { ok: true };
+      calls += 1;
+      if (calls === 1) throw new PeerTransportError("authentication_required", 401);
+      return { capabilities: ["chat:read", "bot:read", "bot:write", "bot:activity"] };
+    },
+  );
+  await assert.rejects(
+    store.request("host_a", { path: "/bots" }),
+    (error: unknown) => error instanceof PeerTransportError && error.code === "authentication_required",
+  );
+  assert.equal(requests.some((request) => request.path === "/bots"), false, "nothing is sent on a refused credential");
+  await store.connect("host_a");
+  assert.equal(requests.filter((request) => request.path === "/device/capabilities").length, 2, "the next connection asks again");
+  assert.ok((await store.list())[0]!.capabilities.includes("bot:activity"));
 });
 
 test("a malformed route hint is ignored instead of failing the connection", async () => {

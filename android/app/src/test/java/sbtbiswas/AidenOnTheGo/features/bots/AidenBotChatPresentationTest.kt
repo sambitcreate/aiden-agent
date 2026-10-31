@@ -15,7 +15,12 @@ import sbtbiswas.AidenOnTheGo.ui.theme.aidenFrameDue
 class AidenBotChatPresentationTest {
     @Test
     fun onlyMessagesStillWaitingForTheReplyAreFadedAndEachSaysWhy() {
-        assertEquals(AidenBotPendingBubble(true, AidenBotPendingCaption.SENDING), aidenBotOutgoingBubble(AidenBotOutgoingLook.Sending))
+        // A message on its way looks sent at once, and says "Sending…" only once it has waited.
+        assertEquals(AidenBotPendingBubble(false, null), aidenBotOutgoingBubble(AidenBotOutgoingLook.Sending, waitedMs = 300))
+        assertEquals(
+            AidenBotPendingBubble(false, AidenBotPendingCaption.SENDING),
+            aidenBotOutgoingBubble(AidenBotOutgoingLook.Sending, waitedMs = 5_000)
+        )
         assertEquals(
             AidenBotPendingBubble(true, AidenBotPendingCaption.QUEUED),
             aidenBotOutgoingBubble(AidenBotOutgoingLook.Queued(AidenStreamInputMode.QUEUE))

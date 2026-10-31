@@ -170,10 +170,11 @@ export interface AdvisorRuntimeDependencies {
     signal?: AbortSignal,
     conversationId?: string,
   ): Promise<ResolvedModelRuntime>;
-  recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime): Promise<void>;
+  recordUsage(message: AssistantMessage, runtime: ResolvedModelRuntime, attemptId: string): Promise<void>;
   recordUnreportedUsage(
     runtime: ResolvedModelRuntime,
     status: "failed" | "cancelled",
+    attemptId: string,
   ): Promise<void>;
   reportFailure?(area: string, error: unknown): void;
 }
@@ -627,6 +628,9 @@ export class AdvisorRuntime {
                 throw error;
               }
             });
+            // Providers can turn an abort into a synthetic error response. Preserve
+            // the caller's cancellation in both the attempt and usage ledger.
+            if (signal?.aborted) response = { ...response, stopReason: "aborted" };
             if (response.stopReason === "aborted") {
               state = "cancelled";
               failure = signal?.aborted ? "cancelled" : "timeout";
@@ -651,11 +655,12 @@ export class AdvisorRuntime {
             this.dependencies.reportFailure?.("settle", error);
           }
           try {
-            if (response) await this.dependencies.recordUsage(response, runtime);
+            if (response) await this.dependencies.recordUsage(response, runtime, attemptId);
             else {
               await this.dependencies.recordUnreportedUsage(
                 runtime,
                 state === "cancelled" ? "cancelled" : "failed",
+                attemptId,
               );
             }
             await this.dependencies.attempts.markUsageRecorded(attemptId);

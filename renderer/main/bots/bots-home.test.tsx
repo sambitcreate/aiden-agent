@@ -303,3 +303,22 @@ test("a phone's Finish on your Mac opens the connection setup even with the Bots
   const dialog = await screen.findByRole("dialog");
   assert.ok(within(dialog).getAllByText(/Gmail/u).length > 0);
 });
+
+test("/bots opens the Bot last looked at from a recent cached list while that list refreshes", async () => {
+  localStorage.setItem(
+    BOT_SIDEBAR_PREFERENCES_KEY,
+    serializeBotSidebarPreferences({ since: 1, pinnedBotId: null, lastViewed: { "bot-2": 50 }, seenReplyAt: {} }),
+  );
+  installBotTestIpc({
+    // The refresh never answers; the cached list, read moments ago, is enough.
+    "bots:list": () => new Promise<never>(() => undefined),
+    "bots:live:summary": () => idle,
+    "bots:get": (botId) => [PLANNER, INBOX].find((bot) => bot.id === botId) ?? null,
+    "bots:live:subscribe": (botId) => ({ ...idle, botId, epoch: "e1", seq: 0, entries: [], partial: null, question: null, activity: null, queued: [] }),
+    "bots:pendingApprovals": () => [],
+  });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, staleTime: 0 } } });
+  queryClient.setQueryData([...queryKeys.bots, "active"], [PLANNER, INBOX]);
+  const { router } = await mountWithBotRouter(<BotsView />, { initialPath: "/bots", queryClient });
+  await waitFor(() => assert.equal(router.state.location.pathname, "/bots/bot-2/chat"));
+});

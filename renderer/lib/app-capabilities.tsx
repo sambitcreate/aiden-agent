@@ -7,12 +7,16 @@ export interface AppCapabilities {
   bots: boolean;
   appUpdates: boolean;
   computerUse: boolean;
+  /** A macOS VM per Bot (Apple silicon only). */
+  botComputers: boolean;
   dockIcon: boolean;
   accessibilityPaste: boolean;
   dictationHoldToTalk: boolean;
   dictationHoldSetup: boolean;
   dictationHoldTrigger: string | null;
   nativeShare: boolean;
+  /** Connectors served by a separate Mac app, such as iMCP. */
+  macAppConnectors: boolean;
   appleFoundationModels: boolean;
   geminiLive: boolean;
   devices: boolean;
@@ -26,12 +30,14 @@ export const DISABLED_APP_CAPABILITIES: AppCapabilities = Object.freeze({
   bots: false,
   appUpdates: false,
   computerUse: false,
+  botComputers: false,
   dockIcon: false,
   accessibilityPaste: false,
   dictationHoldToTalk: false,
   dictationHoldSetup: false,
   dictationHoldTrigger: null,
   nativeShare: false,
+  macAppConnectors: false,
   appleFoundationModels: false,
   geminiLive: false,
   devices: false,
@@ -51,12 +57,14 @@ export function parseAppCapabilities(value: unknown): AppCapabilities {
     bots: record.bots === true,
     appUpdates: record.appUpdates === true,
     computerUse: record.computerUse === true,
+    botComputers: record.botComputers === true,
     dockIcon: record.dockIcon === true,
     accessibilityPaste: record.accessibilityPaste === true,
     dictationHoldToTalk: record.dictationHoldToTalk === true,
     dictationHoldSetup: record.dictationHoldSetup === true,
     dictationHoldTrigger: typeof record.dictationHoldTrigger === "string" ? record.dictationHoldTrigger.slice(0, 128) : null,
     nativeShare: record.nativeShare === true,
+    macAppConnectors: record.macAppConnectors === true,
     appleFoundationModels: record.appleFoundationModels === true,
     geminiLive: record.geminiLive === true,
     devices: record.devices === true,

@@ -80,16 +80,16 @@ async function reviewAndSave() {
 test("a removed MCP server stays visible by id and blocks saving until it is deselected", async () => {
   mountEditor({ permission: "full", mcpServerIds: ["mail", "gone-server"] });
 
-  assert.ok(screen.getByText("Unavailable MCP server (gone-server)"));
+  assert.ok(screen.getByText("Unavailable connector (gone-server)"));
   assert.ok(screen.getAllByText("Disabled or removed").length >= 1);
   assert.equal(confirm("Review task").disabled, true);
 
   // A selected unavailable server can still be removed, which unblocks the task.
-  const remove = mcpSwitch("Remove Unavailable MCP server (gone-server) for this scheduled task");
+  const remove = mcpSwitch("Remove Unavailable connector (gone-server) for this scheduled task");
   assert.equal(remove.disabled, false);
   fireEvent.click(remove);
   await waitFor(() => assert.equal(confirm("Review task").disabled, false));
-  assert.equal(screen.queryByText("Unavailable MCP server (gone-server)"), null);
+  assert.equal(screen.queryByText("Unavailable connector (gone-server)"), null);
 });
 
 test("a disabled MCP server is listed only while selected and cannot be newly allowed", async () => {
@@ -112,7 +112,7 @@ test("a disabled MCP server is listed only while selected and cannot be newly al
 test("allowing an MCP server grants Full permission, drops the workspace and saves the exact ids", async () => {
   const saved = mountEditor({ permission: "read-only", workspaceId: undefined });
   fireEvent.click(mcpSwitch("Allow Mail for this scheduled task"));
-  assert.ok(await screen.findByText(/may call 1 selected MCP server unattended\. MCP tools may read or change external data\./u));
+  assert.ok(await screen.findByText(/may call 1 selected connector unattended\. Connector tools may read or change external data\./u));
 
   await reviewAndSave();
   await waitFor(() => assert.equal(saved.length, 1));
@@ -123,19 +123,19 @@ test("allowing an MCP server grants Full permission, drops the workspace and sav
 
 test("a workspace and MCP servers together, or more than 16 servers, cannot be saved", async () => {
   mountEditor({ permission: "full", workspaceId: workspace.id, mcpServerIds: ["mail"] });
-  assert.ok(screen.getByText(/Choose either a workspace or MCP servers/u));
+  assert.ok(screen.getByText(/Choose either a workspace or connectors/u));
   assert.equal(confirm("Review task").disabled, true);
   cleanup();
 
   const many = Array.from({ length: 17 }, (_, index) => server(`s${index}`, `Server ${index}`));
   mountEditor({ permission: "full", mcpServerIds: many.map((entry) => entry.id) }, { mcpServers: many });
-  assert.ok(screen.getByText(/Choose at most 16 MCP servers/u));
+  assert.ok(screen.getByText(/Choose at most 16 connectors/u));
   assert.equal(confirm("Review task").disabled, true);
 });
 
 test("selected servers cannot be saved while the MCP inventory failed to load", () => {
   mountEditor({ permission: "full", mcpServerIds: ["mail"] }, { mcpServersUnavailable: true });
-  assert.ok(screen.getByText(/MCP servers could not be loaded/u));
+  assert.ok(screen.getByText(/Connectors could not be loaded/u));
   assert.equal(confirm("Review task").disabled, true);
 });
 
@@ -226,7 +226,7 @@ async function mountView(tasks: ScheduledTask[], mcpList: () => unknown) {
 test("a legacy task inherits every enabled server when edited, and says so in its details", async () => {
   const calls = await mountView([storedTask({ mcpServerIds: undefined })], () => [mail, archived]);
   fireEvent.click(await screen.findByRole("button", { name: /Legacy brief/u, pressed: false }));
-  assert.ok(await screen.findByText(/All enabled MCP servers \(legacy\)/u));
+  assert.ok(await screen.findByText(/All enabled connectors \(legacy\)/u));
 
   const edit = lastEditButton();
   await waitFor(() => assert.equal(edit.disabled, false));
@@ -257,7 +257,7 @@ test("Scheduled settings turn on default MCP access together with Full permissio
     "mcp:list": () => [mail],
   });
   await mountWithBotRouter(<ScheduledTasksSettings />, { initialPath: "/settings" });
-  const toggle = await screen.findByRole("switch", { name: "Enable MCP access for new scheduled tasks" }) as HTMLButtonElement;
+  const toggle = await screen.findByRole("switch", { name: "Enable connector access for new scheduled tasks" }) as HTMLButtonElement;
   await waitFor(() => assert.equal(toggle.disabled, false));
   assert.equal(toggle.getAttribute("aria-checked"), "false");
   fireEvent.click(toggle);

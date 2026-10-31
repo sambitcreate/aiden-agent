@@ -6,6 +6,7 @@ import { Button, Text, toast } from "../../components/ui";
 import { botsApi } from "../../lib/ipc";
 import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { queryKeys } from "../../lib/queries";
+import { addBotToCache } from "./bot-identity";
 import { BOT_PRESETS, type BotPreset } from "../../shared/bot-presets";
 import { DEFAULT_BOT_AVATAR, type BotDefinition } from "../../shared/bots";
 
@@ -33,8 +34,9 @@ export function BotStarterCarousel({
     setPending(preset.id);
     try {
       const { bot } = await botsApi.createFromPreset({ presetId: preset.id });
-      qc.setQueryData(queryKeys.bot(bot.id), bot);
-      await qc.invalidateQueries({ queryKey: queryKeys.bots });
+      // Listed and opened now; the list reread follows.
+      addBotToCache(qc, bot);
+      void qc.invalidateQueries({ queryKey: queryKeys.bots });
       onOpenChat(bot);
     } catch (error) {
       toast.error(userFacingErrorMessage(error, `Aiden couldn’t start ${preset.name}.`));

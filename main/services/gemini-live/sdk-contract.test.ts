@@ -924,7 +924,7 @@ test("Aiden's exact Pi Google adapter remains ordinary generateContent streaming
   );
 });
 
-test("Electron 43.1.1 declares the display handler, exact-frame request, and system picker", async () => {
+test("Electron 43 declares the display handler, exact-frame request, and system picker", async () => {
   const electronRoot = path.join(modulesRoot, "electron");
   const manifest = JSON.parse(
     await readFile(path.join(electronRoot, "package.json"), "utf8"),
@@ -935,7 +935,7 @@ test("Electron 43.1.1 declares the display handler, exact-frame request, and sys
     path.join(electronRoot, "electron.d.ts"),
     "utf8",
   );
-  assert.equal(manifest.version, "43.1.1");
+  assert.match(String(manifest.version), /^43\./u);
   assert.match(declarations, /setDisplayMediaRequestHandler\(/u);
   assert.match(declarations, /frame: \(WebFrameMain\) \| \(null\)/u);
   assert.match(declarations, /userGesture: boolean/u);

@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type {
   AgentEvent,
   AgentMessage,
+  AgentOptions,
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
@@ -65,6 +66,7 @@ import { DEFAULT_SUBAGENT_CHILD_DEADLINE_MS, DEFAULT_SUBAGENT_CANCELLATION_GRACE
 export * from "./subagent-child-policy.js";
 const SAFE_CHILD_PROVIDER_FAILURE = "The child model could not complete this task.";
 const CHILD_TURN_LIMIT_WARNING = "The child reached its turn limit.";
+const CHILD_REPORT_INSTRUCTION = "Your remaining allowance is for one text-only final report. No tools or further actions are available. Report only what the settled history supports: partial findings, checks actually run and their observed results, remaining checks and blockers. Work is incomplete and unverified; do not claim task acceptance or that interrupted/unknown effects succeeded. Keep the report concise.";
 const REDACTED_CREDENTIAL = "[REDACTED CREDENTIAL]";
 const MAX_PARTIAL_BOUNDARY_COMPARISONS = 50_000;
 const PARTIAL_SCAN_LIMIT_NOTICE = "[Additional partial findings omitted after safety scan limit.]";
@@ -166,6 +168,8 @@ export interface SubagentChildRunnerDependencies {
       context: BeforeToolCallContext,
       signal?: AbortSignal,
     ) => Promise<BeforeToolCallResult | undefined>;
+    prepareNextTurnWithContext?: AgentOptions["prepareNextTurnWithContext"];
+    finishTurn?: AgentOptions["finishTurn"];
     onStarting?: () => void;
   }) => SubagentRuntimeChild;
   buildTools?: (input: {
@@ -609,6 +613,9 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
       };
     });
     let child: SubagentRuntimeChild | undefined;
+    let turns = 0;
+    let toolCalls = 0;
+    let reportingWarning: string | undefined;
     if (input.executeNested) {
       const authority = input.v2Authority;
       if (
@@ -679,18 +686,53 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         permission: input.permission,
       }),
       tools: childTools,
-      beforeToolCall:
-        outboundApproval || workspaceWriteApproval || mcpMutationApproval || shellApproval
-          ? async (context, signal) => {
-              const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
-              if (workspaceResult !== undefined) return workspaceResult;
-              const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
-              if (mutationResult !== undefined) return mutationResult;
-              const shellResult = await shellApproval?.beforeToolCall(context, signal);
-              if (shellResult !== undefined) return shellResult;
-              return outboundApproval?.beforeToolCall(context, signal);
-            }
-          : undefined,
+      prepareNextTurnWithContext: ({ context }) => {
+        throwIfParentAborted(input.signal);
+        if (deadlineElapsed()) {
+          child!.cancel(new Error("Subagent child deadline exceeded."));
+          throw new Error("Subagent child deadline exceeded.");
+        }
+        if (turns >= policy.maxTurns) {
+          stopForLimit(CHILD_TURN_LIMIT_WARNING);
+          throw new Error(CHILD_TURN_LIMIT_WARNING);
+        }
+        // Reserve one of the already-authorized turns, with at most 30 seconds
+        // (10% for shorter runs) of the existing wall clock. An in-flight tool
+        // is never interrupted to manufacture a report or given extra time.
+        if (turns >= policy.maxTurns - 1 || toolCalls >= policy.maxToolCalls ||
+          now() >= deadlineAt - Math.min(30_000, policy.deadlineMs * 0.1)) {
+          reportingWarning ??= turns >= policy.maxTurns - 1
+            ? CHILD_TURN_LIMIT_WARNING
+            : toolCalls >= policy.maxToolCalls
+              ? "The child reached its tool-call limit."
+              : "The child reserved its remaining deadline for reporting.";
+          return {
+            context: {
+              ...context,
+              tools: [],
+              messages: [...context.messages, {
+                role: "user",
+                content: [{ type: "text", text: CHILD_REPORT_INSTRUCTION }],
+                timestamp: Date.now(),
+              }],
+            },
+          };
+        }
+        return undefined;
+      },
+      // A noncompliant model can still emit a stale tool name. End after this
+      // one report response, and deny it before any approval or effect dispatch.
+      finishTurn: () => reportingWarning ? { action: "end" } : undefined,
+      beforeToolCall: async (context, signal) => {
+        if (reportingWarning) return { block: true, terminate: true, reason: "Only a final text report is permitted." };
+        const workspaceResult = await workspaceWriteApproval?.beforeToolCall(context, signal);
+        if (workspaceResult !== undefined) return workspaceResult;
+        const mutationResult = await mcpMutationApproval?.beforeToolCall(context, signal);
+        if (mutationResult !== undefined) return mutationResult;
+        const shellResult = await shellApproval?.beforeToolCall(context, signal);
+        if (shellResult !== undefined) return shellResult;
+        return outboundApproval?.beforeToolCall(context, signal);
+      },
       initialMessages: input.context.messages,
       onStarting: () => input.telemetry?.starting(),
     });
@@ -719,8 +761,6 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
     let currentTurnProtocolDeltaChars = 0;
     let currentTurnHiddenProtocolDeltaChars = 0;
     let observedTerminalAssistant = false;
-    let turns = 0;
-    let toolCalls = 0;
     let lifecycleEvents = 0;
     let currentTurnHadTextDelta = false;
     let terminalError: string | null = null;
@@ -921,6 +961,18 @@ export async function runSubagentChild(input: RunSubagentChildInput): Promise<Su
         status: "interrupted",
         summary: "",
         warning: "The child was interrupted before completion.",
+      };
+    }
+    if (reportingWarning) {
+      if (!observedTerminalAssistant || !terminalOutput.trim()) {
+        return safeFailure(input.request, `${reportingWarning} The child did not provide a final text report.`);
+      }
+      return {
+        role: input.request.role,
+        label: input.request.label,
+        status: "failed",
+        ...projectSubagentCompletedSummary(sanitizePartialFindingsForParent(partialReports)),
+        warning: `${reportingWarning} These are incomplete, unverified partial findings.`,
       };
     }
     if (!observedTerminalAssistant || !terminalOutput.trim()) {

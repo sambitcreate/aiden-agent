@@ -12,6 +12,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalDecision
+import sbtbiswas.AidenOnTheGo.models.AidenApprovalSchedule
 import sbtbiswas.AidenOnTheGo.models.AidenApprovalScope
 import sbtbiswas.AidenOnTheGo.models.AidenQuestionContractCodec
 import sbtbiswas.AidenOnTheGo.models.AidenRemoteRunQuestion
@@ -47,7 +48,9 @@ data class AidenRemoteRunApproval(
     val toolCallId: String?,
     val toolName: String,
     val canAllow: Boolean,
-    val scopes: List<AidenApprovalScope>?
+    val scopes: List<AidenApprovalScope>?,
+    /** Contract revision 39 (`schedule:cards`): a scheduled-task card, or null when absent or invalid. */
+    val schedule: AidenApprovalSchedule? = null
 )
 
 /** A run snapshot. `reason: "gap"` restates the pending prompts after missed
@@ -188,8 +191,10 @@ object AidenRunEventCodec {
     }
 
     fun parseApproval(obj: JsonObject, label: String = "approval_required"): AidenRemoteRunApproval {
-        // Tool arguments and host previews (`details`) stay on the Mac.
-        assertKeys(obj, setOf("approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes"), label)
+        // Tool arguments and host previews (`details`) stay on the Mac. Revision 39 adds the
+        // display-only `schedule` card, which fails closed on its own: an invalid card reads as
+        // no card and never fails the approval or changes `canAllow` and `scopes`.
+        assertKeys(obj, setOf("approvalId", "summary", "toolCallId", "toolName", "canAllow", "scopes", "schedule"), label)
         val canAllow = (obj["canAllow"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
             ?: throw AidenRemoteContractException.UnsafePayloadField("canAllow")
         val scopes = obj["scopes"]?.let { element ->
@@ -210,7 +215,8 @@ object AidenRunEventCodec {
             toolCallId = obj.optionalString("toolCallId", label, AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH, allowEmpty = true),
             toolName = obj.string("toolName", label, AidenRemoteProtocol.MAX_TOOL_NAME_LENGTH),
             canAllow = canAllow,
-            scopes = scopes
+            scopes = scopes,
+            schedule = AidenApprovalSchedule.parseOrNull(obj["schedule"])
         )
     }
 

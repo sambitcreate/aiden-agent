@@ -44,7 +44,14 @@ export interface ChatApplicationDependencies {
   toolOutputStore?: Pick<ToolOutputStore, "deleteByChat">;
   chatStore: Pick<
     typeof chatStore,
-    "list" | "listRegular" | "get" | "create" | "rename" | "moveEmptyChatToWorkspace" | "remove"
+    | "list"
+    | "listRegular"
+    | "get"
+    | "create"
+    | "rename"
+    | "setChatModelSelection"
+    | "moveEmptyChatToWorkspace"
+    | "remove"
   > & Partial<Pick<typeof chatStore, "listSummaryMetadata">>;
   configStore: Pick<typeof configStore, "getWorkspace">;
   llmClient: Pick<
@@ -78,10 +85,14 @@ export interface ChatApplicationDependencies {
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
+  /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
+  followThrough?: { deleteChat(chatId: string): Promise<void> };
   memoryStore?: { deleteSourceChat(chatId: string): Promise<number> };
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
+  /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
+  afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -207,6 +218,30 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
       });
     },
 
+    /**
+     * The model picker in an open chat changes that chat only. Refused while a
+     * reply runs, because the running turn records its own model when it ends.
+     */
+    async setModelSelection(
+      chatId: string,
+      providerId: string,
+      model: string,
+      options: ChatApplicationMutationOptions = {},
+    ) {
+      if (deps.llmClient.isChatBusy(chatId)) {
+        throw new Error("Finish or stop the current response before changing this chat's model.");
+      }
+      return chatForRenderer(
+        await deps.chatStore.setChatModelSelection(chatId, providerId, model, async (chat) => {
+          assertRenameAllowedFromChat(chat, options);
+          await options.assertCurrent?.(chat);
+          if (deps.llmClient.isChatBusy(chatId)) {
+            throw new Error("Finish or stop the current response before changing this chat's model.");
+          }
+        }),
+      );
+    },
+
     async moveEmptyToWorkspace(
       chatId: string,
       workspaceId: string,
@@ -271,6 +306,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         await options.assertCurrent?.(current);
         await deps.llmClient.cancelChat(chatId);
         deps.visualSnapshots?.cancelChat(chatId);
+        await deps.followThrough?.deleteChat(chatId).catch((error: unknown) => {
+          deps.logError("follow-through", "Could not stop the chat's background jobs.", error);
+        });
         try {
           await deps.subagentRunStore.deleteChat(chatId);
         } catch (error) {
@@ -336,6 +374,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
+        await deps.afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId)).catch((error: unknown) => {
+          deps.logError("workspace", "Could not release the deleted chat's folder.", error);
+        });
       } finally {
         if (!releaseAdmission) {
           try {

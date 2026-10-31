@@ -1,8 +1,8 @@
 /**
  * A flat device stream with touch and keyboard input, for surfaces smaller
- * than the full viewer (the floating player). It runs only while `active`:
- * turning it off stops decoding and closes the stream and input sockets.
- * The connection rules match `device-viewer.tsx`.
+ * than the full viewer (the floating player, a Bot computer's Computer tab).
+ * It runs only while `active`: turning it off stops decoding and closes the
+ * stream and input sockets. The connection rules match `device-viewer.tsx`.
  */
 import * as React from "react";
 import { devicesApi } from "./ipc";
@@ -52,8 +52,14 @@ export function useDeviceStream(input: {
   /** Picks serve-sim (iOS) or serve-emu (Android) routes and input encoding. */
   platform: DevicePlatform;
   active: boolean;
+  /** Where grants come from; the Simulator's proxy by default. A Bot computer's viewer has its own. */
+  requestGrant?: () => Promise<DeviceStreamGrant>;
+  /** Show the MJPEG stream even where H.264 could be decoded (a Bot computer's hub serves only MJPEG). */
+  preferMjpeg?: boolean;
 }): DeviceStreamView {
-  const { hostId, deviceId, platform, active } = input;
+  const { hostId, deviceId, platform, active, preferMjpeg = false } = input;
+  const requestGrantRef = React.useRef(input.requestGrant);
+  requestGrantRef.current = input.requestGrant;
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const clientRef = React.useRef<DeviceStreamClient | null>(null);
   const renewalsRef = React.useRef<number[]>([]);
@@ -79,8 +85,7 @@ export function useDeviceStream(input: {
     let current = true;
     setStatus("connecting");
     setDetail(undefined);
-    devicesApi
-      .streamGrant()
+    (requestGrantRef.current ?? devicesApi.streamGrant)()
       .then((next) => {
         if (current) setGrant(next);
       })
@@ -98,7 +103,7 @@ export function useDeviceStream(input: {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const client = createDeviceStreamClient(
-      { hostId, deviceId, platform, grant },
+      { hostId, deviceId, platform, grant, preferMjpeg },
       createCanvasFrameSink(canvas),
       {
         onStatus: (next, message) => {
@@ -131,7 +136,7 @@ export function useDeviceStream(input: {
       setInputConnected(false);
       setMjpegUrl(null);
     };
-  }, [active, grant, hostId, deviceId, platform, fail]);
+  }, [active, grant, hostId, deviceId, platform, preferMjpeg, fail]);
 
   // The fallback image mounts only after the running client asked for it.
   const attachImage = React.useCallback((image: HTMLImageElement | null) => {

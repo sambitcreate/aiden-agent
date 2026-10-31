@@ -16,6 +16,10 @@ export const COMPUTER_USE_ACCEPTANCE_RECEIPT = path.join(
   "build",
   "computer-use-acceptance-receipt.json",
 );
+export const BOT_COMPUTERS_ACCEPTANCE_RECEIPT = path.join(
+  "build",
+  "bot-computers-acceptance-receipt.json",
+);
 
 function resolvedDescendant(root, relative) {
   const resolvedRoot = path.resolve(root);
@@ -38,6 +42,10 @@ export function resolveMacDistributionStaging(root = repositoryRoot) {
 
 export function resolveComputerUseAcceptanceReceipt(root = repositoryRoot) {
   return resolvedDescendant(root, COMPUTER_USE_ACCEPTANCE_RECEIPT);
+}
+
+export function resolveBotComputersAcceptanceReceipt(root = repositoryRoot) {
+  return resolvedDescendant(root, BOT_COMPUTERS_ACCEPTANCE_RECEIPT);
 }
 
 async function infoIfPresent(target) {
@@ -101,26 +109,43 @@ async function createSafeDirectory(relative, root) {
   return (await inspectDescendant(context, relative, { create: true })).path;
 }
 
-export async function invalidateComputerUseAcceptanceReceipt(root = repositoryRoot) {
+async function invalidateReceipt(relative, root) {
   const context = await safeRoot(root);
-  const inspected = await inspectDescendant(context, COMPUTER_USE_ACCEPTANCE_RECEIPT, {
-    leaf: "file",
-  });
+  const inspected = await inspectDescendant(context, relative, { leaf: "file" });
   if (inspected.exists) await rm(inspected.path);
 }
 
-export async function writeComputerUseAcceptanceReceipt(contents, root = repositoryRoot) {
+async function writeReceipt(relative, contents, root, label) {
   const context = await safeRoot(root);
-  await inspectDescendant(context, path.dirname(COMPUTER_USE_ACCEPTANCE_RECEIPT), { create: true });
-  const existing = await inspectDescendant(await safeRoot(root), COMPUTER_USE_ACCEPTANCE_RECEIPT, {
-    leaf: "file",
-  });
-  if (existing.exists)
-    throw new Error("Refusing to replace existing Computer Use acceptance evidence.");
-  const receipt = resolveComputerUseAcceptanceReceipt(root);
+  await inspectDescendant(context, path.dirname(relative), { create: true });
+  const existing = await inspectDescendant(await safeRoot(root), relative, { leaf: "file" });
+  if (existing.exists) throw new Error(`Refusing to replace existing ${label} acceptance evidence.`);
+  const receipt = resolvedDescendant(root, relative);
   await writeFile(receipt, contents, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  await inspectDescendant(await safeRoot(root), COMPUTER_USE_ACCEPTANCE_RECEIPT, { leaf: "file" });
+  await inspectDescendant(await safeRoot(root), relative, { leaf: "file" });
   return receipt;
+}
+
+export async function invalidateComputerUseAcceptanceReceipt(root = repositoryRoot) {
+  await invalidateReceipt(COMPUTER_USE_ACCEPTANCE_RECEIPT, root);
+}
+
+export async function writeComputerUseAcceptanceReceipt(contents, root = repositoryRoot) {
+  return writeReceipt(COMPUTER_USE_ACCEPTANCE_RECEIPT, contents, root, "Computer Use");
+}
+
+export async function invalidateBotComputersAcceptanceReceipt(root = repositoryRoot) {
+  await invalidateReceipt(BOT_COMPUTERS_ACCEPTANCE_RECEIPT, root);
+}
+
+export async function writeBotComputersAcceptanceReceipt(contents, root = repositoryRoot) {
+  return writeReceipt(BOT_COMPUTERS_ACCEPTANCE_RECEIPT, contents, root, "Bot computers");
+}
+
+/** A new package invalidates every packaged-acceptance receipt: each is evidence about one build. */
+async function invalidateAcceptanceReceipts(root) {
+  await invalidateComputerUseAcceptanceReceipt(root);
+  await invalidateBotComputersAcceptanceReceipt(root);
 }
 
 export async function prepareMacPackageOutput(mode, root = repositoryRoot) {
@@ -128,14 +153,14 @@ export async function prepareMacPackageOutput(mode, root = repositoryRoot) {
   if (!relative) throw new Error("Package output mode must be development or distribution.");
   await removeSafeDirectory(relative, root);
   const output = await createSafeDirectory(relative, root);
-  await invalidateComputerUseAcceptanceReceipt(root);
+  await invalidateAcceptanceReceipts(root);
   return output;
 }
 
 export async function beginMacDistribution(root = repositoryRoot) {
   await removeSafeDirectory(MAC_PACKAGE_OUTPUTS.distribution, root);
   await removeSafeDirectory(MAC_DISTRIBUTION_STAGING_OUTPUT, root);
-  await invalidateComputerUseAcceptanceReceipt(root);
+  await invalidateAcceptanceReceipts(root);
   const staging = await createSafeDirectory(MAC_DISTRIBUTION_STAGING_OUTPUT, root);
   return {
     staging,

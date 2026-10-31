@@ -16,6 +16,7 @@ import androidx.annotation.StringRes
 import sbtbiswas.AidenOnTheGo.R
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import java.util.UUID
@@ -45,6 +46,36 @@ interface AidenBotSessionTransport {
         decision: AidenBotRoutineProposalDecision,
         key: UUID
     ): AidenBotRoutineProposalRespondResult
+
+    /**
+     * Revision 37 (`bot:handoffs`): Done or Skip on a hand-off card. A transport that predates
+     * hand-offs answers nothing: the card only shows to a phone the Mac sends hand-offs to.
+     */
+    suspend fun answerHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        key: UUID
+    ): AidenBotHandoffAnswerReceipt = throw AidenRemoteClientException.InvalidResponse()
+
+    /** Revision 37: Finish on your Mac for a sign-in hand-off. */
+    suspend fun openHandoffOnMac(botId: String, waitId: String, key: UUID): AidenBotHandoffOpenOnMacReceipt =
+        throw AidenRemoteClientException.InvalidResponse()
+
+    /** Revision 37: lifts the person's pause (`DELETE /bots/{id}/pause`). */
+    suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView =
+        throw AidenRemoteClientException.InvalidResponse()
+
+    /** Revision 45 (`bot:images`): the bytes of an image the Bot shared. A Mac without it has none to read. */
+    suspend fun sharedImage(botId: String, entryId: String): ByteArray =
+        throw AidenRemoteClientException.InvalidResponse()
+    /** Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. */
+    suspend fun actOnIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        key: UUID
+    ): AidenBotIssueActReceipt = throw AidenRemoteClientException.InvalidResponse()
 }
 
 /**
@@ -76,6 +107,22 @@ class AidenRemoteBotSessionTransport(private val client: AidenRemoteClient) : Ai
         decision: AidenBotRoutineProposalDecision,
         key: UUID
     ) = client.respondToBotRoutineProposal(botId, proposalId, decision, key)
+    override suspend fun answerHandoff(
+        botId: String,
+        waitId: String,
+        request: AidenBotHandoffAnswerRequest,
+        key: UUID
+    ) = client.answerBotHandoff(botId, waitId, request, key)
+    override suspend fun openHandoffOnMac(botId: String, waitId: String, key: UUID) =
+        client.openBotHandoffOnMac(botId, waitId, key)
+    override suspend fun unpause(botId: String, key: UUID) = client.unpauseBot(botId, key)
+    override suspend fun sharedImage(botId: String, entryId: String) = client.botSessionImage(botId, entryId)
+    override suspend fun actOnIssue(
+        botId: String,
+        issueId: String,
+        request: AidenBotIssueActRequest,
+        key: UUID
+    ) = client.actOnBotIssue(botId, issueId, request, key)
 }
 
 /** One transcript row. Consecutive `memory_update` entries share one quiet caption. */
@@ -179,6 +226,12 @@ fun aidenApplyBotSessionEvent(current: AidenBotSession?, event: AidenBotSessionE
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, activity = payload.activity))
         is AidenBotSessionEventPayload.Queued ->
             AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, queued = payload.queued))
+        // Revision 37: the frame carries the whole hand-off, or null once it is settled.
+        is AidenBotSessionEventPayload.Handoff ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, handoff = payload.handoff))
+        // Revision 42: the frame carries the whole card list; an empty list clears it.
+        is AidenBotSessionEventPayload.Issues ->
+            AidenBotSessionEventOutcome.Applied(current.copy(seq = event.seq, issues = payload.issues))
         AidenBotSessionEventPayload.Closed -> AidenBotSessionEventOutcome.Reconnect
         is AidenBotSessionEventPayload.Snapshot -> AidenBotSessionEventOutcome.Applied(payload.session)
     }
@@ -257,6 +310,45 @@ fun aidenBotLostAccess(error: Exception): Boolean = when (error) {
     else -> false
 }
 
+/**
+ * Which of `bot:cards`, `bot:activity`, `bot:handoffs`, `bot:handoff-notes`, `bot:handoff-on-mac` and `bot:images` [installation] holds. The Mac shapes a
+ * Bot session feed by these (its cards, Chat activity, hand-offs and the paused state) when the
+ * feed opens, and keeps that shape for the feed's life. A Bot chat can open from the pairing's
+ * saved features while it connects, before this connection has negotiated a grant, so the chat
+ * compares these once `/server` has answered and reopens a feed that opened without one
+ * ([AidenBotSessionController.reopenFeed]).
+ */
+fun aidenBotSessionFeedGrants(installation: AidenInstallation?): Set<AidenRemoteCapability> =
+    listOf(
+        AidenRemoteCapability.BOT_CARDS,
+        AidenRemoteCapability.BOT_ACTIVITY,
+        AidenRemoteCapability.BOT_HANDOFFS,
+        AidenRemoteCapability.BOT_HANDOFF_NOTES,
+        AidenRemoteCapability.BOT_HANDOFF_ON_MAC,
+        AidenRemoteCapability.BOT_IMAGES
+    )
+        .filterTo(mutableSetOf()) { installation?.hasNegotiatedAccess(it) == true }
+
+/** What the composer does with its text (revision 37). */
+enum class AidenBotComposerMode {
+    /** A message to the Bot. */
+    MESSAGE,
+    /** Done's note for the action hand-off the Bot is waiting on. */
+    HANDOFF_NOTE,
+    /** A sign-in hand-off waits: it is finished on the Mac, or skipped on its card. */
+    HELD_FOR_SIGN_IN,
+    /**
+     * Revision 40: a card a password-or-code rule opened waits. It takes no note, so the composer
+     * holds: a code typed here would reach the Bot. Done and Skip on the card answer it.
+     */
+    HELD_FOR_NO_NOTE,
+    /** The person paused the Bot: nothing is sent until Resume. */
+    PAUSED
+}
+
+/** The Mac's answer to Finish on your Mac: whether it brought the Bot's browser forward. */
+data class AidenBotHandoffMacPrompt(val waitId: String, val opened: Boolean)
+
 data class AidenBotSessionUiState(
     val session: AidenBotSession? = null,
     val isLoading: Boolean = true,
@@ -272,6 +364,16 @@ data class AidenBotSessionUiState(
     val isDismissing: Boolean = false,
     val isAnsweringQuestion: Boolean = false,
     val isRespondingToApproval: Boolean = false,
+    /** Revision 37: Done or Skip on the hand-off card is on its way. */
+    val isAnsweringHandoff: Boolean = false,
+    /** Revision 37: Finish on your Mac is on its way. */
+    val isFinishingHandoffOnMac: Boolean = false,
+    /** What the Mac said after Finish on your Mac, for the card it was pressed on. */
+    val handoffMacPrompt: AidenBotHandoffMacPrompt? = null,
+    /** Revision 37: Resume on a paused Bot is on its way. */
+    val isUnpausing: Boolean = false,
+    /** Revision 42: the cards whose action is on its way, so their buttons wait. */
+    val actingIssueIds: Set<String> = emptySet(),
     val actionError: String? = null,
     /** A notice about unsent messages; shown in place of [actionError] until dismissed or the next send. */
     val notice: AidenBotSessionNotice? = null,
@@ -302,6 +404,39 @@ data class AidenBotSessionUiState(
     val isRunning: Boolean get() = state == AidenBotSessionState.RUNNING
     val isInterrupted: Boolean get() = session?.interrupted == true
     val isAccessBlocked: Boolean get() = session?.blocked == AidenBotSessionBlock.ACCESS_CHANGED
+    /** Revision 37: the person paused this Bot. It takes no messages until Resume. */
+    val isPaused: Boolean get() = state == AidenBotSessionState.PAUSED
+
+    /** Revision 37: the step the Bot handed back, while it waits. */
+    val handoff: AidenBotHandoff? get() = session?.handoff
+
+    /** Revision 42: the host's open "Needs you" cards, oldest first. */
+    val openIssues: List<AidenBotIssue> get() = session?.issues.orEmpty().filter { !it.resolved }
+    fun isActingOn(issue: AidenBotIssue): Boolean = actingIssueIds.contains(issue.id)
+    /** The composer's text goes to an action hand-off as Done's note, unless the card takes none. */
+    val composerAnswersHandoff: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote != false
+    /** Revision 40: the waiting card takes no note, so the composer waits for Done or Skip. */
+    val composerHeldForNoNote: Boolean get() = handoff?.kind == AidenBotHandoffKind.ACTION && handoff?.takesNote == false
+    /** A sign-in hand-off is finished on the Mac: the composer waits for it (Skip still answers). */
+    val composerHeldForSignIn: Boolean get() = handoff?.kind == AidenBotHandoffKind.SIGN_IN
+
+    /** What Send does now: a paused Bot takes nothing; a waiting hand-off takes the text as its note. */
+    val composerMode: AidenBotComposerMode
+        get() = when {
+            isPaused -> AidenBotComposerMode.PAUSED
+            composerHeldForSignIn -> AidenBotComposerMode.HELD_FOR_SIGN_IN
+            composerHeldForNoNote -> AidenBotComposerMode.HELD_FOR_NO_NOTE
+            composerAnswersHandoff -> AidenBotComposerMode.HANDOFF_NOTE
+            else -> AidenBotComposerMode.MESSAGE
+        }
+
+    /** The composer takes text: a message the Bot can take, or a hand-off note while none is on its way. */
+    val composerEnabled: Boolean
+        get() = when (composerMode) {
+            AidenBotComposerMode.MESSAGE -> canSend
+            AidenBotComposerMode.HANDOFF_NOTE -> !isAnsweringHandoff
+            AidenBotComposerMode.HELD_FOR_SIGN_IN, AidenBotComposerMode.HELD_FOR_NO_NOTE, AidenBotComposerMode.PAUSED -> false
+        }
 
     /** The transcript to draw: the Mac's, or the cached one while connecting. */
     val entries: List<AidenBotSessionEntry> get() = session?.entries ?: cachedEntries
@@ -314,7 +449,7 @@ data class AidenBotSessionUiState(
 
     /** The composer takes a message unless the Mac said this Bot can't; before the first snapshot it waits in the outbox. */
     val canSend: Boolean
-        get() = !needsModel && !botMissing && state != AidenBotSessionState.UNAVAILABLE
+        get() = !needsModel && !botMissing && state != AidenBotSessionState.UNAVAILABLE && !isPaused
 
     /** "Stopping" shows. */
     val isStopping: Boolean get() = stopIntent != AidenBotTurnIntent.NONE && isRunning
@@ -325,7 +460,8 @@ data class AidenBotSessionUiState(
     val queued: List<AidenBotQueuedMessage> get() = session?.queued.orEmpty()
 
     /** The outgoing messages to draw after the transcript and the Mac's Queued bubbles. */
-    val outgoing: List<AidenBotOutgoingMessage> get() = outbox.filter { !it.echoed && !isShownAsQueued(it) }
+    val outgoing: List<AidenBotOutgoingMessage>
+        get() = outbox.filter { !it.echoed && !isShownAsQueued(it) && !(it.takenBeforeVisit && it.unheld) }
 
     private fun isShownAsQueued(message: AidenBotOutgoingMessage): Boolean =
         message.queuedId != null && queued.any { it.submissionId == message.queuedId }
@@ -348,7 +484,8 @@ data class AidenBotSessionUiState(
 
     /** Stop stays in the top bar while a turn runs, including while it waits on a question or approval card. */
     val canStopTurn: Boolean
-        get() = isRunning || ((session?.question != null || session?.approval != null) && !isInterrupted)
+        get() = isRunning ||
+            ((session?.question != null || session?.approval != null || session?.handoff != null) && !isInterrupted && !isPaused)
 
     /** The failed turn Retry resends: only the newest entry, only with text, while sending is allowed and no Retry of it is on its way. */
     val retryableFailedTurn: AidenBotSessionEntry.FailedTurn?
@@ -422,6 +559,8 @@ class AidenBotSessionController(
     private val requestLimitMillis: Long = REQUEST_LIMIT_MILLIS,
     /** How long a taken message that nothing on the Mac shows stays before it goes (FR-m5). */
     private val unheldGraceMillis: Long = UNHELD_GRACE_MILLIS,
+    /** Revision 45: how many bytes of shared images this chat keeps in memory. */
+    sharedImageBudgetBytes: Long = AidenSharedImageBytes.DEFAULT_MAX_BYTES,
     private val nowMs: () -> Long = System::currentTimeMillis
 ) {
     private val _state: MutableStateFlow<AidenBotSessionUiState>
@@ -444,15 +583,20 @@ class AidenBotSessionController(
     private val inFlight = mutableSetOf<String>()
     private var pendingAnswer: Pair<String, AidenQuestionRespondRequest>? = null
     private var pendingApprovalDecision: Pair<String, AidenApprovalDecision>? = null
+    private var pendingHandoffAnswer: Pair<String, AidenBotHandoffAnswerRequest>? = null
     /** How many times the Mac has written each field, so a failed action rolls back only what nothing newer replaced. */
     private var stateWrites = 0
     private var questionWrites = 0
     private var approvalWrites = 0
+    private var handoffWrites = 0
+    private var issueWrites = 0
     /** Transcript entries that already stand for an outgoing message, for the life of an epoch. */
     private val claimedEntries = mutableSetOf<String>()
     private var claimsEpoch: String? = null
     /** The run a Stop was pressed in, by its `startedAt`. */
     private var stopStartedAt: Long? = null
+    /** Revision 45: images the Bot shared, kept in memory within a budget while this chat is open; never written to disk. */
+    private val sharedImages = AidenSharedImageBytes(sharedImageBudgetBytes)
 
     init {
         val cached = sessionKey?.let { store?.transcript(it) }.orEmpty()
@@ -473,6 +617,12 @@ class AidenBotSessionController(
         state = _state.asStateFlow()
         if (held != null && adopted != held && sessionKey != null) store?.storeOutbox(sessionKey, this, adopted)
     }
+
+    /**
+     * Revision 37: called once for each hand-off this chat sees arrive (a new wait id), from the
+     * feed or a snapshot, so the screen can alert a person who isn't looking (G24).
+     */
+    var onHandoffArrived: ((AidenBotHandoff) -> Unit)? = null
 
     fun setActivitySupported(supported: Boolean) {
         _state.update { it.copy(activitySupported = supported) }
@@ -504,12 +654,65 @@ class AidenBotSessionController(
         restoreJob?.cancel()
         unheldTimers.values.forEach { it.cancel() }
         unheldTimers.clear()
+        sharedImages.clear()
+    }
+
+    /**
+     * Opens the feed again: a fresh read of the session, then a new feed whose first frame is a
+     * snapshot. The Mac shapes a feed by this phone's grants when it opens, so a grant negotiated
+     * after this chat's feed opened ([aidenBotSessionFeedGrants]) reaches it only on a new one.
+     * Unsent messages, their keys and any answer on its way are left as they are. Does nothing
+     * unless the feed is following.
+     */
+    fun reopenFeed() {
+        if (released || feedJob?.isActive != true) return
+        feedJob?.cancel()
+        feedJob = scope.launch { follow() }
     }
 
     /** The notice was read. */
     fun dismissNotice() {
         _state.update { it.copy(notice = null) }
     }
+
+    /**
+     * Revision 45 (`bot:images`): the bytes of an image the Bot shared, or null when the Mac can't
+     * send them (it left the chat, or the phone is offline). Images are kept while this chat is open,
+     * within a byte budget and only while the transcript still shows them; one that was dropped, or
+     * whose read failed, is read again the next time it is drawn. An id the transcript doesn't show
+     * is never asked for.
+     */
+    suspend fun sharedImageData(entryId: String): ByteArray? {
+        sharedImages[entryId]?.let { return it }
+        if (entryId !in shownSharedImageIds()) return null
+        val data = try {
+            bounded { transport.sharedImage(botId, entryId) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return null
+        }
+        sharedImages.retainOnly(shownSharedImageIds())
+        sharedImages.put(entryId, data)
+        return data
+    }
+
+    /**
+     * The attachment the shared image viewer draws. Entry ids (`entry_7`) repeat across Bots and
+     * Macs, and the viewer caches pictures for the whole app by attachment id, so the id it sees
+     * names this Mac and Bot too. Reads still go to [sharedImageData] with the entry's own id.
+     */
+    fun sharedImageAttachment(image: AidenBotSessionEntry.SharedImage): AidenMessageAttachment =
+        image.attachment.copy(id = "bot-image:$imageScope:${image.id}")
+
+    private val imageScope: String by lazy {
+        val owner = sessionKey?.let { "${it.instanceId}\u0000${it.deviceId}\u0000" }.orEmpty() + botId
+        java.security.MessageDigest.getInstance("SHA-256").digest(owner.toByteArray())
+            .take(12).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun shownSharedImageIds(): Set<String> =
+        _state.value.entries.filterIsInstance<AidenBotSessionEntry.SharedImage>().mapTo(HashSet()) { it.id }
 
     /** [block], or [AidenBotSessionTimeout] once it has run past [requestLimitMillis]. */
     private suspend fun <T : Any> bounded(block: suspend () -> T): T =
@@ -613,6 +816,7 @@ class AidenBotSessionController(
             is AidenBotSessionEventPayload.State -> afterStateWrite(previous)
             is AidenBotSessionEventPayload.Question -> questionWrites += 1
             is AidenBotSessionEventPayload.Approval -> approvalWrites += 1
+            is AidenBotSessionEventPayload.Handoff -> handoffWritten(previous?.handoff, payload.handoff)
             is AidenBotSessionEventPayload.Activity -> activityArrived(payload.activity)
             is AidenBotSessionEventPayload.Entry -> storeTranscript()
             else -> Unit
@@ -628,11 +832,19 @@ class AidenBotSessionController(
         settleCards(session)
         questionWrites += 1
         approvalWrites += 1
+        handoffWritten(previous?.handoff, session.handoff)
         if (session.activity != previous?.activity) activityArrived(session.activity)
         afterStateWrite(previous)
         storeTranscript()
         reconcileOutbox(snapshot = true)
         wakeOutbox()
+    }
+
+    /** The Mac wrote the hand-off: another card's Mac prompt goes, and a new card is announced once. */
+    private fun handoffWritten(previous: AidenBotHandoff?, next: AidenBotHandoff?) {
+        handoffWrites += 1
+        _state.update { if (it.handoffMacPrompt != null && it.handoffMacPrompt.waitId != next?.waitId) it.copy(handoffMacPrompt = null) else it }
+        if (next != null && next.waitId != previous?.waitId) onHandoffArrived?.invoke(next)
     }
 
     private fun settleCards(session: AidenBotSession) {
@@ -831,7 +1043,8 @@ class AidenBotSessionController(
             echoEntryId = null,
             echoSubmissionId = null,
             queuedId = null,
-            unheld = false
+            unheld = false,
+            takenBeforeVisit = false
         )
         setOutbox(_state.value.outbox.map { if (it.id == id) again else it })
         flushNow()
@@ -1041,7 +1254,8 @@ class AidenBotSessionController(
     private suspend fun deliver(key: UUID) {
         val current = _state.value
         val message = current.outbox.firstOrNull { it.key == key } ?: return
-        if (current.needsModel || current.state == AidenBotSessionState.UNAVAILABLE || current.botMissing) {
+        // A paused Bot (revision 37) takes nothing either: the message waits as "Couldn't send · Try again".
+        if (current.needsModel || current.state == AidenBotSessionState.UNAVAILABLE || current.isPaused || current.botMissing) {
             // A frozen request may have reached the Mac: Try again replays its key. Any entry it
             // waited on goes back to the others.
             message.echoEntryId?.let { claimedEntries -= it }
@@ -1371,6 +1585,203 @@ class AidenBotSessionController(
         }
     }
 
+    /**
+     * Revision 37: answers the hand-off once, Done (with an optional note the Bot reads) or Skip.
+     * The card goes at once and comes back with an error if the answer didn't reach the Mac,
+     * unless the Mac has since shown another (R18). A sign-in can only be skipped from a phone.
+     * An unanswered attempt keeps its key, so retrying the same answer replays the Mac's
+     * receipt; another answer gets a new key. A card answered elsewhere (`handoff_expired`)
+     * stays gone. A second tap while one is in flight sends nothing.
+     */
+    suspend fun answerHandoff(outcome: AidenBotHandoffOutcome, note: String? = null): Boolean {
+        val handoff = _state.value.session?.handoff ?: return false
+        if (outcome == AidenBotHandoffOutcome.DONE && handoff.kind == AidenBotHandoffKind.SIGN_IN) return false
+        val trimmed = note?.trim()?.takeIf { it.isNotEmpty() }
+        // A card that takes no note (revision 40) is answered bare: a code typed as a note never leaves the phone.
+        if (trimmed != null && !handoff.takesNote) return false
+        if (trimmed != null && trimmed.codePointCount(0, trimmed.length) > AidenBotHandoffWire.MAX_NOTE_LENGTH) {
+            _state.update { it.copy(actionError = HANDOFF_NOTE_TOO_LONG) }
+            return false
+        }
+        val request = AidenBotHandoffAnswerRequest(outcome, trimmed)
+        var claimed = false
+        val writes = handoffWrites
+        _state.update { current ->
+            if (current.isAnsweringHandoff) current else {
+                claimed = true
+                current.copy(
+                    isAnsweringHandoff = true,
+                    actionError = null,
+                    handoffMacPrompt = null,
+                    session = current.session?.copy(handoff = null)
+                )
+            }
+        }
+        if (!claimed) return false
+        val action = "$ANSWER_HANDOFF:${handoff.waitId}"
+        if (pendingHandoffAnswer != action to request) {
+            keys.complete(action)
+            pendingHandoffAnswer = action to request
+        }
+        return try {
+            bounded { transport.answerHandoff(botId, handoff.waitId, request, keys.key(action)) }
+            keys.complete(action)
+            pendingHandoffAnswer = null
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            if (aidenBotMacAnswered(error)) pendingHandoffAnswer = null
+            if ((error as? AidenRemoteClientException.Server)?.body?.code == AidenRemoteErrorCode.HANDOFF_EXPIRED) {
+                // Answered on the Mac or another phone, or withdrawn: nothing waits any more.
+                _state.update { it.copy(actionError = HANDOFF_EXPIRED) }
+            } else {
+                _state.update { current ->
+                    val session = current.session
+                    current.copy(
+                        session = if (handoffWrites == writes && session?.handoff == null) session?.copy(handoff = handoff) else session,
+                        actionError = HANDOFF_NOT_SENT
+                    )
+                }
+            }
+            false
+        } finally {
+            _state.update { it.copy(isAnsweringHandoff = false) }
+        }
+    }
+
+    /**
+     * Revision 37: Finish on your Mac, for a sign-in hand-off (and, revision 43, a step on the
+     * Bot's own screen there). The card stays; it then says whether the Mac brought the Bot's
+     * browser or computer forward. A retry after an unknown outcome reuses the key.
+     */
+    suspend fun finishHandoffOnMac(): Boolean {
+        val handoff = _state.value.session?.handoff ?: return false
+        if (handoff.kind != AidenBotHandoffKind.SIGN_IN && !handoff.onMac) return false
+        var claimed = false
+        _state.update { current ->
+            if (current.isFinishingHandoffOnMac) current else {
+                claimed = true
+                current.copy(isFinishingHandoffOnMac = true, actionError = null)
+            }
+        }
+        if (!claimed) return false
+        val action = "$OPEN_HANDOFF_ON_MAC:${handoff.waitId}"
+        return try {
+            val receipt = bounded { transport.openHandoffOnMac(botId, handoff.waitId, keys.key(action)) }
+            keys.complete(action)
+            _state.update {
+                if (it.session?.handoff?.waitId == handoff.waitId) {
+                    it.copy(handoffMacPrompt = AidenBotHandoffMacPrompt(handoff.waitId, receipt.opened))
+                } else it
+            }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(action, error)
+            if ((error as? AidenRemoteClientException.Server)?.body?.code == AidenRemoteErrorCode.HANDOFF_EXPIRED) {
+                _state.update { current ->
+                    val session = current.session
+                    current.copy(
+                        session = if (session?.handoff?.waitId == handoff.waitId) session.copy(handoff = null) else session,
+                        actionError = HANDOFF_EXPIRED
+                    )
+                }
+            } else {
+                _state.update { it.copy(actionError = UNREACHABLE) }
+            }
+            false
+        } finally {
+            _state.update { it.copy(isFinishingHandoffOnMac = false) }
+        }
+    }
+
+    /**
+     * Revision 37: Resume on a paused Bot. The Mac's answer stands, so nothing is shown before
+     * it: a reply the pause cut short comes back interrupted, with its own Resume and Dismiss.
+     */
+    suspend fun unpause(): Boolean {
+        val current = _state.value
+        if (!current.isPaused || UNPAUSE in inFlight) return false
+        inFlight += UNPAUSE
+        _state.update { it.copy(isUnpausing = true, actionError = null) }
+        val writes = stateWrites
+        return try {
+            val view = bounded { transport.unpause(botId, keys.key(UNPAUSE)) }
+            keys.complete(UNPAUSE)
+            if (stateWrites == writes) applyStateView(view)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(UNPAUSE, error)
+            _state.update { it.copy(actionError = UNREACHABLE) }
+            false
+        } finally {
+            inFlight -= UNPAUSE
+            _state.update { it.copy(isUnpausing = false) }
+        }
+    }
+
+    /**
+     * Revision 42 (`bot:issues`): carries out one action a "Needs you" card offers. A settling
+     * action drops the card here and puts it back if the request didn't reach the Mac; the Mac's
+     * own `issues` frame is the truth either way. A retry after an unknown outcome reuses its key,
+     * so the host action never runs twice.
+     */
+    suspend fun actOnIssue(issue: AidenBotIssue, action: AidenBotIssueAction): Boolean {
+        val current = _state.value
+        if (!current.hasLoaded || issue.resolved || action !in issue.actions) return false
+        if (current.openIssues.none { it.id == issue.id }) return false
+        if (issue.id in current.actingIssueIds) return false
+        val settles = action.kind != AidenBotIssueActionKind.OPEN_CHAT
+        val actionKey = "issue:${issue.id}:${action.kind.name}:${action.routineId.orEmpty()}"
+        val writes = issueWrites
+        _state.update { state ->
+            state.copy(
+                actionError = null,
+                actingIssueIds = state.actingIssueIds + issue.id,
+                session = if (settles) {
+                    state.session?.copy(issues = state.session.issues?.filterNot { it.id == issue.id })
+                } else {
+                    state.session
+                }
+            )
+        }
+        return try {
+            val receipt = bounded {
+                transport.actOnIssue(botId, issue.id, AidenBotIssueActRequest(action), keys.key(actionKey))
+            }
+            keys.complete(actionKey)
+            if (receipt.result == AidenBotIssueActResult.NOT_OPEN && settles && issueWrites == writes) {
+                issueWrites += 1
+            }
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            keys.failed(actionKey, error)
+            _state.update { state ->
+                val server = error as? AidenRemoteClientException.Server
+                val stale = server?.body?.code == AidenRemoteErrorCode.OPERATION_STALE ||
+                    server?.body?.code == AidenRemoteErrorCode.INVALID_REQUEST
+                state.copy(
+                    session = if (settles && issueWrites == writes && state.session?.issues?.none { it.id == issue.id } == true) {
+                        state.session.copy(issues = state.session.issues.orEmpty() + issue)
+                    } else {
+                        state.session
+                    },
+                    actionError = if (stale) ISSUE_STALE else ISSUE_NOT_SENT
+                )
+            }
+            false
+        } finally {
+            _state.update { it.copy(actingIssueIds = it.actingIssueIds - issue.id) }
+        }
+    }
+
     suspend fun requestConnection(pluginId: String) {
         val phase = _state.value.connectRequests[pluginId]
         if (phase == AidenBotConnectRequestPhase.SENDING || phase == AidenBotConnectRequestPhase.SENT) return
@@ -1480,11 +1891,21 @@ class AidenBotSessionController(
         const val ANSWER_QUESTION = "answerQuestion"
         const val RESPOND_APPROVAL = "respondApproval"
         const val RESPOND_PROPOSAL = "respondProposal"
+        const val ANSWER_HANDOFF = "answerHandoff"
+        const val OPEN_HANDOFF_ON_MAC = "openHandoffOnMac"
+        const val UNPAUSE = "unpause"
         /** Tries a message gets on a connection that keeps failing before it says "Couldn't send". */
         const val MAX_CONNECTION_ATTEMPTS = 3
         const val SEND_FAILED = "Aiden couldn’t send that. Try again."
         const val UNREACHABLE = "Aiden couldn’t reach your Mac. Try again."
         const val ANSWER_FAILED = "Aiden couldn’t send that answer. Try again."
+        /** Revision 37 copy, shared with iOS and desktop. */
+        const val HANDOFF_EXPIRED = "That card was already answered or closed."
+        const val HANDOFF_NOT_SENT = "That answer wasn’t sent. Please try again."
+        const val HANDOFF_NOTE_TOO_LONG = "Keep the note under 4,000 characters."
+        /** Revision 42 copy, shared with iOS and desktop. */
+        const val ISSUE_STALE = "This card changed. Pull to refresh and try again."
+        const val ISSUE_NOT_SENT = "That didn’t reach your Mac. Please try again."
         /** The bound on each request to the Mac (FR-I3), the same as iOS. */
         const val REQUEST_LIMIT_MILLIS = 12_000L
         /** How long a taken message nothing on the Mac shows waits for a second look (FR-m5). */
@@ -1498,5 +1919,8 @@ class AidenBotSessionController(
  */
 object AidenBotSessionCopy {
     const val NEEDS_MODEL = "Needs an AI model"
-    const val PAUSED_ROW = "Paused — tap to resume"
+    /** A reply that stopped before it finished (a quit, a crash, or a lifted pause). */
+    const val INTERRUPTED_ROW = "Interrupted — tap to resume"
+    /** Revision 37: the person paused the Bot (G2, the same words as iOS and desktop). */
+    const val PAUSED_ROW = "Paused"
 }

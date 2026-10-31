@@ -28,7 +28,26 @@ import { workspaceStore, accessFor } from "./workspaces.ts";
 import { recordUsage } from "./usage-ledger.ts";
 import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
+import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
+
+/**
+ * The approval summary a paired phone shows. A call with only a command or path reads
+ * like the desktop host's ("Run command: npm test"); anything else stays the exact
+ * request, so nothing the call would do is hidden.
+ */
+export function daemonApprovalSummary(toolName: string, input: unknown): string {
+  const args = input !== null && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+  const only = (key: string) => {
+    const value = args && Object.keys(args).length === 1 ? args[key] : undefined;
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const readable = toolName === "bash" ? only("command") && `Run command: ${only("command")}`
+    : toolName === "read" ? only("path") && `Read file: ${only("path")}`
+      : toolName === "ls" ? only("path") && `List folder: ${only("path")}`
+        : undefined;
+  return readable || `${toolName}: ${JSON.stringify(input)}`;
+}
 
 /** One daemon owns this store. CLI imports always copy its journals into new sessions. */
 export function createDaemonChats(agentDir: string) {
@@ -38,7 +57,7 @@ export function createDaemonChats(agentDir: string) {
   const activity = new ChatActivityRegistry(() => {});
   const admission = new ChatTurnAdmission();
   const deletion = new ChatDeletionGate();
-  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
+  const active = new Map<string, { streamId: string; ownerId: string; workspaceId?: string; abort: AbortController; cancellationOrigin?: GenerationCancellationOrigin; session?: AgentSession; settled: Promise<void>; finish(): void; release(): void }>();
   const reserved = new Set<string>();
   const idleWaiters = new Map<string, Set<() => void>>();
   const wakeIdle = (id: string) => { for (const wake of idleWaiters.get(id) ?? []) wake(); idleWaiters.delete(id); };
@@ -67,7 +86,14 @@ export function createDaemonChats(agentDir: string) {
       }
       return true;
     },
-    async cancelChat(id: string) { admission.releaseChat(id); const entry = active.get(id); entry?.abort.abort(); await entry?.session?.abort(); },
+    /** Stops the chat's turn; the first stop's origin is what its timeline records, as on the desktop. */
+    async cancelChat(id: string, origin: GenerationCancellationOrigin = "chat_deletion") {
+      admission.releaseChat(id); const entry = active.get(id);
+      if (entry && !entry.abort.signal.aborted) entry.cancellationOrigin ??= origin;
+      entry?.abort.abort(); await entry?.session?.abort();
+    },
+    /** A Bot the person paused: its reply ends as their Stop, and the chat is kept. */
+    async stopChatWork(id: string) { await llmClient.cancelChat(id, "user_stop"); return llmClient.waitForChatIdle(id); },
     approve(id: string, decision: "allow" | "deny", ownerId: string) {
       const pending = approvals.get(id); if (!pending || pending.ownerId !== ownerId) return false;
       approvals.delete(id); pending.resolve(decision === "allow"); return true;
@@ -75,7 +101,7 @@ export function createDaemonChats(agentDir: string) {
     cancel(streamId: string, ownerId: string) {
       const pair = [...active.entries()].find(([, entry]) => entry.streamId === streamId && entry.ownerId === ownerId);
       if (!pair) return false;
-      void llmClient.cancelChat(pair[0]); return true;
+      void llmClient.cancelChat(pair[0], "user_stop"); return true;
     },
     async start(streamId: string, params: ChatStartParams, owner: ChatGenerationOwner, options: { usageSource: UsageRequestSource; turnId?: string; botAudienceId?: string; onTurnAccepted?(): void }) {
       if (owner.isDestroyed() || !admission.owns(params.chatId, options.turnId ?? streamId, owner.documentId)) return false;
@@ -110,7 +136,9 @@ export function createDaemonChats(agentDir: string) {
         const chat = await chatStore.get(params.chatId);
         if (!chat) throw new Error("The chat is unavailable.");
         if (chat.botId) {
+          bots?.assertLegacyChatAllowed?.();
           if (!bots || !options.botAudienceId) throw new Error("This chat requires a Bot capability audience.");
+          await bots.assertNotPaused(chat.botId);
           botAdmission = await bots.authority.admit({ audienceId: options.botAudienceId, botId: chat.botId, chatId: chat.id });
           assertBotRuntimeProviderSelection(botAdmission.authority.provider, { providerId: params.providerId, model: params.model });
           const cancel = () => { entry.abort.abort(); void entry.session?.abort(); };
@@ -191,7 +219,7 @@ export function createDaemonChats(agentDir: string) {
                 approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
                 entry.abort.signal.addEventListener("abort", cancel, { once: true });
                 if (entry.abort.signal.aborted) cancel();
-                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: `${event.toolName}: ${original}` });
+                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
               });
               await assertAuthority();
               if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
@@ -244,7 +272,7 @@ export function createDaemonChats(agentDir: string) {
         send("chat:done", { streamId, content, chat: updated, timeline: finalTimeline }); return true;
       } catch (error) {
         const cancelled = entry.abort.signal.aborted;
-        const finalTimeline = timeline.finish(cancelled ? "cancelled" : "failed");
+        const finalTimeline = cancelled ? timeline.finish("cancelled", entry.cancellationOrigin) : timeline.finish("failed");
         if (!persisted && (content || produced.length)) {
           await chatStore.appendMessage(params.chatId, { role: "assistant", content, timeline: finalTimeline }).catch(() => {
             process.stderr.write("aiden: Could not persist the partial response.\n");
@@ -262,6 +290,6 @@ export function createDaemonChats(agentDir: string) {
   }
   return { chatStore, llmClient, activity, admission, deletion, sessionPath,
     setBots(runtime: CliBotGenerationRuntime) { bots = runtime; },
-    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat!(id))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
+    async stop() { const ids = new Set([...reserved, ...active.keys()]); admission.releaseAll(); await Promise.allSettled([...ids].map((id) => llmClient.cancelChat(id, "application_shutdown"))); await Promise.all([...ids].map((id) => llmClient.waitForChatIdle(id))); },
   };
 }

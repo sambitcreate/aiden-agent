@@ -218,7 +218,7 @@ Detailed behavioral oracles:
 - Desktop fake-provider chat produces a Memory panel; click its switch; observe the actual gate and persisted state; reopen chat/relaunch and verify refreshed state. Extend existing e2e surface tests rather than grepping JSX/source.
 - SwiftUI/Compose view tests operate controls and assert accessible names, states, pending/error behavior and service results. Shared semantic fixtures validate enum/value compatibility. Run both native focused suites and paired-device acceptance; report emulator versus physical evidence separately.
 - Mid-operation unpair/revoke/host switch/workspace delete: effect stays with its original target or is denied, never migrates. No mutation from notifications or background receipt hydration.
-- Disabling Skills while generation is active: future skill effects stop and panel receipt reaches the UI despite model cancellation. Memory/Web Search tool admission reflects saved enablement with honest timing.
+- Disabling Skills while generation is active: future skill effects stop and panel receipt reaches the UI despite model cancellation. Memory/Web Search tool admission reflects saved enablement with honest timing. (Superseded 2026-10-27: turning Skills off no longer cancels running replies; it applies from the next skill call. See `aiden-app-knowledge-actions-plan.md`.)
 - CLI real TUI fixture: focus/keyboard change and persisted result; external fake app tool cannot escape None. Headless descriptors cannot execute or wait for a nonexistent interactive prompt.
 - Export/package: no grant/credential in copied chat, artifact or telemetry; relocated bundles contain only shipped help; private plans/memory omitted. Long histories hydrate only visible panels with bounded subscriptions.
 

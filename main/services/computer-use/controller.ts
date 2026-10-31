@@ -100,11 +100,24 @@ export type ComputerUseVerifyStatus = "satisfied" | "unsatisfied" | "unknown";
 
 export type ComputerUseDriverEffect = "confirmed" | "partial" | "unverifiable" | "suspected_noop";
 
+/** An element as an approval describes it: its role and label only, never its value. */
+export interface ComputerUseApprovalElement {
+  role?: string;
+  label?: string;
+}
+
 export interface ComputerUseApprovalDescriptor {
   toolName: "computer_use";
   summary: string;
   target: ComputerUseTargetDetails;
   grant: ComputerUseGrantPrepared;
+  /** The element the action targets in the latest capture (by number, or under its pixel). */
+  element?: ComputerUseApprovalElement;
+  /** type and key: the element an earlier action in this window last put focus on. */
+  focusedElement?: ComputerUseApprovalElement;
+  /** The window's latest full capture showed a secure text field. */
+  secureFieldInCapture?: boolean;
+  menuPath?: readonly string[];
 }
 
 interface Bounds {
@@ -157,6 +170,19 @@ interface ActiveTarget extends WindowRecord {
   screenshotWidth?: number;
   screenshotHeight?: number;
   elements: Map<number, ElementRecord>;
+}
+
+/**
+ * What the rules classifier may know about one window between captures:
+ * every action invalidates the element map, so the element a click or
+ * set_value focused, and whether the last full capture showed a secure text
+ * field, are kept here until another window is targeted.
+ */
+interface WindowFacts {
+  pid: number;
+  windowId: number;
+  focused?: ComputerUseApprovalElement;
+  secureField: boolean;
 }
 
 interface DriverImage {
@@ -565,6 +591,29 @@ function normalizeApps(result: ParsedDriverResult): AppRecord[] {
   return apps;
 }
 
+/** `AXSecureTextField`, as a role or a secure text field subrole. */
+function isSecureTextRole(role: string | undefined): boolean {
+  return role !== undefined && /secure\s*text\s*field/iu.test(role.replace(/^AX/u, ""));
+}
+
+/** The innermost captured element whose screenshot frame contains the pixel. */
+function elementAt(target: ActiveTarget, coordinate: readonly number[]): ElementRecord | undefined {
+  const [x, y] = coordinate;
+  if (x === undefined || y === undefined) return undefined;
+  let best: ElementRecord | undefined;
+  let bestArea = Number.POSITIVE_INFINITY;
+  for (const element of target.elements.values()) {
+    const frame = element.screenshotFrame;
+    if (!frame || x < frame.x || y < frame.y || x >= frame.x + frame.width || y >= frame.y + frame.height) continue;
+    const area = frame.width * frame.height;
+    if (area < bestArea) {
+      best = element;
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
 function normalizeElements(result: ParsedDriverResult, maximum: number): ElementRecord[] {
   const raw = result.structured?.elements;
   if (!Array.isArray(raw)) return [];
@@ -801,6 +850,7 @@ export class ComputerUseController {
    * element-map invalidation, since actions do not replace driver snapshots.
    */
   private lastTreeSnapshot: { pid: number; windowId: number; snapshotId: string } | null = null;
+  private windowFacts: WindowFacts | null = null;
   private revision = 0;
   private readonly grants: ComputerUseGrantLedger;
 
@@ -849,7 +899,81 @@ export class ComputerUseController {
       summary: `${summarizeComputerUseApproval(normalized)} — ${this.approvalTargetSummary(target)}`,
       target: this.targetDetails(target)!,
       grant: this.grants.prepare(normalized),
+      ...this.approvalFacts(normalized, target),
     };
+  }
+
+  /** The role and label of what the action touches, for the Bot rules classifier. */
+  private approvalFacts(
+    args: ComputerUseArgs,
+    target: ActiveTarget,
+  ): Pick<ComputerUseApprovalDescriptor, "element" | "focusedElement" | "secureFieldInCapture" | "menuPath"> {
+    const facts = this.factsFor(target);
+    const element = this.actedElement(args, target);
+    const typing = args.action === "type" || args.action === "key";
+    return {
+      ...(element ? { element } : {}),
+      ...(typing && facts?.focused ? { focusedElement: { ...facts.focused } } : {}),
+      ...(facts?.secureField ? { secureFieldInCapture: true } : {}),
+      ...(args.action === "menu" && args.menu_path ? { menuPath: [...args.menu_path] } : {}),
+    };
+  }
+
+  private factsFor(target: Pick<WindowRecord, "pid" | "windowId">): WindowFacts | undefined {
+    const facts = this.windowFacts;
+    return facts && facts.pid === target.pid && facts.windowId === target.windowId ? facts : undefined;
+  }
+
+  /** The captured element an action addresses: by number, or the innermost one under its pixel. */
+  private actedElement(args: ComputerUseArgs, target: ActiveTarget): ComputerUseApprovalElement | undefined {
+    let record: ElementRecord | undefined;
+    if (args.action === "drag") {
+      record =
+        args.from_element !== undefined
+          ? target.elements.get(args.from_element)
+          : args.from_coordinate
+            ? elementAt(target, args.from_coordinate)
+            : undefined;
+    } else if (args.element !== undefined) {
+      record = target.elements.get(args.element);
+    } else if (args.coordinate) {
+      record = elementAt(target, args.coordinate);
+    }
+    if (!record || (record.role === undefined && record.label === undefined)) return undefined;
+    return {
+      ...(record.role !== undefined ? { role: record.role } : {}),
+      ...(record.label !== undefined ? { label: record.label } : {}),
+    };
+  }
+
+  /** After a successful action: where focus went, as far as Aiden can tell. */
+  private recordFocus(args: ComputerUseArgs, target: ActiveTarget, acted: ComputerUseApprovalElement | undefined): void {
+    const facts: WindowFacts = this.factsFor(target) ?? {
+      pid: target.pid,
+      windowId: target.windowId,
+      secureField: false,
+    };
+    switch (args.action) {
+      case "click":
+      case "double_click":
+      case "right_click":
+      case "middle_click":
+      case "set_value":
+        facts.focused = acted;
+        break;
+      case "key": {
+        // Typing a character keeps focus; Tab, Return and shortcuts may move it.
+        const typed = [...(args.keys ?? "")].length === 1;
+        if (!typed) facts.focused = undefined;
+        break;
+      }
+      case "type":
+      case "scroll":
+        break;
+      default:
+        facts.focused = undefined;
+    }
+    this.windowFacts = facts;
   }
 
   authorize(
@@ -1074,6 +1198,7 @@ export class ComputerUseController {
     this.grants.clear();
     this.clearTarget();
     this.lastTreeSnapshot = null;
+    this.windowFacts = null;
     void this.session?.close().catch(() => {});
   }
 
@@ -1084,6 +1209,7 @@ export class ComputerUseController {
 
   private setTarget(window: WindowRecord, elements: ElementRecord[] = []): ActiveTarget {
     this.revision += 1;
+    if (!this.factsFor(window)) this.windowFacts = null;
     const target: ActiveTarget = {
       ...window,
       elements: new Map(elements.map((element) => [element.index, element])),
@@ -1328,6 +1454,16 @@ export class ComputerUseController {
     }
     const elements = effectiveMode === "vision" ? [] : normalizeElements(result, maximumElements);
     const target = this.setTarget(window, elements);
+    // A vision capture reads no elements, so it can't rule a secure field out.
+    if (effectiveMode !== "vision") {
+      const facts = this.factsFor(target);
+      this.windowFacts = {
+        pid: target.pid,
+        windowId: target.windowId,
+        ...(facts?.focused ? { focused: facts.focused } : {}),
+        secureField: elements.some((element) => isSecureTextRole(element.role)),
+      };
+    }
     const width = result.image?.width ?? safeInteger(result.structured?.screenshot_width, 1);
     const height = result.image?.height ?? safeInteger(result.structured?.screenshot_height, 1);
     // Only exact dimensions parsed from this capture's image can translate AX
@@ -1786,6 +1922,7 @@ export class ComputerUseController {
     const target = this.requireTarget();
     const session = await this.getSession(signal);
     const call = this.buildDriverCall(args, target, session.toolCatalog);
+    const acted = this.actedElement(args, target);
     if (args.delivery_mode === "foreground" && args.bring_to_front === true) {
       await this.callDriver(
         "bring_to_front",
@@ -1819,6 +1956,7 @@ export class ComputerUseController {
     // mutation. Keep the immutable window identity, but make every later
     // element/pixel action acquire a fresh snapshot and a fresh approval.
     this.invalidateTargetSnapshot(target);
+    this.recordFocus(args, target, acted);
     const details = outcomeDetails(outcome);
     const actionPayload: Record<string, unknown> = {
       ok: true,

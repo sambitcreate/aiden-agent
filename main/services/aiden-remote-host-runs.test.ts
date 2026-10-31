@@ -343,6 +343,44 @@ test("a phone attached to a foreign run sees the phone projection: summary, canA
   });
 });
 
+test("a phone that opted into schedule cards sees the card on run approvals and gap snapshots, nothing else changes", () => {
+  const { registry, service } = harness({ maxEventsPerRun: 3, deltaCoalesceMs: 0 });
+  registry.publish("run-1", "chat:approval", approval("approval-1"));
+  const carded = {
+    ...phone("device-cards"),
+    capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "schedule:read", "schedule:cards"]),
+  };
+  // The opt-in alone is not enough: the card carries the task's instructions.
+  const unreadable = {
+    ...phone("device-no-read"),
+    capabilities: new Set<AidenRemoteCapability>(["runs:observe", "runs:control", "schedule:cards"]),
+  };
+  const live = (device: typeof carded) =>
+    open(service, device, "run-1").frames().find((frame) => frame.event === "approval_required")!.data.payload;
+
+  const plain = live(phone("device-plain"));
+  const withCard = live(carded);
+  const { schedule, ...rest } = withCard as Record<string, unknown> & { schedule?: Record<string, unknown> };
+  assert.deepEqual(rest, plain, "the card is the only difference");
+  assert.equal(withCard.canAllow, true);
+  assert.equal("details" in withCard, false);
+  assert.equal(schedule?.name, "Nightly tests");
+  assert.equal(schedule?.prompt, "Run npm test.");
+  assert.equal("schedule" in live(unreadable), false);
+  // A desktop controller decides from the full details, so it never needs the card.
+  const mac = live({ ...carded, id: "device-mac", type: "mac" });
+  assert.equal("schedule" in mac, false);
+  assert.deepEqual(mac.details, scheduleDetails());
+
+  // Pushed out of retention, the approval comes back in the gap snapshot with the same card.
+  for (const delta of ["a", "b", "c", "d"]) registry.publish("run-1", "chat:delta", { delta });
+  const snapshot = open(service, carded, "run-1").frames()[0]!;
+  assert.equal(snapshot.event, "snapshot");
+  const [pending] = (snapshot.data.payload as { approvals: Array<Record<string, unknown>> }).approvals;
+  assert.deepEqual(pending!.schedule, schedule);
+  assert.equal(pending!.canAllow, true);
+});
+
 test("a phone may allow the Computer Use access card from a foreign run with its scopes", async () => {
   const { registry, service } = harness();
   registry.publish("run-1", "chat:approval", approval("approval-1", {

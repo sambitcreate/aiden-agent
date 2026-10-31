@@ -168,12 +168,22 @@ final class AidenRemoteCoordinator {
     private(set) var connectionIssue: AidenConnectionIssue?
     private(set) var connectionState: AidenRemoteConnectionState
     private(set) var server: AidenServer?
+    /// The Mac's feature tokens: this connection's `/server` answer, else what
+    /// the active pairing saved from its last answer, else nil for a pairing
+    /// that never heard `/server`. Gates read this so a cold or connecting open
+    /// behaves like the last connected one instead of falling to legacy paths.
+    var knownServerFeatures: [String]? {
+        if let server { return server.features }
+        let saved = installationStore.activeInstallation?.serverFeatures ?? []
+        return saved.isEmpty ? nil : saved
+    }
     private(set) var workspaces: [AidenWorkspace] = []
     private(set) var workspaceSnapshotRevision = 0
     private(set) var isMutating = false
     var presentedError: String?
     let workspaceArchiveStore: AidenWorkspaceArchiveStore
     private let chatCache: AidenChatCache
+    private let chatDraftStore: AidenChatDraftStore
     private let scheduledTaskCache: AidenScheduledTaskCache
     private let workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache
     private let installationDataGate = AidenInstallationDataGate()
@@ -188,6 +198,7 @@ final class AidenRemoteCoordinator {
         self.haptics = haptics ?? AidenHapticCenter()
         workspaceArchiveStore = AidenWorkspaceArchiveStore()
         chatCache = .shared
+        chatDraftStore = .shared
         scheduledTaskCache = .shared
         workspaceEnvironmentCache = .shared
         clientFactory = { try AidenRemoteClient(installation: $0, credential: $1) }
@@ -198,6 +209,7 @@ final class AidenRemoteCoordinator {
         installationStore: AidenInstallationStore,
         workspaceArchiveStore: AidenWorkspaceArchiveStore? = nil,
         chatCache: AidenChatCache = .shared,
+        chatDraftStore: AidenChatDraftStore = .shared,
         scheduledTaskCache: AidenScheduledTaskCache = .shared,
         workspaceEnvironmentCache: AidenWorkspaceEnvironmentCache = .shared,
         haptics: (any AidenHapticEmitting)? = nil,
@@ -207,6 +219,7 @@ final class AidenRemoteCoordinator {
         self.haptics = haptics ?? AidenHapticCenter()
         self.workspaceArchiveStore = workspaceArchiveStore ?? AidenWorkspaceArchiveStore()
         self.chatCache = chatCache
+        self.chatDraftStore = chatDraftStore
         self.scheduledTaskCache = scheduledTaskCache
         self.workspaceEnvironmentCache = workspaceEnvironmentCache
         self.clientFactory = clientFactory
@@ -214,6 +227,7 @@ final class AidenRemoteCoordinator {
     }
 
     func start() async {
+        await chatDraftStore.migrateExistingStorage()
         guard installationStore.activeInstallation != nil else {
             connectionGeneration &+= 1
             connectionState = .needsPairing
@@ -813,7 +827,28 @@ final class AidenRemoteCoordinator {
             installationId: installation.id,
             generation: generation
         )
+        for capabilities in Self.capabilitiesAskedForAlone {
+            await negotiateCapabilityAloneIfNeeded(
+                capabilities,
+                client: client,
+                installationId: installation.id,
+                generation: generation
+            )
+        }
     }
+
+    /// Opt-ins a Mac older than their revision refuses by name, in the order
+    /// they are asked for after the progress batch: `bot:handoffs` (revision
+    /// 37), with `bot:handoff-notes` (revision 40) and `bot:handoff-on-mac`
+    /// (revision 43) in the same call when the Mac offers them, then
+    /// `schedule:cards` (revision 39), then `bot:images` (revision 45), then
+    /// `bot:issues` (revision 42).
+    static let capabilitiesAskedForAlone: [[AidenRemoteCapability]] = [
+        [.botHandoffs, .botHandoffNotes, .botHandoffOnMac],
+        [.scheduleCards],
+        [.botImages],
+        [.botIssues],
+    ]
 
     /// Existing pairings predate the progress opt-in field. Upgrade them only
     /// after the authenticated server advertises the matching feature. A
@@ -867,6 +902,57 @@ final class AidenRemoteCoordinator {
             }
             // Feature discovery and the device-capability update are additive;
             // older Macs remain connected with the existing feature set.
+        }
+    }
+
+    /// Contract revisions 37 and 39: `bot:handoffs` and `schedule:cards` are
+    /// each asked for in a call of their own, after the progress batch, and
+    /// only while the Mac lists them in `serverCapabilities`. A Mac that does
+    /// not know a name refuses the whole request with a 400, so naming it in
+    /// the batch could cost the device every other opt-in. A refusal leaves the
+    /// earlier grants as they are. Revision 40: the rest of a group, such as
+    /// `bot:handoff-notes`, joins its first opt-in's call only while the Mac
+    /// offers that first one and lists the member too, so a Mac on an earlier
+    /// revision still grants `bot:handoffs`, and a device that holds it asks
+    /// for the notes alone once its Mac updates.
+    private func negotiateCapabilityAloneIfNeeded(
+        _ capabilities: [AidenRemoteCapability],
+        client: AidenRemoteClient,
+        installationId: String,
+        generation: Int
+    ) async {
+        guard isCurrentContext(installationId: installationId, generation: generation),
+              let server = self.server, server.instanceId == installationId,
+              let first = capabilities.first, server.serverCapabilities?.contains(first) == true,
+              let installation = installationStore.installations.first(where: { $0.id == installationId }) else {
+            return
+        }
+        let missing = capabilities.filter {
+            server.serverCapabilities?.contains($0) == true && !installation.hasNegotiatedAccess(to: $0)
+        }
+        guard !missing.isEmpty else { return }
+        do {
+            let negotiatedCapabilities = try await client.updateDeviceCapabilities(accepts: missing)
+            guard isCurrentContext(installationId: installationId, generation: generation) else { return }
+            let refreshedServer = try await client.server()
+            guard isCurrentContext(installationId: installationId, generation: generation),
+                  refreshedServer.instanceId == installationId else { return }
+            try installationStore.updateNegotiatedDeviceCapabilities(
+                negotiatedCapabilities,
+                confirmedBy: refreshedServer
+            )
+            self.server = refreshedServer
+        } catch let error where aidenIsCancellation(error) {
+            return
+        } catch {
+            if let context = try? requestContext(for: installationId),
+               isCurrentContext(installationId: installationId, generation: generation),
+               await handleCredentialRevocation(error, context: context) {
+                return
+            }
+            // A Mac without the route, or a refusal (400 or 404), keeps the
+            // grants the device already has: hand-offs stay on the Mac, and
+            // scheduled-task approvals keep the summary card.
         }
     }
 
