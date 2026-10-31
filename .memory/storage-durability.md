@@ -51,9 +51,9 @@ Branch `perf/storage-durability`, from the main-process optimization audit (MAIN
 
 ## Image attachments as files (MAIN-11, built 2026-10-31, cross-machine images phase 2)
 - Built differently from the old proposal below in a few ways; see `.memory/cross-machine-images.md` "Step 2" for the shipped design.
-- Images (only images; text attachments stay inline) live in `chats/images/<sha[0:2]>/<sha256>` (`chat-image-store.ts`), written via `writeFileAtomic({ exclusive: true, mode: 0o600 })`.
+- Images (only images; text attachments stay inline) live in `chats/images/<sha[0:2]>/<sha256>` (`chat-image-store.ts`), written via `writeFileAtomic({ exclusive: true, mode: 0o600 })`. `put` resolves only once the file and its shard entry are durable: puts of one hash are serialized, and a file this process has not synced itself (earlier run, or a put whose sync failed) is fsynced with its shard before reuse.
 - Chat JSON keeps `{id, name, mimeType, kind, size, sha256, width?, height?}`; old inline chats migrate lazily in `writeChat`.
-- GC: `sweepUnusedImages` regex-scans every file in the chats folder (also quarantined and staged payloads) for `"sha256":"<hex>"`, 24 h grace by mtime (renewed on reuse) plus an in-process "written into a chat recently" map. It runs only while `images/.sweep-needed` exists (set by delete, clear, replaced snapshot), 2 min after startup and after each such change. Pi journals are not scanned: they never name image hashes.
+- GC: `sweepUnusedImages` regex-scans every file in the chats folder (also quarantined and staged payloads) for `"sha256":"<hex>"`, 24 h grace by mtime (renewed on reuse) plus an in-process "written into a chat recently" map. It runs only while `images/.sweep-needed` exists (set by delete, clear, replaced snapshot), 2 min after startup and after each such change, and again when the first deferred file's grace runs out (never sooner than the 2 min delay). Pi journals are not scanned: they never name image hashes.
 - Original proposal (kept for history): blobs under `chats/blobs/`, messages `{ blob: sha256, ... }`, dual-read, startup-only GC with a 24 h grace.
 
 ## Not done yet (audit leads, still open)

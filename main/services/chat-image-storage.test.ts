@@ -218,8 +218,87 @@ test("storing bytes that are already on disk renews them, so a sweep keeps them"
   const sha = await images.put(PNG_BYTES);
   await ageImageFiles(directory, 2 * DAY);
   await images.put(PNG_BYTES);
-  assert.deepEqual(await images.sweep(new Set(), { graceMs: DAY }), { removed: 0, deferred: 1 });
+  const { removed, deferred, nextDueInMs } = await images.sweep(new Set(), { graceMs: DAY });
+  assert.deepEqual({ removed, deferred }, { removed: 0, deferred: 1 });
+  assert.ok(nextDueInMs! > DAY - 60_000 && nextDueInMs! <= DAY, "due again about a day from now");
   assert.deepEqual(await imageFiles(directory), [sha]);
+});
+
+test("a put of bytes another put is still syncing waits until the file is durable", async (t) => {
+  const directory = await tempDir(t);
+  const shard = imageSha256(PNG_BYTES).slice(0, 2);
+  let reachedShardSync!: () => void;
+  const reached = new Promise<void>((resolve) => (reachedShardSync = resolve));
+  let releaseShardSync!: () => void;
+  const released = new Promise<void>((resolve) => (releaseShardSync = resolve));
+  let shardSyncs = 0;
+  const images = createChatImageStore(async () => directory, {
+    syncFile: async () => undefined,
+    syncDirectory: async (target) => {
+      if (path.basename(target) !== shard) return;
+      shardSyncs += 1;
+      if (shardSyncs === 1) {
+        reachedShardSync();
+        await released;
+      }
+    },
+  });
+
+  const first = images.put(PNG_BYTES);
+  await reached; // the file is visible, its directory entry not yet durable
+  let secondDone = false;
+  const second = images.put(PNG_BYTES).then(() => (secondDone = true));
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(secondDone, false, "the second put waits for the first one's sync");
+  releaseShardSync();
+  await Promise.all([first, second]);
+});
+
+test("a put after a failed sync syncs the existing file again before it succeeds", async (t) => {
+  const directory = await tempDir(t);
+  const sha = imageSha256(PNG_BYTES);
+  const synced: string[] = [];
+  let failShard = true;
+  const images = createChatImageStore(async () => directory, {
+    syncFile: async (target) => {
+      synced.push(`file ${path.basename(target)}`);
+    },
+    syncDirectory: async (target) => {
+      if (path.basename(target) !== sha.slice(0, 2)) return;
+      if (failShard) {
+        failShard = false;
+        throw Object.assign(new Error("I/O error"), { code: "EIO" });
+      }
+      synced.push("shard");
+    },
+  });
+
+  await assert.rejects(images.put(PNG_BYTES), /I\/O error/);
+  assert.deepEqual(await imageFiles(directory), [sha], "the file was published before the sync failed");
+  synced.length = 0;
+  assert.equal(await images.put(PNG_BYTES), sha);
+  assert.deepEqual(synced, [`file ${sha}`, "shard"]);
+
+  // Once durable, reusing the bytes in this process syncs nothing more.
+  synced.length = 0;
+  await images.put(PNG_BYTES);
+  assert.deepEqual(synced, []);
+});
+
+test("unused images still inside their grace are swept once it runs out, without another delete", async (t) => {
+  const directory = await tempDir(t);
+  const store = createChatStore(async () => directory, undefined, { imageSweepDelayMs: 20, imageSweepGraceMs: 300 });
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await store.remove(chat.id);
+  assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
+
+  const deadline = Date.now() + 5_000;
+  while ((await imageFiles(directory)).length > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.deepEqual(await imageFiles(directory), []);
+  await assert.rejects(fs.access(path.join(directory, CHAT_IMAGES_DIRECTORY, ".sweep-needed")), { code: "ENOENT" });
 });
 
 test("the window's image link serves the stored bytes and revalidates by hash", async (t) => {

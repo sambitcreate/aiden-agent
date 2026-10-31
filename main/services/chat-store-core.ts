@@ -103,6 +103,8 @@ export interface ChatStoreDurability {
    * are only removed by an explicit `sweepUnusedImages`.
    */
   imageSweepDelayMs?: number;
+  /** Test seam: how long an unused image file is kept. Defaults to a day. */
+  imageSweepGraceMs?: number;
 }
 
 /** Images read back at once when a chat is returned with its bytes. */
@@ -164,14 +166,18 @@ export function createChatStore(
     durability.readFile ?? ((target: string) => fs.readFile(target, "utf-8"));
   const images =
     durability.images ??
-    createChatImageStore(resolveChatsDir, { syncDirectory: (target) => syncDirectory(target) });
+    createChatImageStore(resolveChatsDir, {
+      syncDirectory: (target) => syncDirectory(target),
+      syncFile: (target) => syncFile(target),
+    });
+  const imageSweepGraceMs = durability.imageSweepGraceMs ?? IMAGE_SWEEP_GRACE_MS;
   /** When each image hash was last written into a chat by this process. */
   const imageReferencedAt = new Map<string, number>();
   const reportedMissingImages = new Set<string>();
   /** Recently linked chats' image lists, keyed by chat, valid while the chat file is unchanged. */
   const storedImageLists = new Map<string, { stamp: string; images: Map<string, { mimeType: string; size: number }> }>();
   let imageSweepTimer: ReturnType<typeof setTimeout> | undefined;
-  let imageSweepRunning: Promise<{ removed: number }> | undefined;
+  let imageSweepRunning: Promise<unknown> | undefined;
   let pendingDirectorySync: string | undefined;
 
   async function syncDirectoryDurably(directory: string): Promise<void> {
@@ -1100,7 +1106,7 @@ export function createChatStore(
 
   async function sweepUnusedImages(
     options: { onlyWhenNeeded?: boolean } = {},
-  ): Promise<{ removed: number }> {
+  ): Promise<{ removed: number; nextDueInMs?: number }> {
     const directory = await resolveChatsDir();
     const marker = await sweepMarkerPath();
     let mark: string | undefined;
@@ -1119,11 +1125,11 @@ export function createChatStore(
     if (!referenced) return { removed: 0 };
     const startedAt = Date.now();
     const result = await images.sweep(referenced, {
-      graceMs: IMAGE_SWEEP_GRACE_MS,
-      isProtected: (sha256) => Date.now() - (imageReferencedAt.get(sha256) ?? -Infinity) < IMAGE_SWEEP_GRACE_MS,
+      graceMs: imageSweepGraceMs,
+      isProtected: (sha256) => Date.now() - (imageReferencedAt.get(sha256) ?? -Infinity) < imageSweepGraceMs,
     });
     for (const [sha256, at] of imageReferencedAt) {
-      if (startedAt - at >= IMAGE_SWEEP_GRACE_MS) imageReferencedAt.delete(sha256);
+      if (startedAt - at >= imageSweepGraceMs) imageReferencedAt.delete(sha256);
     }
     // Keep the marker while unused files wait out their grace, or when a
     // delete marked it again during this sweep.
@@ -1131,14 +1137,18 @@ export function createChatStore(
       const current = await fs.readFile(marker, "utf-8").catch(() => undefined);
       if (current === mark) await fs.rm(marker, { force: true });
     }
-    return { removed: result.removed };
+    return result.nextDueInMs === undefined
+      ? { removed: result.removed }
+      : { removed: result.removed, nextDueInMs: result.nextDueInMs };
   }
 
   /**
    * Sweep unused image files after `imageSweepDelayMs` (restarting the wait on
    * each call), only when a deleted or cleared chat left a marker behind.
+   * While unused files wait out their grace, sweep again once the first of
+   * them is due.
    */
-  function scheduleImageSweep(): void {
+  function scheduleImageSweep(afterMs?: number): void {
     const delay = durability.imageSweepDelayMs;
     if (delay === undefined) return;
     if (imageSweepTimer) clearTimeout(imageSweepTimer);
@@ -1149,11 +1159,16 @@ export function createChatStore(
         return;
       }
       imageSweepRunning = sweepUnusedImages({ onlyWhenNeeded: true })
-        .catch(() => ({ removed: 0 }))
-        .finally(() => {
+        .catch((): { removed: number; nextDueInMs?: number } => ({ removed: 0 }))
+        .then((result) => {
           imageSweepRunning = undefined;
+          // A later request already restarted the wait; never sweep sooner than the usual delay.
+          if (result.nextDueInMs !== undefined && !imageSweepTimer) {
+            scheduleImageSweep(Math.max(delay, result.nextDueInMs));
+          }
+          return result;
         });
-    }, delay);
+    }, afterMs ?? delay);
     imageSweepTimer.unref?.();
   }
 
@@ -1449,7 +1464,7 @@ export function createChatStore(
      */
     sweepUnusedImages,
 
-    scheduleImageSweep,
+    scheduleImageSweep: () => scheduleImageSweep(),
 
     /** Install the first user message and sidebar metadata as one recoverable transaction. */
     async createWithFirstMessage(input: {

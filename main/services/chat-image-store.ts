@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { syncDirectory as syncDirectoryPath, writeFileAtomic } from "./durable-fs.js";
+import { syncDirectory as syncDirectoryPath, syncFile as syncFilePath, writeFileAtomic } from "./durable-fs.js";
 
 export const CHAT_IMAGES_DIRECTORY = "images";
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
@@ -54,6 +54,7 @@ export interface ChatImageSweepOptions {
 
 export interface ChatImageStoreIo {
   syncDirectory(directory: string): Promise<void>;
+  syncFile(target: string): Promise<void>;
 }
 
 export function createChatImageStore(
@@ -61,12 +62,18 @@ export function createChatImageStore(
   io: Partial<ChatImageStoreIo> = {},
 ) {
   const syncDirectory = io.syncDirectory ?? syncDirectoryPath;
+  const syncFile = io.syncFile ?? syncFilePath;
   // Directories whose own entry is known to be durable in their parent.
   const durableDirectories = new Set<string>();
   // A put and a sweep never cross on one hash: the sweep skips a hash with a
   // put in flight, and a put waits for a removal already under way.
   const putsInFlight = new Map<string, number>();
   const removals = new Map<string, Promise<void>>();
+  // Puts of one hash run one after another, so a second put never returns
+  // while the first is still making the file durable.
+  const putQueues = new Map<string, Promise<void>>();
+  // Hashes whose file and directory entry this process has made durable.
+  const durableImages = new Set<string>();
 
   async function imagesDirectory(): Promise<string> {
     return path.join(await resolveChatsDir(), CHAT_IMAGES_DIRECTORY);
@@ -95,42 +102,72 @@ export function createChatImageStore(
     }
   }
 
+  /**
+   * Write an image's file, or reuse the one already there, and return only
+   * once its bytes and directory entry are durable, so a chat that names the
+   * hash next can never outlive the file across a power loss.
+   */
+  async function publish(sha256: string, bytes: Uint8Array): Promise<void> {
+    await removals.get(sha256);
+    const target = await filePath(sha256);
+    const shard = path.dirname(target);
+    if ((await regularFileSize(target)) === bytes.byteLength) {
+      // Reused bytes count as fresh for the sweep's grace window.
+      const now = new Date();
+      await fs.utimes(target, now, now).catch(() => undefined);
+      // A file this process has not made durable came from an earlier run or
+      // from a put whose sync failed: sync it before a chat refers to it.
+      if (!durableImages.has(sha256)) await makeDurable(target, shard);
+      durableImages.add(sha256);
+      return;
+    }
+    await ensureDurableDirectory(await imagesDirectory());
+    await ensureDurableDirectory(shard);
+    try {
+      await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600, io: { syncFile, syncDirectory } });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Another process published the same bytes first, or a damaged file
+      // holds the name: replace only the latter.
+      if ((await regularFileSize(target)) === bytes.byteLength) {
+        await makeDurable(target, shard);
+      } else {
+        await fs.rm(target, { force: true });
+        await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600, io: { syncFile, syncDirectory } });
+      }
+    }
+    durableImages.add(sha256);
+  }
+
+  async function makeDurable(target: string, shard: string): Promise<void> {
+    await ensureDurableDirectory(await imagesDirectory());
+    await ensureDurableDirectory(shard);
+    await syncFile(target);
+    await syncDirectory(shard);
+  }
+
   return {
     /** Absolute path of an image's file, for streaming it. */
     path: filePath,
 
     /**
-     * Store an image's bytes and return their hash. Storing bytes that are
-     * already there writes nothing.
+     * Store an image's bytes and return their hash once the file is durable.
+     * Storing bytes that are already there rewrites nothing.
      */
     async put(bytes: Uint8Array): Promise<string> {
       const sha256 = imageSha256(bytes);
       putsInFlight.set(sha256, (putsInFlight.get(sha256) ?? 0) + 1);
+      const run = (putQueues.get(sha256) ?? Promise.resolve()).then(() => publish(sha256, bytes));
+      const settled = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      putQueues.set(sha256, settled);
       try {
-        await removals.get(sha256);
-        const target = await filePath(sha256);
-        if ((await regularFileSize(target)) === bytes.byteLength) {
-          // Reused bytes count as fresh for the sweep's grace window.
-          const now = new Date();
-          await fs.utimes(target, now, now).catch(() => undefined);
-          return sha256;
-        }
-        const images = await imagesDirectory();
-        await ensureDurableDirectory(images);
-        await ensureDurableDirectory(path.dirname(target));
-        try {
-          await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600 });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-          // Another writer published the same bytes first, or a damaged file
-          // holds the name: replace only the latter.
-          if ((await regularFileSize(target)) !== bytes.byteLength) {
-            await fs.rm(target, { force: true });
-            await writeFileAtomic(target, bytes, { exclusive: true, mode: 0o600 });
-          }
-        }
+        await run;
         return sha256;
       } finally {
+        if (putQueues.get(sha256) === settled) putQueues.delete(sha256);
         const remaining = (putsInFlight.get(sha256) ?? 1) - 1;
         if (remaining > 0) putsInFlight.set(sha256, remaining);
         else putsInFlight.delete(sha256);
@@ -163,7 +200,7 @@ export function createChatImageStore(
     async sweep(
       referenced: ReadonlySet<string>,
       options: ChatImageSweepOptions,
-    ): Promise<{ removed: number; deferred: number }> {
+    ): Promise<{ removed: number; deferred: number; nextDueInMs?: number }> {
       const now = options.now ?? Date.now;
       const images = await imagesDirectory();
       let shards: string[];
@@ -174,8 +211,14 @@ export function createChatImageStore(
         throw error;
       }
       let removed = 0;
-      // Unused images kept for now because they are recent or protected.
+      // Unused images kept for now because they are recent or protected, and
+      // how soon the first of them may be removable.
       let deferred = 0;
+      let nextDueInMs: number | undefined;
+      const defer = (inMs: number) => {
+        deferred += 1;
+        nextDueInMs = Math.min(nextDueInMs ?? inMs, inMs);
+      };
       for (const shard of shards) {
         if (!SHARD.test(shard)) continue;
         const directory = path.join(images, shard);
@@ -193,7 +236,7 @@ export function createChatImageStore(
           if (!image && !STAGING.test(name)) continue;
           if (image && referenced.has(name)) continue;
           if (image && options.isProtected?.(name)) {
-            deferred += 1;
+            defer(options.graceMs);
             continue;
           }
           const target = path.join(directory, name);
@@ -204,11 +247,12 @@ export function createChatImageStore(
             continue;
           }
           // Re-check right before removing: a write may have started using it.
+          const age = now() - stat.mtimeMs;
           if (
-            now() - stat.mtimeMs < options.graceMs ||
+            age < options.graceMs ||
             (image && (putsInFlight.has(name) || options.isProtected?.(name)))
           ) {
-            if (image) deferred += 1;
+            if (image) defer(age < options.graceMs ? options.graceMs - age : options.graceMs);
             continue;
           }
           const removal = fs.rm(target, { force: true });
@@ -223,7 +267,7 @@ export function createChatImageStore(
         }
         if (changed) await syncDirectory(directory).catch(() => undefined);
       }
-      return { removed, deferred };
+      return nextDueInMs === undefined ? { removed, deferred } : { removed, deferred, nextDueInMs };
     },
   };
 }
