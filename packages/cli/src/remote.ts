@@ -11,6 +11,7 @@ import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "../../.
 import { AidenRemoteApprovedRootService } from "../../../main/services/aiden-remote-approved-roots.js";
 import { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../../../main/services/aiden-remote-tls-identity.js";
+import { aidenRemoteLanHostnames } from "../../../main/services/aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "../../../main/services/aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "../../../main/services/aiden-remote-workspaces.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "../../../main/services/aiden-remote-workspace-owners.js";
@@ -170,8 +171,9 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     begin: (outcome) => state.beginTailscalePendingOutcome(outcome), snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
     commit: (ownership) => state.commitTailscaleOutcome(ownership), clear: () => state.clearTailscalePendingOutcome(),
   } });
-  const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: hostname(), tailscale, bonjour: options.discovery ?? bonjourPublisher(),
-    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: [hostname()], opensslPath: "openssl" }),
+  const lanHostnames = await aidenRemoteLanHostnames();
+  const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: lanHostnames.endpoint, tailscale, bonjour: options.discovery ?? bonjourPublisher(),
+    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: lanHostnames.certificate, opensslPath: "openssl" }),
     workspaceApi: async (instanceId) => {
       const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
       chatApi ??= await createCliRemoteChats(agentDir, chats, workspaces, state, idempotency, persistIdempotency, bots);

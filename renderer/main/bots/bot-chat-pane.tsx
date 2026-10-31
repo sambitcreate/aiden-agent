@@ -1670,12 +1670,7 @@ export function BotChatPane({ botId }: { botId: string }) {
       </MessageAttachmentPreviewProvider>
       <BotStatusAnnouncer text={statusActivity ? botStatusSpeech(statusActivity, chatActivity.wording) : ""} />
       {statusActivity ? (
-        <BotStatusLine
-          activity={statusActivity}
-          wording={chatActivity.wording}
-          onStop={stop}
-          onLayoutChange={setStatusLayout}
-        />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
       {running && usageLimitWait ? (
         <BotUsageLimitCard

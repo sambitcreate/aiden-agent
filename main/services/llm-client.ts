@@ -284,7 +284,7 @@ import {
 } from "../../renderer/shared/attachment-contract.js";
 import { listWorkspaceFiles } from "./workspace-files.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
-import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
+import { assertWorkspaceFolderPresent, restoreNoWorkspaceFolder } from "./workspace-folder-presence.js";
 import { OPENAI_CODEX_PROVIDER_ID } from "./codex-provider.js";
 import { GOOGLE_PROVIDER_ID } from "./google-provider.js";
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
@@ -1199,6 +1199,7 @@ async function prepareGeneration(
       ? await configStore.getWorkspace(params.workspaceId)
       : undefined);
   if (workspace && !botBound) {
+    await restoreNoWorkspaceFolder(workspace);
     // Name a moved or deleted folder before any tool fails without saying why.
     await assertWorkspaceFolderPresent(workspace);
     await assertManagedWorktreeAdmission(workspace);
@@ -2267,6 +2268,8 @@ async function prepareGeneration(
     googleWorkspaceSnapshot,
     skillSnapshot,
     workspaceId: workspace?.id,
+    /** The folder is the hidden one behind a No workspace chat. */
+    noWorkspace: workspace?.noWorkspace === true,
     subagentSupervisor,
     showLocalModelReasoning: settings.showLocalModelReasoning,
     compactionEngine: compactionEngineFrom(settings.compactionEngine),
@@ -2655,6 +2658,7 @@ export const llmClient = {
       googleWorkspaceSnapshot,
       skillSnapshot,
       workspaceId,
+      noWorkspace,
       subagentSupervisor,
       showLocalModelReasoning,
       compactionEngine,
@@ -3036,7 +3040,11 @@ export const llmClient = {
           const memoryWorkspace = !generationChat.workspaceId
             ? undefined
             : await configStore.getWorkspace(generationChat.workspaceId);
-          const scope = memoryScopeForChat(generationChat, memoryWorkspace?.folderPath);
+          const scope = memoryScopeForChat(
+            generationChat,
+            memoryWorkspace?.folderPath,
+            memoryWorkspace?.noWorkspace === true,
+          );
           const indexing = await memoryStore.replaceChatMetadata(
             scope,
             generationChat.id,
@@ -3290,6 +3298,7 @@ export const llmClient = {
                 true,
                 skillSnapshot,
                 new Set(toolsWithRuntimeContributions.map((tool) => tool.name)),
+                noWorkspace,
               ).then(({ systemPrompt, sections }) => {
                 hostPromptSkills = sections.skills;
                 return systemPrompt;
