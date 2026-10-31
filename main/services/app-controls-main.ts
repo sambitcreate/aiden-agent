@@ -1,4 +1,6 @@
-import { AppControlsService, appControlRevision } from "./app-controls-core.js";
+import { AppControlsService, appControlRevision, newChatModelChoices } from "./app-controls-core.js";
+import { listConfiguredProviders } from "./provider-list-main.js";
+import { ipcMain } from "../platform.js";
 import type { StoredAppOperation } from "./app-controls-core.js";
 import { configStore } from "./config-store.js";
 import { DataStore } from "./data-store.js";
@@ -49,15 +51,29 @@ const operations = new DataStore<StoredAppOperation[]>(
   },
 );
 export const appControlsService = new AppControlsService({
-  read: async (workspaceId) => ({
-    settings: await configStore.getSettings(),
-    workspace: workspaceId ? await configStore.getWorkspace(workspaceId) : undefined,
-  }),
+  read: async (workspaceId) => {
+    const settings = await configStore.getSettings();
+    return {
+      settings,
+      workspace: workspaceId ? await configStore.getWorkspace(workspaceId) : undefined,
+      newChatModels: newChatModelChoices(await listConfiguredProviders(), settings),
+    };
+  },
   loadOperations: () => operations.load(),
   saveOperations: async (value) => {
     await operations.save(value);
   },
   onChanged: publishAppControlsChanged,
+  // Settings → Appearance saves its whole edited look shortly after each
+  // change, so a change made now would be overwritten by that save.
+  admit: async (operation) => {
+    if (!operation.control.startsWith("appearance.")) return;
+    const settings = await configStore.getSettings();
+    if (appearancePreview.snapshot(normalizeAppearanceConfig(settings.appearance)).pending)
+      throw new Error(
+        "Settings → Appearance has changes that are still being saved. Try again in a moment, or change it there.",
+      );
+  },
   commit: async (operation, context) => {
     if (operation.control === "webSearch.enabled")
       assertWebSearchRolloutMutationAllowed("set-enabled", undefined, webSearchRollout);
@@ -99,6 +115,14 @@ export const appControlsService = new AppControlsService({
         context.remote,
         context.authorize,
       );
+      if (operation.control === "models.newChat") {
+        // The desktop keeps its new-chat model in each window; tell them.
+        ipcMain.broadcast("settings:new-chat-model-changed", {
+          providerId: saved.lastProviderId,
+          model: saved.lastModel,
+        });
+        return;
+      }
       const patch = operation.control.startsWith("appearance.")
         ? { appearance: saved.appearance }
         : operation.control === "skills.enabled"

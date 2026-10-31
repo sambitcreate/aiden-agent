@@ -85,10 +85,12 @@ export function boundBrowserSnapshot(snapshot: BrowserSnapshot): BoundedBrowserS
       ...(tab.pictureInPicture !== undefined ? { pictureInPicture: tab.pictureInPicture } : {}),
       ...(tab.visible !== undefined ? { visible: tab.visible } : {}),
       ...(tab.error ? { error: text(tab.error, 2_000) } : {}),
+      ...(tab.heldForPerson ? { heldForPerson: { reason: tab.heldForPerson.reason } } : {}),
     },
     text: text(snapshot.text, BROWSER_SNAPSHOT_CONTEXT_LIMITS.pageText),
     elements: [], diagnostics: [],
-    ...(snapshot.image ? { image: snapshot.image } : {}), contextBudget,
+    ...(snapshot.image ? { image: snapshot.image } : {}),
+    ...(snapshot.imageNote ? { imageNote: text(snapshot.imageNote, 400) } : {}), contextBudget,
   };
   // Leave room for field names and final measurement/omission metadata. Retain
   // failures first, then useful locators, before spending space on duplicate AX.
@@ -134,7 +136,7 @@ export function boundBrowserSnapshot(snapshot: BrowserSnapshot): BoundedBrowserS
     ref: text(entry.ref, 128), tag: text(entry.tag, 48), ...(entry.role ? { role: text(entry.role, 64) } : {}),
     text: text(entry.text, 240), selector: entry.selector,
     bounds: { x: entry.bounds.x, y: entry.bounds.y, width: entry.bounds.width, height: entry.bounds.height },
-    ...(entry.attributes ? { attributes: Object.fromEntries(Object.entries(entry.attributes).filter(([key]) => ["aria-label", "placeholder", "type", "name", "href", "data-testid"].includes(key)).map(([key, value]) => [key, text(value, 240)])) } : {}),
+    ...(entry.attributes ? { attributes: Object.fromEntries(Object.entries(entry.attributes).filter(([key]) => ["aria-label", "placeholder", "type", "name", "autocomplete", "href", "data-testid"].includes(key)).map(([key, value]) => [key, text(value, 240)])) } : {}),
   }));
   result.elements = select(elements, BROWSER_SNAPSHOT_CONTEXT_LIMITS.elements, (entry) => /^(alert|status)$/.test(entry.role ?? "") ? 3 : /^(button|input|textarea|select)$/.test(entry.tag) || /^(button|textbox|checkbox|radio|combobox)$/.test(entry.role ?? "") ? 2 : entry.text ? 1 : 0, "elements", false);
   const scalar = (value: unknown, max = 256): string | boolean | number | undefined => {

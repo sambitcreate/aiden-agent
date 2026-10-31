@@ -1,10 +1,10 @@
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { McpRequester } from "./mcp-client.js";
 import type { McpStatus } from "../../renderer/shared/mcp-status.js";
-import { listMcpToolInventory, listMcpToolPage } from "./mcp-tool-inventory.js";
+import { listMcpToolInventory, listMcpToolPage, type McpCapabilitySource } from "./mcp-tool-inventory.js";
 
 /** Inspect only an initialized, still-owned client. Never consult another connection's cache. */
 export async function inspectInitializedMcpStatus(
-  client: Pick<Client, "getServerCapabilities" | "request">,
+  client: McpRequester & McpCapabilitySource,
   isCurrent: () => boolean,
 ): Promise<McpStatus> {
   const assertCurrent = () => {
@@ -12,9 +12,9 @@ export async function inspectInitializedMcpStatus(
   };
   assertCurrent();
   // Capture before discovery: a tools/list error must not erase successful
-  // initialization metadata, and the response must not alias SDK-owned state.
-  const capabilities = client.getServerCapabilities();
-  const serverCapabilities = capabilities === undefined ? null : structuredClone(capabilities);
+  // initialization metadata, and the response must not alias client-owned state.
+  const capabilities = client.serverCapabilities;
+  const serverCapabilities = capabilities === undefined ? null : structuredClone(capabilities) as Record<string, unknown>;
   try {
     // Resources/prompts-only servers are valid MCP servers. Do not issue a
     // method they never advertised merely to test their connection.

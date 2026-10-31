@@ -1,4 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
+import type { McpPreset } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -19,6 +20,7 @@ import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -99,6 +101,10 @@ export interface Provider {
   canLogout?: boolean;
   /** Former custom IDs remapped during a safe provider-identity migration. */
   legacyIds?: string[];
+  /** Built-in providers: the kind of credential Aiden stores (never the value). */
+  credentialType?: "api_key" | "oauth";
+  /** Built-in API-key providers: custom connectors may use this key on this device (Settings → Providers). */
+  connectorKeySharing?: boolean;
   /** Pi-owned setup options. Credential payloads never leave Electron main. */
   authMethods?: Array<{
     type: "api_key" | "oauth";
@@ -253,6 +259,12 @@ export interface Workspace {
    * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
    */
   scratch?: true;
+  /**
+   * Set on the hidden workspace behind a "No workspace" chat: one per chat, in
+   * Aiden's app-data `chats/` folder, using global settings. Never listed as a
+   * workspace row or choice. Device-local; Remote projections leave it out.
+   */
+  noWorkspace?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -641,6 +653,7 @@ export interface ChatMessage {
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
+  notice?: import("../shared/agent-notices").AgentNoticeV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;
@@ -777,7 +790,7 @@ export interface ChatTitleRenameResult extends ChatMetadataUpdated {
   changed: boolean;
 }
 
-export type McpTransport = "stdio" | "http" | "sse";
+export type McpTransport = "stdio" | "http";
 
 export interface McpServer {
   id: string;
@@ -791,7 +804,10 @@ export interface McpServer {
   oauth?: boolean;
   /** Explicit authorization-server metadata document for custom remote OAuth connections. */
   authServerMetadataUrl?: string;
-  oauthClientName?: string;
+  /** Pre-registered OAuth client for a custom server without dynamic registration. */
+  oauthClientId?: string;
+  /** Its secret: a keychain marker once saved (never the value); plain text only while being entered. */
+  oauthClientSecret?: string;
   /** Built-in provider reference; requires separate device-local consent before use. */
   authProvider?: string;
   /** Optional bounded server description used for tool discovery. */
@@ -805,28 +821,8 @@ export interface McpServer {
   hiddenTools?: string[];
 }
 
-export type McpPresetAuth =
-  | {
-      kind: "apiKey";
-      headerName: string;
-      keyLabel: string;
-      keyHelpUrl: string;
-      headerValuePrefix?: string;
-    }
-  | { kind: "oauth"; clientName?: string };
-
-/** A built-in MCP provider definition from the main-process catalog. */
-export interface McpPreset {
-  id: string;
-  name: string;
-  tagline: string;
-  vendor: string;
-  category: string;
-  transport: "http";
-  url: string;
-  auth: McpPresetAuth;
-  docsUrl: string;
-}
+/** A built-in connector definition from the main-process catalog. */
+export type { McpPreset, McpPresetAuth } from "../shared/connector-catalog";
 
 /** Catalog entry plus the user's connection state for it. */
 export interface McpPresetState {
@@ -834,10 +830,12 @@ export interface McpPresetState {
   serverId: string;
   configured: boolean;
   enabled: boolean;
-  /** API key stored (apiKey presets) or OAuth tokens present (oauth presets). */
+  /** API key stored (apiKey presets), OAuth tokens present (oauth presets), or saved (no-credential presets). */
   ready: boolean;
   /** OAuth presets: the stored sign-in was rejected and must be renewed. */
   needsSignIn?: boolean;
+  /** OAuth presets: a browser sign-in is stored (usable or not), so it can be signed out. */
+  hasSession?: boolean;
   /** The saved record for this preset is unusable; setup can repair it or it can be removed. */
   error?: string;
   /** The saved record failed validation; setup rebuilds it from the preset's official settings. */
@@ -925,6 +923,10 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../shared/usage-limits").UsageLimitWaitHours;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
@@ -942,6 +944,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
   tts?: TtsSettingsV1;
   voiceProvider?: VoiceProvider;
@@ -951,6 +955,8 @@ export interface AppSettings {
   voiceLanguage?: string;
   voiceTranslateToEnglish?: boolean;
   voiceTrimSilence?: boolean;
+  /** Load the on-device model at launch and when one is chosen, before the first dictation (default on). */
+  localVoicePreload?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
@@ -1164,6 +1170,7 @@ export type {
   McpDependent,
   McpLiveState,
   McpLiveStatus,
+  McpMacAppStatus,
   McpServerDependents,
   McpStatus,
   McpToolSummary,

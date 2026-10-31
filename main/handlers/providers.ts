@@ -37,6 +37,8 @@ import {
   providerConnectionSnapshot,
 } from "../services/provider-credential-rotation-core.js";
 import { listConfiguredProviders } from "../services/provider-list-main.js";
+import { mcpProviderKeySharingIds, setMcpProviderKeySharing } from "../services/mcp-provider-auth.js";
+import { registerProviderKeySharingHandler } from "./mcp-provider-auth.js";
 import { invalidateBotRuntimeInventoryAuthority } from "../services/bot-runtime-inventory-lease.js";
 import { modelsDevCacheRuntime, modelsDevCacheStatus } from "../services/models-dev-cache.js";
 import { providerModelInfo } from "../services/provider-model-info.js";
@@ -59,6 +61,10 @@ import { isGeminiTranscriptionModel } from "../../renderer/shared/voice-models.j
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
 import { parseDictationPreferencePatch } from "../../renderer/shared/dictation-preferences.js";
 import { parseVoicePreferencePatch, parseVoiceProviderPatch } from "../../renderer/shared/voice-preferences.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
+import { spending } from "../services/spending-main.js";
+import { usageLimits } from "../services/usage-limit-main.js";
 
 
 const parseProvider = createProviderPayloadParser({ persistableArtwork: persistableProviderArtwork });
@@ -110,7 +116,15 @@ async function saveProvider(
 }
 
 async function listProviders() {
-  return listConfiguredProviders();
+  const [providers, sharing] = await Promise.all([
+    listConfiguredProviders(),
+    mcpProviderKeySharingIds().catch(() => new Set<string>()),
+  ]);
+  return providers.map((provider) =>
+    provider.isBuiltin && provider.credentialType === "api_key" && sharing.has(provider.id)
+      ? { ...provider, connectorKeySharing: true }
+      : provider,
+  );
 }
 
 async function refreshProviderCatalogs(providerIds?: readonly string[], force = true) {
@@ -159,8 +173,12 @@ export function registerProviderHandlers(): void {
   ipcMain.handle("providers:logout", async (event, providerId: unknown) => {
     // Logout is a credential mutation, so reject requests queued by a document
     // that navigation or renderer replacement has already made stale.
-    providerAuthOwner(event);
-    return providerAuthFlow.logout(parseProviderAuthProviderId(providerId));
+    const owner = providerAuthOwner(event);
+    const id = parseProviderAuthProviderId(providerId);
+    const result = await providerAuthFlow.logout(id);
+    // The opt-in belongs to the removed key; a later key must be opted in again.
+    await setMcpProviderKeySharing(id, false, () => !owner.isDestroyed()).catch(() => undefined);
+    return result;
   });
 
   ipcMain.handle(
@@ -248,6 +266,12 @@ export function registerProviderHandlers(): void {
       return listModels(provider, key);
     },
   );
+
+  registerProviderKeySharingHandler<Electron.IpcMainInvokeEvent>({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    owner: providerAuthOwner,
+    set: setMcpProviderKeySharing,
+  });
 
   registerProviderCatalogHandlers(ipcMain, {
     providerAuthOwner,
@@ -405,6 +429,15 @@ export function registerProviderHandlers(): void {
       if (typeof p.cacheWarmingEnabled !== "boolean") throw new Error("Invalid cache warming setting.");
       next.cacheWarmingEnabled = p.cacheWarmingEnabled;
     }
+    if (p.usageLimitWaitHours !== undefined) {
+      if (!isUsageLimitWaitHours(p.usageLimitWaitHours)) throw new Error("Invalid usage limit wait setting.");
+      next.usageLimitWaitHours = p.usageLimitWaitHours;
+    }
+    if (p.spendingLimits !== undefined) {
+      const limits = parseSpendingLimitsSettings(p.spendingLimits);
+      if (limits === undefined) throw new Error("Invalid spending limits.");
+      next.spendingLimits = limits;
+    }
     if (typeof p.memoryEnabled === "boolean") next.memoryEnabled = p.memoryEnabled;
     if (p.computerUseAlwaysAllow !== undefined) {
       if (typeof p.computerUseAlwaysAllow !== "boolean") throw new Error("Invalid Computer Use setting.");
@@ -434,6 +467,8 @@ export function registerProviderHandlers(): void {
       ? await linuxHoldSettings.apply(next.dictationHoldToTalk, (isCurrent) => configStore.setSettings(next, isCurrent))
       : await configStore.setSettings(next);
     await applySettingsEffects(saved, next);
+    if (next.spendingLimits !== undefined) spending.settingsChanged();
+    if (next.usageLimitWaitHours !== undefined) void usageLimits.waitSettingChanged();
     return saved;
   });
 }

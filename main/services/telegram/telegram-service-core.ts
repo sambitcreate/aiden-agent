@@ -843,7 +843,9 @@ export function createTelegramServiceCore(deps: TelegramServiceDeps) {
       text: [turn.text, ...textFiles].join("\n\n"),
       ...(images.length > 0 ? { attachments: images } : {}),
     };
-    await deps.botIngress!.admit(message);
+    const admitted = await deps.botIngress!.admit(message);
+    // A paused Bot already answered with its one line; it is not typing.
+    if (admitted.paused === true) return;
     void deps.api.sendChatAction(turn.chatId, "typing", turn.threadId).catch(() => undefined);
   }
 

@@ -70,11 +70,12 @@ test("a configured preset whose sign-in was rejected reports needsSignIn, not re
       assertMcpPresetServer(server);
     },
     isReady: async () => false,
-    needsSignIn: () => true,
+    signIn: async () => ({ needsSignIn: true, hasSession: true }),
   });
   const own = result.find((state) => state.preset.id === first.id)!;
   assert.equal(own.ready, false);
   assert.equal(own.needsSignIn, true);
+  assert.equal(own.hasSession, true);
   // Unconfigured presets never claim a sign-in problem.
   assert.equal(result.find((state) => state.preset.id === second.id)!.needsSignIn, undefined);
 });

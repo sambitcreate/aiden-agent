@@ -245,3 +245,45 @@ test("a new message after a finished tool starts a new turn with its own recap",
   const rows = botTranscriptRows(entries, null, { running: false, level: "summary" });
   assert.deepEqual(kinds(rows), ["user", "recap", "assistant", "user", "assistant"]);
 });
+
+test("the person's answer to a hand-off is their own row, with the note below, and the card itself never reads as a step", () => {
+  const entries: BotTranscriptEntry[] = [
+    user("u1", "Move the savings"),
+    {
+      id: "a1",
+      type: "assistant",
+      text: "I need you for one step.",
+      toolCalls: [{ id: "h1", name: "hand_off", kind: "waiting", label: "Handed you a step" }],
+      stopReason: "toolUse",
+    },
+    { id: "handoff:h1", type: "handoff_result", kind: "action", outcome: "done", action: "Enter the 2FA code", note: "It said verified." },
+    {
+      id: "a2",
+      type: "assistant",
+      text: "",
+      toolCalls: [{ id: "s1", name: "sign_in", kind: "waiting", label: "Handed you a step" }],
+      stopReason: "toolUse",
+    },
+    { id: "handoff:s1", type: "handoff_result", kind: "sign_in", outcome: "done", action: "Sign in to github.com", origin: "https://github.com" },
+    { id: "a3", type: "assistant", text: "", toolCalls: [{ id: "h2", name: "hand_off", kind: "waiting", label: "Handed you a step" }], stopReason: "toolUse" },
+    { id: "handoff:h2", type: "handoff_result", kind: "action", outcome: "skipped", action: "Pay the invoice" },
+    answer("a4", "All set, I left the invoice for you."),
+  ];
+  for (const level of ["quiet", "summary", "detailed"] as const) {
+    const rows = botTranscriptRows(entries, null, { running: false, level });
+    assert.deepEqual(
+      rows.map((row) => (row.kind === "handoff_result" ? `${row.outcome}${row.signedIn ? " signed in" : ""}: ${row.text}` : row.kind)),
+      [
+        "user",
+        "assistant",
+        "done: You did this: Enter the 2FA code",
+        "done signed in: You signed in to github.com",
+        "skipped: You skipped this: Pay the invoice",
+        "assistant",
+      ],
+      level,
+    );
+    const done = rows.find((row) => row.kind === "handoff_result");
+    assert.equal(done?.kind === "handoff_result" ? done.note : undefined, "It said verified.");
+  }
+});

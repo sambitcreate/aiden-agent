@@ -18,6 +18,12 @@
 // starting the paused turn. A turn dismissed or stopped for good is
 // `dismissed` and never delivered.
 //
+// Pause: a message to a Bot the person paused is not admitted. The chat gets
+// one fixed line ("Ada is paused. Resume it in Aiden to continue.") per
+// message, and no row: nothing waits for an answer. A turn that was running
+// when the Bot paused keeps its `interrupted` row and is delivered once the
+// person unpauses and resumes it.
+//
 // Routines: a finished routine's visible reply (or its failure) is a
 // `routine` row keyed by the run's request id. It starts `pending` and uses
 // the same `pending → sending → sent` path and duplicate-labelled redelivery,
@@ -114,6 +120,8 @@ export interface TelegramBotIngressDeps {
    * enabled and still targets that chat. Checked right before each send.
    */
   routineTargetEnabled?(row: Pick<BotReplyRow, "botId" | "chatId" | "threadId">): Promise<boolean>;
+  /** The Bot's display name, for the paused line. */
+  botName?(botId: string): Promise<string | undefined>;
   now?: () => number;
   onError?(message: string, cause: unknown): void;
 }
@@ -125,8 +133,11 @@ export function telegramRoutineText(routineName: string, text: string): string {
 }
 
 export interface TelegramBotIngress {
-  /** Durably admit one message. Resolves only after the session accepted it. */
-  admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean }>;
+  /**
+   * Durably admit one message. Resolves only after the session accepted it,
+   * or, for a paused Bot (`paused: true`), after the paused line was sent.
+   */
+  admit(message: TelegramBotMessage): Promise<{ requestId: string; deduped: boolean; paused?: true }>;
   /**
    * Durably queue a routine's result for the bound chat and send it in the
    * background. A request id that already has a row is ignored.
@@ -143,6 +154,20 @@ export interface TelegramBotIngress {
   /** Resolves when no background wait or delivery is running (tests and shutdown). */
   idle(): Promise<void>;
   stop(): void;
+}
+
+/** What the chat hears instead of an answer while its Bot is paused. */
+export function telegramBotPausedLine(name: string | undefined): string {
+  const display = name?.trim();
+  return `${display ? display : "This Bot"} is paused. Resume it in Aiden to continue.`;
+}
+
+/** Duck-typed: this module only imports the session's types (the CLI bundles it without the runtime). */
+/** A send the Bot refused for a reason the chat should hear: a pause, or the month's spending limit. */
+function sessionRefusal(cause: unknown): "paused_by_person" | "spending_limit" | undefined {
+  if (!(cause instanceof Error) || cause.name !== "BotSessionError") return undefined;
+  const reason = (cause as { reason?: unknown }).reason;
+  return reason === "paused_by_person" || reason === "spending_limit" ? reason : undefined;
 }
 
 export function telegramBotRequestId(message: Pick<TelegramBotMessage, "botId" | "chatId" | "threadId" | "messageId">): string {
@@ -174,6 +199,8 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
   let tail: Promise<unknown> = Promise.resolve();
   /** Rows with a wait running, so one row is never tracked (or delivered) twice. */
   const tracking = new Set<string>();
+  /** A live transport send owns the row, even if startup recovery sees it. */
+  const delivering = new Set<string>();
   /**
    * Tracked rows whose Bot left the paused state while their wait was still
    * settling. The wait may have observed the pause before Resume (or Dismiss),
@@ -237,16 +264,26 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     void promise.finally(() => background.delete(promise));
   }
 
-  async function deliverRow(requestId: string, duplicate: boolean): Promise<void> {
-    const queued = await locked((file) => file.rows.find((candidate) => candidate.requestId === requestId));
+  async function attemptDelivery(requestId: string, duplicate: boolean): Promise<void> {
+    const expectedState = duplicate ? "sending" : "pending";
+    const queued = await locked((file) => file.rows.find((candidate) =>
+      candidate.requestId === requestId && candidate.state === expectedState));
+    if (!queued) return;
     if (queued?.kind === "routine" && !(await routineTargetEnabled(queued))) {
       // Unbound or switched off since the routine ran: drop it unsent.
-      await update(requestId, (current) => void (current.state = "failed"));
+      await update(requestId, (current) => {
+        if (current.state === expectedState) current.state = "failed";
+      });
       return;
     }
-    const row = await update(requestId, (current) => {
+    const row = await locked(async (file) => {
+      const current = file.rows.find((candidate) => candidate.requestId === requestId);
+      if (current?.state !== expectedState) return undefined;
       current.state = "sending";
       if (duplicate) current.redelivered = true;
+      current.updatedAt = now();
+      await persist(file);
+      return { ...current };
     });
     if (row === undefined || row.text === undefined) return;
     const text = duplicate ? `${MAY_BE_DUPLICATE_PREFIX} ${row.text}` : row.text;
@@ -259,11 +296,21 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
       });
     } catch (cause) {
       // Part of the reply may have reached Telegram: retry once, labelled.
-      if (!duplicate) return deliverRow(requestId, true);
+      if (!duplicate) return attemptDelivery(requestId, true);
       await update(requestId, (current) => void (current.state = "failed"));
       throw cause;
     }
     await update(requestId, (current) => void (current.state = "sent"));
+  }
+
+  async function deliverRow(requestId: string, duplicate: boolean): Promise<void> {
+    if (delivering.has(requestId)) return;
+    delivering.add(requestId);
+    try {
+      await attemptDelivery(requestId, duplicate);
+    } finally {
+      delivering.delete(requestId);
+    }
   }
 
   /** Wait for the row's answer in the background, unless a wait for it is already running. */
@@ -314,11 +361,31 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
         if (known.state === "awaiting") trackOnce({ ...known });
         return { requestId, deduped: true };
       }
-      const { submissionId, deduped } = await deps.session.send(message.botId, {
-        text: message.text,
-        requestId,
-        ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
-      });
+      let admitted: { submissionId: string; deduped: boolean };
+      try {
+        admitted = await deps.session.send(message.botId, {
+          text: message.text,
+          requestId,
+          ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
+        });
+      } catch (cause) {
+        const refusal = sessionRefusal(cause);
+        if (refusal === undefined) throw cause;
+        // Not admitted and no row: the update is consumed with one fixed line.
+        const name = await deps.botName?.(message.botId).catch(() => undefined);
+        try {
+          await deps.deliver({
+            chatId: message.chatId,
+            ...(message.threadId === undefined ? {} : { threadId: message.threadId }),
+            ownerUserId: message.ownerUserId,
+            text: refusal === "paused_by_person" ? telegramBotPausedLine(name) : (cause as Error).message,
+          });
+        } catch (deliveryError) {
+          deps.onError?.("Telegram could not tell a chat its Bot is paused.", deliveryError);
+        }
+        return { requestId, deduped: false, paused: true };
+      }
+      const { submissionId, deduped } = admitted;
       const recordRow = () => locked(async (file) => {
         const existing = file.rows.find((candidate) => candidate.requestId === requestId);
         if (existing !== undefined) return undefined;
@@ -373,6 +440,7 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     async recover() {
       const rows = await locked((file) => file.rows.map((row) => ({ ...row })));
       for (const row of rows) {
+        if (delivering.has(row.requestId)) continue;
         // An interrupted row is re-checked: it may have been resumed while
         // Telegram was not running. A paused turn is never started here.
         if (row.state === "awaiting" || row.state === "interrupted") trackOnce(row);
@@ -385,7 +453,8 @@ export function createTelegramBotIngress(deps: TelegramBotIngressDeps): Telegram
     },
 
     botStateChanged(botId, state) {
-      if (state.kind === "interrupted" || stopper.signal.aborted) return;
+      // Still held: an interrupted turn waits for Resume, a paused Bot for unpause.
+      if (state.kind === "interrupted" || state.kind === "paused" || stopper.signal.aborted) return;
       inBackground(async () => {
         const rows = await locked((file) =>
           file.rows

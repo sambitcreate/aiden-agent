@@ -9,6 +9,11 @@
 //   state and makes no provider request.
 // - Nothing here resumes a harness on its own. The startup scan only records
 //   which Bots are interrupted.
+// - `pause` is the person's switch (plan §7). It is recorded first, then a
+//   running turn is closed under a time bound and left interrupted, never
+//   dismissed. While paused, sends, Resume, Dismiss and compaction are refused
+//   with `paused_by_person`; `unpause` clears the switch and an interrupted
+//   turn shows its usual Resume card again.
 // - `deleteBot` records the delete durably (`bots/pending-deletes.json`)
 //   before its first destructive step, then aborts the live run, erases the
 //   Bot's session and runs the caller-supplied cleanup steps. A pending delete
@@ -17,6 +22,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { AssistantMessage, ImageContent, Models, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -38,6 +44,12 @@ import {
   type BotRegistry,
 } from "./bot-extension.js";
 import { writeFileAtomic } from "../durable-fs.js";
+import {
+  createBotPauseStore,
+  type BotPauseOrigin,
+  type BotPauseRecord,
+  type BotPauseStore,
+} from "../bot-pause-store.js";
 import { BOT_INTRO_REQUEST_PREFIX } from "./bot-intro.js";
 import {
   BotHarnessHostClosedError,
@@ -57,7 +69,12 @@ export type BotSessionState =
   | { kind: "needs_model" }
   /** The Bot has a model, but it cannot be used right now (sign-in, missing provider, access). */
   | { kind: "model_error"; message: string }
-  | { kind: "unavailable"; reason: "held_by_live_process" };
+  | { kind: "unavailable"; reason: "held_by_live_process" }
+  /**
+   * The person paused the Bot (plan §7). `interrupted`: the submission of the
+   * turn that was running when it paused, waiting for Resume after unpause.
+   */
+  | { kind: "paused"; since: number; by: BotPauseOrigin; interrupted?: string };
 
 /** A transcript notice entry; `data` of `aiden.bot-notice`. */
 export type BotNotice =
@@ -68,11 +85,18 @@ export type BotNotice =
   /** The answer to this submission was `[SILENT]`: kept, but no bubble, preview or unread. */
   | { notice: "silent"; submissionId: string }
   /** Precedes an input the person never typed (the self-intro prompt): the input is not shown. */
-  | { notice: "hidden_input"; requestId: string };
+  | { notice: "hidden_input"; requestId: string }
+  /** Written on unpause: the routines that fired while the Bot was paused, with Run now. */
+  | { notice: "routines_skipped"; since: number; routines: { routineId: string; name: string; count: number }[] };
 
 export type BotReplyOutcome =
   | { kind: "completed"; text: string }
-  | { kind: "failed"; error: string }
+  /**
+   * `error` is the person-facing message. `reason` is Pi's own reason code and
+   * `detail` the provider text it settled the submission with; callers classify
+   * a routine failure from them, never from the message.
+   */
+  | { kind: "failed"; error: string; reason?: string; detail?: string }
   /**
    * No answer now. `settled`: the turn ended without one for good (dismissed,
    * stopped or deleted); otherwise it is paused and Resume can still answer it.
@@ -110,13 +134,29 @@ export type BotSessionErrorReason =
   | "access_changed"
   | "bot_missing"
   | "bot_deleted"
-  | "bot_paused";
+  /** Interrupted: a turn is waiting for Resume (the unattended-send refusal). */
+  | "bot_paused"
+  /** The person paused the Bot. */
+  | "paused_by_person"
+  /** The Bot's month is over its spending limit. */
+  | "spending_limit";
 
 export class BotSessionError extends Error {
-  constructor(readonly reason: BotSessionErrorReason, message?: string) {
+  /**
+   * `authority`: the typed `BotRuntimeAuthorityError` classification behind
+   * this refusal (for example `model_changed`), so routines can record it.
+   */
+  constructor(readonly reason: BotSessionErrorReason, message?: string, readonly authority?: string) {
     super(message ?? defaultMessage(reason));
     this.name = "BotSessionError";
   }
+}
+
+/** The typed classification of a `BotRuntimeAuthorityError`, by name (it may come from another module instance). */
+function authorityOf(error: unknown): string | undefined {
+  if (!(error instanceof Error) || error.name !== "BotRuntimeAuthorityError") return undefined;
+  const classification = (error as { classification?: unknown }).classification;
+  return typeof classification === "string" && classification ? classification : undefined;
 }
 
 function defaultMessage(reason: BotSessionErrorReason): string {
@@ -134,6 +174,10 @@ function defaultMessage(reason: BotSessionErrorReason): string {
       return "This Bot no longer exists.";
     case "bot_paused":
       return "I got interrupted while working on this.";
+    case "paused_by_person":
+      return "This Bot is paused. Resume it to continue.";
+    case "spending_limit":
+      return "This Bot reached its spending limit for this month. Allow more to keep going.";
   }
 }
 
@@ -141,6 +185,7 @@ function defaultMessage(reason: BotSessionErrorReason): string {
 export type BotWithdrawResult = "withdrawn" | "started" | "gone";
 
 export interface BotSessionService {
+  submissionForRequest(botId: string, requestId: string): Promise<string | undefined>;
   send(botId: string, input: BotSendInput): Promise<{ submissionId: string; deduped: boolean }>;
   resume(botId: string, requestId: string): Promise<BotSessionState>;
   dismiss(botId: string, requestId: string): Promise<BotSessionState>;
@@ -166,6 +211,14 @@ export interface BotSessionService {
   awaitReply(botId: string, submissionId: string, signal: AbortSignal): Promise<BotReplyOutcome>;
   /** Keep the submission's answer for audit but hide it from the chat, preview and unread. */
   markSilent(botId: string, submissionId: string): Promise<void>;
+  /**
+   * Pause the Bot (idempotent: the first pause's time and origin stay). A
+   * running turn is closed and left interrupted, so its questions, hand-offs
+   * and approvals are withdrawn and asked again after unpause and Resume.
+   */
+  pause(botId: string, by: BotPauseOrigin): Promise<BotSessionState>;
+  /** Clear the pause. An interrupted turn then waits for Resume as usual. */
+  unpause(botId: string): Promise<BotSessionState>;
 }
 
 export interface BotSessionRuntime extends BotSessionService {
@@ -193,10 +246,16 @@ export interface BotSessionRuntime extends BotSessionService {
    * Resolves once the compaction is admitted; it summarizes in the background.
    */
   compact(botId: string): Promise<void>;
+  /**
+   * Append an entry to the Bot's conversation without starting its scheduler:
+   * safe while the Bot is paused or interrupted, unlike a write submission.
+   */
+  appendEntry(botId: string, kind: string, data: JsonValue): Promise<void>;
   shutdown(): Promise<void>;
 }
 
 export interface BotSessionServiceDeps {
+  leaseHelperPath?: string;
   profileDir: string;
   /**
    * pi-ai model access. Production passes each Bot its own view, so a Bot's
@@ -232,6 +291,22 @@ export interface BotSessionServiceDeps {
   /** `resume` restarted an interrupted turn (not called for replays, blocked or no-op resumes). */
   onResumed?(botId: string): void;
   onReport?(botId: string, error: unknown): void;
+  /** Which Bots the person paused. Default: `<profileDir>/bot-service/bot-pauses.json`. */
+  pauses?: BotPauseStore;
+  /** Runs after the pause is recorded and before a running turn is closed (memory review cancel). */
+  onPaused?(botId: string): void | Promise<void>;
+  /**
+   * Runs once a running turn was closed (or at once when none ran): pause steps
+   * that live outside the harness. Waits inside the turn (questions, approvals,
+   * hand-offs) need none: the close signals their calls, which withdraws them.
+   */
+  afterPaused?(botId: string): void | Promise<void>;
+  /** Runs after the pause is cleared, with the record it cleared (skipped-routines notice). */
+  onUnpaused?(botId: string, record: BotPauseRecord): void | Promise<void>;
+  /** How long a pause waits for a running turn to close (default 5 s, like quit). */
+  suspendTimeoutMs?: number;
+  /** Why a new message may not start: the Bot's month is over its spending limit. */
+  spendingRefusal?(botId: string): Promise<string | undefined>;
 }
 
 const ctx = BACKGROUND_CONTEXT;
@@ -297,6 +372,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   const registries = new Map<string, BotRegistry>();
   const hostOrUnavailable = await createBotHarnessHost({
     profileDir: deps.profileDir,
+    leaseHelperPath: deps.leaseHelperPath,
     models: deps.models,
     buildRegistry: (botId) => {
       const registry = createBotRegistry(botId, deps.extension);
@@ -318,6 +394,12 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   /** Interrupted turns whose Resume was refused because the Bot's access changed. */
   const blocked = new Map<string, "access_changed" | "bot_missing">();
   const deleted = new Set<string>();
+  const pauses = deps.pauses ?? createBotPauseStore({ root: () => path.join(deps.profileDir, "bot-service") });
+  /**
+   * Bots a pause could not close within its bound: the close keeps running in
+   * the host, so state reads skip inspecting them until it finishes.
+   */
+  const suspending = new Set<string>();
   const pendingDeletesFile = path.join(deps.profileDir, "bots", PENDING_DELETES_FILE);
   // A delete cut short by a crash still owns the Bot: never reopen its session.
   for (const botId of await readPendingDeletes(pendingDeletesFile)) deleted.add(botId);
@@ -376,11 +458,42 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     await conversation.submit({ type: "write", entry: { kind: BOT_NOTICE_ENTRY_KIND, data: notice } }, ctx);
   }
 
+  /**
+   * The Bot's pause for display. An unreadable pause file is reported and
+   * reads as not paused here; every action reads the store itself and refuses
+   * (`assertNotPaused`), so nothing runs on a guess.
+   */
+  async function pauseOf(botId: string): Promise<BotPauseRecord | undefined> {
+    try {
+      return await pauses.get(botId);
+    } catch (error) {
+      deps.onReport?.(botId, error);
+      return undefined;
+    }
+  }
+
+  /** Refuse while paused. An unreadable pause file refuses too (fail closed). */
+  async function assertNotPaused(botId: string): Promise<void> {
+    if ((await pauses.get(botId)) !== undefined) throw new BotSessionError("paused_by_person");
+  }
+
+  /** The submission of the turn waiting under a pause, without starting anything. */
+  async function interruptedUnderPause(botId: string): Promise<string | undefined> {
+    if (host === null || suspending.has(botId) || !host.isOpen(botId)) return undefined;
+    const unfinished = unfinishedInput(await host.inspect(botId));
+    return unfinished === undefined ? undefined : String(unfinished.id);
+  }
+
   /** Current state without taking the per-Bot queue. */
   async function currentState(botId: string): Promise<BotSessionState> {
     if (host === null) return { kind: "unavailable", reason: "held_by_live_process" };
     if (deleted.has(botId)) return { kind: "idle" };
-    if (host.isOpen(botId)) {
+    const pause = await pauseOf(botId);
+    if (pause !== undefined) {
+      const interrupted = await interruptedUnderPause(botId);
+      return { kind: "paused", since: pause.since, by: pause.by, ...(interrupted === undefined ? {} : { interrupted }) };
+    }
+    if (host.isOpen(botId) && !suspending.has(botId)) {
       const inspection = await host.inspect(botId);
       const unfinished = unfinishedInput(inspection);
       if (unfinished !== undefined) {
@@ -400,13 +513,14 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
   async function modelFor(
     botId: string,
-  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string }> {
+  ): Promise<{ kind: "ok"; ref: ModelRef } | { kind: "none" } | { kind: "error"; message: string; authority?: string }> {
     try {
       const ref = await deps.resolveModel(botId);
       return ref === null ? { kind: "none" } : { kind: "ok", ref };
     } catch (error) {
       const message = error instanceof Error && error.message.length > 0 ? error.message : defaultMessage("model_error");
-      return { kind: "error", message };
+      const authority = authorityOf(error);
+      return { kind: "error", message, ...(authority !== undefined ? { authority } : {}) };
     }
   }
 
@@ -419,7 +533,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
   async function prepareToRun(botId: string, conversation: Conversation, registry: BotRegistry): Promise<void> {
     const resolved = await modelFor(botId);
     if (resolved.kind === "none") throw new BotSessionError("needs_model");
-    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message);
+    if (resolved.kind === "error") throw new BotSessionError("model_error", resolved.message, resolved.authority);
     const model = resolved.ref;
     await registry.refresh();
     const agent = await conversation.agent(ctx);
@@ -483,7 +597,41 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return { kind: "completed", text: assistantText(answer?.model?.[0] as AssistantMessage | undefined) };
     }
     if (settled.reason === "aborted") return { kind: "interrupted", settled: true };
-    return { kind: "failed", error: settled.reason ?? "The reply failed." };
+    // Pi's detail carries the provider's own words (`model_error` uses a string);
+    // structured details such as `{ reason: "restart_limit" }` add nothing the
+    // reason code does not already say.
+    const detail = typeof settled.detail === "string" && settled.detail.trim() ? settled.detail : undefined;
+    return {
+      kind: "failed",
+      error: settled.reason ?? "The reply failed.",
+      ...(settled.reason !== undefined ? { reason: settled.reason } : {}),
+      ...(detail !== undefined ? { detail } : {}),
+    };
+  }
+
+  /** Whether the Bot's harness has work its scheduler is running now. */
+  async function hasLiveWork(owner: BotHarnessHost, botId: string): Promise<boolean> {
+    const inspection = await owner.inspect(botId);
+    return inspection.scheduling === "running" && (inspection.tasks.length > 0 || inspection.submissions.length > 0);
+  }
+
+  /**
+   * A pause whose close outlived its bound: reopen once the close finishes (the
+   * host queues the open behind it) and publish the interrupted turn then.
+   */
+  function reopenAfterSuspend(owner: BotHarnessHost, botId: string): void {
+    suspending.add(botId);
+    void owner
+      .inspect(botId)
+      .catch((error: unknown) => deps.onReport?.(botId, error))
+      .finally(() => {
+        suspending.delete(botId);
+        if (deleted.has(botId)) return;
+        void currentState(botId).then(
+          (state) => publish(botId, state),
+          (error: unknown) => deps.onReport?.(botId, error),
+        );
+      });
   }
 
   async function lookupRequest(conversation: Conversation, requestId: string) {
@@ -537,11 +685,23 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return currentState(botId);
     },
 
+    submissionForRequest(botId, requestId) {
+      return serialize(botId, async () => {
+        const { conversation } = await openBot(botId);
+        const existing = await lookupRequest(conversation, requestId);
+        return existing === undefined ? undefined : String(existing.id);
+      });
+    },
+
     send(botId, input) {
       return serialize(botId, async () => {
         const { conversation, registry } = await openBot(botId);
         const existing = await lookupRequest(conversation, input.requestId);
         if (existing !== undefined) return { submissionId: String(existing.id), deduped: true };
+        // After the dedupe lookup, so a redelivered request still reports its submission.
+        await assertNotPaused(botId);
+        const spendingRefusal = await deps.spendingRefusal?.(botId);
+        if (spendingRefusal !== undefined) throw new BotSessionError("spending_limit", spendingRefusal);
 
         const before = await currentState(botId);
         if (before.kind === "interrupted" && input.ifNotInterrupted) throw new BotSessionError("bot_paused");
@@ -577,6 +737,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return serialize(botId, async () => {
         const replay = answered.get(key);
         if (replay !== undefined) return replay;
+        await assertNotPaused(botId);
         const before = await currentState(botId);
         if (before.kind !== "interrupted") return remember(key, before);
 
@@ -601,6 +762,7 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
       return serialize(botId, async () => {
         const replay = answered.get(key);
         if (replay !== undefined) return replay;
+        await assertNotPaused(botId);
         const before = await currentState(botId);
         if (before.kind !== "interrupted") return remember(key, before);
         const { conversation, registry } = await openBot(botId);
@@ -686,6 +848,8 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
 
     compact(botId) {
       return serialize(botId, async () => {
+        // Compaction starts the scheduler, which would run an interrupted turn.
+        await assertNotPaused(botId);
         const { conversation, registry } = await openBot(botId);
         await prepareToRun(botId, conversation, registry);
         await conversation.compact(deps.compactionInstructions, ctx);
@@ -694,8 +858,62 @@ export async function createBotSessionService(deps: BotSessionServiceDeps): Prom
     },
 
     async markSilent(botId, submissionId) {
+      // Appended, not submitted: the Bot may have been paused or interrupted
+      // since this reply settled, and a write submission would resume it.
+      await service.appendEntry(botId, BOT_NOTICE_ENTRY_KIND, { notice: "silent", submissionId });
+    },
+
+    async appendEntry(botId, kind, data) {
       const { conversation } = await openBot(botId);
-      await writeNotice(conversation, { notice: "silent", submissionId });
+      await conversation.commit((tx) => tx.appendEntry(conversation.id, { kind, data }), ctx);
+    },
+
+    pause(botId, by) {
+      return serialize(botId, async () => {
+        if (deleted.has(botId)) throw new BotSessionError("bot_deleted");
+        const owner = requireHost();
+        // Durable first: whatever happens below, the Bot stays paused.
+        await pauses.pause(botId, by);
+        try {
+          await deps.onPaused?.(botId);
+        } catch (error) {
+          deps.onReport?.(botId, error);
+        }
+        // A close or reopen that fails is reported, never raised: the pause is
+        // already durable, so the Bot's other work still stops and every window hears it.
+        try {
+          if (owner.isOpen(botId) && !suspending.has(botId) && (await hasLiveWork(owner, botId))) {
+            const outcome = await owner.suspend(botId, deps.suspendTimeoutMs);
+            if (outcome === "timed_out") reopenAfterSuspend(owner, botId);
+            // Reopen: the closed turn is read back as interrupted and nothing is scheduled.
+            else if (outcome === "closed") await owner.inspect(botId);
+          }
+        } catch (error) {
+          deps.onReport?.(botId, error);
+        }
+        try {
+          await deps.afterPaused?.(botId);
+        } catch (error) {
+          deps.onReport?.(botId, error);
+        }
+        return publish(botId, await currentState(botId));
+      });
+    },
+
+    async unpause(botId) {
+      const { state, record } = await serialize(botId, async () => {
+        const cleared = await pauses.unpause(botId);
+        return { state: publish(botId, await currentState(botId)), record: cleared };
+      });
+      // Outside the queue: the hook may append entries to this Bot.
+      if (record !== undefined) {
+        try {
+          await deps.onUnpaused?.(botId, record);
+        } catch (error) {
+          deps.onReport?.(botId, error);
+        }
+      }
+      return state;
     },
 
     async shutdown() {

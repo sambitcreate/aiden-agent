@@ -34,11 +34,14 @@ struct AidenBotSessionChatView: View {
     @State private var startAttempt = 0
     /// The chat couldn't start (no pairing or credential to reach the Mac with).
     @State private var startFailed = false
+    /// The grants this chat's feed opened with (`aidenBotSessionFeedGrants`).
+    @State private var feedOpenedWith: Set<AidenRemoteCapability> = []
     /// Content growth must not be mistaken for the reader scrolling away.
     @State private var follow = AidenTranscriptFollowController()
     /// Bumped by the person's own send: the transcript scrolls to it wherever it was.
     @State private var ownSendScroll = 0
     @State private var footerHeight: CGFloat = 0
+    @State private var spending = AidenSpendingNoticeModel()
     @ScaledMetric(relativeTo: .body) private var controlSize: CGFloat = 40
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.aidenReduceMotion) private var reduceMotion
@@ -53,6 +56,21 @@ struct AidenBotSessionChatView: View {
 
     private var canWrite: Bool {
         coordinator.connectionState == .connected && canCompose
+    }
+
+    private var spendingTransport: AidenSpendingTransport? {
+        guard coordinator.server?.supportsSpendingLimits == true else { return nil }
+        return try? coordinator.remoteClient()
+    }
+
+    private var spendingRefreshKey: String {
+        [
+            coordinator.activeInstanceId ?? "",
+            String(coordinator.server?.supportsSpendingLimits == true),
+            String(model?.isRunning == true),
+            String(model?.entries.count ?? 0),
+            model?.errorMessage ?? "",
+        ].joined(separator: "|")
     }
 
     /// Messages are taken while the Mac is still connecting: they wait in the
@@ -184,6 +202,10 @@ struct AidenBotSessionChatView: View {
         .task(id: filesLookupKey) {
             await loadFilesTools()
         }
+        // Revision 47: re-read the Bot's month after each reply, send and refusal.
+        .task(id: spendingRefreshKey) {
+            await spending.refresh(owner: .bot(botID), transport: spendingTransport)
+        }
         // Chat activity is changed in Advanced; reread the Bot when it closes.
         .onChange(of: isShowingAdvanced) { _, showing in
             if !showing { Task { await loadSummary() } }
@@ -198,6 +220,16 @@ struct AidenBotSessionChatView: View {
         .onChange(of: AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)) { _, supported in
             model?.attachmentsSupported = supported
             if !supported { attachmentPicker.dismiss() }
+        }
+        // The Mac shapes the feed by the grants this phone holds when it opens
+        // (cards, Chat activity, hand-offs and the paused state). The chat can
+        // open from the saved features while the phone connects, before this
+        // connection negotiated a grant (`bot:handoffs` after the Mac updates);
+        // once it is negotiated, a feed that opened without it opens again.
+        .onChange(of: aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)) { _, grants in
+            guard let model, grants != feedOpenedWith else { return }
+            feedOpenedWith = grants
+            model.reopenFeed()
         }
         // A first load that failed is a quiet hint while the chat keeps
         // reconnecting; once a snapshot arrives it is no longer news.
@@ -348,7 +380,7 @@ struct AidenBotSessionChatView: View {
                             rowView(row, model: model)
                                 .id(row.id)
                         }
-                        if let partial = model.partial {
+                        if let partial = model.revealedPartial, !partial.isEmpty {
                             assistantBubble(partial, interrupted: false, isStreaming: true)
                                 .id("partial")
                         }
@@ -357,6 +389,16 @@ struct AidenBotSessionChatView: View {
                         }
                         ForEach(model.outgoing) { message in
                             outgoingBubble(message, model: model)
+                        }
+                        ForEach(model.openIssues) { issue in
+                            // Revision 42: a "Needs you" card from the host.
+                            AidenBotIssueCardView(
+                                issue: issue,
+                                canAct: canWrite && model.canActOnIssue,
+                                isBusy: model.actingIssue?.id == issue.id,
+                                onAct: { action in Task { await model.actOnIssue(issue, action: action) } }
+                            )
+                            .id("issue:\(issue.id)")
                         }
                         AidenBotStatusLineView(model: model)
                         Color.clear.frame(height: 1).id("bottom")
@@ -378,11 +420,14 @@ struct AidenBotSessionChatView: View {
                 .scrollDismissesKeyboard(.interactively)
                 .modifier(AidenBotSoftScrollEdge())
                 .onChange(of: model.entries.count) { _, _ in followIfAtEnd(proxy) }
-                .onChange(of: model.partial) { _, _ in followIfAtEnd(proxy) }
+                .onChange(of: model.revealedPartial) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.queued.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: model.outgoing.count) { _, _ in followIfAtEnd(proxy) }
                 .onChange(of: ownSendScroll) { _, _ in followIfAtEnd(proxy, userInitiated: true) }
                 .onAppear { follow.setStreaming(model.isRunning) }
+                .onChange(of: reduceMotion, initial: true) { _, reduce in
+                    model.pacesPartialReveal = !reduce
+                }
                 .onChange(of: model.isRunning) { _, running in follow.setStreaming(running) }
                 .overlay(alignment: .bottom) {
                     if follow.showsJumpButton {
@@ -511,6 +556,15 @@ struct AidenBotSessionChatView: View {
                     Task { await model.respondToProposal(card.proposalId, decision: decision) }
                 }
             )
+        case let .sharedImage(image):
+            // Revision 45: the image the Bot shared, read from the Mac when it is drawn.
+            AidenMessageImageAttachmentsView(
+                attachments: [image.attachment],
+                edge: .leading,
+                loadData: { attachment in await model.sharedImageData(entryId: attachment.id) }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 48)
         }
     }
 
@@ -564,8 +618,14 @@ struct AidenBotSessionChatView: View {
     private func outgoingBubble(_ message: AidenBotOutgoingMessage, model: AidenBotSessionModel) -> some View {
         switch model.look(of: message) {
         case .sending:
-            pendingBubble(message.text, faded: true, attachments: message.attachments) {
-                Text(AidenBotSessionCopy.sending)
+            // It looks sent at once; "Sending…" shows only once it has waited a
+            // moment for the Mac (offline, or a slow Mac).
+            AidenBotSendWait(since: message.createdAt) { slow in
+                pendingBubble(message.text, faded: false, attachments: message.attachments) {
+                    if slow {
+                        Text(AidenBotSessionCopy.sending)
+                    }
+                }
             }
             .accessibilityElement(children: .combine)
         case .sent:
@@ -654,6 +714,7 @@ struct AidenBotSessionChatView: View {
                 // Mac says this tool can only be denied from a phone.
                 AidenApprovalCard(
                     summary: approval.summary,
+                    toolName: approval.toolName,
                     kind: .action,
                     canRespond: canRespondToApprovals,
                     hasRequiredWriteCapability: canRespondToApprovals,
@@ -665,11 +726,42 @@ struct AidenBotSessionChatView: View {
                 .disabled(!canRespondToApprovals || !model.canAnswerApproval)
                 .id(approval.waitId)
             }
+            if let handoff = model.handoff {
+                // Revision 37: the step the Bot handed back. A sign-in is
+                // finished on the Mac; any other step is Done or Skip here.
+                AidenBotHandoffCard(
+                    handoff: handoff,
+                    canAnswer: canWrite && model.canAnswerHandoff,
+                    isFinishing: model.inFlight.contains(.openHandoffOnMac),
+                    macPrompt: model.handoffMacPrompt.flatMap { $0.waitId == handoff.waitId ? $0.text : nil },
+                    onDone: { Task { await model.answerHandoff(.done) } },
+                    onSkip: { Task { await model.answerHandoff(.skipped) } },
+                    onFinishOnMac: { Task { await model.finishHandoffOnMac() } }
+                )
+                .id(handoff.waitId)
+            }
+            if let current = spending.spending, !model.needsModel, !model.isPaused {
+                AidenSpendingNotice(
+                    spending: current,
+                    botName: bot?.name,
+                    isAllowing: spending.isAllowing,
+                    canAllow: canWrite,
+                    errorMessage: spending.errorMessage,
+                    onAllowMore: { Task { await spending.allowMore(transport: spendingTransport) } }
+                )
+            }
             if model.needsModel {
                 AidenBotNeedsModelCard(
                     botName: bot?.name ?? "this Bot",
                     canSetUp: canWrite,
                     onSetUp: { isShowingAdvanced = true }
+                )
+            } else if model.isPaused {
+                AidenBotPausedCard(
+                    botName: bot?.name ?? "This Bot",
+                    isBusy: model.inFlight.contains(.unpause),
+                    canAct: canWrite,
+                    onResume: { Task { await model.unpause() } }
                 )
             } else if model.isInterrupted {
                 AidenBotInterruptedCard(
@@ -723,8 +815,19 @@ struct AidenBotSessionChatView: View {
     }
 
     /// The draft clears at once and the bubble shows (R14); a refused message
-    /// comes back to the composer.
+    /// comes back to the composer. While a step waits (revision 37), the text
+    /// is its note instead and Send marks the step done, when the card's own
+    /// Done could (connected); staged photos or files say to wait.
     private func submit(_ model: AidenBotSessionModel, whenBusy mode: AidenStreamInputMode?) {
+        if model.composerAnswersHandoff {
+            let note = draft
+            let connected = canWrite
+            draft = ""
+            Task {
+                if !(await model.answerHandoffFromComposer(note, connected: connected)), draft.isEmpty { draft = note }
+            }
+            return
+        }
         guard hasMessage(model), !model.isAttaching else { return }
         let text = draft
         draft = ""
@@ -787,7 +890,7 @@ struct AidenBotSessionChatView: View {
                 }
                 if dynamicTypeSize.isAccessibilitySize {
                     VStack(alignment: .trailing, spacing: 8) {
-                        composerField
+                        composerField(model)
                         HStack(spacing: 6) {
                             if model.attachmentsSupported { attachButton(model) }
                             Spacer(minLength: 0)
@@ -797,7 +900,7 @@ struct AidenBotSessionChatView: View {
                 } else {
                     HStack(alignment: .bottom, spacing: 6) {
                         if model.attachmentsSupported { attachButton(model) }
-                        composerField
+                        composerField(model)
                         composerControls(model)
                     }
                 }
@@ -817,14 +920,33 @@ struct AidenBotSessionChatView: View {
         }
     }
 
-    private var composerField: some View {
-        TextField("Message", text: $draft, axis: .vertical)
+    private func composerField(_ model: AidenBotSessionModel) -> some View {
+        TextField(composerPlaceholder(model), text: $draft, axis: .vertical)
             .lineLimit(1...6)
             .focused($composerFocused)
             .padding(.horizontal, 4)
             .padding(.vertical, 11)
             .frame(minHeight: max(44, controlSize))
-            .disabled(!canCompose)
+            .disabled(!canCompose || composerIsHeld(model))
+    }
+
+    /// Revision 37: a paused Bot takes nothing, and a waiting sign-in is
+    /// finished on the Mac or skipped, so the composer waits for either.
+    /// Revision 40: so does a password-or-code card, which takes no note.
+    private func composerIsHeld(_ model: AidenBotSessionModel) -> Bool {
+        model.isPaused || model.handoff?.kind == .signIn || model.composerHeldForNoNote
+    }
+
+    private func composerPlaceholder(_ model: AidenBotSessionModel) -> String {
+        if model.isPaused { return AidenBotSessionCopy.pausedPlaceholder(bot?.name ?? "This Bot") }
+        switch model.handoff?.kind {
+        case .action:
+            return model.composerHeldForNoNote
+                ? AidenBotSessionCopy.handoffNoNotePlaceholder
+                : AidenBotSessionCopy.handoffNotePlaceholder
+        case .signIn: return AidenBotSessionCopy.signInPlaceholder
+        case nil: return "Message"
+        }
     }
 
     /// The workspace chat's +: Files, Camera and Photos.
@@ -948,7 +1070,11 @@ struct AidenBotSessionChatView: View {
     @ViewBuilder
     private func composerControls(_ model: AidenBotSessionModel) -> some View {
         if model.isRunning {
-            if model.offersBusyModes {
+            if model.composerAnswersHandoff || composerIsHeld(model) {
+                // A waiting step's note goes with a plain Send, never Steer or Queue,
+                // and a held composer offers neither.
+                sendButton(model)
+            } else if model.offersBusyModes {
                 busyPill(model)
             }
             Button {
@@ -964,17 +1090,24 @@ struct AidenBotSessionChatView: View {
             .disabled(!canWrite || model.isStopping || model.inFlight.contains(.stop))
             .accessibilityLabel("Stop")
         } else {
-            Button {
-                submit(model, whenBusy: nil)
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.body.weight(.semibold))
-                    .frame(width: max(44, controlSize), height: max(44, controlSize))
-            }
-            .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
-            .disabled(!canCompose || !model.canSend || !hasMessage(model) || model.isAttaching)
-            .accessibilityLabel("Send")
+            sendButton(model)
         }
+    }
+
+    private func sendButton(_ model: AidenBotSessionModel) -> some View {
+        Button {
+            submit(model, whenBusy: nil)
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.body.weight(.semibold))
+                .frame(width: max(44, controlSize), height: max(44, controlSize))
+        }
+        .buttonStyle(AidenSolidFillButtonStyle(shape: Circle()))
+        .disabled(
+            !canCompose || !model.canSend || composerIsHeld(model) || !hasMessage(model) || model.isAttaching
+                || (model.composerAnswersHandoff && !(canWrite && model.canAnswerHandoff))
+        )
+        .accessibilityLabel(model.composerAnswersHandoff ? "Send and mark done" : "Send")
     }
 
     @MainActor
@@ -995,6 +1128,24 @@ struct AidenBotSessionChatView: View {
         )
         model.activitySupported = aidenBotActivitySupported(coordinator: coordinator)
         model.attachmentsSupported = AidenBotHostFeature.isAdvertised(AidenBotHostFeature.attachments, coordinator: coordinator)
+        feedOpenedWith = aidenBotSessionFeedGrants(coordinator.installationStore.activeInstallation)
+        // G24: a hand-off that arrives while the person is away from this
+        // chat (the app went to the background) alerts once, on this phone.
+        let instanceID = context.instanceId
+        let botID = botID
+        model.onHandoffArrived = { handoff in
+            let name = bot?.name ?? "Your Bot"
+            Task { @MainActor in
+                await AidenRunAlertNotifier.shared.notifyBotHandoff(
+                    waitID: handoff.waitId,
+                    kind: handoff.kind,
+                    instanceID: instanceID,
+                    botID: botID,
+                    botName: name,
+                    isChatOnScreen: true
+                )
+            }
+        }
         self.model = model
         // Nothing waits on another: the first snapshot, the Bot's detail and the
         // stream (with the outbox it sends) start together.
@@ -1271,6 +1422,98 @@ struct AidenBotRoutineProposalCardView: View {
     }
 }
 
+/// Revision 42 (`bot:issues`): a "Needs you" card the host raised, with up to
+/// two actions. A card that offers nothing a phone can do (the Mac's own
+/// settings opened it) says "Open on your Mac".
+struct AidenBotIssueCardView: View {
+    let issue: AidenRemoteBotIssue
+    let canAct: Bool
+    let isBusy: Bool
+    let onAct: (AidenBotIssueAction) -> Void
+
+    @Environment(\.aidenPalette) private var palette
+
+    private var symbol: String {
+        switch issue.kind {
+        case .preflightFailed: "wrench.and.screwdriver"
+        case .routineFailed: "clock.badge.exclamationmark"
+        case .routinePaused: "pause.circle"
+        case .runStalled: "hourglass"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(palette.foreground)
+                .frame(width: 40, height: 40)
+                .background(palette.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(AidenBotSessionCopy.issueNeedsYou)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(palette.secondary)
+                Text(issue.title)
+                    .font(.headline)
+                    .foregroundStyle(palette.foreground)
+                if !issue.body.isEmpty {
+                    Text(issue.body)
+                        .font(.subheadline)
+                        .foregroundStyle(palette.secondary)
+                }
+                actions
+                    .padding(.top, 4)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(palette.raised, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if issue.actions.isEmpty {
+            // `open_settings` never crosses the wire: the rest is on the Mac.
+            Text(AidenBotSessionCopy.issueOpenOnMac)
+                .font(.subheadline)
+                .foregroundStyle(palette.secondary)
+        } else if canAct {
+            HStack(spacing: 10) {
+                ForEach(Array(issue.actions.enumerated()), id: \.offset) { index, action in
+                    Button(AidenBotSessionModel.issueActionTitle(action)) { onAct(action) }
+                        .modifier(AidenBotIssueButtonStyle(isPrimary: index == issue.actions.count - 1))
+                }
+            }
+            .disabled(isBusy)
+        } else {
+            Text(AidenBotSessionCopy.finishOnMacReadOnly)
+                .font(.footnote)
+                .foregroundStyle(palette.secondary)
+        }
+    }
+}
+
+/// The last action is primary: it carries the solid fill; the other stays bordered.
+private struct AidenBotIssueButtonStyle: ViewModifier {
+    let isPrimary: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isPrimary {
+            content
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .aidenSolidFillTint()
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+        }
+    }
+}
+
 /// `I couldn't finish that reply.`, with Retry on the newest failed turn.
 struct AidenBotFailedTurnCard: View {
     let canRetry: Bool
@@ -1514,5 +1757,23 @@ struct AidenBotAttachmentChips: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Draws a message still on its way to the Mac: `slow` turns true once it has
+/// waited `AidenBotOutgoingMessage.sendingCaptionDelay` since it was sent, so a
+/// quick send never says "Sending…".
+private struct AidenBotSendWait<Content: View>: View {
+    let since: Date
+    @ViewBuilder let content: (Bool) -> Content
+    @State private var waited = false
+
+    var body: some View {
+        content(waited || AidenBotOutgoingMessage.showsSendingCaption(sentAt: since, now: Date()))
+            .task(id: since) {
+                let remaining = since.addingTimeInterval(AidenBotOutgoingMessage.sendingCaptionDelay).timeIntervalSinceNow
+                if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+                if !Task.isCancelled { waited = true }
+            }
     }
 }

@@ -447,13 +447,16 @@ export function reconcileTerminalAssistantProjection(
   turnStart: { full: number; reasoning: number },
   message: { role?: string; content?: unknown },
   exposeReasoning: boolean,
+  /** The turn continues a cut-off reply, so its text joins the previous text directly. */
+  continuesCutOffReply = false,
 ): TerminalAssistantProjection {
   if (message.role !== "assistant") {
     return { ...accumulated, changed: false };
   }
   const fullPrefix = accumulated.full.slice(0, turnStart.full);
   const terminalText = terminalAssistantText(message);
-  const full = `${fullPrefix}${assistantTurnTextSeparator(fullPrefix, terminalText)}${terminalText}`;
+  const separator = continuesCutOffReply ? "" : assistantTurnTextSeparator(fullPrefix, terminalText);
+  const full = `${fullPrefix}${separator}${terminalText}`;
   const terminalReasoning = exposeReasoning
     ? terminalAssistantReasoning(message)
     : "";

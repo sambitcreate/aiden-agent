@@ -58,6 +58,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
         return chat("created", input.workspaceId);
       },
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async (id: string, workspaceId: string) =>
         chat(id, workspaceId),
       remove: async () => undefined,
@@ -251,6 +252,7 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { events.push("chat"); },
     },
@@ -268,6 +270,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { throw new Error("disk failed"); },
     } as ChatApplicationDependencies["chatStore"],
@@ -459,4 +462,33 @@ test("renderer rename and delete refuse feature-owned chats when asked to", asyn
   // Without the option the shared service keeps its existing behavior.
   await application.service.rename("design-chat", "Renamed");
   assert.deepEqual(events, ["renamed"]);
+});
+
+test("a committed deletion offers the chat's workspace for release, and a failed release keeps the deletion", async () => {
+  const released: string[] = [];
+  const application = fixture({
+    afterChatRemoved: async (workspaceId: string) => {
+      released.push(workspaceId);
+      throw new Error("trash unavailable");
+    },
+  });
+  await application.service.remove("chat-1");
+  assert.deepEqual(released, ["workspace-1"]);
+  assert.equal(application.finishDeletionCalls(), 1);
+
+  const uncommitted = fixture({
+    afterChatRemoved: async (workspaceId: string) => { released.push(`late:${workspaceId}`); },
+    chatStore: {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async () => chat(),
+      create: async () => chat(),
+      rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => { throw new Error("disk failed"); },
+    } as ChatApplicationDependencies["chatStore"],
+  });
+  await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
+  assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
 });

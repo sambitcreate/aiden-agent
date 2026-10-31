@@ -80,6 +80,36 @@ class AidenQuestionTest {
     }
 
     @Test
+    fun recommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        assertEquals("Postgres" to true, AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)"))
+        assertEquals("Postgres" to true, AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)"))
+        assertEquals("(Recommended)" to false, AidenQuestionAnswerDraft.recommendedLabel("(Recommended)"))
+        assertEquals("(Recommended) Postgres" to false, AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres"))
+
+        val questions = listOf(
+            question(options = listOf(option("Small"), option("Large (Recommended)"), option("Huge (Recommended)"))),
+            question(
+                header = "Steps", prompt = "Which steps?", multiSelect = true,
+                options = listOf(option("Lint (Recommended)"), option("Test"), option("Docs (Recommended)"))
+            ),
+            question(header = "Notes", prompt = "Any notes?")
+        )
+        val selections = AidenQuestionAnswerDraft.recommendedSelections(questions)
+        assertEquals(
+            mapOf(0 to setOf("Large (Recommended)"), 1 to setOf("Lint (Recommended)", "Docs (Recommended)")),
+            selections
+        )
+        // Accepting them sends the full labels, which are the options' identities.
+        assertEquals(
+            listOf(
+                AidenQuestionAnswer.Option(questionIndex = 0, answer = "Large (Recommended)"),
+                AidenQuestionAnswer.Multi(questionIndex = 1, selected = listOf("Lint (Recommended)", "Docs (Recommended)"))
+            ),
+            AidenQuestionAnswerDraft.answers(questions, selections, emptyMap())
+        )
+    }
+
+    @Test
     fun questionDraftCustomAnswerOverridesSelectionAndBlanksAreSkipped() {
         val questions = listOf(question())
         val customWins = AidenQuestionAnswerDraft.answers(

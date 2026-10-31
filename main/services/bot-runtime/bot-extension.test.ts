@@ -7,19 +7,34 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@earendil-works/pi-durable";
+import {
+  defineExtension,
+  Harness,
+  hook,
+  MemoryStorage,
+  ToolResultEntry,
+  ToolTask,
+  type Conversation,
+  type Extension,
+} from "@earendil-works/pi-durable";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
 import { createBotMemoryService, type BotMemoryRuntime } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
+import { createBotPauseStore } from "../bot-pause-store.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../bot-memory/tool.js";
 import { botTranscriptRows } from "../../../renderer/main/bots/bot-transcript-rows.js";
+import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import { createBotRegistry, type BotExtensionDeps, type BotRegistry } from "./bot-extension.js";
+import { handoffSkippedText, ruleHandoffDoneBlock, ruleUnattendedBlock } from "./bot-handoff-text.js";
+import { recordRuleHandoffEntry } from "./bot-handoffs.js";
+import { createBotSessionService } from "./bot-session-service.js";
 import { botIngressAllowsTool } from "./bot-tool-policy.js";
 import { createBotHarnessHost, type BotHarnessHost } from "./harness-host.js";
 import { projectBotTranscript } from "./live-projection.js";
 import { spawnHarnessChild } from "./test-support/child.js";
+import { SCENARIO_RULE_HANDOFF, SCENARIO_SCRIPT_TOOL } from "./test-support/extension-scenario.js";
 import { countingTool, recordingDeps } from "./test-support/fixtures.js";
-import { createFauxModels, FAUX_MODEL_REF, type FauxModels } from "./test-support/faux.js";
+import { createFauxModels, FAUX_MODEL_REF, waitFor, type FauxModels } from "./test-support/faux.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const scenarioFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-support", "extension-scenario.ts");
@@ -135,6 +150,38 @@ test("(b) a tool the current policy forbids is blocked without running", async (
   }
 });
 
+test("(b2) a run over its spending limit finishes the step, then sends no more requests", async () => {
+  const tool = countingTool("lookup");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("lookup", { text: "x" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("must not be requested"),
+  ]);
+  const recorded: Array<{ requestIds: readonly (string | undefined)[]; stopReason: string }> = [];
+  const deps: BotExtensionDeps = {
+    ...recordingDeps({ tools: [{ tool, replay: "unsafe" }] }),
+    spending: {
+      // Over the limit once the first response is counted.
+      refusal: async () => (recorded.length > 0 ? "Ada reached its $5.00 spending limit for this month." : undefined),
+      // Counting takes a moment (it looks up the sign-in first); the next
+      // request must still see it.
+      record: async (_botId, requestIds, message) => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        recorded.push({ requestIds, stopReason: message.stopReason });
+      },
+    },
+  };
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    const settled = await (await root.submit({ type: "input", content: "go", requestId: "routine:t1:1" }, ctx)).wait(ctx);
+    assert.equal(settled.status, "unanswered");
+    assert.equal(fauxModels.calls(), 1);
+    assert.equal(tool.executions.length, 1, "the step that crossed the limit finishes");
+    assert.deepEqual(recorded, [{ requestIds: ["routine:t1:1"], stopReason: "toolUse" }]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(c) an approval-gated tool asks once and runs after allow", async () => {
   const gated = countingTool("gated");
   const fauxModels = createFauxModels([
@@ -180,6 +227,104 @@ test("(c2) a denied approval blocks the tool", async () => {
   }
 });
 
+/* ------------------------------------------------------------------------- */
+/* Codemode: scripts over the Bot's tools                                    */
+/* ------------------------------------------------------------------------- */
+
+/** A turn whose model runs one codemode script, then answers. Returns the tools each request declared and the script's result. */
+async function scriptTurn(deps: BotExtensionDeps, code: string, requestId?: string) {
+  const declared: string[][] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage([fauxToolCall("codemode", { code }, { id: "script-1" })], { stopReason: "toolUse" });
+    },
+    fauxAssistantMessage("done"),
+  ]);
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go", ...(requestId === undefined ? {} : { requestId }) }, ctx)).wait(ctx);
+    const [result] = await toolResults(root);
+    return { declared, result: result!, text: result!.content.map((part) => part.text ?? "").join("\n") };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("(cm1) a Bot with connection tools gets codemode, and each scripted call passes the Bot's policy", async () => {
+  const read = countingTool("docs__read");
+  const deps = recordingDeps({ tools: [{ tool: read, replay: "unsafe", mcp: true }] });
+  const turn = await scriptTurn(deps, "text(await tools.docs__read({ text: 'notes' }))");
+  assert.deepEqual(turn.declared, [["docs__read", "codemode"]], "connection tools stay declared next to codemode");
+  assert.deepEqual(read.executions, [{ text: "notes" }]);
+  assert.match(turn.text, /ran notes/u);
+  assert.deepEqual(deps.policyChecks, ["docs__read"], "the script's call is checked; codemode itself is not a capability");
+});
+
+test("(cm2) a scripted call that needs approval asks the person, and a denial keeps it from running", async () => {
+  const send = countingTool("mail__send");
+  const deps = recordingDeps({
+    tools: [{ tool: send, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, approval: { summary: "Send the email" } }),
+    approve: async () => "deny",
+  });
+  const turn = await scriptTurn(deps, "try { await tools.mail__send({ text: 'hi' }); text('sent') } catch (error) { text('blocked: ' + error.message) }");
+  assert.deepEqual(send.executions, []);
+  assert.equal(deps.approvals.length, 1);
+  assert.equal(deps.approvals[0]!.toolName, "mail__send");
+  assert.equal(deps.approvals[0]!.summary, "Send the email");
+  assert.equal(deps.approvals[0]!.toolCallId, "script-1/c1", "the script's first nested call");
+  assert.match(turn.text, /blocked: The person declined this action\./u);
+});
+
+test("(cm3) a scripted call a rule hands to the person is refused without a card; the model is told to call it directly", async () => {
+  const buy = countingTool("shop__buy");
+  const deps = recordingDeps({
+    tools: [{ tool: buy, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, handoff: { rule: { id: "purchases", label: "Make a purchase" }, summary: "buy", action: "Buy it", why: "Your rule" } }),
+    handoff: async () => ({ outcome: "done" }),
+  });
+  const turn = await scriptTurn(deps, "try { await tools.shop__buy({ text: 'socks' }) } catch (error) { text(error.message) }");
+  assert.deepEqual(buy.executions, []);
+  assert.deepEqual(deps.handoffs, []);
+  assert.match(turn.text, /Call shop__buy directly, not from codemode/u);
+});
+
+test("(cm4) scripts follow the turn's ingress and never reach direct-only tools", async () => {
+  const read = countingTool("docs__read");
+  const question = countingTool("ask_user_question");
+  const deps: BotExtensionDeps = {
+    ...recordingDeps({ tools: [{ tool: read, replay: "unsafe", mcp: true }, { tool: question, replay: "unsafe" }] }),
+    // A routine run may not read docs (a stand-in ingress rule).
+    turnAllows: (name, requestIds) => !(name === "docs__read" && requestIds.some((id) => id?.startsWith("routine:"))),
+  };
+  const turn = await scriptTurn(
+    deps,
+    "text(ALL_TOOLS.map((tool) => tool.name).join(','));\ntry { await tools.docs__read({ text: 'x' }) } catch (error) { text(error.message) }",
+    "routine:task-1:1",
+  );
+  assert.match(turn.text, /^docs__read$/mu, "the question card is not a script tool");
+  assert.match(turn.text, /This tool is not available on this turn\./u);
+  assert.deepEqual(read.executions, []);
+});
+
+test("(cm5) a Bot without scriptable tools gets no codemode", async () => {
+  const declared: string[][] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage("hi");
+    },
+  ]);
+  const { harness, root } = await memoryHarness(recordingDeps({ tools: [{ tool: countingTool("ask_user_question"), replay: "unsafe" }] }), fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "go" }, ctx)).wait(ctx);
+    assert.deepEqual(declared, [["ask_user_question"]]);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
 test("(d) after SIGKILL while waiting for approval, Resume re-asks with the same waitId", async () => {
   const profile = tempProfile();
   const child = spawnHarnessChild("scenario", [
@@ -207,6 +352,39 @@ test("(d) after SIGKILL while waiting for approval, Resume re-asks with the same
       "the approval is re-asked once, under the original waitId",
     );
     assert.equal(gated.executions.length, 1);
+    assert.equal(fauxModels.calls(), 1, "only the follow-up answer is requested");
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(d2) after SIGKILL while a script's call waits for approval, Resume re-asks with the same waitId and runs it once", async () => {
+  const profile = tempProfile();
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-script-approval", kind: "script-approval" }),
+  ]);
+  const childWaitId = await child.waitFor("APPROVAL");
+  await child.kill();
+
+  const gated = countingTool(SCENARIO_SCRIPT_TOOL);
+  const fauxModels = createFauxModels([fauxAssistantMessage("all done")]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe", mcp: true }],
+    policy: () => ({ allowed: true, approval: { summary: "Run gated" } }),
+  });
+  const { host, harness } = await reopenAfterKill(profile, "bot-script-approval", deps, fauxModels);
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions;
+    harness.resume();
+    const settled = await (await harness.submission(placed!.id, ctx))!.wait(ctx);
+    assert.equal(settled.status, "done");
+    assert.deepEqual(
+      deps.approvals.map((request) => request.waitId),
+      [childWaitId],
+      "the script's approval is re-asked once, under the original waitId",
+    );
+    assert.deepEqual(gated.executions, [{ text: "x" }], "the approved call runs once, after Resume");
     assert.equal(fauxModels.calls(), 1, "only the follow-up answer is requested");
   } finally {
     await host.shutdown();
@@ -439,5 +617,267 @@ test("(h) the Bot's own saves keep the memory section byte-identical; a person e
     assert.ok(sections[5]!.includes("Lives in Pune."), "a new session re-reads memory");
   } finally {
     await harness.close(ctx);
+  }
+});
+
+// --- Rule hand-offs (plan §4.4) ------------------------------------------
+
+const RULE_HANDOFF = () => ({ allowed: true as const, handoff: { ...SCENARIO_RULE_HANDOFF, rule: { ...SCENARIO_RULE_HANDOFF.rule } } });
+const resultText = (result: ToolResultModel | undefined) => result?.content.map((part) => part.text ?? "").join("") ?? "";
+
+async function handoffTurn(options: Parameters<typeof recordingDeps>[0]) {
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("gated", { text: "x" }, { id: "call-rule" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("noted"),
+  ]);
+  const deps = recordingDeps({ tools: [{ tool: gated, replay: "unsafe" }], policy: RULE_HANDOFF, ...options });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "order it" }, ctx)).wait(ctx);
+    return { deps, gated, results: await toolResults(root) };
+  } finally {
+    await harness.close(ctx);
+  }
+}
+
+test("(i) a rule hand-off opens a card instead of running the tool; Done blocks it with what the person did", async () => {
+  const { deps, gated, results } = await handoffTurn({ handoff: async () => ({ outcome: "done", note: "Booked for two" }) });
+  assert.deepEqual(gated.executions, []);
+  assert.deepEqual(deps.approvals, []);
+  assert.equal(deps.handoffs.length, 1);
+  const [card] = deps.handoffs;
+  assert.deepEqual(
+    { toolCallId: card!.toolCallId, toolName: card!.toolName, action: card!.action, why: card!.why, rule: card!.rule },
+    {
+      toolCallId: "call-rule",
+      toolName: "gated",
+      action: SCENARIO_RULE_HANDOFF.action,
+      why: SCENARIO_RULE_HANDOFF.why,
+      rule: SCENARIO_RULE_HANDOFF.rule,
+    },
+  );
+  assert.match(card!.waitId, /^[0-9a-f-]{36}$/u);
+  assert.equal(results[0]!.isError, true);
+  assert.ok(resultText(results[0]).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary, "Booked for two")));
+  assert.deepEqual(deps.recordCalls, [
+    {
+      botId: "bot-1",
+      kind: "action",
+      outcome: "done",
+      action: SCENARIO_RULE_HANDOFF.action,
+      note: "Booked for two",
+      toolCallId: "call-rule",
+      rule: SCENARIO_RULE_HANDOFF.rule,
+    },
+  ]);
+});
+
+test("(i2) Skip on a rule hand-off blocks with the skip text", async () => {
+  const { gated, results, deps } = await handoffTurn({ handoff: async () => ({ outcome: "skipped" }) });
+  assert.deepEqual(gated.executions, []);
+  assert.ok(resultText(results[0]).includes(handoffSkippedText(SCENARIO_RULE_HANDOFF.action)));
+  assert.equal(deps.recordCalls[0]?.outcome, "skipped");
+});
+
+test("(i3) with no one to ask, a rule hand-off blocks with what the person needs to do", async () => {
+  const { gated, results, deps } = await handoffTurn({});
+  assert.deepEqual(gated.executions, []);
+  assert.deepEqual(deps.recordCalls, []);
+  assert.ok(resultText(results[0]).includes(ruleUnattendedBlock(SCENARIO_RULE_HANDOFF.rule.label)));
+});
+
+test("(j) after SIGKILL while a rule hand-off waits, Resume asks again under the same waitId and never runs the tool", async () => {
+  const profile = tempProfile();
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-handoff", kind: "handoff" }),
+  ]);
+  const childWaitId = await child.waitFor("HANDOFF");
+  await child.kill();
+
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([fauxAssistantMessage("thanks")]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: RULE_HANDOFF,
+    handoff: async () => ({ outcome: "done" }),
+  });
+  const { host, harness, conversation } = await reopenAfterKill(profile, "bot-handoff", deps, fauxModels);
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions;
+    harness.resume();
+    assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+    assert.deepEqual(deps.handoffs.map((request) => request.waitId), [childWaitId]);
+    assert.deepEqual(gated.executions, []);
+    assert.equal(deps.recordCalls.length, 1);
+    const [result] = await toolResults(conversation);
+    assert.ok(resultText(result).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary)));
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(j2) an answer stored before a crash is applied on Resume without asking again, whatever the rules say now", async () => {
+  const profile = tempProfile();
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-answered", kind: "handoff-answered" }),
+  ]);
+  await child.waitFor("RECORDING");
+  await child.kill();
+
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([fauxAssistantMessage("thanks")]);
+  // The rules changed since: the call would now simply run. It must not.
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: () => ({ allowed: true }),
+    handoff: async () => {
+      throw new Error("asked again");
+    },
+  });
+  const { host, harness, conversation } = await reopenAfterKill(profile, "bot-answered", deps, fauxModels);
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions;
+    harness.resume();
+    assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+    assert.deepEqual(deps.handoffs, []);
+    assert.deepEqual(deps.policyChecks, [], "a stored answer is applied before any policy check");
+    assert.deepEqual(gated.executions, []);
+    assert.deepEqual(
+      deps.recordCalls.map((record) => [record.outcome, record.note]),
+      [["done", "Booked for two"]],
+    );
+    const [result] = await toolResults(conversation);
+    assert.ok(resultText(result).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary, "Booked for two")));
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(j3) a wait first opened as a hand-off that the rules turned into an approval asks today's summary under the same waitId", async () => {
+  const profile = tempProfile();
+  const child = spawnHarnessChild("scenario", [
+    scenarioFile,
+    JSON.stringify({ profileDir: profile, botId: "bot-turned", kind: "handoff" }),
+  ]);
+  const childWaitId = await child.waitFor("HANDOFF");
+  await child.kill();
+
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([fauxAssistantMessage("done")]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: () => ({ allowed: true, approval: { summary: "Rule · Make a purchase or booking — Click Buy" } }),
+  });
+  const { host, harness } = await reopenAfterKill(profile, "bot-turned", deps, fauxModels);
+  try {
+    const [placed] = (await harness.inspect(ctx)).submissions;
+    harness.resume();
+    assert.equal((await (await harness.submission(placed!.id, ctx))!.wait(ctx)).status, "done");
+    assert.deepEqual(
+      deps.approvals.map((request) => [request.waitId, request.summary]),
+      [[childWaitId, "Rule · Make a purchase or booking — Click Buy"]],
+    );
+    assert.equal(gated.executions.length, 1);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(j4) an approval memo written before rules (no kind) carries its waitId into a hand-off", async () => {
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("gated", { text: "x" }, { id: "call-old" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("noted"),
+  ]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: RULE_HANDOFF,
+    handoff: async () => ({ outcome: "done" }),
+  });
+  const registry = createBotRegistry("bot-1", deps);
+  // Stand in for an earlier release: its hook ran first and stored the memo without `kind`.
+  const legacy: Extension = defineExtension({
+    name: "legacy-approval-memo",
+    hooks: [
+      hook(ToolTask, {
+        beforeTool: async (call, api, context) => {
+          await api.memo("aiden.approval", { waitId: "11111111-2222-4333-8444-555555555555", toolCallId: call.id, summary: "Run gated" }, context);
+          return undefined;
+        },
+      }),
+    ],
+  });
+  registry.uninstall({ name: "aiden-bot" } as Extension);
+  registry.install(legacy);
+  await registry.refresh();
+  const harness = await Harness.open(new MemoryStorage(), { models: fauxModels.models, registry }, ctx);
+  registry.attachHarness(harness);
+  const root = await harness.root(ctx, { agent: { model: FAUX_MODEL_REF } });
+  try {
+    await (await root.submit({ type: "input", content: "order it" }, ctx)).wait(ctx);
+    assert.deepEqual(deps.handoffs.map((request) => request.waitId), ["11111111-2222-4333-8444-555555555555"]);
+    assert.deepEqual(gated.executions, []);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("(k) a pause that lands while a rule hand-off's answer is being recorded closes the turn; Resume applies the answer once", { timeout: 60_000 }, async () => {
+  const profile = tempProfile();
+  const botId = "bot:paused-mid-answer";
+  const gated = countingTool("gated");
+  const fauxModels = createFauxModels([
+    fauxAssistantMessage([fauxToolCall("gated", { text: "x" }, { id: "call-paused" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("carried on"),
+  ]);
+  const deps = recordingDeps({
+    tools: [{ tool: gated, replay: "unsafe" }],
+    policy: RULE_HANDOFF,
+    handoff: async () => ({ outcome: "done", note: "Booked for two" }),
+  });
+  // Production's writer, held on its first attempt until the pause has begun
+  // closing the turn: the answer is stored, its row not yet written.
+  let releaseRow!: () => void;
+  const rowHeld = new Promise<void>((resolve) => (releaseRow = resolve));
+  deps.recordHandoff = async (record, conversation) => {
+    deps.recordCalls.push(record);
+    if (deps.recordCalls.length === 1) await rowHeld;
+    await recordRuleHandoffEntry(conversation, record);
+  };
+  const service = await createBotSessionService({
+    profileDir: profile,
+    models: fauxModels.models,
+    extension: deps,
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set([botId]),
+    pauses: createBotPauseStore({ root: () => path.join(profile, "bot-service"), now: () => 1_000 }),
+    // A close that waited on the row would give up here and leave the turn running.
+    suspendTimeoutMs: 3_000,
+    onPaused: () => void setTimeout(releaseRow, 50),
+  });
+  const never = new AbortController().signal;
+  try {
+    const { submissionId } = await service.send(botId, { text: "buy it", requestId: "desk-1" });
+    await waitFor(() => deps.recordCalls.length === 1, { what: "the answer to be recorded" });
+
+    // The turn closed (it reads as interrupted under the pause) instead of the close timing out.
+    assert.deepEqual(await service.pause(botId, "mac"), { kind: "paused", since: 1_000, by: "mac", interrupted: submissionId });
+    assert.deepEqual(await service.unpause(botId), { kind: "interrupted", submissionId });
+    await service.resume(botId, "resume-1");
+    assert.deepEqual(await service.awaitReply(botId, submissionId, never), { kind: "completed", text: "carried on" });
+
+    assert.equal(deps.handoffs.length, 1, "the stored answer is applied on Resume, not asked again");
+    assert.equal(deps.recordCalls.length, 2, "the closed attempt and Resume both apply the same answer");
+    assert.deepEqual(gated.executions, []);
+    const conversation = await service.conversation(botId);
+    const entries = (await conversation.context(ctx)).entries;
+    assert.equal(entries.filter((entry) => entry.kind === BOT_HANDOFF_RESULT_ENTRY_KIND).length, 1);
+    const [result] = await toolResults(conversation);
+    assert.ok(resultText(result).includes(ruleHandoffDoneBlock(SCENARIO_RULE_HANDOFF.summary, "Booked for two")));
+  } finally {
+    await service.shutdown();
   }
 });

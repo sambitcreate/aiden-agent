@@ -1,15 +1,20 @@
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
-  type JSONRPCMessage,
-  JSONRPCMessageSchema,
-  ListToolsResultSchema,
+  McpClient,
+  McpConnectionClosedError,
   McpError,
-  ToolSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+  McpTimeoutError,
+  parseJsonRpcMessage,
+  type JsonRpcMessage,
+  type McpTransport,
+  type McpTransportCloseListener,
+  type McpTransportErrorListener,
+  type McpTransportMessageListener,
+} from "@earendil-works/pi-mcp";
+import { ListToolsResultSchema, ToolSchema } from "@modelcontextprotocol/sdk/types.js";
+import { connectMcpClient, mcpRequest, withMcpAbortReason } from "../mcp-client.js";
+import { callMcpTool } from "../mcp-tool-inventory.js";
 import {
   CuaDriverError,
   type CuaDriverToolInfo,
@@ -51,8 +56,8 @@ function cancellationError(signal: AbortSignal | undefined, message: string): Cu
 }
 
 /**
- * Never hand a caller-owned signal to the MCP SDK. Some SDK request paths keep
- * abort listeners until their own lifecycle ends. A fresh controller scopes
+ * Never hand a caller-owned signal to the MCP client. A request path may keep
+ * abort listeners until its own lifecycle ends. A fresh controller scopes
  * every request and this forwarding listener is always removed in `finally`.
  */
 async function withRequestSignal<T>(
@@ -102,14 +107,14 @@ function settlesWithin(promise: Promise<unknown>, milliseconds: number): Promise
 
 function isClosedTransportError(error: unknown): boolean {
   return (
-    (error instanceof McpError && error.code === ErrorCode.ConnectionClosed) ||
+    error instanceof McpConnectionClosedError ||
     (error instanceof Error &&
       /closed|not connected|broken pipe|end of stream|eof|transport/i.test(error.message))
   );
 }
 
 function isRequestTimeout(error: unknown): boolean {
-  return error instanceof McpError && error.code === ErrorCode.RequestTimeout;
+  return error instanceof McpTimeoutError;
 }
 
 function isLocalRequestTooLarge(error: unknown): boolean {
@@ -125,8 +130,8 @@ function isLocalRequestTooLarge(error: unknown): boolean {
 }
 
 function isJsonRpcRequest(
-  message: JSONRPCMessage,
-): message is JSONRPCMessage & { id: number | string; method: string } {
+  message: JsonRpcMessage,
+): message is JsonRpcMessage & { id: number | string; method: string } {
   return (
     "method" in message &&
     "id" in message &&
@@ -195,11 +200,10 @@ class BoundedMcpLineDecoder {
  * parameterized byte limit is a narrow framing-test seam; CuaDriverSession
  * always supplies Aiden's fixed 64 MiB production contract.
  */
-export class AuthenticatedBridgeTransport implements Transport {
-  onclose?: () => void;
-  onerror?: (error: Error) => void;
-  onmessage?: <T extends JSONRPCMessage>(message: T) => void;
-
+export class AuthenticatedBridgeTransport implements McpTransport {
+  private readonly messageListeners = new Set<McpTransportMessageListener>();
+  private readonly errorListeners = new Set<McpTransportErrorListener>();
+  private readonly closeListeners = new Set<McpTransportCloseListener>();
   private readonly decoder: BoundedMcpLineDecoder;
   private started = false;
   private didNotifyClose = false;
@@ -210,6 +214,25 @@ export class AuthenticatedBridgeTransport implements Transport {
     maximumMessageBytes: number,
   ) {
     this.decoder = new BoundedMcpLineDecoder(maximumMessageBytes);
+  }
+
+  onMessage(listener: McpTransportMessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
+  }
+
+  onError(listener: McpTransportErrorListener): () => void {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
+  }
+
+  onClose(listener: McpTransportCloseListener): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
+  }
+
+  private emitMessage(message: JsonRpcMessage): void {
+    for (const listener of [...this.messageListeners]) listener(message);
   }
 
   async start(): Promise<void> {
@@ -226,7 +249,7 @@ export class AuthenticatedBridgeTransport implements Transport {
     this.child.once("close", this.handleProcessClose);
   }
 
-  async send(message: JSONRPCMessage): Promise<void> {
+  async send(message: JsonRpcMessage): Promise<void> {
     const stdin = this.child.stdin;
     if (!this.started || this.closePromise || !stdin || stdin.destroyed || !stdin.writable) {
       throw new Error("Authenticated bridge is not connected.");
@@ -234,12 +257,11 @@ export class AuthenticatedBridgeTransport implements Transport {
     const line = JSON.stringify(message);
     if (Buffer.byteLength(line, "utf8") > CUA_DRIVER_MAX_CLIENT_MESSAGE_BYTES) {
       if (isJsonRpcRequest(message)) {
-        // MCP SDK 1.29 registers its response handler before Transport.send and
-        // does not delete that handler when send rejects. Loop a private local
-        // error through the normal response path so the SDK consumes the exact
-        // request ID, clears its timeout, and leaves this session usable.
+        // Loop a private local error through the normal response path so the
+        // client consumes the exact request ID, clears its timeout, and leaves
+        // this session usable.
         queueMicrotask(() => {
-          this.onmessage?.({
+          this.emitMessage({
             jsonrpc: "2.0",
             id: message.id,
             error: {
@@ -284,10 +306,10 @@ export class AuthenticatedBridgeTransport implements Transport {
   private readonly handleData = (chunk: Buffer) => {
     try {
       this.decoder.consume(chunk, (frame) => {
-        const message = JSONRPCMessageSchema.parse(
+        const message = parseJsonRpcMessage(
           JSON.parse(frame.toString("utf8")),
         );
-        this.onmessage?.(message);
+        this.emitMessage(message);
       });
     } catch (error) {
       this.fail(
@@ -306,7 +328,7 @@ export class AuthenticatedBridgeTransport implements Transport {
   };
 
   private fail(error: Error): void {
-    this.onerror?.(error);
+    for (const listener of [...this.errorListeners]) listener(error);
     this.notifyClose();
     void this.close();
   }
@@ -314,7 +336,7 @@ export class AuthenticatedBridgeTransport implements Transport {
   private notifyClose(): void {
     if (this.didNotifyClose) return;
     this.didNotifyClose = true;
-    this.onclose?.();
+    for (const listener of [...this.closeListeners]) listener();
   }
 
   private async closeInternal(): Promise<void> {
@@ -344,7 +366,7 @@ export class AuthenticatedBridgeTransport implements Transport {
 export class CuaDriverSession {
   readonly id = `aiden-${randomUUID()}`;
   private readonly transport: AuthenticatedBridgeTransport;
-  private client: Client | null = null;
+  private client: McpClient | null = null;
   private tools = new Map<string, CuaDriverToolInfo>();
   private toolSchemaVersion: string | null = null;
   private toolCapabilityVersion: string | null = null;
@@ -396,31 +418,24 @@ export class CuaDriverSession {
       throw cancellationError(signal, "Computer Use startup was cancelled.");
     }
     this.state = "connecting";
-    const client = new Client(
-      { name: "aiden-agent-computer-use", version: "1.0.0" },
-      { capabilities: {} },
-    );
-    client.onclose = () => {
+    const client = new McpClient({ name: "aiden-agent-computer-use", version: "1.0.0", capabilities: {} });
+    client.onClose(() => {
       if (this.client !== client) return;
       this.client = null;
       if (this.state === "connecting" || this.state === "ready") this.state = "broken";
       this.notifyClosed();
-    };
+    });
     this.client = client;
     try {
       await withRequestSignal(signal, (requestSignal) =>
-        client.connect(this.transport, {
+        connectMcpClient(client, this.transport, {
           signal: requestSignal,
-          timeout: remainingMilliseconds(deadline),
+          timeoutMs: remainingMilliseconds(deadline),
         }),
       );
       const listing = await withRequestSignal(signal, (requestSignal) =>
-        client
-          .request(
-            { method: "tools/list", params: {} },
-            CUA_LIST_TOOLS_RESULT_SCHEMA,
-            { signal: requestSignal, timeout: remainingMilliseconds(deadline) },
-          )
+        mcpRequest<unknown>(client, "tools/list", {}, { signal: requestSignal, timeoutMs: remainingMilliseconds(deadline) })
+          .then((listing) => CUA_LIST_TOOLS_RESULT_SCHEMA.parse(listing))
           .catch((error: unknown) => {
             if (
               isAbortError(error) ||
@@ -442,14 +457,10 @@ export class CuaDriverSession {
       this.toolCapabilityVersion = catalog.capabilityVersion;
       const startResult = await withRequestSignal(signal, (requestSignal) => {
         const timeout = remainingMilliseconds(deadline);
-        return client.callTool(
+        return callMcpTool(
+          client,
           { name: "start_session", arguments: { session: this.id } },
-          undefined,
-          {
-            signal: requestSignal,
-            timeout,
-            maxTotalTimeout: timeout,
-          },
+          { signal: requestSignal, timeoutMs: timeout },
         );
       });
       if (isToolError(startResult)) {
@@ -543,14 +554,13 @@ export class CuaDriverSession {
       }
       try {
         return await withRequestSignal(options.signal, (requestSignal) =>
-          this.client!.callTool(
-            { name, arguments: declaresSession ? { ...args, session: this.id } : { ...args } },
-            undefined,
-            {
-              signal: requestSignal,
-              timeout: options.timeoutMs ?? CALL_TIMEOUT_MS,
-              maxTotalTimeout: options.timeoutMs ?? CALL_TIMEOUT_MS,
-            },
+          withMcpAbortReason(
+            this.client!.request<unknown>(
+              "tools/call",
+              { name, arguments: declaresSession ? { ...args, session: this.id } : { ...args } },
+              { signal: requestSignal, timeoutMs: options.timeoutMs ?? CALL_TIMEOUT_MS },
+            ),
+            requestSignal,
           ),
         );
       } catch (error) {
@@ -649,10 +659,10 @@ export class CuaDriverSession {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), CLOSE_GRACE_MS);
         try {
-          await client.callTool(
+          await client.request(
+            "tools/call",
             { name: "end_session", arguments: { session: this.id } },
-            undefined,
-            { signal: controller.signal, timeout: CLOSE_GRACE_MS, maxTotalTimeout: CLOSE_GRACE_MS },
+            { signal: controller.signal, timeoutMs: CLOSE_GRACE_MS },
           );
         } catch {
           // Process teardown is the hard session boundary.

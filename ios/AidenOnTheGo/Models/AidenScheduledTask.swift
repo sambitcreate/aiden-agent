@@ -51,10 +51,10 @@ struct AidenScheduledTask: Codable, Identifiable, Equatable, Sendable {
     var mcpAccessSummary: String? {
         guard mode == .llm else { return nil }
         if usesLegacyInheritedMcpAccess {
-            return String(localized: "All enabled MCP servers (legacy)")
+            return String(localized: "All enabled connectors (legacy)")
         }
         guard let mcpServerIds, !mcpServerIds.isEmpty else {
-            return String(localized: "No MCP servers")
+            return String(localized: "No connectors")
         }
         return String(localized: "\(mcpServerIds.count) selected")
     }
@@ -281,17 +281,17 @@ struct AidenScheduledTaskDraft: Equatable, Sendable {
         if schedule.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return String(localized: "Schedule is required.") }
         if timezone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return String(localized: "Timezone is required.") }
         if mode == .llm && !hasResolvedMcpScope {
-            return String(localized: "Refresh the enabled MCP server inventory before reviewing this legacy task.")
+            return String(localized: "Refresh the enabled connectors before reviewing this legacy task.")
         }
         if mode == .llm && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return String(localized: "Prompt is required.") }
         if mode == .llm && mcpServerIds.count > Self.maximumMcpServerCount {
-            return String(localized: "Choose no more than 16 MCP servers.")
+            return String(localized: "Choose no more than 16 connectors.")
         }
         if mode == .llm && !mcpServerIds.isEmpty && permission != .full {
-            return String(localized: "MCP access requires Full permission.")
+            return String(localized: "Connector access requires Full permission.")
         }
         if mode == .llm && !mcpServerIds.isEmpty && workspaceId != nil {
-            return String(localized: "MCP access is available only without a workspace binding.")
+            return String(localized: "Connector access is available only without a workspace binding.")
         }
         if mode == .script && scriptId == nil { return String(localized: "Choose a script from Aiden Agent.") }
         if mode == .script && permission != .full { return String(localized: "Script tasks require Full permission.") }
@@ -303,16 +303,16 @@ struct AidenScheduledTaskDraft: Equatable, Sendable {
         currentMcpServers: [AidenScheduledMcpServer]?
     ) -> String? {
         if task?.usesLegacyInheritedMcpAccess == true, currentMcpServers == nil {
-            return String(localized: "Refresh the enabled MCP server inventory before reviewing this legacy task.")
+            return String(localized: "Refresh the enabled connectors before reviewing this legacy task.")
         }
         if let validationMessage { return validationMessage }
         guard mode == .llm, !mcpServerIds.isEmpty else { return nil }
         guard let currentMcpServers else {
-            return String(localized: "Refresh the enabled MCP server inventory before reviewing MCP access.")
+            return String(localized: "Refresh the enabled connectors before reviewing connector access.")
         }
         let availableIDs = Set(currentMcpServers.map(\.id))
         if !mcpServerIds.isSubset(of: availableIDs) {
-            return String(localized: "Remove unavailable MCP connections before reviewing this task.")
+            return String(localized: "Remove unavailable connectors before reviewing this task.")
         }
         return nil
     }
@@ -343,7 +343,7 @@ struct AidenScheduledTaskDraft: Equatable, Sendable {
     }
 
     func mcpAccessReviewSummary(currentMcpServers: [AidenScheduledMcpServer]) -> String {
-        guard !mcpServerIds.isEmpty else { return String(localized: "No MCP servers") }
+        guard !mcpServerIds.isEmpty else { return String(localized: "No connectors") }
         let serversByID = Dictionary(uniqueKeysWithValues: currentMcpServers.map { ($0.id, $0.name) })
         return mcpServerIds.sorted().map { id in
             serversByID[id] ?? String(localized: "Unavailable connection: \(id)")

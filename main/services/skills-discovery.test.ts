@@ -404,9 +404,8 @@ test("YAML skill metadata reaches the catalog and tools without losing multiline
       snapshot.catalog.find((entry) => entry.name === fixture.directory)?.description,
       fixture.description,
     );
-    assert.ok(
-      tools.find((tool) => tool.name === skill.toolKey)?.description.includes(fixture.description),
-    );
+    // The one skill tool loads it by the name the prompt lists with its description.
+    assert.match(JSON.stringify(await tools[0]!.execute("load", { name: fixture.directory })), /Keep this body/u);
     assert.ok(formatAvailableSkills(snapshot)?.includes(fixture.description));
   }
 });

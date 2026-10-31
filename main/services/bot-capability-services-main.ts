@@ -1,6 +1,8 @@
+import { createBotSkillApprovals } from "./bot-skill-approvals.js";
+import type { DiscoveredSkill } from "./types.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { app } from "../platform.js";
+import { app, logger } from "../platform.js";
 import { createBotCapabilityCatalogMainService } from "./bot-capability-catalog-main.js";
 import { createBotCapabilityInventoryPorts } from "./bot-capability-inventory-ports.js";
 import { createBotCapabilityIncarnationStore } from "./bot-capability-incarnation-store.js";
@@ -27,8 +29,7 @@ import {
   resolveBotMcpInventory,
   type BotMcpInspectionFailureReport,
 } from "./bot-mcp-inventory.js";
-import { writeDiagnosticEvent } from "./diagnostic-journal.js";
-import { projectDiagnosticError } from "./diagnostics-contract.js";
+import { mcpDiagnostics } from "./mcp-failure-diagnostics.js";
 import {
   resolveBotCapabilitySkills,
   resolveBotRuntimeSkillBindings,
@@ -77,6 +78,36 @@ export const botSkillContentWatcher = new BotSkillContentWatcher(() => {
   invalidateBotRuntimeInventoryAuthority("skill_content");
 });
 
+/** Which home skills of a Bot the person approved (spec 2026-10-27 §7 L0). */
+export const botSkillApprovals = createBotSkillApprovals({ profileDir: () => app.getPath("userData") });
+
+/** A skill found in a Bot's folder that nobody approved waits on one review card. */
+function reportUnapprovedHomeSkills(botId: string, found: readonly DiscoveredSkill[]): void {
+  void import("./bot-skills/proposals-main.js")
+    .then(({ reviewHomeSkills }) => reviewHomeSkills(botId, found))
+    .catch((error: unknown) => logger.warn("bots", `Bot ${botId} skill review card failed.`, error));
+}
+
+/** A Bot skill was added or approved: reload skills and Bot authority. */
+export function invalidateBotSkills(): void {
+  skillRegistry.invalidate();
+  invalidateBotRuntimeInventoryAuthority("skill_content");
+}
+
+/** Skill names in use for a Bot, and where each comes from. */
+export async function botSkillNameSources(botId: string): Promise<Map<string, "configured" | "workspace" | "global">> {
+  const sources = new Map<string, "configured" | "workspace" | "global">();
+  const home = (await botManagedWorkspace.resolve(botId)).homePath;
+  for (const skill of await discoverSkillCandidates(home)) {
+    if (skill.source === "workspace") sources.set(skill.name, "workspace");
+  }
+  for (const skill of await discoverSkillCandidates(undefined)) {
+    if (skill.source === "global") sources.set(skill.name, "global");
+  }
+  for (const skill of await configStore.listSkills()) sources.set(skill.name, "configured");
+  return sources;
+}
+
 /** Main-only join from exact Bot grants to the existing runtime skill registry. */
 export async function resolveBotRuntimeSkills(botId: string) {
   const skills = await resolveBotRuntimeSkillBindings({
@@ -86,6 +117,9 @@ export async function resolveBotRuntimeSkills(botId: string) {
     botId,
     loadBotHomePath: async () => (await botManagedWorkspace.resolve(botId)).homePath,
     discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
+    // Approval is of exact content, keyed by its fingerprint.
+    isHomeSkillApproved: (_stableId, fingerprint) => botSkillApprovals.isApproved(botId, fingerprint, fingerprint),
+    onUnapprovedHomeSkills: (found) => reportUnapprovedHomeSkills(botId, found),
   });
   await botSkillContentWatcher.watchSkillFiles(
     skills.flatMap(({ runtimePath }) => (runtimePath ? [runtimePath] : [])),
@@ -158,20 +192,10 @@ const botMcpScopeCache = createBotMcpScopeCache({
 });
 
 function reportBotMcpInspectionFailure(report: BotMcpInspectionFailureReport): void {
-  const projected = projectDiagnosticError(report.error);
-  writeDiagnosticEvent({
-    level: "warn",
-    area: "mcp",
-    event: "mcp-degraded",
-    outcome: report.kind === "timed_out" ? "timed-out" : "degraded",
-    code: projected.code,
-    fields: {
-      phase: "bot-inventory",
-      transport: report.server.transport,
-      keptLastGood: report.keptLastGood,
-      errorType: projected.errorType,
-      ...(projected.fingerprint ? { fingerprint: projected.fingerprint } : {}),
-    },
+  mcpDiagnostics.degraded(report.server, report.error, {
+    phase: "mcp-bot-inventory",
+    ...(report.kind === "timed_out" ? { outcome: "timed-out" as const } : {}),
+    extra: { keptLastGood: report.keptLastGood },
   });
 }
 
@@ -195,7 +219,11 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
           if (currentSignal.aborted) throw currentSignal.reason;
           return botMcpCredentialSignature(server, await opaqueKeyStore.load());
         },
-        inspectTools: inspectConfiguredMcpToolsForBotCatalog,
+        inspectTools: async (server, inspectSignal) => {
+          const tools = await inspectConfiguredMcpToolsForBotCatalog(server, inspectSignal);
+          mcpDiagnostics.recovered(server);
+          return tools;
+        },
         incarnations: capabilityIncarnations,
         scopeCache: botMcpScopeCache,
         reportFailure: reportBotMcpInspectionFailure,
@@ -210,6 +238,8 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
               botId: target.botId,
               loadBotHomePath: async () =>
                 (await botManagedWorkspace.resolve(target.botId)).homePath,
+              isHomeSkillApproved: (_stableId: string, fingerprint: string) =>
+                botSkillApprovals.isApproved(target.botId, fingerprint, fingerprint),
             }
           : {}),
         discover: (workspaceRoot) => discoverSkillCandidates(workspaceRoot),
@@ -238,6 +268,14 @@ export const botCapabilityCatalog = createBotCapabilityCatalogMainService(
     },
     subagentsAvailable: () => subagentsEnabled(),
     computerUseSupported: () => hostPlatformCapabilities().computerUse,
+    // Loaded lazily: the browser service pulls in Electron's web contents.
+    browserAgentAccess: async () =>
+      (await import("./browser/service.js")).browserService.agentAccessDefaultAllowed(),
+    // Never on Linux or Intel Macs; elsewhere once Settings → Bot computers is set up.
+    botComputersReady: async () => {
+      const { botComputers, botComputersEnabled } = await import("./bot-computers/bot-computers-main.js");
+      return botComputersEnabled() && (await botComputers().host.baseReady());
+    },
   }),
   {
     onRuntimeSnapshot: (botId, snapshot) => {

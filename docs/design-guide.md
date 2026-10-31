@@ -14,6 +14,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
 | Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |
+| Tool approval card above the composer | `.composer-shell` on the card, `.approval-well` for its code and note wells, `.approval-icon-tile` for the icon | The composer's 40px squircle; wells use the composer radius less the card's 16px padding; the icon tile is a 14px squircle |
 
 The renderer's action rule also covers existing `button`, `[role="button"]`, and
 `[data-slot="button"]` elements, including the compact dictation window. Reuse
@@ -30,6 +31,65 @@ Joined actions reuse the group rule instead of per-corner utility overrides.
 Their individual hover and focus fills meet at straight seams, while the group
 and its end buttons share the outer squircle. Leave the group overflow visible
 so each button's keyboard outline and portaled menus remain unobstructed.
+
+## Approval card
+
+A tool approval reads top to bottom as one centered question: an accent icon
+tile, the action as a plain question ("Run this command?", "Edit forecast.ts?"),
+the exact request in a monospaced well, one quiet line under it ("Aiden is
+paused until you choose.", or the file and its size of change), and two equal
+large buttons. Deny is the filled neutral action and keeps initial focus; Allow
+once is the accent action. In the open chat each button carries its key as a
+quiet trailing label (`⌘⌫` Deny, `⌘↩` Allow once), at reduced opacity rather
+than in a keycap, so the pair still reads as two plain actions. When the host offers remembered scopes, Allow once
+becomes a joined action whose chevron menu lists **Allow for this chat** and
+**Always allow in this workspace**, each with one line on what it covers: a
+command rule covers only that exact command, but a file rule covers any later
+edit (or write) to that file, whatever it changes, so the line says so. A
+file change shows removed and added lines on the soft red and green status
+fills, with screen-reader labels instead of relying on color. Specialized
+approvals (scheduled tasks, subagent grants, form fills, classifiers) keep their
+own review bodies inside the same card. The iPhone and Android cards use the
+same layout and wording; they show the approval summary instead of a diff,
+because phones never receive tool arguments, and a scheduled task asks the
+same question as the desktop ("Save this scheduled task?", "Change this
+automation?"). A long request folds to six lines behind **Show all**, and once
+expanded it scrolls inside a bounded well, so Show less and the buttons stay on
+screen when the card sits in a non-scrolling footer. While the end of the
+request is still out of view, the well says **Scroll for more** next to Show
+less, so no part of what is being approved can hide without a cue. On iPhone the
+card's shadow belongs to its surface only, never to the text inside it.
+
+A scheduled-task approval replaces the monospaced well with a structured review
+on every platform. The icon tile shows a calendar clock, and the question names
+the action ("Save this scheduled task?", "Update this scheduled task?", "Pause
+…", "Resume …", "Delete …", "Run this scheduled task now?"). A hero well follows:
+the task name, its cadence in words (never cron), and a "Next run" line only
+while the task will start on its own once approved (a resumed task does, a
+paused one does not). Under an inset separator, icon-led detail
+rows list **Runs in** (the project, else the connectors by name, else "Anywhere
+on your computer" for Full access, else "No project"), **Access** as a chip
+("Read-only" on the neutral fill, "Full access" on the warning fill with a
+warning-tinted icon), **Model** ("OpenRouter · Qwen3 Coder") or **Runs** →
+"Script", **Notifications** and **Time zone**. The instructions or script sit in
+their own labelled well, the script monospaced, with the same folding and
+scroll cue as a long command. Status notes use soft semantic fills with no
+border: "Scheduling is off…" on the warning fill when the scheduler is off,
+otherwise "This task stays paused." for a task saved or run while paused (not
+for a pause, a resume or a delete). On desktop the card sits in the chat's
+fixed footer above the composer. That footer never grows under the toolbar,
+so an approval card gets only the room the composer leaves, even while a long
+draft is being typed. When the composer alone is taller than that room (many
+attachments and a long draft), the excess leaves through the top, so the text
+box and Send stay in view. A schedule card's review (the hero well, details and
+instructions) scrolls inside it and shrinks first, keeping the question, notes
+and buttons on screen. It keeps a few lines (up to 7rem, 12% of the window
+height) and past that the whole card scrolls, starting from its question. The quiet line under the body reads "Scheduled work runs on your
+desktop while Aiden is open and the computer is awake." The desktop also shows
+the project and connector ids in a tertiary monospaced line, because it
+authorizes the exact host scope; phones receive names only. A phone shows this
+review only when the host sends the revision 39 `schedule` card, and otherwise
+keeps the summary card.
 
 ## Untitled structure
 
@@ -73,6 +133,26 @@ or hover. Text-entry
 focus uses fill and caret changes without a new border or ring. Reuse existing
 hover and press feedback and respect Reduce Motion; do not animate the corner
 shape or add layout shifts.
+
+## Loading and optimistic updates
+
+Reads follow the cache-first rule ([plan](plans/cache-first-loading-states-plan.md)):
+saved or last-known data renders at once and revalidates underneath, shaped
+skeletons appear only on a true first read with nothing saved, an empty state
+only once the read has settled, and connection status stays quiet. Reads never
+show indeterminate spinners.
+
+Writes follow the instant rule ([plan](plans/instant-ui-optimistic-updates-plan.md)):
+a tap changes the screen before the round trip. Rename, toggle, send, resume,
+dismiss and list edits apply to the local cache or view first and settle when
+the host answers; a failure rolls the row back and shows one toast or inline
+error, never a second confirmation. Sends show a pending echo keyed by one
+idempotent request id that is kept across a retry. Navigation never waits for
+the network: open from the cache or from the create receipt and refresh behind
+the new screen. Destructive actions that cannot be restored keep a pending label
+(Delete Bot, Remove workspace) until the host confirms; rows that can be
+restored are removed at once and put back on failure. Feature gates on phones
+read the pairing's saved `/server` features until the connection answers.
 
 ## Activity marks
 

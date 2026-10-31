@@ -9,7 +9,11 @@ import { useRouter } from "@tanstack/react-router";
 import { botChatRouteBotId } from "../../lib/bot-routes";
 
 export const BOT_PANEL_ID = "bot-panel";
-export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines"] as const;
+/**
+ * `browser` shows only while the Bot's own browser has a tab, and `computer`
+ * only while the Bot has a computer on a Mac with Bot computers (`bot-workbench.tsx`).
+ */
+export const BOT_PANEL_TABS = ["activity", "files", "memory", "routines", "browser", "computer"] as const;
 export type BotPanelTab = (typeof BOT_PANEL_TABS)[number];
 export const BOT_PANEL_OPEN_KEY = "aiden-agent.bot-panel.open";
 export const BOT_PANEL_TAB_KEY = "aiden-agent.bot-panel.tab";
@@ -35,6 +39,8 @@ export type BotPanelShowOptions = (
 /** Actions never change identity, so a component that only acts does not re-render with panel state. */
 export interface BotPanelActions {
   show(tab: BotPanelTab, options?: BotPanelShowOptions): void;
+  /** Open on `tab` without moving focus: the Bot, not the person, put something there. */
+  reveal(tab: BotPanelTab): void;
   setTab(tab: BotPanelTab): void;
   toggle(): void;
   close(): void;
@@ -171,6 +177,12 @@ export function BotPanelProvider({
     [],
   );
 
+  const reveal = React.useCallback(
+    (tab: BotPanelTab) =>
+      setState((current) => (current.open && current.tab === tab ? current : { ...current, open: true, tab })),
+    [],
+  );
+
   const consumeFocusRequest = React.useCallback(() => {
     const pending = pendingFocus.current;
     pendingFocus.current = false;
@@ -178,8 +190,8 @@ export function BotPanelProvider({
   }, []);
 
   const actions = React.useMemo<BotPanelActions>(
-    () => ({ show, setTab, toggle, close, consumeFocusRequest }),
-    [show, setTab, toggle, close, consumeFocusRequest],
+    () => ({ show, reveal, setTab, toggle, close, consumeFocusRequest }),
+    [show, reveal, setTab, toggle, close, consumeFocusRequest],
   );
   const panelState = React.useMemo<BotPanelState>(() => ({ ...state, focusRequest }), [state, focusRequest]);
   return (

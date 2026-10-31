@@ -7,8 +7,10 @@ import {
   parseBotSidebarPreferences,
   serializeBotSidebarPreferences,
 } from "../../lib/bot-sidebar-preferences";
+import { queryKeys } from "../../lib/queries";
 import { BotDeleteDialog } from "./bot-delete-dialog";
-import { mountWithBotRouter } from "./test-providers";
+import { botFixture } from "./test-fixtures";
+import { createBotTestQueryClient, mountWithBotRouter } from "./test-providers";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
@@ -103,4 +105,25 @@ test("deleting a Bot that is not on screen leaves the page, and any unsaved edit
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(router.state.location.pathname, "/bots/bot-1");
   assert.equal(router.state.location.searchStr, "?page=instructions");
+});
+
+test("a deleted Bot leaves the cached list at once, before the list is read again", async () => {
+  installBotTestIpc({
+    "bots:delete": () => undefined,
+    // A reread never answers in this test: the list must come from the cache.
+    "bots:list": () => new Promise<never>(() => undefined),
+  });
+  const queryClient = createBotTestQueryClient();
+  queryClient.setQueryData([...queryKeys.bots, "active"], [botFixture(), botFixture({ id: "bot-2", name: "Scout" })]);
+  const harness = await mountWithBotRouter(<BotDeleteDialog bot={bot} open onOpenChange={() => undefined} />, {
+    initialPath: "/bots/bot-1",
+    queryClient,
+  });
+  const dialog = await screen.findByRole("alertdialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete Bot" }));
+  await waitFor(() => assert.equal(harness.router.state.location.pathname, "/bots"));
+  assert.deepEqual(
+    queryClient.getQueryData<ReturnType<typeof botFixture>[]>([...queryKeys.bots, "active"])?.map((row) => row.id),
+    ["bot-2"],
+  );
 });

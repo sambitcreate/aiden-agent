@@ -1,0 +1,280 @@
+// A step the Bot handed back to the person (plan §4.1): "Your turn: Enter the
+// 2FA code for your bank." with the reason, an optional Open for the page that
+// helps, Skip and Done. The shared Bot notice card, elevated like an approval,
+// with the Bot's own face in the tile; no coloured borders. The composer stays
+// below it: typing there answers Done with a note, which the Bot reads, so the
+// card says so. A card a password-or-code rule opened takes no note at all.
+//
+// A sign-in (plan §5.2) is the same card asking the person to sign in to one
+// site for the Bot: "Sign in to github.com for Ada", with Open sign-in (the
+// site in a new tab of the Bot's own browser), Skip and I'm signed in. A
+// sign-in on the Bot's own computer (`target: "computer"`, plan §8.6) offers
+// "Open Ada's computer" instead: the site opens there with the person in
+// control, and the Bot's computer tools wait until the card is answered (a
+// program it left running in the guest is the limit; docs/bot-computers.md).
+//
+// A step on the Bot's own screen (an action with `target`) offers "Open in
+// Ada's browser" or "Open Ada's computer": the page opens there, never in the
+// person's own browser.
+//
+// A Bot that lives on another Mac (`finishOn`) shows the same card here. Its
+// sign-in happens in its own browser over there, so that card offers
+// "Finish on <Mac>" and Skip instead of Open sign-in and I'm signed in. A
+// step on its screen over there (`onMac`, Remote contract revision 43) offers
+// "Finish on <Mac>", Skip and Done.
+
+import { ExternalLink, Globe, Laptop, LogIn, Monitor } from "lucide-react";
+import { BotAvatar } from "../bot-avatar";
+import { Button } from "../ui";
+import { BotNoticeCard } from "./bot-notice-card";
+import type { BotAvatar as BotAvatarValue } from "../../shared/bots";
+import { botHandoffTakesNote, type BotHandoffOutcome, type BotPendingHandoff } from "../../shared/bot-handoffs";
+
+/** The page Open goes to, as the card names it ("bank.example"). */
+function linkHost(url: string): string | undefined {
+  try {
+    return new URL(url).host || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type ShownHandoff = Pick<BotPendingHandoff, "kind" | "action" | "why" | "open" | "rule"> &
+  Pick<Partial<BotPendingHandoff>, "origin" | "target"> & {
+    /** A paired Mac's card that takes no note (Remote contract revision 40). */
+    takesNote?: boolean;
+    /** A paired Mac’s step on the Bot’s own screen there (Remote contract revision 43). */
+    onMac?: boolean;
+  };
+
+/** An action on the Bot's own browser or computer, here or on its other Mac. */
+function onBotScreen(handoff: ShownHandoff): boolean {
+  return handoff.kind === "action" && (handoff.target !== undefined || handoff.onMac === true);
+}
+
+/** An action's Open on the Bot's own screen: "Open in Ada's browser" or "Open Ada's computer". */
+export function handoffScreenOpenLabel(name: string | undefined, target: "browser" | "computer"): string {
+  if (target === "computer") return name ? `Open ${name}’s computer` : "Open the computer";
+  return name ? `Open in ${name}’s browser` : "Open in the Bot’s browser";
+}
+
+function onComputer(handoff: Pick<ShownHandoff, "kind" | "target">): boolean {
+  return handoff.kind === "sign_in" && handoff.target === "computer";
+}
+
+/** The sign-in's Open: in the Bot's browser, or on the Bot's own computer. */
+export function handoffSignInOpenLabel(name: string | undefined, handoff: Pick<ShownHandoff, "kind" | "target">): string {
+  if (!onComputer(handoff)) return "Open sign-in";
+  return name ? `Open ${name}’s computer` : "Open the computer";
+}
+
+/** The site a sign-in names ("github.com"): its origin, else its page, else its title. */
+function signInHost(handoff: ShownHandoff): string {
+  for (const url of [handoff.origin, handoff.open?.url]) {
+    const host = url === undefined ? undefined : linkHost(url);
+    if (host) return host;
+  }
+  return handoff.action.replace(/^Sign in to /u, "");
+}
+
+/**
+ * What the composer says while a sign-in waits: it is answered on the card,
+ * never with a note, so a password typed in the chat can't reach the Bot.
+ */
+export function handoffSignInComposerText(name: string, handoff?: Pick<ShownHandoff, "kind" | "target">): string {
+  const open = handoff ? handoffSignInOpenLabel(name, handoff) : "Open sign-in";
+  return `Sign in for ${name} with ${open} above, then choose I’m signed in.`;
+}
+
+/**
+ * What the composer says while a password-or-code card waits: it is answered
+ * on the card, never with a note, so the code can't reach the Bot.
+ */
+export function handoffNoNoteComposerText(name: string): string {
+  return `Enter it yourself, then choose Done above. This card takes no note, so a password or code never reaches ${name}.`;
+}
+
+/** The card's title: whose turn it is, or what to sign in to and for whom. */
+export function handoffCardTitle(name: string, handoff: ShownHandoff): string {
+  return handoff.kind === "sign_in" ? `Sign in to ${signInHost(handoff)} for ${name}` : `Your turn: ${handoff.action}`;
+}
+
+/**
+ * The card's buttons: Open (or Open sign-in, or Open <name>'s computer), Skip
+ * and Done (or I'm signed in), or "Finish on <Mac>" and Skip for a sign-in on
+ * a Bot's other Mac. The Bot panel repeats them when it floats over the card.
+ */
+export function HandoffActions({
+  handoff,
+  name,
+  busy = false,
+  finishOn,
+  onOpen,
+  onFinish,
+  onAnswer,
+}: {
+  handoff: ShownHandoff;
+  /** The Bot's name, for a sign-in on its computer ("Open Ada's computer"). */
+  name?: string;
+  busy?: boolean;
+  finishOn?: string;
+  onOpen(): void;
+  onFinish?(): void;
+  onAnswer(outcome: BotHandoffOutcome): void;
+}) {
+  const signIn = handoff.kind === "sign_in";
+  const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  const done = (
+    <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+      Done
+    </Button>
+  );
+  const skip = (
+    <Button variant="transparent" size="small" disabled={busy} onClick={() => onAnswer("skipped")}>
+      Skip
+    </Button>
+  );
+  if (signIn && finishOn !== undefined) {
+    return (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
+          <Laptop aria-hidden="true" />
+          {`Finish on ${finishOn}`}
+        </Button>
+        {skip}
+      </>
+    );
+  }
+  if (signIn) {
+    return (
+      <>
+        {handoff.open ? (
+          <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
+            {onComputer(handoff) ? <Monitor aria-hidden="true" /> : <LogIn aria-hidden="true" />}
+            {handoffSignInOpenLabel(name, handoff)}
+          </Button>
+        ) : null}
+        {skip}
+        <Button variant="accent" size="small" disabled={busy} onClick={() => onAnswer("done")}>
+          I’m signed in
+        </Button>
+      </>
+    );
+  }
+  if (onBotScreen(handoff) && finishOn !== undefined) {
+    return (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onFinish}>
+          <Laptop aria-hidden="true" />
+          {`Finish on ${finishOn}`}
+        </Button>
+        {skip}
+        {done}
+      </>
+    );
+  }
+  if (onBotScreen(handoff) && handoff.target !== undefined) {
+    return (
+      <>
+        <Button variant="filled" size="small" disabled={busy} onClick={onOpen}>
+          {handoff.target === "computer" ? <Monitor aria-hidden="true" /> : <Globe aria-hidden="true" />}
+          {handoffScreenOpenLabel(name, handoff.target)}
+        </Button>
+        {skip}
+        {done}
+      </>
+    );
+  }
+  return (
+    <>
+      {handoff.open ? (
+        <Button variant="filled" size="small" disabled={busy} aria-label={host ? `Open ${host}` : "Open"} onClick={onOpen}>
+          <ExternalLink aria-hidden="true" />
+          Open
+        </Button>
+      ) : null}
+      {skip}
+      {done}
+    </>
+  );
+}
+
+export function HandoffCard({
+  botId,
+  name,
+  avatar,
+  handoff,
+  busy = false,
+  finishOn,
+  onOpen,
+  onFinish,
+  onAnswer,
+}: {
+  /** A Bot of this Mac, whose photo the tile may show; left out for a Bot on another Mac. */
+  botId?: string;
+  name: string;
+  avatar: BotAvatarValue;
+  handoff: ShownHandoff;
+  /** An answer or Open is on its way: the buttons wait for it. */
+  busy?: boolean;
+  /** The other Mac the Bot lives on, by name: a sign-in is finished there. */
+  finishOn?: string;
+  onOpen(): void;
+  /** "Finish on <Mac>": bring the sign-in forward on the Bot's own Mac. */
+  onFinish?(): void;
+  onAnswer(outcome: BotHandoffOutcome): void;
+}) {
+  const signIn = handoff.kind === "sign_in";
+  const elsewhere = signIn && finishOn !== undefined;
+  const host = handoff.open && !signIn ? linkHost(handoff.open.url) : undefined;
+  return (
+    <BotNoticeCard
+      label={`${name} needs you`}
+      elevated
+      iconTile={
+        <BotAvatar
+          {...(botId === undefined ? {} : { botId, photoLoading: "immediate" as const })}
+          avatar={avatar}
+          name={name}
+          size="small"
+        />
+      }
+      title={handoffCardTitle(name, handoff)}
+      actions={
+        <HandoffActions
+          handoff={handoff}
+          name={name}
+          busy={busy}
+          finishOn={finishOn}
+          onOpen={onOpen}
+          onFinish={onFinish}
+          onAnswer={onAnswer}
+        />
+      }
+    >
+      {handoff.why ? <p className="whitespace-pre-line">{handoff.why}</p> : null}
+      {handoff.rule ? <p className="mt-1 text-tertiary">From your rule: {handoff.rule.label}</p> : null}
+      {host && !onBotScreen(handoff) ? <p className="mt-1 text-tertiary">Opens {host}</p> : null}
+      {onBotScreen(handoff) && finishOn === undefined && handoff.target !== undefined ? (
+        <p className="mt-1 text-tertiary">
+          {handoff.target === "computer"
+            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer.`
+            : `Opens in ${name}’s own browser${host ? ` at ${host}` : ""}, not in yours.`}
+        </p>
+      ) : null}
+      {onBotScreen(handoff) && finishOn !== undefined ? (
+        <p className="mt-1 text-tertiary">{`This step is on ${name}’s own screen on ${finishOn}.`}</p>
+      ) : null}
+      {!signIn && botHandoffTakesNote(handoff) ? (
+        <p className="mt-1 text-tertiary">{`${name} reads any note you send. Enter passwords, codes and card numbers on the page, never in the chat.`}</p>
+      ) : null}
+      {signIn && !elsewhere ? (
+        <p className="mt-1 text-tertiary">
+          {onComputer(handoff)
+            ? `Opens on ${name}’s own computer, with you in control. ${name} waits until you answer, and never sees your password.`
+            : `Opens in ${name}’s own browser. ${name} never sees your password.`}
+        </p>
+      ) : null}
+    </BotNoticeCard>
+  );
+}

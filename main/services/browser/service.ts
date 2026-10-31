@@ -33,6 +33,7 @@ import type {
   BrowserState,
   BrowserTab,
   BrowserLinkOpening,
+  BrowserHoldReason,
 } from "../../../renderer/shared/browser.js";
 import {
   BUILT_IN_BROWSER_PROFILES,
@@ -67,8 +68,38 @@ import { playwrightInjectedSource } from "./playwright-source.generated.js";
 import { browserImportSources, importBrowserCookies } from "./import.js";
 import { browserFileService, browserPreviewRequestHeaders, type BrowserFileReservation, type PreparedBrowserFile } from "./files.js";
 import type { BrowserApprovalTarget } from "./approval.js";
+import { botBrowserPartition, botBrowserProfileId, botIdOfBrowserProfile, isBotBrowserProfileId } from "./bot-profile.js";
+import { botIdForBrowserWorkspace, browserWorkspacesOfBot, forgetBotBrowserWorkspace } from "./bot-workspaces.js";
+import {
+  assertBoundarySelector,
+  boundaryRefusalOf,
+  BROWSER_BOUNDARY_ACTION_REFUSED,
+  BROWSER_BOUNDARY_NAME_SOURCE,
+  BROWSER_COVERED_OR_MOVED_TARGET,
+  BROWSER_COVERED_TARGET,
+  BROWSER_HELD_TAB_REFUSED,
+  BROWSER_IMAGE_MASKED_NOTE,
+  BROWSER_RECALL_FIELD_FUNCTION,
+  BROWSER_SENSITIVE_FIELD_SOURCE,
+  BROWSER_SENSITIVE_TYPING_REFUSED,
+  browserBoundaryLocatorExpression,
+  browserBoundarySelectorsExpression,
+  browserKeyInsertsText,
+  browserTypingGuardSource,
+  maskBrowserSnapshotImage,
+  scrubBrowserSnapshot,
+  type BoundaryViewport,
+} from "./credential-boundary.js";
+import {
+  scanSensitiveFieldReach,
+  scanSensitiveFields,
+  SensitiveFieldMemory,
+  type SensitiveFieldReach,
+} from "./credential-fields.js";
 import { configureBrowserPermissionHandlers } from "./permission-policy.js";
 import { configStore } from "../config-store.js";
+import { browserRecordingBytesMatch, browserRecordingsFolder, findBrowserRecording } from "./recordings.js";
+import { browserRecordingExtension } from "../../../renderer/shared/browser-recording.js";
 import { writeFileAtomic } from "../durable-fs.js";
 import { projectDiagnosticError } from "../diagnostics-contract.js";
 import { writeDiagnosticEvent } from "../diagnostic-journal.js";
@@ -80,7 +111,45 @@ type CommandContext = {
   supportsImages?: boolean;
   preparedFile?: PreparedBrowserFile;
   beforeEffect?: () => void;
+  /**
+   * A Bot's own browser port (main only): no page scripts, recording or local
+   * files, masked snapshots and no typing into secret fields.
+   */
+  credentialBoundary?: true;
 };
+export type BrowserCommandContext = CommandContext;
+/** What `probeAgentTarget` reads about the element an agent action targets. */
+export interface BrowserFieldProbe {
+  tag?: string;
+  type?: string;
+  autocomplete?: string;
+  role?: string;
+  accessibleName?: string;
+  formActionHost?: string;
+}
+export interface BrowserProbeTarget {
+  ref?: string;
+  selector?: string;
+  locator?: string;
+  x?: number;
+  y?: number;
+  /** The element that has focus (typing without a target, key presses). */
+  focused?: boolean;
+  /** A click: read the control around the pressed element. */
+  click?: boolean;
+}
+/** The person is using a Bot's tab: the Bot can't read or drive it until it is released. */
+export interface BrowserHold {
+  holdId: string;
+  reason: BrowserHoldReason;
+}
+/** How often a held tab's fields are read while the person uses it, at the least (milliseconds). */
+const HELD_FIELD_SCAN_MS = 500;
+/** Actions a Bot's browser port never runs. */
+const BOUNDARY_REFUSED_ACTIONS: ReadonlySet<string> = new Set([
+  "evaluate", "record_start", "record_stop", "open_file", "annotate", "annotation_preview", "annotation_reset",
+  "annotation_submit", "screenshot", "devtools",
+]);
 interface WorkspaceBrowser {
   state: BrowserState;
   owner?: RendererDocumentOwner;
@@ -113,6 +182,8 @@ interface LiveTab {
   recording?: RecordingSession;
   pendingRecorder?: BrowserWindow;
   visible: boolean;
+  /** Actions and captures running on this tab; while any is, a hidden tab stays in its window. */
+  activeHosts: number;
   bounds?: BrowserBounds;
   closing: boolean;
   expectedInputs: Array<{ type: string; key?: string; button?: string; modifiers?: number; expires: number }>;
@@ -127,6 +198,11 @@ interface LiveTab {
   lastCursor?: { x: number; y: number };
   previewNavigation?: BrowserFileReservation;
   initialLoad?: Promise<void>;
+  hold?: BrowserHold;
+  /** Fields this tab has shown as sensitive, so a "show password" toggle can't uncover one. */
+  sensitiveFields: SensitiveFieldMemory;
+  /** Reads the fields of a held tab while the person uses it (`watchHeldFields`). */
+  heldFieldWatch?: { timer?: ReturnType<typeof setTimeout> };
 }
 
 const ACTIONS_AGENT = new Set([
@@ -293,6 +369,90 @@ export class BrowserService {
     workspace.owner = owner;
     workspace.removeOwner = owner.onInvalidated(() => this.closeForWebContents(owner.id));
   }
+  /** Whether a live application document shows this workspace's browser. */
+  hasOwner(workspaceId: string): boolean {
+    const owner = this.workspaces.get(workspaceId)?.owner;
+    return Boolean(owner && !owner.isDestroyed());
+  }
+  /**
+   * Move a Bot's browser to the application document now showing that Bot,
+   * keeping its tabs. Each tab is hidden until the new document presents it.
+   */
+  transferOwner(workspaceId: string, owner: RendererDocumentOwner): void {
+    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's browser can move between windows.");
+    const workspace = this.workspace(workspaceId);
+    if (owner.isDestroyed()) throw new Error("The browser's application document is no longer active.");
+    if (workspace.owner?.documentId === owner.documentId && workspace.owner.id === owner.id) return;
+    workspace.removeOwner?.();
+    workspace.removeOwner = undefined;
+    workspace.owner = undefined;
+    const tabs = [...this.tabs.values()].filter((tab) => tab.state.workspaceId === workspaceId && !tab.closing);
+    for (const tab of tabs) this.detach(tab);
+    this.attachOwner(workspaceId, owner);
+    for (const tab of tabs) this.hide(tab);
+    this.emit(workspaceId);
+  }
+  /**
+   * Hold a Bot's tab for the person (a sign-in or hand-off card, or a
+   * takeover). Whatever the Bot had queued or approved on it stops.
+   */
+  hold(workspaceId: string, tabId: string, hold: BrowserHold): void {
+    if (!botIdForBrowserWorkspace(workspaceId)) throw new Error("Only a Bot's tab can be held for the person.");
+    if (!hold || typeof hold.holdId !== "string" || !hold.holdId || !["sign_in", "handoff", "takeover"].includes(hold.reason))
+      throw new Error("Invalid browser hold.");
+    const tab = this.tab(workspaceId, tabId);
+    tab.hold = { holdId: hold.holdId, reason: hold.reason };
+    tab.state.heldForPerson = { reason: hold.reason };
+    tab.queue.interrupt();
+    this.watchHeldFields(tab);
+    this.emit(workspaceId);
+  }
+  /** Release a hold. Anything the Bot had approved before it is stale. Unknown holds are ignored. */
+  release(workspaceId: string, holdId: string): void {
+    for (const tab of this.tabs.values()) {
+      if (tab.state.workspaceId !== workspaceId || tab.hold?.holdId !== holdId) continue;
+      tab.hold = undefined;
+      delete tab.state.heldForPerson;
+      this.unwatchHeldFields(tab);
+      tab.queue.interrupt();
+      this.emit(workspaceId);
+    }
+  }
+  /**
+   * Delete a Bot's browser data: close its tabs (in its managed workspace and
+   * anywhere else its profile is open), then clear the partition's storage,
+   * cache and HTTP auth. Idempotent, and works after a restart with no tabs.
+   */
+  async clearBotProfile(botId: string, managedWorkspaceId: string): Promise<void> {
+    const profileId = botBrowserProfileId(botId);
+    this.deletingProfiles.add(profileId);
+    try {
+      for (const workspaceId of new Set([managedWorkspaceId, ...browserWorkspacesOfBot(botId)]))
+        if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
+      for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+      const partition = botBrowserPartition(botId);
+      const botSession = this.sessions.get(partition) ?? session.fromPartition(partition);
+      await botSession.clearStorageData();
+      await botSession.clearCache();
+      await botSession.clearAuthCache();
+      await botSession.cookies.flushStore();
+      forgetBotBrowserWorkspace(botId);
+    } finally {
+      this.deletingProfiles.delete(profileId);
+    }
+  }
+  /** Close a Bot's tabs and forget its workspace, keeping its sign-ins (the Bot runtime let go of it). */
+  closeBotTabs(botId: string): void {
+    const profileId = botBrowserProfileId(botId);
+    for (const workspaceId of browserWorkspacesOfBot(botId))
+      if (this.workspaces.has(workspaceId)) this.closeForWorkspace(workspaceId);
+    for (const tab of [...this.tabs.values()]) if (tab.state.profileId === profileId) this.close(tab);
+  }
+  /** Whether Browser settings let agents use the browser (the global default; a Bot's browser follows it). */
+  agentAccessDefaultAllowed(): boolean {
+    this.load();
+    return resolveBrowserAgentAccess(this.defaults.agentAccess, "inherit");
+  }
   linkOpening(): BrowserLinkOpening {
     this.load();
     return this.defaults.linkOpening;
@@ -341,6 +501,58 @@ export class BrowserService {
     const tab = this.tab(workspaceId, selected);
     return { workspaceId, tabId: selected, url: tab.state.url,
       documentRevision: `${tab.navigationSequence}:${tab.committedNavigation}`, controlRevision: tab.queue.epoch };
+  }
+  /**
+   * What a Bot's pending click, typing or key press would touch, for its
+   * approval and the rules classifier: the element's tag, type, autocomplete,
+   * role, accessible name and form action host, never its value. Read in
+   * Aiden's isolated world; `undefined` when nothing can be read.
+   */
+  async probeAgentTarget(
+    workspaceId: string,
+    tabId: string,
+    target: BrowserProbeTarget,
+    signal?: AbortSignal,
+  ): Promise<BrowserFieldProbe | undefined> {
+    const tab = this.tab(workspaceId, tabId);
+    let pick: string;
+    if (target.focused) pick = "__aidenFocused().element";
+    else if (target.x !== undefined && target.y !== undefined) {
+      const x = browserBoundedNumber(target.x, 0, 8192, "Click X"), y = browserBoundedNumber(target.y, 0, 8192, "Click Y");
+      pick = `(()=>{let e=document.elementFromPoint(${x},${y});for(let i=0;i<32&&e&&e.shadowRoot;i+=1){const inner=e.shadowRoot.elementFromPoint(${x},${y});if(!inner||inner===e)break;e=inner;}return e;})()`;
+    } else {
+      try {
+        pick = this.target(tab, target, true);
+      } catch {
+        return undefined;
+      }
+    }
+    // A click lands on the control around the pressed element (a label inside a button).
+    const control = target.click
+      ? "raw.closest('button,a[href],input,select,textarea,summary,label,[role=button],[role=link],[role=menuitem],[role=tab],[role=checkbox],[role=radio],[role=switch],[role=option]')||raw"
+      : "raw";
+    try {
+      // A field that was a password field (a "show password" toggle) reads as one.
+      await this.recallSensitiveFields(tab, signal);
+      const probe = await this.evaluate(
+        tab,
+        `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${BROWSER_BOUNDARY_NAME_SOURCE}const raw=${pick};if(!raw||raw.nodeType!==1)return null;const e=${control};const u=globalThis.__aidenPlaywright.utils;const attr=n=>{const v=e.getAttribute(n);return v===null?undefined:v.slice(0,200);};const form=e.form||e.closest('form');let host;try{if(form)host=new URL(form.getAttribute('action')||location.href,location.href).hostname;}catch{host=undefined;}let name;try{name=String(__aidenBoundaryName(e)).slice(0,300)||undefined;}catch{name=undefined;}return{tag:String(e.localName||''),type:__aidenSensitive(e)&&!__aidenSensitiveNow(e)?'password':attr('type'),autocomplete:attr('autocomplete'),role:u.getAriaRole(e)||(e.isContentEditable?'textbox':undefined),accessibleName:name,formActionHost:host};})()`,
+        signal,
+        true,
+      );
+      if (!probe || typeof probe !== "object") return undefined;
+      const field: BrowserFieldProbe = {};
+      for (const key of ["tag", "type", "autocomplete", "role", "accessibleName", "formActionHost"] as const) {
+        const value = (probe as Record<string, unknown>)[key];
+        if (typeof value === "string" && value.length > 0) field[key] = value.slice(0, 300);
+      }
+      return field;
+    } catch (error) {
+      // A locator the boundary refuses fails the call before any card asks.
+      const refused = boundaryRefusalOf(error);
+      if (refused !== error) throw refused;
+      return undefined;
+    }
   }
   private beginPreviewNavigation(tab: LiveTab, url: string): void {
     const next = browserFileService.reserveUrl(tab.state.workspaceId, url);
@@ -418,11 +630,19 @@ export class BrowserService {
     return profile;
   }
   private browserSession(profileId: string): Session {
-    const profile = this.profile(profileId);
-    const partition = browserPartition(
-      profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
-      profile.kind === "incognito",
-    );
+    let partition: string;
+    const botId = botIdOfBrowserProfile(profileId);
+    if (botId !== undefined) {
+      // A Bot's own profile is outside the person's profile list.
+      if (this.deletingProfiles.has(profileId)) throw new Error("This Bot's browser is being deleted.");
+      partition = botBrowserPartition(botId);
+    } else {
+      const profile = this.profile(profileId);
+      partition = browserPartition(
+        profile.kind === "incognito" ? `${profile.id}:${this.incognitoGeneration}` : profile.id,
+        profile.kind === "incognito",
+      );
+    }
     let browserSession = this.sessions.get(partition);
     if (!browserSession) {
       browserSession = session.fromPartition(partition);
@@ -729,6 +949,9 @@ export class BrowserService {
         humanInput(input.type, undefined, undefined, input.button, (input as typeof input & { _modifiers?: number })._modifiers);
     });
     wc.on("console-message", (details) => {
+      // What a page logs while the person holds the tab (signing in) is
+      // theirs: the Bot's later snapshots never replay it.
+      if (tab.hold) return;
       tab.diagnostics.push({
         level: details.level,
         message: browserFileService.redactText(details.message).slice(0, 4_000),
@@ -828,7 +1051,8 @@ export class BrowserService {
       window.once("closed", () => wc.removeListener("destroyed", destroyPopup));
     });
     wc.debugger.on("message", (_event, method, params) => {
-      if (method === "Network.responseReceived") {
+      // Nor the pages and requests a held tab loads (a sign-in's redirects).
+      if (method === "Network.responseReceived" && !tab.hold) {
         const response = params.response;
         tab.network.push({
           url: browserDisplayUrl(String(response?.url ?? "")).slice(0, 4_000),
@@ -854,6 +1078,10 @@ export class BrowserService {
     this.mainWindow(workspaceId);
     if (workspace.state.tabs.length >= BROWSER_MAX_TABS)
       throw new Error(`Close a browser tab before opening more than ${BROWSER_MAX_TABS}.`);
+    // A Bot's tabs always use its own profile; no other workspace may open it.
+    const botId = botIdForBrowserWorkspace(workspaceId);
+    if (botId !== undefined) profileId = botBrowserProfileId(botId);
+    else if (isBotBrowserProfileId(profileId)) throw new Error("This browser profile belongs to a Bot.");
     const normalized = browserUrl(url);
     const browserSession = this.browserSession(profileId);
     const view = new WebContentsView({
@@ -898,11 +1126,13 @@ export class BrowserService {
       refs: new Map(),
       referenceGeneration: 0,
       visible: false,
+      activeHosts: 0,
       closing: false,
       expectedInputs: [],
       crashTimes: [],
       navigationSequence: 0,
       committedNavigation: 0,
+      sensitiveFields: new SensitiveFieldMemory(),
     };
     this.tabs.set(state.id, tab);
     workspace.state.tabs.push(state);
@@ -948,7 +1178,7 @@ export class BrowserService {
     tab.visible = false;
     tab.state.visible = false;
     tab.view.setVisible(false);
-    if (process.platform !== "linux") {
+    if (process.platform !== "linux" && tab.activeHosts === 0) {
       this.detach(tab);
       return;
     }
@@ -965,6 +1195,32 @@ export class BrowserService {
     }
     window.contentView.addChildView(tab.view);
     tab.attached = window;
+  }
+  /**
+   * macOS takes a hidden tab out of its window, where its page gets no frames:
+   * an animation-frame wait never ends, and a page loaded there has nothing to
+   * capture. While an action or capture runs, the tab is hosted as Linux always
+   * hosts it, an invisible child of its window, and taken out again after.
+   */
+  private hostWhileActive(tab: LiveTab): () => void {
+    if (process.platform === "linux") return () => {};
+    tab.activeHosts += 1;
+    if (!tab.visible && !tab.attached && !tab.closing) {
+      try {
+        const window = this.mainWindow(tab.state.workspaceId);
+        window.contentView.addChildView(tab.view);
+        tab.attached = window;
+      } catch {
+        // No window to host it: the action runs as it would have.
+      }
+    }
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      tab.activeHosts -= 1;
+      if (tab.activeHosts === 0 && !tab.visible) this.detach(tab);
+    };
   }
   private present(tab: LiveTab, visible: boolean, bounds?: BrowserBounds): void {
     if (bounds) tab.bounds = boundedBounds(bounds);
@@ -994,6 +1250,7 @@ export class BrowserService {
   private close(tab: LiveTab): void {
     if (tab.closing) return;
     tab.closing = true;
+    this.unwatchHeldFields(tab);
     this.finishPreviewNavigation(tab);
     browserFileService.releaseConsumer(tab.state.id);
     tab.queue.interrupt();
@@ -1023,8 +1280,9 @@ export class BrowserService {
       }
       this.emit(tab.state.workspaceId);
     }
+    // A Bot's profile (or one being deleted) is not in the person's list.
     if (
-      this.profile(tab.state.profileId).kind === "incognito" &&
+      this.profiles.find((profile) => profile.id === tab.state.profileId)?.kind === "incognito" &&
       ![...this.tabs.values()].some((t) => t.state.profileId === tab.state.profileId)
     ) {
       const partition = browserPartition(
@@ -1215,9 +1473,11 @@ export class BrowserService {
     signal?: AbortSignal,
   ): Promise<BrowserImage> {
     const release = tab.backgroundThrottling.acquire(signal);
+    const unhost = this.hostWhileActive(tab);
     try {
       return await this.capturePage(tab, fullPage, bounds, signal);
     } finally {
+      unhost();
       release();
     }
   }
@@ -1297,8 +1557,12 @@ export class BrowserService {
     signal?: AbortSignal,
     includeAllElements = false,
     preservedSelectors: BrowserStylePreview[] = [],
+    credentialBoundary = false,
   ): Promise<BrowserSnapshot> {
     const generation = ++tab.referenceGeneration;
+    // A field the tab remembers as a password field is marked first, so the
+    // element locators, generated in a Bot's view of the page, treat it as one.
+    if (credentialBoundary) await this.recallSensitiveFields(tab, signal);
     const data = await this.evaluate(
       tab,
       `(() => {
@@ -1306,7 +1570,8 @@ export class BrowserService {
       const all=[]; const walk=root=>{ for(const e of root.querySelectorAll("*")){ if((${includeAllElements ? "!e.matches('html,body,script,style,link,meta')" : "e.matches('a[href],button,input,textarea,select,[role],[tabindex]')"})&&visible(e)) all.push(e); if(e.shadowRoot) walk(e.shadowRoot); if(all.length>=200) break; } }; walk(document);
       globalThis.__aidenElements = all.slice(0,200);
       const preserved=${JSON.stringify(preservedSelectors.map(({ ref, selector }) => ({ ref, selector })))}.map(input=>({...input,element:globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(input.selector),document,false)}));
-      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??globalThis.__aidenPlaywright.generateSelectorSimple(e,{}); const attrs={}; for(const name of ['aria-label','placeholder','type','name','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
+      const generated=${credentialBoundary ? browserBoundarySelectorsExpression("globalThis.__aidenElements") : "undefined"};
+      const elements=globalThis.__aidenElements.map((e,i)=> { const r=e.getBoundingClientRect(); const original=preserved.find(input=>input.element===e);const selector=original?.selector??(generated?generated[i]:globalThis.__aidenPlaywright.generateSelectorSimple(e,{})); const attrs={}; for(const name of ['aria-label','placeholder','type','name','autocomplete','href','data-testid']) if(e.hasAttribute(name)) attrs[name]=e.getAttribute(name).slice(0,500); if(${includeAllElements}) {const style=getComputedStyle(e);for(const name of ['font-family','font-size','font-weight','line-height','color','background-color','opacity','border-radius','border-color','border-width','border-style','width','height','padding','margin','gap'])attrs['style:'+name]=style.getPropertyValue(name);} return {ref:original?.ref??${JSON.stringify(String(generation))}+'-'+i,tag:e.tagName.toLowerCase(),role:e.getAttribute('role')||undefined,text:(e.getAttribute('aria-label')||e.innerText||e.getAttribute('placeholder')||'').slice(0,500),selector,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},attributes:attrs}; });
       return {text:(document.body?.innerText||'').slice(0,20000),elements,width:innerWidth,height:innerHeight};
     })()`,
       signal,
@@ -1326,18 +1591,135 @@ export class BrowserService {
     };
     snapshot.tab.viewport.width = data.width;
     snapshot.tab.viewport.height = data.height;
-    if (includeImage) snapshot.image = await this.capture(tab, false, undefined, signal);
+    let sensitive = new Set<number>();
+    const processId = tab.view.webContents.getProcessId();
+    const remembered = tab.sensitiveFields.of(processId);
+    if (includeImage && credentialBoundary) {
+      const masked = await this.maskedCapture(tab, signal, remembered);
+      sensitive = new Set(masked.sensitive);
+      if ("image" in masked) {
+        snapshot.image = masked.image;
+        if (masked.masked > 0) snapshot.imageNote = BROWSER_IMAGE_MASKED_NOTE;
+      } else snapshot.imageNote = masked.omitted;
+    } else if (includeImage) snapshot.image = await this.capture(tab, false, undefined, signal);
     const accessibilityTree = await this.send(tab, "Accessibility.getFullAXTree", {}, signal);
     Object.assign(snapshot, {
       accessibilityTree: { nodes: accessibilityTree.nodes?.slice(0, 1_000) },
       networkEntries: clone(tab.network),
       actionTimeline: clone(tab.timeline),
     });
-    return browserRedactPreviewUrls(snapshot);
+    if (!credentialBoundary) return browserRedactPreviewUrls(snapshot);
+    // Fields read after the accessibility tree cover any that appeared during
+    // capture, and the same read says which names could include what they hold.
+    let reach: SensitiveFieldReach;
+    try {
+      reach = await scanSensitiveFieldReach(this.cdpPort(tab, signal), remembered, sensitive);
+    } finally {
+      await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
+    }
+    this.rememberSensitiveFields(tab, processId, reach.sensitive);
+    return browserRedactPreviewUrls(scrubBrowserSnapshot(snapshot, reach));
   }
+  /** Remember fields read in renderer process `processId`, unless the tab has moved to another since. */
+  private rememberSensitiveFields(tab: LiveTab, processId: number, ids: Iterable<number>): void {
+    const wc = tab.view.webContents;
+    if (!wc.isDestroyed() && wc.getProcessId() === processId) tab.sensitiveFields.remember(processId, ids);
+  }
+  /**
+   * Read the page's sensitive fields into the tab's memory. With `mark`, a
+   * field only memory knows (a password field the page turned into plain
+   * text) is marked in Aiden's isolated world, so the typing guard, the field
+   * probe and a Bot's locators (a wait, a click, type or scroll target, the
+   * snapshot's generated locators) treat it as what it was. Called before
+   * each of them.
+   */
+  private async recallSensitiveFields(tab: LiveTab, signal?: AbortSignal, mark = true): Promise<void> {
+    const wc = tab.view.webContents;
+    if (wc.isDestroyed()) return;
+    const processId = wc.getProcessId();
+    try {
+      const scan = await scanSensitiveFields(this.cdpPort(tab, signal), tab.sensitiveFields.of(processId));
+      this.rememberSensitiveFields(tab, processId, scan.sensitive);
+      if (!mark || scan.recalled.length === 0) return;
+      await this.evaluate(tab, "0", signal, true);
+      const executionContextId = tab.contextId;
+      for (const backendNodeId of scan.recalled) {
+        // A field that left the page since has nothing to mark.
+        const resolved = await this.send(tab, "DOM.resolveNode", { backendNodeId, executionContextId, objectGroup: "aiden-recall" }, signal).catch(() => undefined);
+        const objectId = resolved?.object?.objectId;
+        if (typeof objectId === "string")
+          await this.send(tab, "Runtime.callFunctionOn", { objectId, functionDeclaration: BROWSER_RECALL_FIELD_FUNCTION, returnByValue: true }, signal);
+      }
+      await this.send(tab, "Runtime.releaseObjectGroup", { objectGroup: "aiden-recall" }, signal).catch(() => {});
+    } finally {
+      await this.send(tab, "DOM.disable", {}, signal).catch(() => {});
+    }
+  }
+  /**
+   * While the person holds a tab, read its fields every so often, so a field
+   * they turn into plain text ("show password") after it loaded stays covered
+   * once the Bot has the tab back. A slow read waits longer before the next.
+   */
+  private watchHeldFields(tab: LiveTab): void {
+    if (tab.heldFieldWatch) return;
+    const watch: NonNullable<LiveTab["heldFieldWatch"]> = {};
+    tab.heldFieldWatch = watch;
+    const read = async () => {
+      const started = Date.now();
+      await this.recallSensitiveFields(tab, undefined, false).catch(() => {});
+      if (tab.heldFieldWatch !== watch) return;
+      if (!tab.hold || tab.closing || tab.view.webContents.isDestroyed()) {
+        tab.heldFieldWatch = undefined;
+        return;
+      }
+      watch.timer = setTimeout(() => void read(), Math.max(HELD_FIELD_SCAN_MS, 20 * (Date.now() - started)));
+    };
+    void read();
+  }
+  private unwatchHeldFields(tab: LiveTab): void {
+    if (tab.heldFieldWatch?.timer) clearTimeout(tab.heldFieldWatch.timer);
+    tab.heldFieldWatch = undefined;
+  }
+  private cdpPort(tab: LiveTab, signal?: AbortSignal) {
+    return { call: (method: string, params?: Record<string, unknown>) => this.send(tab, method, params ?? {}, signal) };
+  }
+  /** A capture with every password, code and card field painted over, or why there is none. */
+  private async maskedCapture(tab: LiveTab, signal: AbortSignal | undefined, remembered: ReadonlySet<number>) {
+    return maskBrowserSnapshotImage({
+      cdp: this.cdpPort(tab, signal),
+      remembered,
+      viewport: async (): Promise<BoundaryViewport> => {
+        const measured = await this.evaluate(
+          tab,
+          "({width:innerWidth,height:innerHeight,scale:globalThis.visualViewport?visualViewport.scale:1,scrollX,scrollY})",
+          signal,
+          true,
+        );
+        return {
+          width: Number(measured?.width), height: Number(measured?.height), scale: Number(measured?.scale),
+          scrollX: Number(measured?.scrollX), scrollY: Number(measured?.scrollY),
+        };
+      },
+      documentRevision: () => `${tab.navigationSequence}:${tab.committedNavigation}`,
+      capture: () => this.capture(tab, false, undefined, signal),
+      decode: (image) => {
+        const decoded = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+        const size = decoded.getSize();
+        return { width: size.width, height: size.height, data: decoded.toBitmap() };
+      },
+      encode: (bitmap) => {
+        const painted = nativeImage.createFromBitmap(Buffer.from(bitmap.data.buffer, bitmap.data.byteOffset, bitmap.data.byteLength), {
+          width: bitmap.width, height: bitmap.height,
+        });
+        return { data: painted.toPNG().toString("base64"), mimeType: "image/png", width: bitmap.width, height: bitmap.height };
+      },
+    });
+  }
+  /** `boundary`: a Bot's locator, resolved so password, code and card fields' text can't decide the match. */
   private target(
     tab: LiveTab,
     command: { ref?: string; selector?: string; locator?: string },
+    boundary = false,
   ): string {
     if ([command.ref, command.selector, command.locator].filter((v) => v !== undefined).length > 1)
       throw new Error("Provide exactly one element reference, selector, or locator.");
@@ -1347,6 +1729,7 @@ export class BrowserService {
       return ref;
     }
     const locator = command.locator ?? command.selector;
+    if (locator && boundary) return browserBoundaryLocatorExpression(text(locator, "selector", 4_000));
     if (locator)
       return `globalThis.__aidenPlaywright.querySelector(globalThis.__aidenPlaywright.parseSelector(${JSON.stringify(text(locator, "selector", 4_000))}),document,true)`;
     return "document.activeElement";
@@ -1356,8 +1739,11 @@ export class BrowserService {
     command: { ref?: string; selector?: string; locator?: string; timeoutMs?: number },
     signal?: AbortSignal,
     pinClickTarget = false,
+    boundary = false,
   ): Promise<{ x: number; y: number }> {
-    const target = this.target(tab, command);
+    const target = this.target(tab, command, boundary);
+    // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
+    if (boundary && !command.ref) await this.recallSensitiveFields(tab, signal);
     const end =
       Date.now() + browserBoundedNumber(command.timeoutMs ?? 15000, 1, 60000, "Action timeout");
     let failure: unknown;
@@ -1367,7 +1753,7 @@ export class BrowserService {
       try {
         return await this.evaluate(
           tab,
-          `(() => { const e=${target}; if(!e||!e.isConnected) throw new Error('Element no longer exists; take a new snapshot.'); const injected=globalThis.__aidenPlaywright; if(!injected.elementState(e,'visible').matches||!injected.elementState(e,'enabled').matches) throw new Error('Element is hidden or disabled.'); e.scrollIntoView({block:'center',inline:'center'}); const r=e.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; const hit=injected.expectHitTarget({x,y},e); if(hit!=='done') throw new Error('Another element covers the target: '+(hit.hitTargetDescription||'')); ${pinClickTarget ? "globalThis.__aidenClickTarget=e;" : ""} return {x,y}; })()`,
+          `(() => { const e=${target}; if(!e||!e.isConnected) throw new Error('Element no longer exists; take a new snapshot.'); const injected=globalThis.__aidenPlaywright; if(!injected.elementState(e,'visible').matches||!injected.elementState(e,'enabled').matches) throw new Error('Element is hidden or disabled.'); e.scrollIntoView({block:'center',inline:'center'}); const r=e.getBoundingClientRect(); const x=r.x+r.width/2,y=r.y+r.height/2; const hit=injected.expectHitTarget({x,y},e); if(hit!=='done') throw new Error(${boundary ? JSON.stringify(BROWSER_COVERED_TARGET) : "'Another element covers the target: '+(hit.hitTargetDescription||'')"}); ${pinClickTarget ? "globalThis.__aidenClickTarget=e;" : ""} return {x,y}; })()`,
           signal,
           true,
         );
@@ -1375,6 +1761,8 @@ export class BrowserService {
         failure = error;
         browserAbort(signal);
         browserAbort(tab.queue.signal);
+        const refused = boundaryRefusalOf(error);
+        if (refused !== error) throw refused;
         if (
           error instanceof Error &&
           (/strict mode violation|parsing selector|unknown engine|invalid selector/i.test(
@@ -1576,9 +1964,9 @@ export class BrowserService {
             canvas.height=${Math.max(1, Math.min(1080, bounds.height))};
             const context=canvas.getContext('2d');
             const stream=canvas.captureStream(${fps});
-            const mime=MediaRecorder.isTypeSupported('video/webm;codecs=vp9')?'video/webm;codecs=vp9':'video/webm';
-            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000});
-            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null};
+            const mime=['video/mp4;codecs=avc1.42E01E','video/webm;codecs=vp9','video/webm'].find(type=>MediaRecorder.isTypeSupported(type))||'video/webm';
+            const media=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:4000000,...(mime.startsWith('video/mp4')?{videoKeyFrameIntervalDuration:1000}:{})});
+            const state=globalThis.__aidenRecording={canvas,media,chunks:[],stream,bytes:0,error:null,type:mime.startsWith('video/mp4')?'video/mp4':'video/webm'};
             media.ondataavailable=e=>{
               if(!e.data.size)return;
               state.bytes+=e.data.size;
@@ -1603,6 +1991,8 @@ export class BrowserService {
         signal,
       );
       // Hidden renderers may not composite a changed canvas until explicitly captured.
+      // The MP4 muxer writes nothing until a keyframe, so MP4 asks for one each
+      // second: the first frame shows up as bytes and the size limit keeps working.
       // Readiness is encoded data, not elapsed time: immediate Stop must yield a video.
       const firstFrameDeadline = Date.now() + 5_000;
       while (true) {
@@ -1704,27 +2094,30 @@ export class BrowserService {
       await this.send(tab, "Page.stopScreencast").catch(() => {});
       await recording.pending;
       if (recording.failed) throw new Error(recording.failed);
-      const base64 = await browserDeadline(
+      const encoded: unknown = await browserDeadline(
         recording.recorder.webContents.executeJavaScript(
-          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:'video/webm'}); return await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); })()`,
+          `(async () => { const state=globalThis.__aidenRecording; if(state.media.state!=='inactive') await new Promise(resolve=>{state.media.onstop=resolve;state.media.stop();}); for(const track of state.stream.getTracks())track.stop(); if(state.error)throw new Error(state.error); const blob=new Blob(state.chunks,{type:state.type}); const data=await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(blob);}); return {type:state.type,data}; })()`,
         ),
         15_000,
       );
-      if (typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
+      const output = (encoded ?? {}) as { type?: unknown; data?: unknown };
+      const mimeType = output.type === "video/mp4" ? "video/mp4" : output.type === "video/webm" ? "video/webm" : undefined;
+      const base64 = output.data;
+      if (!mimeType || typeof base64 !== "string" || base64.length > RECORDING_MAX_BYTES * 1.4)
         throw new Error("Recording output is invalid or too large.");
       const bytes = Buffer.from(base64, "base64");
-      if (bytes.length < 16 || !bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
+      if (bytes.length < 16 || !browserRecordingBytesMatch(bytes, mimeType))
         throw new Error(
           "The browser did not produce a video frame. Wait for the page to render and record again.",
         );
-      const folder = path.join(app.getPath("userData"), "browser", "recordings");
+      const folder = browserRecordingsFolder(app.getPath("userData"));
       await fs.mkdir(folder, { recursive: true, mode: 0o700 });
-      const target = path.join(folder, `${recording.id}.webm`);
+      const target = path.join(folder, `${recording.id}.${browserRecordingExtension(mimeType)}`);
       await fs.writeFile(target, bytes, { mode: 0o600 });
       const result = {
         id: recording.id,
         path: target,
-        mimeType: "video/webm",
+        mimeType,
         durationMs: Date.now() - recording.started,
         sizeBytes: bytes.length,
       };
@@ -1866,10 +2259,30 @@ export class BrowserService {
     browserAbort(context.signal);
     if (!command || typeof command !== "object" || typeof command.action !== "string")
       throw new Error("Invalid browser command.");
-    if (!(await configStore.getWorkspace(workspaceId)))
+    // A Bot's managed workspace is admitted once main registered it; it is
+    // never one of the person's configured workspaces.
+    const botWorkspace = botIdForBrowserWorkspace(workspaceId) !== undefined;
+    if (!botWorkspace && !(await configStore.getWorkspace(workspaceId)))
       throw new Error("This workspace no longer exists.");
+    if (context.credentialBoundary) {
+      if (!botWorkspace || context.source !== "agent") throw new Error("This browser port belongs to a Bot.");
+      if (BOUNDARY_REFUSED_ACTIONS.has(command.action)) throw new Error(BROWSER_BOUNDARY_ACTION_REFUSED);
+      const fields = command as { selector?: unknown; locator?: unknown };
+      for (const selector of [fields.selector, fields.locator])
+        if (typeof selector === "string") assertBoundarySelector(selector);
+    } else if (botWorkspace && context.source === "agent") {
+      throw new Error("This browser belongs to a Bot.");
+    }
     browserAbort(context.signal);
-    if (context.owner) this.attachOwner(workspaceId, context.owner);
+    if (context.owner && botWorkspace) {
+      // A Bot's browser follows the window the person uses it from. Another
+      // window's panel layout (a stale hide) never pulls it back.
+      const current = this.workspaces.get(workspaceId)?.owner;
+      const owned = current && !current.isDestroyed();
+      const same = owned && current.id === context.owner.id && current.documentId === context.owner.documentId;
+      if (owned && !same && command.action === "present") return { state: this.getState(workspaceId) };
+      this.transferOwner(workspaceId, context.owner);
+    } else if (context.owner) this.attachOwner(workspaceId, context.owner);
     const workspace = this.workspace(workspaceId);
     this.mainWindow(workspaceId);
     if (context.source === "agent") {
@@ -2043,6 +2456,9 @@ export class BrowserService {
         result.importSources = await browserImportSources();
         break;
       case "import_cookies":
+        // The person's cookies never move into a Bot's browser.
+        if (isBotBrowserProfileId(command.profileId))
+          throw new Error("A Bot's browser keeps its own sign-ins. Sign in from its Browser tab instead.");
         result.importResult = await importBrowserCookies(
           command.sourceId,
           this.browserSession(command.profileId),
@@ -2061,7 +2477,9 @@ export class BrowserService {
         break;
       }
       case "reveal_recording": {
-        const recording = this.recordings.get(command.recordingId);
+        // A recording from an earlier launch is still on disk, under its id.
+        const recording = this.recordings.get(command.recordingId)
+          ?? await findBrowserRecording(app.getPath("userData"), command.recordingId);
         if (!recording) throw new Error("This recording is no longer available.");
         shell.showItemInFolder(recording.path);
         break;
@@ -2071,6 +2489,9 @@ export class BrowserService {
         const tab = this.tab(workspaceId, command.tabId);
         const wc = tab.view.webContents;
         result.tabId = tab.state.id;
+        // While the person uses a held tab the agent can't read or drive it,
+        // snapshots included; it may still open and use other tabs.
+        if (context.source === "agent" && tab.hold) throw new Error(BROWSER_HELD_TAB_REFUSED);
         // Panel cleanup can cancel an already inactive picker. Hiding browser
         // chrome must not interrupt automation or invalidate pending approval.
         if (command.action === "annotate" && !command.enabled && !tab.picking) break;
@@ -2113,6 +2534,7 @@ export class BrowserService {
           // Playwright actionability waits use animation frames, including user
           // initiated automation. Acquire only after the action leaves the queue.
           const release = tab.backgroundThrottling.acquire(signal);
+          const unhost = this.hostWhileActive(tab);
           tab.state.agentControlling = context.source === "agent";
           this.emit(workspaceId);
           try {
@@ -2217,6 +2639,8 @@ export class BrowserService {
                   command.includeImage !== false && context.supportsImages !== false,
                   signal,
                   context.source === "user" && input.includeAllElements === true,
+                  [],
+                  context.credentialBoundary === true,
                 );
                 break;
               case "click": {
@@ -2224,7 +2648,7 @@ export class BrowserService {
                 if (hasTarget && (command.x !== undefined || command.y !== undefined))
                   throw new Error("Provide one click target.");
                 const point = hasTarget
-                  ? await this.elementPoint(tab, command, signal, true)
+                  ? await this.elementPoint(tab, command, signal, true, context.credentialBoundary === true)
                   : {
                       x: browserBoundedNumber(command.x, 0, 8192, "Click X"),
                       y: browserBoundedNumber(command.y, 0, 8192, "Click Y"),
@@ -2259,7 +2683,7 @@ export class BrowserService {
                       const node=globalThis.__aidenClickTarget;
                       globalThis.__aidenClickGuard?.stop();
                       const guard=globalThis.__aidenPlaywright.setupHitTargetInterceptor(node,'mouse',${JSON.stringify(point)},false);
-                      if(typeof guard==='string')throw new Error('Another element covers the target or it moved: '+guard);
+                      if(typeof guard==='string')throw new Error(${context.credentialBoundary ? JSON.stringify(BROWSER_COVERED_OR_MOVED_TARGET) : "'Another element covers the target or it moved: '+guard"});
                       globalThis.__aidenClickGuard=guard;
                     })()`, signal, true);
                     check();
@@ -2281,18 +2705,27 @@ export class BrowserService {
               case "type": {
                 text(command.text, "browser input");
                 if (command.ref || command.selector || command.locator) {
-                  const point = await this.elementPoint(tab, command, signal);
+                  const point = await this.elementPoint(tab, command, signal, false, context.credentialBoundary === true);
                   await this.showAgentCursor(tab, point, signal);
                 }
                 check();
-                const target = this.target(tab, command);
+                const target = this.target(tab, command, context.credentialBoundary === true);
+                if (context.credentialBoundary) {
+                  await this.recallSensitiveFields(tab, signal);
+                  check();
+                }
+                // A Bot never types into a secret field, whether named or focused.
+                const guard = context.credentialBoundary ? `${BROWSER_SENSITIVE_FIELD_SOURCE}if(__aidenSensitive(e))throw new Error(${JSON.stringify(BROWSER_SENSITIVE_TYPING_REFUSED)});` : "";
+                const focusedGuard = context.credentialBoundary ? browserTypingGuardSource("e") : "";
                 context.beforeEffect?.();
                 await this.evaluate(
                   tab,
-                  `(()=>{const e=${target};if(!e)throw new Error('Input not found');if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
+                  `(()=>{const e=${target};if(!e)throw new Error('Input not found');${guard}if(!globalThis.__aidenPlaywright.elementState(e,'editable').matches)throw new Error('Target is not editable or is read-only');e.focus();${focusedGuard}${command.clear ? "if('select' in e)e.select();else {const range=document.createRange();range.selectNodeContents(e);const selection=getSelection();selection.removeAllRanges();selection.addRange(range);}" : ""}})()`,
                   signal,
                   true,
-                );
+                ).catch((error: unknown) => {
+                  throw boundaryRefusalOf(error);
+                });
                 check();
                 context.beforeEffect?.();
                 if (command.clear && command.text === "")
@@ -2301,6 +2734,16 @@ export class BrowserService {
                 break;
               }
               case "press":
+                if (context.credentialBoundary && browserKeyInsertsText(text(command.key, "keyboard key", 100), command.modifiers ?? [])) {
+                  await this.recallSensitiveFields(tab, signal);
+                  check();
+                  await this.evaluate(tab, `(()=>{${BROWSER_SENSITIVE_FIELD_SOURCE}${browserTypingGuardSource("null")}})()`, signal, true).catch(
+                    (error: unknown) => {
+                      throw boundaryRefusalOf(error);
+                    },
+                  );
+                  check();
+                }
                 await this.press(tab, command.key, command.modifiers, signal, check, context.beforeEffect);
                 break;
               case "scroll": {
@@ -2310,6 +2753,8 @@ export class BrowserService {
                         tab,
                         { selector: input.selector, locator: input.locator },
                         signal,
+                        false,
+                        context.credentialBoundary === true,
                       )
                     : { x: command.x ?? 200, y: command.y ?? 200 };
                 check();
@@ -2361,7 +2806,7 @@ export class BrowserService {
                 await this.evaluate(tab, buildBrowserAnnotationPreviewResetExpression(), signal, true);
                 break;
               case "wait":
-                await this.wait(tab, input, signal, check);
+                await this.wait(tab, input, signal, check, context.credentialBoundary === true);
                 break;
               case "record_start":
                 await this.startRecording(tab, command.fps ?? this.defaults.recordingFps, signal);
@@ -2395,6 +2840,7 @@ export class BrowserService {
             throw error;
           } finally {
             release();
+            unhost();
             await this.removeAgentCursor(tab);
             actionEvent.completedAt = Date.now();
             tab.state.agentControlling = false;
@@ -2480,6 +2926,7 @@ export class BrowserService {
     input: Record<string, any>,
     signal?: AbortSignal,
     check = () => {},
+    boundary = false,
   ): Promise<void> {
     const timeout = browserBoundedNumber(input.timeoutMs ?? 15000, 1, 60000, "Wait timeout");
     const end = Date.now() + timeout;
@@ -2491,7 +2938,9 @@ export class BrowserService {
       !input.readiness
     )
       throw new Error("Provide at least one browser wait condition.");
-    const target = input.selector || input.locator ? this.target(tab, input) : undefined;
+    const target = input.selector || input.locator ? this.target(tab, input, boundary) : undefined;
+    // Before a Bot's locator runs, as before it types: see `recallSensitiveFields`.
+    if (target && boundary) await this.recallSensitiveFields(tab, signal);
     while (Date.now() < end) {
       check();
       browserAbort(signal);
@@ -2511,6 +2960,8 @@ export class BrowserService {
         check();
         browserAbort(signal);
         browserAbort(tab.queue.signal);
+        const refused = boundaryRefusalOf(error);
+        if (refused !== error) throw refused;
         if (error instanceof Error && /selector/i.test(error.message)) throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));

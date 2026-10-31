@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { speechModel } from "./local-speech-catalog.js";
+import { SPEECH_MODELS, speechModel } from "./local-speech-catalog.js";
 import {
   isLocalSpeechParentMessage,
   isLocalSpeechWorkerMessage,
@@ -78,6 +78,12 @@ test("translate and trimSilence must be booleans", () => {
   assert.equal(isLocalSpeechParentMessage(transcribe({ trimSilence: 1 })), false);
 });
 
+test("every catalog model, the Metal GGUF one included, is a valid request spec", () => {
+  for (const model of SPEECH_MODELS) {
+    assert.equal(isLocalSpeechParentMessage(transcribe({ modelId: model.id, spec: model })), true, model.id);
+  }
+});
+
 test("the spec must describe the requested model", () => {
   assert.equal(isLocalSpeechParentMessage(transcribe({ modelId: "whisper-turbo" })), false);
   assert.equal(isLocalSpeechParentMessage(transcribe({ spec: { ...spec, family: "kaldi" } })), false);
@@ -100,6 +106,11 @@ test("version 1 frames are rejected", () => {
   assert.equal(isLocalSpeechWorkerMessage({ version: 1, kind: "result", requestId: "r1", text: "hi" }), false);
   assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1" }), true);
   assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "release", requestId: "x1" }), true);
+});
+
+test("a status frame may name the family whose engine to check, and only a known one", () => {
+  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "parakeet-gguf" }), true);
+  assert.equal(isLocalSpeechParentMessage({ version: 2, kind: "status", requestId: "s1", family: "llama" }), false);
 });
 
 test("worker results and failures are validated", () => {

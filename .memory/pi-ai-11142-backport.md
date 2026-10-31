@@ -10,3 +10,5 @@ Pi #11142 (upstream commit caa6967b, "keep the prompt cache across tool changes 
 On the next Pi bump: if the new release contains caa6967b, delete the patch, the script, its test and the four call sites. Otherwise the version gate fails the install on purpose.
 
 pi-subagents is not an Aiden dependency (native subagents). Its v0.79.2 fixes #2963 and #2968 were reviewed against Aiden: neither applies (tools are rebuilt per generation, and only foreground subagents ship). When background subagents ship (Phase 7B), completion notices need a durable outbox, and each notice should count as delivered only once the parent's turn starts.
+
+2026-10-26: removed. Pi 1.4.0 contains #11142 (pi-ai `getResponsesToolSupport`), and the bump deleted the patch, the script, its test and the call sites. See `pi-1.4.0-upgrade.md`.

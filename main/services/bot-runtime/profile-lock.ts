@@ -48,7 +48,7 @@ async function readRecord(file: string): Promise<LockRecord | null> {
 }
 
 /** Acquire before any Bot session database is opened. */
-export async function acquireBotProfileLock(dir: string): Promise<ProfileLockResult> {
+export async function acquireBotProfileLock(dir: string, leaseHelperPath = desktopLeaseHelperPath()): Promise<ProfileLockResult> {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const canonical = await fs.realpath(dir);
   const file = path.join(canonical, BOT_PROFILE_LOCK_FILE);
@@ -58,7 +58,7 @@ export async function acquireBotProfileLock(dir: string): Promise<ProfileLockRes
   let published = false;
   let replacedLegacy = false;
   try {
-    releaseGuard = tryAcquireProcessLifetimeLock(path.join(canonical, BOT_PROFILE_GUARD_FILE), desktopLeaseHelperPath());
+    releaseGuard = tryAcquireProcessLifetimeLock(path.join(canonical, BOT_PROFILE_GUARD_FILE), leaseHelperPath);
     if (!releaseGuard) {
       const owner = await readRecord(file);
       return { ok: false, reason: "held_by_live_process", pid: owner?.pid ?? 0 };

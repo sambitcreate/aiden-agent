@@ -3,6 +3,8 @@ import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
+import { mkdtempSync, promises as fsPromises, rmSync } from "node:fs";
+import os from "node:os";
 import * as path from "node:path";
 import { showScheduledNotification } from "./schedule-notification.js";
 import type { ScheduledRun, ScheduledTask } from "./types.js";
@@ -191,10 +193,17 @@ async function executionHarness(
   const chat = { id: "chat-1", title: "Daily brief", updatedAt: 1 };
   const output = options.output ?? "completed output";
   const notificationFailure = new Error("synthetic notification failure: PRIVATE_DETAIL");
+  // Only a Bot delivery reads userData; the directory is created on first use.
+  let profile: string | undefined;
+  const telegramDeliveries: Array<{ botId: string; requestId: string; routineName: string; text: string }> = [];
   const ports: Record<string, unknown> = {
     "node:path": path,
     "node:crypto": crypto,
+    "node:fs": { promises: fsPromises },
+    "node:fs/promises": fsPromises,
     "../platform.js": {
+      // The delivery log lives under the app's userData, as in production.
+      app: { getPath: () => (profile ??= mkdtempSync(path.join(os.tmpdir(), "aiden-schedule-notification-"))) },
       Notification: class {
         static isSupported() {
           return true;
@@ -237,6 +246,17 @@ async function executionHarness(
       },
     },
   };
+  // The funnel lives one directory deeper than the scheduler: esbuild keeps an
+  // external relative specifier as written, so both spellings reach one port.
+  ports["../../platform.js"] = ports["../platform.js"];
+  ports["../app-navigation.js"] = ports["./app-navigation.js"];
+  // The delivery gate reads the Bot's interruption settings; quiet hours off
+  // and a high limit keep these tests independent of the time of day.
+  ports["../bot-store.js"] = {
+    botStore: {
+      get: async () => ({ name: "Planner", interruptions: { quietHours: { enabled: false, start: "22:00", end: "07:00" }, dailyLimit: 20 } }),
+    },
+  };
   const bundle = await build({
     entryPoints: [fileURLToPath(new URL("./schedule-execution.ts", import.meta.url))],
     bundle: true,
@@ -261,11 +281,34 @@ async function executionHarness(
               markSilent: async () => {},
             });`,
           }));
+          // Telegram is a dynamic import in the funnel; keep it synthetic and
+          // hand each delivery to this harness.
+          const telegramSink = `__aidenTelegramDeliveries_${crypto.randomUUID().replace(/-/gu, "")}`;
+          (globalThis as Record<string, unknown>)[telegramSink] = (delivery: unknown) =>
+            void telegramDeliveries.push(delivery as (typeof telegramDeliveries)[number]);
+          builder.onResolve({ filter: /^\.\.\/telegram\/telegram-service\.js$/ }, () => ({
+            path: "telegram-service",
+            namespace: "synthetic-telegram",
+          }));
+          builder.onLoad({ filter: /^telegram-service$/, namespace: "synthetic-telegram" }, () => ({
+            loader: "js",
+            contents: `export const telegramService = {
+              deliverBotRoutineResult: async (delivery) => globalThis[${JSON.stringify(telegramSink)}](delivery),
+            };`,
+          }));
           builder.onResolve({ filter: /.*/ }, (args) => {
             if (
               args.importer.endsWith("/schedule-execution.ts") &&
               args.path !== "./schedule-notification.js" &&
-              args.path !== "./scheduled-bot-routines.js"
+              args.path !== "./scheduled-bot-routines.js" &&
+              // The Bot delivery funnel is the code under test too.
+              args.path !== "./bot-delivery/funnel-main.js"
+            ) {
+              return { path: args.path, external: true };
+            }
+            if (
+              args.importer.endsWith("/bot-delivery/funnel-main.ts") &&
+              (args.path === "../../platform.js" || args.path === "../app-navigation.js" || args.path === "../bot-store.js")
             ) {
               return { path: args.path, external: true };
             }
@@ -293,14 +336,32 @@ async function executionHarness(
   const execution = createScheduleExecution(
     store as unknown as Parameters<typeof createScheduleExecution>[0],
   );
-  return { execution, records, broadcasts, warnings, clicks, navigations };
+  return {
+    execution,
+    records,
+    broadcasts,
+    warnings,
+    clicks,
+    navigations,
+    telegramDeliveries,
+    profile: () => profile,
+    cleanup: () => {
+      if (profile) rmSync(profile, { recursive: true, force: true });
+    },
+  };
 }
 
-test("clicking a Bot routine's notification opens that Bot's chat", async () => {
+test("clicking a Bot routine's notification opens that Bot's chat", async (t) => {
   const h = await executionHarness();
+  t.after(h.cleanup);
   const run = await h.execution.run(task({ botId: "bot:planner", prompt: "Check my week." }));
   assert.equal(run.result, "success", run.error);
   assert.equal(h.clicks.length, 1, "the notification opens something when clicked");
+  const [telegram] = h.telegramDeliveries;
+  assert.equal(telegram?.botId, "bot:planner");
+  assert.equal(telegram?.routineName, "Daily brief");
+  assert.match(telegram?.requestId ?? "", /^routine:task-1:manual-/u, "Telegram dedupes by the routine fire");
+  assert.equal(telegram?.text, "Your week looks calm.");
   h.clicks[0]!();
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.navigations, ["/bots/bot%3Aplanner/chat"]);

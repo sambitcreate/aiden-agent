@@ -7,6 +7,7 @@ This is the first slice of the Handy-inspired P1 dictation work. VAD, dictation 
 ## Parakeet idle unload and warm-up
 
 - `ParakeetIdleUnloader` (`main/services/parakeet-idle-unload.ts`) counts in-flight model work as leases. After the last lease ends, it starts a countdown using **Settings → Voice → On-Device Engine → Free memory when idle**. The choices are Never, 2, 5, 10 (the default), 15, 30, or 60 minutes.
+  - Update 2026-10-22: the default is now 30 minutes, and the model loads in advance at launch (**Load in advance**, PR #579). See [voice dictation speed](../voice-dictation-speed-plan.md).
 - Unloading kills the Parakeet utility process. That is the only reliable way to return sherpa-onnx native memory. In-process fallback recognizers are released instead.
 - Status probes also take a lease, so a worker spawned only for a status check still gets reaped.
 - An async idle-period read that races a new lease cannot arm the timer. Changing the setting re-arms the countdown immediately.

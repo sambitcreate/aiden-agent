@@ -2,6 +2,7 @@ import { peerHostsApi } from "../ipc";
 import { parseChatForkLineageV1, type ChatForkLineageV1 } from "../../shared/chat-copy-contract";
 import type { ChatRunInputAdmissionResult } from "../../shared/chat-run-input";
 import type { PeerOperation } from "../../shared/peer-operation";
+import { peerAttachmentContent, type PeerAttachmentContent } from "./remote-images";
 import { hostAvailability } from "../sidebar-remote-groups";
 import {
   mintPeerIdempotencyKey,
@@ -34,6 +35,8 @@ import {
   type HostChatResult,
   type HostChatStatus,
   type HostChatWindowRequest,
+  type HostTurnModel,
+  type RemoteContextPressure,
 } from "./host-chat-adapter";
 import { mapRemoteMessagesWindow, type RemoteMessagesWindow } from "./remote-chat-mapper";
 import { parseSkillCatalog, type SkillCatalogEntry } from "../../shared/slash-commands";
@@ -70,6 +73,7 @@ export function remoteHostCapabilities(host: Pick<PeerHostView, "features" | "ca
   if (features.has("chat-messages-window-v1") && grants.has("chat:read")) capabilities.add("messagesWindow");
   if (features.has("run-streams-v1") && grants.has("runs:observe")) capabilities.add("observe");
   if (features.has("chat-read-state-v1") && grants.has("chat:read")) capabilities.add("markRead");
+  if (features.has("chat-context-pressure-v1") && grants.has("chat:read")) capabilities.add("contextPressure");
   if (grants.has("workspace:browse")) capabilities.add("browseFolders");
   if (grants.has("workspace:manage")) capabilities.add("createWorkspace");
   if (grants.has("chat:write")) {
@@ -171,6 +175,39 @@ export function mapHostForkedChat(value: unknown): HostForkedChat {
   const attachmentIds = attachments.map((attachment) => text(record(attachment).id));
   if (attachmentIds.some((attachmentId) => !attachmentId)) throw new Error("The host's fork prefill was incomplete.");
   return { ...forked, prefill: { text: prefill.text, attachmentIds: attachmentIds as string[] } };
+}
+
+function pressureNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("The host's context pressure was malformed.");
+  return value;
+}
+
+/** `GET /chats/{chatId}/context`, as main validated it: `null` when the host cannot project the chat. */
+export function mapHostContextPressure(value: unknown, chatId: string): RemoteContextPressure | null {
+  const body = record(value);
+  if (body.chatId !== chatId) throw new Error("The host answered for another chat.");
+  if (body.pressure === null) return null;
+  const pressure = record(body.pressure);
+  if (
+    typeof pressure.shouldCompact !== "boolean" ||
+    (pressure.source !== "provider-anchored" && pressure.source !== "estimated")
+  )
+    throw new Error("The host's context pressure was malformed.");
+  const contextWindow = pressureNumber(pressure.contextWindow);
+  if (contextWindow < 1) throw new Error("The host's context pressure was malformed.");
+  return {
+    contextTokens: pressureNumber(pressure.contextTokens),
+    contextWindow,
+    inputBudgetTokens: pressureNumber(pressure.inputBudgetTokens),
+    reservedTokens: pressureNumber(pressure.reservedTokens),
+    percentOfWindow: pressureNumber(pressure.percentOfWindow),
+    percentOfUsableInput: pressureNumber(pressure.percentOfUsableInput),
+    shouldCompact: pressure.shouldCompact,
+    messageTokens: pressureNumber(pressure.messageTokens),
+    staticTokens: pressureNumber(pressure.staticTokens),
+    source: pressure.source,
+    computedAt: pressureNumber(pressure.computedAt),
+  };
 }
 
 /**
@@ -336,6 +373,7 @@ export class RemoteHostAdapter implements HostChatAdapter {
           text: input.text,
           ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {}),
           ...(input.skill ? { skill: input.skill } : {}),
+          ...turnSelectionBody(input),
         },
         idempotencyKey: input.idempotencyKey,
       }, undefined, input.savedIntent),
@@ -501,6 +539,15 @@ export class RemoteHostAdapter implements HostChatAdapter {
     return this.read("messagesWindow", { operation: "chat", resourceId: chatId }, mapHostChatLineage);
   }
 
+  /** One image's bytes, checked by the host against the chat; a host without the route answers `not_found`. */
+  attachmentContent(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>> {
+    return this.read(
+      "messagesWindow",
+      { operation: "attachmentContent", resourceId: chatId, itemId: attachmentId },
+      peerAttachmentContent,
+    );
+  }
+
   /** Runs a read the host must grant first, dropping its answer when the connection moved on. */
   private read<T>(capability: HostChatCapability, operation: PeerOperation, map: (value: unknown) => T): Promise<HostChatResult<T>> {
     if (!this.granted.has(capability))
@@ -519,6 +566,19 @@ export class RemoteHostAdapter implements HostChatAdapter {
   /** The host's skill catalog for one of its chats. */
   skills(chatId: string): Promise<HostChatResult<SkillCatalogEntry[]>> {
     return this.read("skills", { operation: "skills", resourceId: chatId }, (value) => parseSkillCatalog(record(value).skills));
+  }
+
+  /** The chat's next-request context pressure on the host, priced with `model` when given. */
+  contextPressure(chatId: string, model?: HostTurnModel): Promise<HostChatResult<RemoteContextPressure | null>> {
+    return this.read(
+      "contextPressure",
+      {
+        operation: "contextPressure",
+        resourceId: chatId,
+        ...(model ? { providerId: model.providerId, modelId: model.modelId } : {}),
+      },
+      (value) => mapHostContextPressure(value, chatId),
+    );
   }
 
   /** The models the host has configured, for a chat that runs there. */
@@ -630,4 +690,12 @@ export class RemoteHostAdapter implements HostChatAdapter {
     this.listeners.clear();
     this.chatListeners.clear();
   }
+}
+
+/** A turn's model and effort fields, exactly as the host's turn body takes them. */
+export function turnSelectionBody(input: Pick<HostChatSendInput, "model" | "thinkingLevel">): Record<string, string> {
+  return {
+    ...(input.model ? { providerId: input.model.providerId, modelId: input.model.modelId } : {}),
+    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+  };
 }

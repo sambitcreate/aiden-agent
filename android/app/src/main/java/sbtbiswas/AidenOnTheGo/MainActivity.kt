@@ -6,6 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -27,6 +30,12 @@ import sbtbiswas.AidenOnTheGo.models.aidenResolvedBotDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenDeepLink
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationDestination
 import sbtbiswas.AidenOnTheGo.notifications.AidenNavigationRequest
+import sbtbiswas.AidenOnTheGo.notifications.AidenNewChatLinkConsent
+import sbtbiswas.AidenOnTheGo.notifications.AidenExternalNewChatQueue
+import sbtbiswas.AidenOnTheGo.features.remote.pairing
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState
+import kotlinx.coroutines.CancellationException
 import sbtbiswas.AidenOnTheGo.navigation.AidenNavigationHost
 import sbtbiswas.AidenOnTheGo.navigation.AidenNavigationStack
 import sbtbiswas.AidenOnTheGo.navigation.rememberAidenNavigator
@@ -42,6 +51,9 @@ import sbtbiswas.AidenOnTheGo.notifications.AidenScheduledRunNotifier
 class MainActivity : ComponentActivity() {
     private val pendingNavigationRequest = mutableStateOf<AidenNavigationRequest?>(null)
     private var pendingDeepLink: String? = null
+    private val newChatConsent = AidenNewChatLinkConsent()
+    private val externalNewChats = AidenExternalNewChatQueue()
+    private var lastExternalNewChat: AidenNavigationRequest? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,6 +95,53 @@ class MainActivity : ComponentActivity() {
             val serverInfo by coordinator.serverInfo.collectAsStateWithLifecycle()
             val routineNotifier = remember { AidenScheduledRunNotifier(applicationContext) }
             val foregroundScope = rememberCoroutineScope()
+            val pendingNewChat by newChatConsent.pending.collectAsStateWithLifecycle()
+            val approvedNewChat by newChatConsent.approved.collectAsStateWithLifecycle()
+            // An approval is never restored after Activity recreation or backgrounding.
+            LifecycleEventEffect(Lifecycle.Event.ON_STOP) { newChatConsent.invalidate() }
+
+            fun retained(target: AidenNewChatLinkConsent.Target): Boolean =
+                installationStore.installations.value.any { it.pairing == target.pairing }
+
+            LaunchedEffect(approvedNewChat, connectionState, activeInstallationId, installations,
+                workspaces, hasCompletedWorkspaceRefresh) {
+                val target = approvedNewChat ?: return@LaunchedEffect
+                if (!retained(target) || coordinator.activePairing != target.pairing) {
+                    newChatConsent.invalidate()
+                    return@LaunchedEffect
+                }
+                if (connectionState == AidenConnectionState.OFFLINE || connectionState == AidenConnectionState.NEEDS_PAIRING) {
+                    newChatConsent.invalidate()
+                    return@LaunchedEffect
+                }
+                if (connectionState == AidenConnectionState.CONNECTING || !hasCompletedWorkspaceRefresh) return@LaunchedEffect
+                val client = coordinator.pairedClient(target.pairing) ?: return@LaunchedEffect
+                fun valid(): Boolean = retained(target) && coordinator.holdsReadAuthority(client, target.pairing.instanceId) &&
+                    coordinator.activePairing == target.pairing && coordinator.connectionState.value == AidenConnectionState.CONNECTED &&
+                    installationStore.activeInstallation?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true &&
+                    coordinator.workspaces.value.any { it.id == target.workspaceId } &&
+                    !coordinator.archiveStore.isArchived(target.workspaceId, target.pairing.instanceId)
+                // This scope is independent of list refreshes. perform consumes approval before I/O.
+                foregroundScope.launch {
+                    try {
+                        val chat = newChatConsent.perform(target, ::valid) {
+                            requireNotNull(client).createChat(target.workspaceId)
+                        } ?: return@launch
+                        if (chat.isBotChat || chat.workspaceId != target.workspaceId) return@launch
+                        navigationStore.setSelectedArea(target.pairing.instanceId, AidenProductArea.WORKSPACES)
+                        navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(chat.id)))
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) {
+                        if (valid()) coordinator.presentError(error.message ?: "Aiden couldn't create the chat. Check Workspaces before trying again.")
+                    }
+                }
+            }
+            LaunchedEffect(activeInstallationId, installations, connectionState) {
+                val target = pendingNewChat ?: return@LaunchedEffect
+                if (!retained(target) || coordinator.activePairing != target.origin || connectionState != AidenConnectionState.CONNECTED) {
+                    newChatConsent.invalidate()
+                }
+            }
             LifecycleEventEffect(Lifecycle.Event.ON_START) {
                 foregroundScope.launch { routineNotifier.deliverBotRoutines(coordinator) }
             }
@@ -102,6 +161,43 @@ class MainActivity : ComponentActivity() {
             ) {
                 val request = pendingNavigationRequest.value ?: return@LaunchedEffect
                 val requestedInstance = request.instanceId
+                if (request.destination == AidenNavigationDestination.NewChat) {
+                    // Keep the latest navigation pending through connection/workspace refresh.
+                    // The request still owns no switch, creation or microphone authority.
+                    val entry = externalNewChats.takeIfReady(
+                        connectionState == AidenConnectionState.CONNECTED && hasCompletedWorkspaceRefresh
+                    ) { candidate ->
+                        candidate.origin != null && candidate.origin == coordinator.activePairing &&
+                            candidate.target != null && installations.any { it.pairing == candidate.target }
+                    }
+                    if (entry == null) {
+                        if (externalNewChats.waiting == null || connectionState == AidenConnectionState.NEEDS_PAIRING) {
+                            externalNewChats.invalidate()
+                            coordinator.presentError("Connect to the paired Aiden installation before opening this link.")
+                            clearPendingNavigation()
+                        }
+                        return@LaunchedEffect
+                    }
+                    val instanceId = entry.target?.instanceId
+                    val installation = installations.firstOrNull { it.pairing == entry.target }
+                    val catalog = container.intentCatalogStore.load()
+                    val candidates = if (coordinator.activeInstanceId == instanceId) {
+                        workspaces.map { sbtbiswas.AidenOnTheGo.intents.AidenIntentWorkspaceRecord(it.id, instanceId.orEmpty(), it.name) }
+                    } else catalog.workspaces.filter { it.instanceId == instanceId }
+                    val available = candidates.filterNot { coordinator.archiveStore.isArchived(it.id, instanceId) }
+                    val selected = request.workspaceId ?: instanceId?.let(navigationStore::selectedWorkspaceId)
+                    val workspace = available.firstOrNull { it.id == selected }
+                        ?: if (request.workspaceId == null) available.firstOrNull() else null
+                    clearPendingNavigation()
+                    if (installation == null || workspace == null) {
+                        coordinator.presentError("Open this installation and choose an available workspace before starting a chat.")
+                    } else {
+                        newChatConsent.propose(AidenNewChatLinkConsent.Target(installation.pairing, installation.name,
+                            workspace.id, workspace.name, coordinator.activePairing,
+                            originClient = coordinator.pairedClient(coordinator.activePairing)))
+                    }
+                    return@LaunchedEffect
+                }
                 if (requestedInstance != null && installations.none { it.id == requestedInstance }) {
                     coordinator.presentError("This Aiden installation is no longer paired. Pair it again to continue.")
                     clearPendingNavigation()
@@ -111,6 +207,24 @@ class MainActivity : ComponentActivity() {
                     installationStore.setActiveInstallation(requestedInstance)
                     navigator.navigate(AidenNavigationStack.Root)
                     return@LaunchedEffect
+                }
+                // A chat this device has saved opens at once, without waiting for the Mac;
+                // the detail rereads it as the connection comes up.
+                val requestedChat = request.destination as? AidenNavigationDestination.Chat
+                val cachedInstance = coordinator.activeInstanceId
+                if (requestedChat != null && cachedInstance != null) {
+                    val cached = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        chatCache.loadChat(cachedInstance, requestedChat.chatId)
+                    }
+                    if (cached != null && (cached.isBotChat || !coordinator.archiveStore.isArchived(cached.workspaceId, cachedInstance))) {
+                        navigationStore.setSelectedArea(
+                            cachedInstance,
+                            if (cached.isBotChat) AidenProductArea.BOTS else AidenProductArea.WORKSPACES
+                        )
+                        navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(cached.id, request.startsVoice)))
+                        clearPendingNavigation()
+                        return@LaunchedEffect
+                    }
                 }
                 if (connectionState != sbtbiswas.AidenOnTheGo.features.remote.AidenConnectionState.CONNECTED) {
                     return@LaunchedEffect
@@ -147,7 +261,7 @@ class MainActivity : ComponentActivity() {
                         if (client == null) {
                             coordinator.presentError("Connect to Aiden Agent before opening this link.")
                         } else {
-                            if (coordinator.serverInfo.value?.supportsBotDurableSession == true) {
+                            if (coordinator.supportsBotDurableSession()) {
                                 navigationStore.setSelectedArea(
                                     coordinator.activeInstanceId.orEmpty(),
                                     AidenProductArea.BOTS
@@ -183,32 +297,8 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    AidenNavigationDestination.NewChat -> {
-                        if (!hasCompletedWorkspaceRefresh) return@LaunchedEffect
-                        val activeWorkspaces = workspaces.filterNot { workspace ->
-                            coordinator.archiveStore.isArchived(workspace.id, coordinator.activeInstanceId)
-                        }
-                        val workspace = if (request.workspaceId != null) {
-                            activeWorkspaces.firstOrNull { it.id == request.workspaceId }
-                        } else {
-                            activeWorkspaces.firstOrNull()
-                        }
-                        val client = coordinator.client.value
-                        if (workspace == null || client == null) {
-                            coordinator.presentError("Choose or add a workspace before starting a chat.")
-                        } else {
-                            try {
-                                val chat = client.createChat(workspace.id)
-                                navigationStore.setSelectedArea(
-                                    coordinator.activeInstanceId.orEmpty(),
-                                    AidenProductArea.WORKSPACES
-                                )
-                                navigator.navigate(navigator.stack.resetTo(AidenScreen.ChatDetail(chat.id, request.startsVoice)))
-                            } catch (error: Exception) {
-                                coordinator.presentError(error.message ?: "Aiden couldn't create the chat.")
-                            }
-                        }
-                    }
+                    AidenNavigationDestination.NewChat -> Unit // Always handled by consent above.
+
                 }
                 clearPendingNavigation()
             }
@@ -218,6 +308,27 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = AidenTheme.palette.canvas
                 ) {
+                    pendingNewChat?.let { target ->
+                        AlertDialog(
+                            onDismissRequest = { newChatConsent.invalidate() },
+                            title = { Text("Create a new chat?") },
+                            text = { Text("Create a chat in ${target.workspaceName} on ${target.installationName}? Use the microphone button when you are ready to dictate.") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    val approved = newChatConsent.approve(target.id, { candidate ->
+                                        retained(candidate) && coordinator.activePairing == candidate.origin &&
+                                            candidate.originClient != null && coordinator.pairedClient(candidate.origin) === candidate.originClient &&
+                                            coordinator.connectionState.value == AidenConnectionState.CONNECTED
+                                    }) ?: return@TextButton
+                                    if (installationStore.activeInstallationId.value != approved.pairing.instanceId) {
+                                        installationStore.setActiveInstallation(approved.pairing.instanceId)
+                                        navigator.navigate(AidenNavigationStack.Root)
+                                    }
+                                }) { Text("Create Chat") }
+                            },
+                            dismissButton = { TextButton(onClick = { newChatConsent.invalidate() }) { Text("Cancel") } }
+                        )
+                    }
                     AidenNavigationHost(
                         navigator = navigator,
                         reduceMotion = sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion()
@@ -381,6 +492,18 @@ class MainActivity : ComponentActivity() {
     private fun acceptDeepLink(data: String?) {
         if (data == null) return
         val request = AidenDeepLink.parse(data)
+        if (request?.destination == AidenNavigationDestination.NewChat) {
+            if (request == lastExternalNewChat && (externalNewChats.waiting != null || newChatConsent.hasPendingOrActive)) return
+            newChatConsent.invalidate()
+            lastExternalNewChat = request
+        } else if (request != null) {
+            newChatConsent.invalidate()
+            lastExternalNewChat = null
+        }
+        val container = (application as AidenOnTheGoApp).container
+        val targetInstance = request?.instanceId ?: container.coordinator.activeInstanceId
+        externalNewChats.receive(request, container.coordinator.activePairing,
+            container.installationStore.installations.value.firstOrNull { it.id == targetInstance }?.pairing)
         pendingDeepLink = data.takeIf { request != null }
         pendingNavigationRequest.value = request
     }

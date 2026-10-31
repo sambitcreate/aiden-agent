@@ -5,7 +5,6 @@ import { ipcMain, logger } from "../platform.js";
 import { desktopChatExecutionOptions, startGenerationAndMaybeTitle } from "../services/chat-generation-start.js";
 import { isExplicitUserStop, parseChatCancelOrigin } from "../services/chat-cancel.js";
 import { chatTitleService } from "../services/chat-title.js";
-import { configStore } from "../services/config-store.js";
 import { llmClient } from "../services/llm-client.js";
 import { chatGenerationOwner } from "../services/chat-generation-owner.js";
 import { isSafeSubagentIdentifier } from "../../renderer/shared/subagent-runs.js";
@@ -50,11 +49,6 @@ export function registerChatGenerationHandlers(): void {
                 desktopChatExecutionOptions(messageTurnId, () => { accepted = true; }),
               ),
             startTitle: (input) => chatTitleService.startForFirstTurn(input),
-            rememberSelection: (providerId, model) => {
-              void configStore
-                .setSettings({ lastProviderId: providerId, lastModel: model })
-                .catch(() => undefined);
-            },
           },
           id,
           parsed,

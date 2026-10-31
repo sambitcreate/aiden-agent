@@ -1639,6 +1639,18 @@ struct AidenProductShellView: View {
                 let context = try coordinator.requestContext(for: request.instanceId)
                 capturedContext = context
                 let client = try coordinator.remoteClient(for: context)
+                if let sessionPath = aidenBotSessionDeepLinkPath(botID: botID, hostFeatures: coordinator.knownServerFeatures) {
+                    // The Bot's one durable chat, where a hand-off card waits. A
+                    // link never creates anything: confirm the Bot first.
+                    _ = try await client.bot(id: botID)
+                    guard coordinator.isCurrent(context), navigationRequest == request else { return }
+                    navigationRequest = nil
+                    deepLinkedBotChat = nil
+                    area = .bots
+                    navigationStore.setCompactBotPath(sessionPath, for: context.instanceId)
+                    await prepareBotSurface()
+                    return
+                }
                 let page = try await client.botConversations(
                     query: AidenBotConversationQuery(botId: botID)
                 )

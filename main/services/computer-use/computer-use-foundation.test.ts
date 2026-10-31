@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter, getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { codesignVerifyArguments, resolveCuaDriverInstallation } from "./binary.js";
+import {
+  codesignVerifyArguments,
+  resolveCuaDriverInstallation,
+  resolveVendoredCuaDriverExecutable,
+  vendoredCuaDriverNoticePath,
+} from "./binary.js";
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CuaDriverError,
@@ -189,11 +194,11 @@ function assertProcessRunning(pid: number): void {
 function pendingMcpResponseHandlers(session: CuaDriverSession): number {
   const client = (
     session as unknown as {
-      client: { _responseHandlers: Map<number, unknown> } | null;
+      client: { pending: Map<number, unknown> } | null;
     }
   ).client;
   assert.ok(client, "the ready Computer Use session should retain its MCP client");
-  return client._responseHandlers.size;
+  return client.pending.size;
 }
 
 async function killExactProcess(pid: number | undefined): Promise<void> {
@@ -415,6 +420,57 @@ test("driver installation resolution rejects unsupported platforms and symlinked
   }
 });
 
+test("the driver a Bot computer's guest gets is only the vendored, pinned executable inside a real helper bundle", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-copy-"));
+  const options = { appPath: root, isPackaged: false, platform: "darwin" as const, resourcesPath: root };
+  const helper = path.join(root, "build", "computer-use", "CuaDriver.app");
+  const driver = path.join(helper, "Contents", "MacOS", "cua-driver");
+  try {
+    // Nothing vendored yet: the person is told how to vendor, and nothing is copied.
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing" && /computer-use:vendor/u.test(error.message),
+    );
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable({ ...options, platform: "linux" }),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "unsupported_platform",
+    );
+
+    // A file in the right place that isn't the pinned release is refused before any signature check.
+    await mkdir(path.dirname(driver), { recursive: true });
+    await writeFile(driver, "#!/bin/sh\necho not the pinned driver\n", { mode: 0o755 });
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) =>
+        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.36\.0 release/u.test(error.message),
+    );
+
+    // A helper bundle that is a symlink to another folder is never the vendored one.
+    const elsewhere = path.join(root, "elsewhere.app");
+    await rename(helper, elsewhere);
+    await symlink(elsewhere, helper);
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options, cancelled.signal),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cancelled",
+    );
+    // The licence notice travels with the copy, from inside the same helper bundle.
+    assert.equal(vendoredCuaDriverNoticePath(options), path.join(helper, "Contents", "Resources", "LICENSE.cua-driver.md"));
+    assert.equal(
+      vendoredCuaDriverNoticePath({ ...options, isPackaged: true, resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources" }),
+      "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("live codesign verification avoids unsupported strict process requirements", () => {
   assert.deepEqual(codesignVerifyArguments("+4242", "identifier test"), [
     "--verify",
@@ -580,11 +636,11 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
   const messages: unknown[] = [];
   const errors: Error[] = [];
   let closeNotifications = 0;
-  transport.onmessage = (message) => messages.push(message);
-  transport.onerror = (error) => errors.push(error);
-  transport.onclose = () => {
+  transport.onMessage((message) => messages.push(message));
+  transport.onError((error) => errors.push(error));
+  transport.onClose(() => {
     closeNotifications += 1;
-  };
+  });
 
   try {
     await transport.start();

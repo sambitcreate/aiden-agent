@@ -1,5 +1,7 @@
 # Long-thread payload upgrades
 
+Reconciliation (2026-10-19, main `99df8a92a`): the proposals below are the historical audit, not a current defect list. Remote compression and stream-journal coalescing have landed; see [compression audit](../performance/compression-format-audit-2026-10-18.md). Measured desktop rendering now belongs to H4 in [the harness upgrade plan](aiden-harness-quality-upgrade-plan.md); transport/loading remains coordinated with cache-first loading. No packaged performance acceptance is claimed.
+
 Status: planned; first cut shipped (no-op streaming timeline republish)  
 Date: 2026-08-30  
 Inspiration: T3 Code PRs `#4006`, `#4622`, `#4705`, `#4788`, `#4791`, `#6675` (context only; Aiden’s architecture does not map 1:1)
