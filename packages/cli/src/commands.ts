@@ -56,6 +56,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       break;
     }
     case "serve": await (await import("./serve-command.ts")).serveCommand(agentDir, rest); return true;
+    case "service": await (await import("./service.ts")).serviceCommand(agentDir, rest); return true;
     case "provider": {
       if ((rest[0] ?? "list") === "list") { result = (await (await import("./providers.ts")).createCliModelRuntime(agentDir)).getProviders().map(({ id, name }) => ({ id, name })); break; }
       if (rest[0] !== "import" || !rest[1]) throw new Error("Usage: provider list | import <models.json>");

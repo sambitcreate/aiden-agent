@@ -80,9 +80,10 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * Open one pairing window through the daemon's own `remote pair` path, show
  * its QR and manual code, then say how to get a new one once it expires.
  * With no transport named, a server that serves only over Tailscale pairs
- * over Tailscale and every other server pairs over LAN.
+ * over Tailscale and every other server pairs over LAN. Resolves the opened
+ * window's session id, so a caller whose server keeps running can close it.
  */
-export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<void> {
+export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<string | undefined> {
   const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
   // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
   const guessed = !requested && mode === undefined;
@@ -98,25 +99,26 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
     if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${retry}\n`);
     return;
   }
-  if (signal.aborted) return;
+  if (signal.aborted) return pairing.sessionId;
   const { renderPairingTerminal } = await import("./pairing-display.ts");
   const rendered = await renderPairingTerminal(pairing).catch(() => undefined);
-  if (!rendered || signal.aborted) return;
+  if (!rendered || signal.aborted) return pairing.sessionId;
   out.write(rendered + "\n");
   const expiresAt = Date.parse(pairing.bootstrap.expiresAt);
-  if (!Number.isFinite(expiresAt)) return;
+  if (!Number.isFinite(expiresAt)) return pairing.sessionId;
   while (!signal.aborted) {
     await wait(Math.min(POLL_MS, Math.max(0, expiresAt - Date.now())), signal);
-    if (signal.aborted) return;
+    if (signal.aborted) return pairing.sessionId;
     let status: AidenRemotePairingWindowStatus | { state: "none" };
-    try { status = await remoteDaemonCommand(agentDir, "remote", ["pair-status"]) as typeof status; } catch { return; }
-    if (signal.aborted) return;
+    try { status = await remoteDaemonCommand(agentDir, "remote", ["pair-status"]) as typeof status; } catch { return pairing.sessionId; }
+    if (signal.aborted) return pairing.sessionId;
     // Someone opened or closed a window from another shell: that one is theirs to report.
-    if (!("sessionId" in status) || status.sessionId !== pairing.sessionId) return;
-    if (status.state === "failed") { err.write(`aiden: Pairing failed. Run \`aiden remote pair ${transport}\` to try again.\n`); return; }
-    if (status.state === "finishing" && status.deviceId) { out.write("A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n"); return; }
-    if (status.state === "expired" || Date.now() >= expiresAt) { out.write("The pairing code expired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) for a new code.\n"); return; }
+    if (!("sessionId" in status) || status.sessionId !== pairing.sessionId) return pairing.sessionId;
+    if (status.state === "failed") { err.write(`aiden: Pairing failed. Run \`aiden remote pair ${transport}\` to try again.\n`); return pairing.sessionId; }
+    if (status.state === "finishing" && status.deviceId) { out.write("A device paired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) to add another.\n"); return pairing.sessionId; }
+    if (status.state === "expired" || Date.now() >= expiresAt) { out.write("The pairing code expired. Run `aiden remote pair lan` (or `aiden remote pair tailscale`) for a new code.\n"); return pairing.sessionId; }
   }
+  return pairing.sessionId;
 }
 
 /** `aiden serve ...`. Prints its own output and returns when serving stops. */
@@ -142,7 +144,7 @@ export async function serveCommand(agentDir: string, args: string[]): Promise<vo
   const controller = new AbortController();
   const stop = () => controller.abort();
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
-  let pairing: Promise<void> | undefined;
+  let pairing: Promise<unknown> | undefined;
   const onReady = () => {
     if (!flags.remote || flags.pair === "off") return;
     // The QR and manual code carry a single-use secret: show them only to a

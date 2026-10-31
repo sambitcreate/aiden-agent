@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -310,4 +310,35 @@ test("startup pairing names both pair commands when the server's network is unkn
   } finally {
     daemon.close();
   }
+});
+
+test("Linux discovery keeps retrying when avahi-publish-service exits, warns once, and stops when Remote stops", async (t) => {
+  const { bonjourPublisher } = await import("../dist/parity-test-api.js");
+  const bin = mkdtempSync(join(tmpdir(), "aiden-avahi-"));
+  t.after(() => rmSync(bin, { recursive: true, force: true }));
+  const runs = join(bin, "runs");
+  // Exits at once, as the real publisher does while avahi-daemon is not running yet (at boot).
+  writeFileSync(join(bin, "avahi-publish-service"), `#!/bin/sh\necho run >> "${runs}"\nexit 1\n`, { mode: 0o755 });
+  const savedPath = process.env.PATH;
+  process.env.PATH = `${bin}:${savedPath}`;
+  let warnings = "";
+  const write = process.stderr.write;
+  process.stderr.write = (chunk) => { warnings += chunk; return true; };
+  const count = () => { try { return readFileSync(runs, "utf8").split("\n").filter(Boolean).length; } catch { return 0; } };
+  const publisher = bonjourPublisher(50, "linux");
+  try {
+    await publisher.start({ instanceId: "i", displayName: "Aiden", port: 49320, hostname: "box.local" });
+    const deadline = Date.now() + 5_000;
+    while (count() < 3 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(count() >= 3, `the publisher is started again after it exits (ran ${count()} times)`);
+    publisher.stop();
+    const stoppedAt = count();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(count() <= stoppedAt + 1, "no more attempts once Remote stops");
+  } finally {
+    publisher.stop();
+    process.stderr.write = write;
+    process.env.PATH = savedPath;
+  }
+  assert.equal(warnings.match(/avahi-publish-service exited/g)?.length, 1, "the exit is reported once, not on every retry");
 });
