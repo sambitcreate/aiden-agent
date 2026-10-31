@@ -1,5 +1,6 @@
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
 import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
+import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
@@ -1622,6 +1623,10 @@ export const chatsApi = {
   /** The questions and approvals the interrupted reply was waiting on, questions first. */
   interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
   dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
+  /** What each listed local chat is waiting on, for the Inbox; unknown chats and idle ones are left out. */
+  pendingAttention: (ids: readonly string[]) => invoke<ChatPendingAttention[]>("chats:pendingAttention", [...ids]),
+  /** Dismiss a chat's Unavailable prompts (those settled when its window left). */
+  dismissDetachedAttention: (id: string) => invoke<void>("chats:dismissDetachedAttention", id),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

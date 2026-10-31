@@ -127,6 +127,10 @@ export function createInterruptedWaitStore(
         draft.waits = draft.waits.filter((item) => item.chatId !== chatId);
       });
     },
+    /** Chats with a saved wait still young enough to offer. */
+    async chatIds(): Promise<Set<string>> {
+      return new Set((await persistence.load()).waits.filter(fresh).map((item) => item.chatId));
+    },
     /** Drop waits too old to offer, so their text does not stay on disk. */
     prune(): Promise<void> {
       return persistence.update((draft) => {

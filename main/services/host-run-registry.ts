@@ -115,6 +115,8 @@ interface RunRecord {
   pendingQuestionIds: string[];
   /** Pending prompt payloads, kept outside the trimmable journal. */
   prompts: Map<string, HostRunPendingPrompt>;
+  /** When each pending prompt was raised (epoch ms), for wait-time ordering. */
+  promptRaisedAt: Map<string, number>;
   projection: RunProjectionState;
   subscribers: Set<() => void>;
   /** The newest delta event while no `read` has returned it. */
@@ -296,6 +298,7 @@ export class HostRunRegistry {
       pendingApprovalIds: [],
       pendingQuestionIds: [],
       prompts: new Map(),
+      promptRaisedAt: new Map(),
       projection: createRunProjectionState(),
       subscribers: new Set(),
     };
@@ -350,11 +353,13 @@ export class HostRunRegistry {
       run.pendingApprovalIds.push(approvalId);
       this.promptRuns.set(approvalId, run.runId);
       run.prompts.set(approvalId, { type: "approval_required", payload: pending.payload });
+      run.promptRaisedAt.set(approvalId, this.options.now());
     }
     if (questionId) {
       run.pendingQuestionIds.push(questionId);
       this.promptRuns.set(questionId, run.runId);
       run.prompts.set(questionId, { type: "question_required", payload: pending.payload });
+      run.promptRaisedAt.set(questionId, this.options.now());
     }
     this.commit(run, pending, Boolean(approvalId || questionId));
   }
@@ -371,6 +376,7 @@ export class HostRunRegistry {
     const run = this.runs.get(runId);
     if (!run) return;
     run.prompts.delete(id);
+    run.promptRaisedAt.delete(id);
     const approvalIndex = run.pendingApprovalIds.indexOf(id);
     if (approvalIndex >= 0) {
       run.pendingApprovalIds.splice(approvalIndex, 1);
@@ -407,6 +413,12 @@ export class HostRunRegistry {
     const runId = this.promptRuns.get(id);
     const prompt = runId === undefined ? undefined : this.runs.get(runId)?.prompts.get(id);
     return prompt ? structuredClone(prompt) : undefined;
+  }
+
+  /** When a still-waiting prompt was raised, in epoch milliseconds. */
+  promptRaisedAt(id: string): number | undefined {
+    const runId = this.promptRuns.get(id);
+    return runId === undefined ? undefined : this.runs.get(runId)?.promptRaisedAt.get(id);
   }
 
   /** The remembered settlement of a recently resolved prompt, if any. */
@@ -541,6 +553,7 @@ export class HostRunRegistry {
         this.promptRuns.delete(id);
       }
       run.prompts.clear();
+      run.promptRaisedAt.clear();
       attentionChanged ||= run.pendingApprovalIds.length + run.pendingQuestionIds.length > 0;
       run.pendingApprovalIds = [];
       run.pendingQuestionIds = [];

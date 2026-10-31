@@ -9,7 +9,11 @@ import type { ChatRowState } from "../shared/chat-row-state";
 /** Host id used to qualify this machine's own workspaces in project keys. */
 export const LOCAL_SIDEBAR_HOST_ID = "local";
 
-export const SIDEBAR_VIEWS = ["projects", "recent", "attention"] as const;
+/**
+ * `inbox` is accepted ahead of its view (Inbox plan, Phase 1a). Until the Inbox
+ * UI lands, nothing offers it and a stored `inbox` lays out like `attention`.
+ */
+export const SIDEBAR_VIEWS = ["projects", "recent", "attention", "inbox"] as const;
 export type SidebarView = (typeof SIDEBAR_VIEWS)[number];
 
 export const SIDEBAR_CHAT_SORTS = ["last_activity", "created"] as const;
@@ -434,6 +438,8 @@ export interface SidebarPreferences {
   expandedWorkspaceIds: string[];
   machineFilter: SidebarMachineFilter;
   projectGrouping: SidebarProjectGrouping;
+  /** Whether the Inbox's Working shelf is collapsed. */
+  workingShelfCollapsed: boolean;
 }
 
 export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.freeze({
@@ -444,6 +450,7 @@ export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.
   expandedWorkspaceIds: [],
   machineFilter: "all",
   projectGrouping: "separate",
+  workingShelfCollapsed: false,
 });
 
 export const MAX_SIDEBAR_PROJECT_ORDER = 500;
@@ -517,6 +524,10 @@ export function parseSidebarPreferences(
     projectGrouping:
       oneOf(SIDEBAR_PROJECT_GROUPINGS, record.projectGrouping) ??
       DEFAULT_SIDEBAR_PREFERENCES.projectGrouping,
+    workingShelfCollapsed:
+      typeof record.workingShelfCollapsed === "boolean"
+        ? record.workingShelfCollapsed
+        : DEFAULT_SIDEBAR_PREFERENCES.workingShelfCollapsed,
   };
 }
 

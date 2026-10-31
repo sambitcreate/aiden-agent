@@ -111,6 +111,7 @@ import {
   recordRunNotification,
   recordRunSettled,
 } from "./host-runs-main.js";
+import { pendingAttentionRecorder } from "./chat-pending-attention-main.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
@@ -2371,6 +2372,7 @@ export const llmClient = {
             initializing.set(streamId, initialization);
             chatActivityRegistry.begin(streamId, params.chatId);
             recordRunBegin(hostRunRegistry, streamId, params.chatId, owner);
+            pendingAttentionRecorder.runBegan(params.chatId);
             chatProgressEvents.begin(params.chatId, streamId);
           },
         );
@@ -5161,6 +5163,8 @@ export const llmClient = {
     endLoadMonitor(runtimeOwner, streamId, false);
     runtimeOwner.formFill?.revoke();
     void runtimeOwner.computerUse?.close();
+    // Kept for the Inbox's Unavailable row; a quit's withdrawals are interrupted waits instead.
+    if (!quitInProgress) pendingAttentionRecorder.runDetached(streamId);
     approvals.detachStream(streamId);
     questionnaires.detachStream(streamId);
     logger.info("pi", `Renderer detached from generation ${streamId}; work remains main-owned.`);

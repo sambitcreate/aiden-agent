@@ -105,17 +105,16 @@ import {
   moveProjectKey,
   moveProjectKeyTo,
   organizeSidebar,
-  parseSidebarPreferences,
-  serializeSidebarPreferences,
   sidebarAttention,
   visibleProjectChats,
   type SidebarChatSort,
   type SidebarMachineFilter,
   type SidebarProjectGroup,
   type SidebarProjectGrouping,
+  type SidebarPreferences,
   type SidebarProjectSort,
-  type SidebarView,
 } from "../lib/sidebar-organization";
+import { readSidebarPreferences, useSidebarView, writeSidebarPreferences } from "../lib/use-sidebar-view";
 import { SidebarOrganizeMenuItems } from "./sidebar-organize-menu";
 import {
   combineSidebarRows,
@@ -138,7 +137,6 @@ import {
 } from "./sidebar-remote";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
-const SIDEBAR_PREFERENCES_KEY = "aiden-agent.sidebar.v1";
 const COLLAPSED_WORKSPACE_CHAT_LIMIT = 4;
 const NO_REMOTE_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set();
 /** Must match aiden-app-update-banner-out in styles.css. */
@@ -425,11 +423,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   );
   const foundationModels = useFoundationModelsConnection(capabilities.appleFoundationModels);
   const [search, setSearch] = React.useState("");
-  const initialPreferences = React.useMemo(
-    () => parseSidebarPreferences(localStorage.getItem(SIDEBAR_PREFERENCES_KEY)),
-    [],
-  );
-  const [view, setView] = React.useState<SidebarView>(initialPreferences.view);
+  const initialPreferences = React.useMemo(readSidebarPreferences, []);
+  const { view, setView } = useSidebarView();
   const [chatSort, setChatSort] = React.useState<SidebarChatSort>(initialPreferences.chatSort);
   const [projectSort, setProjectSort] = React.useState<SidebarProjectSort>(
     initialPreferences.projectSort,
@@ -798,21 +793,28 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     });
   }, [workspaceRegistryReady, workspaces]);
 
+  // Writes only the fields this window changed, so another window's change to a
+  // different field survives. The view writes itself through `useSidebarView`.
+  const writtenPreferences = React.useRef<Partial<SidebarPreferences>>(initialPreferences);
   React.useEffect(() => {
     if (!workspaceRegistryReady) return;
-    const preferences = parseSidebarPreferences(
-      serializeSidebarPreferences({
-        view,
-        chatSort,
-        projectSort,
-        projectOrder,
-        expandedWorkspaceIds: [...expandedWorkspaceIds],
-        machineFilter,
-        projectGrouping,
-      }),
-      workspaces.map((workspace) => workspace.id),
-    );
-    localStorage.setItem(SIDEBAR_PREFERENCES_KEY, serializeSidebarPreferences(preferences));
+    const own: Partial<SidebarPreferences> = {
+      chatSort,
+      projectSort,
+      projectOrder,
+      expandedWorkspaceIds: [...expandedWorkspaceIds],
+      machineFilter,
+      projectGrouping,
+    };
+    const written = writtenPreferences.current;
+    const patch = Object.fromEntries(
+      Object.entries(own).filter(
+        ([field, value]) =>
+          JSON.stringify(value) !== JSON.stringify(written[field as keyof SidebarPreferences]),
+      ),
+    ) as Partial<SidebarPreferences>;
+    writtenPreferences.current = own;
+    writeSidebarPreferences(patch, workspaces.map((workspace) => workspace.id));
   }, [
     chatSort,
     expandedWorkspaceIds,
@@ -820,7 +822,6 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     projectGrouping,
     projectOrder,
     projectSort,
-    view,
     workspaceRegistryReady,
     workspaces,
   ]);

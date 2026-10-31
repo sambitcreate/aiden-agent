@@ -314,6 +314,7 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
     expandedWorkspaceIds: [],
     machineFilter: "all",
     projectGrouping: "separate",
+    workingShelfCollapsed: false,
   };
   assert.deepEqual(parseSidebarPreferences(null), defaults);
   assert.deepEqual(parseSidebarPreferences("{"), defaults);
@@ -361,6 +362,23 @@ test("the machine filter and cross-machine grouping tolerate older and malformed
   );
 });
 
+test("the Inbox view and its shelf state are stored, and a downgrade falls back to workspaces", () => {
+  const stored = serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "inbox" });
+  assert.equal(parseSidebarPreferences(stored).view, "inbox");
+  // An older build that doesn't know `inbox` reads the legacy organization instead.
+  assert.equal(JSON.parse(stored).organization, "workspace");
+  // `attention` is still its own view until the Inbox UI migrates it.
+  assert.equal(parseSidebarPreferences(JSON.stringify({ view: "attention" })).view, "attention");
+  for (const workingShelfCollapsed of ["true", 1, null, {}]) {
+    assert.equal(
+      parseSidebarPreferences(JSON.stringify({ workingShelfCollapsed })).workingShelfCollapsed,
+      false,
+      JSON.stringify(workingShelfCollapsed),
+    );
+  }
+  assert.equal(parseSidebarPreferences(JSON.stringify({ workingShelfCollapsed: true })).workingShelfCollapsed, true);
+});
+
 test("stored preferences round-trip, keep a downgrade-safe organization, and prune only local keys", () => {
   const stored = serializeSidebarPreferences({
     view: "attention",
@@ -370,6 +388,7 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     expandedWorkspaceIds: ["beta"],
     machineFilter: "host:studio",
     projectGrouping: "repository_path",
+    workingShelfCollapsed: true,
   });
   assert.equal(JSON.parse(stored).organization, "workspace");
   assert.deepEqual(parseSidebarPreferences(stored, ["alpha", "beta"]), {
@@ -380,6 +399,7 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     expandedWorkspaceIds: ["beta"],
     machineFilter: "host:studio",
     projectGrouping: "repository_path",
+    workingShelfCollapsed: true,
   });
   assert.equal(
     JSON.parse(serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" })).organization,

@@ -40,7 +40,7 @@ Ten research passes looked at two reference apps and Aiden's current sidebar. Th
 
 ### One stored view
 
-The sidebar view already lives in `SidebarPreferences.view`. It is device-local and saved in `localStorage` (`chat-sidebar.tsx`, `SIDEBAR_PREFERENCES_KEY`). The Appearance cards will not add a second `AppearanceConfig.sidebarStyle` field. Two stored values could disagree, and the unified sidebar plan keeps organization state device-local. Instead, Phase 1 adds a small `useSidebarView()` store. The Organize menu and the Appearance cards both read and write it, and both stay in sync within the window.
+The sidebar view already lives in `SidebarPreferences.view`. It is device-local and saved in `localStorage` under `SIDEBAR_PREFERENCES_KEY`, now owned by `renderer/lib/use-sidebar-view.ts`. The Appearance cards will not add a second `AppearanceConfig.sidebarStyle` field. Two stored values could disagree, and the unified sidebar plan keeps organization state device-local. Instead, Phase 1 adds a small `useSidebarView()` store. The Organize menu and the Appearance cards both read and write it. They stay in sync within the window, and across windows through the `storage` event; every write merges its own fields over what is stored at that moment.
 
 ### Needs attention becomes Inbox
 
@@ -70,21 +70,22 @@ interface InboxSignals {
 type InboxShelf = "needs_you" | "pinned" | "updates" | "earlier" | "working" | "hidden";
 
 inboxState(signals, now, recentWindowMs) → { shelf, tier, sortAt }
-organizeInbox(rows, now, options) → { needsYou, pinned, updates, earlier, working, hiddenCount }
+organizeInbox(rows, now, options) → { needsYou, pinned, updates, earlier, working, hiddenCount, earlierMoreCount, needsYouCount }
+freezeInboxOrder({ previous, next, touched, present }) → the held on-screen order (see the freeze rules)
 ```
 
 ### Where Needs you comes from
 
-Leaving a local chat calls `cancel("lifecycle")` (`chat-pane.tsx:865-873`), which detaches the renderer (`chat.ts:77-81`, `llm-client.ts:5146-5167`), and pending prompts settle as `"detached"` (`tool-approval.ts:61-62`, `:214-230`). So a local approval or question is live only while some window shows that chat. Local Needs you rows come from:
+Leaving a local chat calls `cancel("lifecycle")` (`chat-pane.tsx:865-873`), which detaches the renderer (`chat.ts:77-81`, `llm-client.ts:5148-5171`), and pending prompts settle as `"detached"` (`tool-approval.ts:61-62`, `:214-230`). So a local approval or question is live only while some window shows that chat. Local Needs you rows come from:
 
 - the open chat;
 - a chat open in another window;
 - Remote-origin runs on this Mac (started from a phone or a paired Mac), which don't detach with the desktop pane;
 - Bots (`needsYou`);
-- detached prompts: main records the detached settle per chat, and the row reads **Unavailable**, tooltip "Approval unavailable — return to retry". It clears when the chat opens or a new run starts;
-- interrupted waits: `interruptedWaits` (`renderer/shared/interrupted-reply.ts`) keeps `askedAt` and the summary for 7 days after a quit or crash. The row reads **Interrupted**, `attentionSince = askedAt`, and opening it shows the existing Resume card (`chat-pane.tsx:3278-3374`).
+- detached prompts: main records the prompts per chat just before the detach settles them (`main/services/chat-pending-attention.ts`, memory only, so a restart drops them with their runs), and the row reads **Unavailable**, tooltip "Approval unavailable — return to retry". A new run in the chat clears them; opening the chat clears them through `chats:dismissDetachedAttention`;
+- interrupted waits: `interruptedWaits` (`main/services/interrupted-reply.ts`, shape in `renderer/shared/interrupted-reply.ts`) keeps `askedAt` and the summary for 7 days after a quit or crash. The row reads **Interrupted**, `attentionSince = askedAt`, and opening it shows the existing Resume card (`chat-pane.tsx:3278-3374`).
 
-Times come from main, not the window. `chats:pendingAttention` reads `HostRunRegistry` (`pendingPrompt`, `host-run-registry.ts:406`; `currentRunForChat`, `:441`; `startedAt`) and returns `since` and `runStartedAt`. `ChatActivityRegistry` holds only id sets (`chat-activity-core.ts:21-93`) and supplies neither summaries nor times. Remote rows have no prompt times until Phase 2.
+Times come from main, not the window. `chats:pendingAttention` reads `HostRunRegistry` (`pendingPrompt`, `host-run-registry.ts:412`; `currentRunForChat`, `:453`; `startedAt`) and returns `since` and `runStartedAt`. The registry had no per-prompt time, so Phase 1 adds `promptRaisedAt(id)` (`:419`), stamped when the prompt is journaled. `ChatActivityRegistry` holds only id sets (`chat-activity-core.ts:21-93`) and supplies neither summaries nor times. Remote rows have no prompt times until Phase 2.
 
 ### Placement rules, in order
 
@@ -158,8 +159,10 @@ The existing sidebar Playwright specs must pass unchanged.
 **1a. The model.**
 
 - `renderer/lib/sidebar-inbox.ts` with `inboxState` and `organizeInbox`.
-- `"inbox"` added to `SIDEBAR_VIEWS`, and the `"attention"` migration in `parseSidebarPreferences`. The migration maps `"attention"` before the `oneOf(SIDEBAR_VIEWS, …)` check (`sidebar-organization.ts:485`); only then is `"attention"` removed from `SIDEBAR_VIEWS`.
-- The `useSidebarView()` store.
+- `"inbox"` added to `SIDEBAR_VIEWS`, and the `"attention"` migration in `parseSidebarPreferences`. The migration maps `"attention"` before the `oneOf(SIDEBAR_VIEWS, …)` check (`sidebar-organization.ts:492`); only then is `"attention"` removed from `SIDEBAR_VIEWS`.
+- The `useSidebarView()` store, plus `useWorkingShelfCollapsed()` for the shelf's stored state (`SidebarPreferences.workingShelfCollapsed`).
+- Until 1b renders it, a stored `inbox` lays out like Needs attention; it is serialized with the legacy `organization: "workspace"`, so an older build falls back to By workspace.
+- `chats:pendingAttention` (see 1c) lands with 1a as data only.
 - Fixture-based tests in `renderer/lib/sidebar-inbox.test.ts`. Each placement and ordering rule gets its own hand-written expected order (an independent oracle). The tests also cover snooze wake-ups, Done coming back on new output, detached and interrupted rows, offline hosts, and tie stability.
 
 **1b. The Inbox view.**
@@ -176,7 +179,7 @@ The existing sidebar Playwright specs must pass unchanged.
 
 **1c. Opening from a row.**
 
-New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, summary, since, runStartedAt, count }`, read from `HostRunRegistry` plus the detached and interrupted records. `kind` is `approval`, `question`, `detached` or `interrupted`. The summary is capped at 200 characters and never includes file contents. Rows never send an approval or an answer.
+New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, summary, since, runStartedAt, count }`, read from `HostRunRegistry` plus the detached and interrupted records. `kind` is `approval`, `question`, `detached`, `interrupted` or `working` (a live run with nothing to answer, so Working-shelf rows get `runStartedAt`; its summary is empty and `count` is 0). Precedence is that order. The summary is the registry's bounded approval summary or the first question's text, collapsed to one line and capped at 200 characters; tool details and file contents never appear. Chats this host doesn't have, and chats waiting on nothing, are left out; malformed ids or more than 2,000 are refused. A second channel, `chats:dismissDetachedAttention(chatId)`, clears a chat's Unavailable prompts. Shape: `renderer/shared/chat-pending-attention.ts`; handler: `main/handlers/chat-pending-attention.ts`. Rows never send an approval or an answer.
 
 - **Open.** Clicking a row, Enter on a focused row, or ⌘1–9 opens the chat or Bot. The approval card is docked above the composer (`chat-pane.tsx:3540-3570`), so there is nothing to scroll. Opening focuses its Deny button, the existing default (`chat-pane.tsx:3128-3143`), but only when the person isn't typing and no overlay is open. With several approvals the card shows `approvals[0]` and `pendingCount` (`:3065`). A question replaces the composer (`:3667-3680`) and its answer field takes focus. When both wait, the approval comes first. Once the prompt resolves, focus goes to the composer. Approve, Deny and Always allow keep their existing rules in the chat, for local and remote chats alike.
 - **Mark read** uses `chats:markRead` for local chats and `POST /chats/{chatId}/read` with `throughMessageId` for remote chats. It is available on Updates rows and from the ••• menu.
@@ -207,7 +210,7 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
   - there is no archived state (`types.ts:666-684`), so the Inbox adds no Archive; Done (Phase 2) is the way to put a chat away;
   - child-stream prompts are ignored (`chat-activity-core.ts:15-19`, `:62-63`). Phase 1 keeps that; rolling child prompts into the parent is a follow-up.
 - *Search.* Search reaches past `recentWindowMs` and the Earlier cap, and respects the machine filter (`sidebar-organization.ts:254-325`).
-- *Stored state.* The shelf's collapsed state lives in `SidebarPreferences`, not a new key. Preferences are written as a whole blob (`chat-sidebar.tsx:813-827`), so a second window could clobber the first. Listen for `storage` events and merge per field, as `use-bot-sidebar-preferences.ts:72` does.
+- *Stored state.* The shelf's collapsed state lives in `SidebarPreferences`, not a new key. Preferences used to be written as a whole blob from `chat-sidebar.tsx`, so a second window could clobber the first. 1a moved the write into `writeSidebarPreferences(patch)`, which re-reads storage and writes only the changed fields, and the store listens for `storage` events, as `use-bot-sidebar-preferences.ts:72` does.
 - *Bot routes.* On a Bot route the sidebar swaps to `BotSidebar` (`chat-sidebar.tsx:484`), chats with a `botId` redirect to `/bots/$botId/chat` (`chat-pane.tsx:317-321`), and `BotSidebar` registers its own ⌘1–9. When `view` is `inbox`, the Inbox stays on Bot routes and owns ⌘1–9 there. Bot Mark read writes the Bot preferences.
 - *Accessibility.* Each row's `aria-description` (the pattern at `chat-sidebar.tsx:1248`) carries the request text, and the tooltip also opens on keyboard focus. Each section is a `role="group"` with its label. The shelf sits inside the one `useRovingRows` container (`roving-rows.ts:90-120`), so arrow keys move between sections and the shelf. Status colours meet text contrast on both themes.
 - *Clock.* Durations use `max(0, now - since)`. Remote clock skew waits for Phase 2.
