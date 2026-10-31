@@ -534,16 +534,59 @@ test("a workspace keeps only a literal scratch mark across saves and reloads", a
   assert.equal((await h.store.getWorkspace("scratch"))?.scratch, true);
 });
 
+test("workspace skill and connector off-lists survive restarts, and a damaged list never loses the workspace", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "client", name: "Client", disabledSkills: ["Deploy"], disabledMcpServerIds: ["gmail"] });
+  await h.store.saveWorkspace({ ...base, id: "damaged", name: "Damaged" });
+  const local = await readJson<{ workspaces: Array<Record<string, unknown>> }>(h.localFile);
+  for (const entry of local.workspaces) {
+    if (entry.id === "damaged") Object.assign(entry, { disabledSkills: "deploy", disabledMcpServerIds: [7, "notion"] });
+  }
+  await fs.writeFile(h.localFile, JSON.stringify(local), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const client = await next.getWorkspace("client");
+  assert.deepEqual(client?.disabledSkills, ["deploy"]);
+  assert.deepEqual(client?.disabledMcpServerIds, ["gmail"]);
+  const damaged = await next.getWorkspace("damaged");
+  assert.equal(damaged?.name, "Damaged");
+  assert.equal("disabledSkills" in (damaged ?? {}), false);
+  assert.deepEqual(damaged?.disabledMcpServerIds, ["notion"]);
+
+  // Turning everything back on removes the stored list.
+  await next.saveWorkspace({ ...client!, disabledSkills: undefined });
+  assert.equal("disabledSkills" in ((await next.getWorkspace("client")) ?? {}), false);
+});
+
 test("a workspace keeps only a literal No workspace mark across saves and reloads", async (t) => {
   const h = await harness(t);
   const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
-  await h.store.saveWorkspace({ ...base, id: "chat", name: "No workspace", folderPath: "/x/chats/kind-fern-hike", noWorkspace: true });
+  // No workspace chats use the global skills and connectors, so an off-list is never kept for them.
+  await h.store.saveWorkspace({
+    ...base,
+    id: "chat",
+    name: "No workspace",
+    folderPath: "/x/chats/kind-fern-hike",
+    noWorkspace: true,
+    disabledSkills: ["deploy"],
+    disabledMcpServerIds: ["gmail"],
+  });
   await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", noWorkspace: 1 as unknown as true });
   const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
   assert.equal(listed.get("chat")?.noWorkspace, true);
   assert.equal("noWorkspace" in (listed.get("odd") ?? {}), false);
   await h.store.saveWorkspace({ ...listed.get("chat")!, permission: "full" });
-  assert.equal((await h.store.getWorkspace("chat"))?.noWorkspace, true);
+  const chat = await h.store.getWorkspace("chat");
+  assert.equal(chat?.noWorkspace, true);
+  assert.equal("disabledSkills" in (chat ?? {}), false);
+  assert.equal("disabledMcpServerIds" in (chat ?? {}), false);
 });
 
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {

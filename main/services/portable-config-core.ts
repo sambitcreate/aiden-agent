@@ -46,6 +46,7 @@ import type {
 import { MAX_CONFIG_ID_LENGTH, MAX_PROVIDER_BASE_URL_LENGTH } from "./types.js";
 import { decodeUtf8, readRegularFile } from "./regular-file-read.js";
 import { isConfiguredSkill, isConfiguredSkillList } from "./skill-config-limits.js";
+import { workspaceCapabilityFields } from "./workspace-capabilities.js";
 import {
   normalizeHiddenModelsByProvider,
   withProviderPolicyHidden,
@@ -861,10 +862,18 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   return runtime;
 }
 
+/** A malformed off-list is cleaned, never a reason to drop the workspace. */
+function withCleanCapabilityLists(workspace: Workspace): Workspace {
+  const { disabledSkills, disabledMcpServerIds, ...rest } = workspace;
+  return { ...rest, ...workspaceCapabilityFields({ disabledSkills, disabledMcpServerIds }) };
+}
+
 function normalizeLocalConfigShape(value: unknown): LocalConfigShape {
   const root = isRecord(value) ? structuredClone(value) : {};
   const { workspaces, seeded, aidenDirMigratedAt, webSearchProfileKind, ...rest } = root;
-  const validWorkspaces = Array.isArray(workspaces) ? workspaces.filter(isWorkspace) : [];
+  const validWorkspaces = Array.isArray(workspaces)
+    ? workspaces.filter(isWorkspace).map(withCleanCapabilityLists)
+    : [];
   const workspaceIdCounts = new Map<string, number>();
   for (const workspace of validWorkspaces) {
     workspaceIdCounts.set(workspace.id, (workspaceIdCounts.get(workspace.id) ?? 0) + 1);

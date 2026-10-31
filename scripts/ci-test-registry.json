@@ -1057,6 +1057,7 @@
         "renderer/lib/wav-audio.test.ts",
         "renderer/lib/workspace-file-open-error.test.ts",
         "renderer/lib/workspace-path-display.test.ts",
+        "renderer/lib/workspace-settings-view.test.ts",
         "renderer/main/bots-view.test.tsx",
         "renderer/main/bots/bot-character-card.test.tsx",
         "renderer/lib/bot-notifications-sync.test.ts",
