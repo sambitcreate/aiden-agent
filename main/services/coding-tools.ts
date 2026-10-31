@@ -2081,11 +2081,14 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         result.leftoverOutput.stdout.resume();
         result.leftoverOutput.stderr.resume();
       }
+      // Leftovers no job took (refused, unconfirmed, or a failed look) still run: say how to stop them.
       const untracked =
-        !handoff && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
-          ? untrackedLeftoversNote(result.leftoverProcessGroup)
+        !handoff?.adopted && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
+          ? handoff
+            ? `[To stop them: kill -- -${result.leftoverProcessGroup}]`
+            : untrackedLeftoversNote(result.leftoverProcessGroup)
           : undefined;
-      const combined = [result.stdout, result.stderr, handoff?.note ?? untracked].filter(Boolean).join("\n").trim();
+      const combined = [result.stdout, result.stderr, handoff?.note, untracked].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }

@@ -245,7 +245,7 @@ export function runCommandLeftovers(input: { chatId: string; workspaceId: string
           } catch (error) {
             if (!(error instanceof BackgroundJobLimitError)) throw error;
             return {
-              note: `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself, for example with kill.]`,
+              note: `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself if they should not keep running.]`,
               adopted: false,
             };
           }

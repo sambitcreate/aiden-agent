@@ -3235,6 +3235,13 @@ test("run_command keeps a refused handoff's output flowing and still shows the r
     const result = await runCommand.execute("refused", { command: "node server.cjs &" });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     assert.match(text, /not tracked: the chat has too many jobs/u);
+    // The refusal is followed by how to stop them, naming the command's own group.
+    const group = groups[groups.length - 1]!;
+    const stop = text.match(/kill -- -(\d+)/u);
+    assert.equal(Number(stop?.[1]), group);
+    assert.ok((await runningGroupMembers(group)).length > 0, "the server still runs");
+    process.kill(-group, "SIGTERM");
+    assert.deepEqual(await untilGroupStopsRunning(group), [], "the kill it names stops the server");
     assert.ok(handed, "the server kept the command's output open");
     assert.equal(handed.stdout.isPaused(), false, "nobody reads it, so it is drained rather than left to fill");
     assert.equal(handed.stderr.isPaused(), false);
