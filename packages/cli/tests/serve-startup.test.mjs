@@ -231,3 +231,51 @@ test("serve status reports Remote as unknown instead of waiting on a daemon that
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** A control socket that answers like a running server and records what it was asked. */
+async function fakeDaemon(answer) {
+  const { createServer } = await import("node:net");
+  const dir = mkdtempSync(join(tmpdir(), "aiden-serve-fake-"));
+  const asked = [];
+  const server = createServer((socket) => {
+    socket.setEncoding("utf8");
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (!buffer.includes("\n")) return;
+      const { command, args } = JSON.parse(buffer);
+      asked.push([command, ...args].join(" "));
+      socket.end(JSON.stringify({ result: answer(command, args) }) + "\n");
+    });
+  });
+  server.listen(join(dir, "serve.sock"));
+  await once(server, "listening");
+  return { dir, asked, close: () => { server.close(); rmSync(dir, { recursive: true, force: true }); } };
+}
+
+function sink() {
+  const stream = { text: "", write(chunk) { stream.text += chunk; return true; } };
+  return stream;
+}
+
+test("startup pairing on a Tailscale-only server pairs over Tailscale and reports a failed window", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+  const daemon = await fakeDaemon((command, args) => {
+    if (command === "serve") return { remote: { on: true, connectionMode: "tailscale" } };
+    if (args[0] === "pair") return pairing;
+    return { sessionId: "pairing_test", state: "failed" };
+  });
+  const out = sink(), err = sink();
+  try {
+    const started = Date.now();
+    await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
+    assert.deepEqual(daemon.asked, ["serve status", "remote pair tailscale", "remote pair-status"]);
+    assert.match(out.text, /Manual code: ABCD-1234/);
+    assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
+    assert.doesNotMatch(out.text, /expired/);
+    assert.ok(Date.now() - started < 10_000, "a failed window ends the wait instead of running out the clock");
+  } finally {
+    daemon.close();
+  }
+});

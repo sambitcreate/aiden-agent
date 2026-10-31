@@ -49,7 +49,7 @@ aiden serve
 
 `aiden serve` starts the server in the foreground: the scheduler, configured Telegram polling, Bots and Remote, the authenticated HTTPS/SSE API that phones and Macs use (port 49320 by default). Remote is on by default; `aiden serve --no-remote` runs without it (`--remote` is still accepted).
 
-When `aiden serve` runs in the foreground in an interactive terminal, it prints a pairing QR code and manual code at startup, so you can scan it from the phone app right away. It pairs over the local network by default; `--pair tailscale` pairs over Tailscale instead, and `--no-pair` skips the code. No code is printed under `--daemon` or when output is not a terminal (a log, a pipe, a service manager), because the code is a single-use secret.
+When `aiden serve` runs in the foreground in an interactive terminal, it prints a pairing QR code and manual code at startup, so you can scan it from the phone app right away. It pairs over the local network by default (over Tailscale when the server is set to Tailscale only, `remote mode tailscale`); `--pair tailscale` pairs over Tailscale instead, and `--no-pair` skips the code. No code is printed under `--daemon` or when output is not a terminal (a log, a pipe, a service manager), because the code is a single-use secret.
 
 | Command | What it does |
 | --- | --- |
