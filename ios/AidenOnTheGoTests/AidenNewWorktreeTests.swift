@@ -131,6 +131,13 @@ final class AidenNewWorktreeTests: XCTestCase {
         XCTAssertEqual(AidenChatNewWorktree.branchSeed(from: fits), fits)
     }
 
+    /// A first message of attachments only still makes a worktree: the Mac
+    /// refuses a blank name, so the phone names it the way the desktop does.
+    func testAFirstMessageWithNoWordsNamesTheBranchNewChat() {
+        XCTAssertEqual(AidenChatNewWorktree.branchSeed(from: ""), "New chat")
+        XCTAssertEqual(AidenChatNewWorktree.branchSeed(from: "  \n "), "New chat")
+    }
+
     /// The Mac keeps every answer under its key, refusals included, so only a
     /// request that got no answer may be retried with the same key.
     func testOnlyARequestTheMacNeverAnsweredKeepsItsKey() throws {

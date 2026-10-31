@@ -42,13 +42,17 @@ data class AidenChatNewWorktree(val chat: AidenChat, val branch: String) {
         const val MAX_TEXT_LENGTH = 4_000
         const val MAX_BRANCH_LENGTH = 200
 
+        /** A first message with no words (attachments only) names the branch `aiden/new-chat`, as on the desktop. */
+        const val UNTITLED_SEED = "New chat"
+
         /**
          * What the Mac names the branch from: the message without its outer whitespace, cut to
-         * [MAX_TEXT_LENGTH] code points (the Mac counts code points). Only its first words make
-         * the name.
+         * [MAX_TEXT_LENGTH] code points (the Mac counts code points), or [UNTITLED_SEED] when it
+         * has no words. Only its first words make the name.
          */
         fun branchSeed(text: String): String {
             val trimmed = text.trim()
+            if (trimmed.isEmpty()) return UNTITLED_SEED
             if (trimmed.codePointCount(0, trimmed.length) <= MAX_TEXT_LENGTH) return trimmed
             return trimmed.substring(0, trimmed.offsetByCodePoints(0, MAX_TEXT_LENGTH))
         }

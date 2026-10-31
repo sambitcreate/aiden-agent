@@ -1123,10 +1123,6 @@ final class AidenRemoteClientTests: XCTestCase {
         await assertInvalidResponse { try await move() }
         await assertInvalidResponse { try await move() }
         XCTAssertEqual(requests, 4)
-        await assertInvalidResponse {
-            try await client.moveChatToNewWorktree(id: "chat_fixture_new_worktree", revision: "r", text: "  \n ")
-        }
-        XCTAssertEqual(requests, 4, "a blank message never reaches the Mac")
     }
 
     func testBotDetailRoutesCarryMutationHeadersAndAcceptOnlyCanonicalStatuses() async throws {

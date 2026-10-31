@@ -966,7 +966,6 @@ class AidenRemoteClient(
         AidenBotWire.validateIdentifier(id, "chatId", AidenRemoteProtocol.MAX_IDENTIFIER_LENGTH)
         // A long message sends only its first 4,000 characters for the name.
         val seed = AidenChatNewWorktree.branchSeed(text)
-        if (seed.isEmpty()) throw AidenRemoteClientException.InvalidResponse()
         return executeRequest(
             "/chats/$id/worktree",
             method = "POST",

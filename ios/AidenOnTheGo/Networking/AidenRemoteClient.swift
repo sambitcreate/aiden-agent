@@ -685,11 +685,17 @@ struct AidenChatNewWorktree: Decodable, Equatable, Sendable {
         self.branch = branch
     }
 
+    /// A first message with no words (attachments only) names the branch
+    /// `aiden/new-chat`, as on the desktop.
+    static let untitledSeed = "New chat"
+
     /// What the Mac names the branch from: the message without its outer
     /// whitespace, cut to the server's limit in Unicode scalars (the Mac
-    /// counts code points). Only its first words make the name.
+    /// counts code points), or `untitledSeed` when it has no words. Only its
+    /// first words make the name.
     static func branchSeed(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return untitledSeed }
         guard trimmed.unicodeScalars.count > maxTextLength else { return trimmed }
         var scalars = String.UnicodeScalarView()
         scalars.append(contentsOf: trimmed.unicodeScalars.prefix(maxTextLength))
@@ -1820,7 +1826,6 @@ final class AidenRemoteClient: @unchecked Sendable {
         idempotencyKey: UUID = UUID()
     ) async throws -> AidenChatNewWorktree {
         let seed = AidenChatNewWorktree.branchSeed(from: text)
-        guard !seed.isEmpty else { throw AidenRemoteClientError.invalidResponse }
         let moved: AidenChatNewWorktree = try await send(
             method: "POST",
             path: ["chats", id, "worktree"],

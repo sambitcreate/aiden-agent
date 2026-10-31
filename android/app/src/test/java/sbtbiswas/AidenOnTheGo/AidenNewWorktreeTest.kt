@@ -202,11 +202,12 @@ class AidenNewWorktreeTest {
                 runBlocking { client.moveChatToNewWorktree("chat_fixture_new_worktree", "chat_revision_new_worktree_1", "Fix the login bug") }
             }
         }
-        val sent = server.requestCount
-        assertThrows(AidenRemoteClientException.InvalidResponse::class.java) {
-            runBlocking { client.moveChatToNewWorktree("chat_fixture_new_worktree", "r", "  \n ") }
-        }
-        assertEquals("a blank message never reaches the Mac", sent, server.requestCount)
+        // A first message of attachments only still makes a worktree: the Mac refuses a blank
+        // name, so the phone names it the way the desktop does.
+        server.enqueue(reply(200, moved))
+        client.moveChatToNewWorktree("chat_fixture_new_worktree", "r", "  \n ")
+        val untitled = generateSequence { server.takeRequest(100, TimeUnit.MILLISECONDS) }.last()
+        assertEquals("New chat", Json.parseToJsonElement(untitled.body.readUtf8()).jsonObject.getValue("text").jsonPrimitive.content)
     }
 
     @Test
