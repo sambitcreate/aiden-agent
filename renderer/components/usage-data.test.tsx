@@ -2,9 +2,12 @@ import "../main/bots/test-dom";
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { analyticsRegistryView } from "../../main/handlers/analytics";
 import { installBotTestIpc } from "../main/bots/test-dom";
 import type { AnalyticsStatusView } from "../shared/analytics";
+import type { OnboardingSnapshot } from "../shared/onboarding";
+import { OnboardingFlow } from "./onboarding-flow";
 import { Toaster } from "./ui";
 import { UsageDataNotice, UsageDataOnboardingRow, UsageDataSettings } from "./usage-data";
 
@@ -145,4 +148,61 @@ test("the notice stays hidden when main has nothing pending", async () => {
   render(<UsageDataNotice />);
   await flush();
   assert.equal(screen.queryByRole("region"), null);
+});
+
+function onboardingSnapshot(outcome: OnboardingSnapshot["outcome"]): OnboardingSnapshot {
+  return { version: 2, outcome, lastSatisfiedStep: outcome === "incomplete" ? "none" : "tour", profileReady: true, providerReady: true };
+}
+
+function renderOnboarding(outcome: OnboardingSnapshot["outcome"]) {
+  const calls = installBotTestIpc({
+    "app:getOnboardingState": () => onboardingSnapshot(outcome),
+    "app:setOnboardingOutcome": () => onboardingSnapshot("incomplete"),
+    "profile:get": () => ({ name: "Ada" }),
+    "analytics:status": () => status({ noticePending: true }),
+    "analytics:markNoticeShown": () => status(),
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  render(
+    <QueryClientProvider client={client}>
+      <OnboardingFlow />
+    </QueryClientProvider>,
+  );
+  return calls;
+}
+
+const NOTICE = { name: "Aiden now shares anonymous usage data" } as const;
+
+for (const outcome of ["completed", "deferred"] as const) {
+  test(`an install that already ${outcome === "completed" ? "finished" : "deferred"} onboarding gets the one-time notice on launch`, async () => {
+    const calls = renderOnboarding(outcome);
+    await flush();
+    await flush();
+
+    const notice = screen.getByRole("region", NOTICE);
+    fireEvent.click(within(notice).getByRole("button", { name: "OK" }));
+    await flush();
+
+    assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), [["ok"]]);
+    assert.equal(screen.queryByRole("region", NOTICE), null);
+  });
+}
+
+test("a new install sees onboarding instead of the notice, and reopening onboarding hides it", async () => {
+  renderOnboarding("incomplete");
+  await flush();
+  await flush();
+  assert.equal(screen.queryByRole("region", NOTICE), null);
+  cleanup();
+
+  renderOnboarding("completed");
+  await flush();
+  await flush();
+  assert.ok(screen.getByRole("region", NOTICE));
+  await act(async () => {
+    window.dispatchEvent(new Event("aiden:show-onboarding"));
+  });
+  await flush();
+  await flush();
+  assert.equal(screen.queryByRole("region", NOTICE), null);
 });

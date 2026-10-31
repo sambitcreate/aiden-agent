@@ -204,8 +204,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
       core.track("app_opened", { launch_kind: launchKind });
     }
     if (pendingUpdate) {
-      core.track("app_updated", pendingUpdate);
+      const update = pendingUpdate;
       pendingUpdate = undefined;
+      if (core.track("app_updated", update)) {
+        await options.store.update((current) => ({ ...current, lastVersion: update.to_version }));
+      }
     }
     await checkActiveDay();
     if (started !== generation) return;
@@ -260,9 +263,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
   async function turnOff(): Promise<AnalyticsState> {
     await sendDisabledEvent();
     await stop();
+    // Nothing is owed after turning off: an update not yet reported is dropped.
+    pendingUpdate = undefined;
     const state = await options.store.update((current) => {
       const { lastActiveDay: _lastActiveDay, ...rest } = disableAnalytics(current);
-      return rest;
+      return { ...rest, lastVersion: options.superProperties.app_version };
     });
     try {
       deletePendingCrash(options.runDirectory);
@@ -295,7 +300,11 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
         const updated = state.lastVersion !== undefined && state.lastVersion !== version;
         launchKind = previousRunUnclean ? "after_crash" : updated ? "after_update" : "cold";
         if (updated) pendingUpdate = { from_version: state.lastVersion!, to_version: version };
-        if (state.lastVersion !== version) {
+        // While only the notice holds sending back, keep the old version so an
+        // update the person quits before answering is still reported next launch.
+        const sendStatus = analyticsSendStatus(state, { env: options.env, hasKey });
+        const waitingForNotice = !sendStatus.canSend && sendStatus.reason === "notice_pending";
+        if (state.lastVersion !== version && !(updated && waitingForNotice)) {
           await options.store.update((current) => ({ ...current, lastVersion: version }));
         }
         await activateIfAllowed();

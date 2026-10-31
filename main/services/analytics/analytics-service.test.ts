@@ -183,6 +183,41 @@ test("a launch after an unclean exit or an update is labelled, and the update is
   assert.deepEqual(relaunch.queued.map((message) => [message.event, message.properties.launch_kind]), [["app_opened", "cold"]]);
 });
 
+test("an update the person quits on before answering the notice is still reported, and turning off forgets it", async (t) => {
+  const upgrading = { enabled: true, lastVersion: "1.39.2" } as const;
+  const first = harness({ initial: { ...upgrading } });
+  t.after(first.cleanup);
+  await first.service.start();
+  first.service.markCleanExit();
+  assert.equal(first.transports.length, 0);
+
+  // Next launch of the same build, on the same stored state.
+  const second = harness({ initial: first.stored() });
+  t.after(second.cleanup);
+  await second.service.start();
+  await second.service.markNoticeShown();
+  const byName = new Map(second.events().map((message) => [message.event, message.properties]));
+  assert.equal(byName.get("app_opened")!.launch_kind, "after_update");
+  assert.deepEqual(
+    [byName.get("app_updated")!.from_version, byName.get("app_updated")!.to_version],
+    ["1.39.2", "1.40.0"],
+  );
+  assert.equal(second.stored().lastVersion, "1.40.0");
+
+  // Answering the notice with Turn off leaves no update owed to a later opt-in.
+  const declined = harness({ initial: { ...upgrading } });
+  t.after(declined.cleanup);
+  await declined.service.start();
+  await declined.service.markNoticeShown({ enabled: false });
+  declined.service.markCleanExit();
+  const later = harness({ initial: declined.stored() });
+  t.after(later.cleanup);
+  await later.service.start();
+  await later.service.setEnabled(true);
+  assert.deepEqual(later.names(), ["app_opened", "app_active"]);
+  assert.equal(later.events()[0]!.properties.launch_kind, "cold");
+});
+
 test("app_active goes out once per local calendar day, across hourly checks and restarts", async (t) => {
   const h = harness({ initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" } });
   t.after(h.cleanup);
