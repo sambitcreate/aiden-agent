@@ -14862,26 +14862,39 @@ final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
         }
         .environment(AidenHapticCenter())
         let host = UIHostingController(rootView: view)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 2000))
+        // Host in the app's scene. A window that belongs to no scene can take a
+        // layout pass whose thumbnail loads never reach the screen, leaving the
+        // spinners in place however long the test waits.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 2000)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+
+        // The snapshot and the deck cards decode asynchronously, each behind a
+        // spinner. Measure once every spinner has given way to its image, so a
+        // slow load is never mistaken for a squeezed snapshot.
+        func isLoading(_ view: UIView) -> Bool {
+            view is UIActivityIndicatorView || view.subviews.contains(where: isLoading)
+        }
+        window.layoutIfNeeded()
+        XCTAssertTrue(isLoading(window), "the first pass shows the attachments loading")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while isLoading(window), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(isLoading(window), "the snapshot and the image deck never finished loading")
 
         // The snapshot draws edge to edge at its own 4:3 shape.
         let expectedHeight = Int(((width - 32) * 3 / 4).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        var rows = 0
-        for attempt in 0..<20 {
-            try await Task.sleep(for: .milliseconds(attempt == 0 ? 1500 : 200))
-            window.layoutIfNeeded()
-            let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
-                window.layer.render(in: context.cgContext)
-            }
-            rows = snapshotRowCount(in: rendered)
-            if abs(rows - expectedHeight) <= 3 { break }
+        window.layoutIfNeeded()
+        let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+            window.layer.render(in: context.cgContext)
         }
-        XCTAssertEqual(rows, expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
+        XCTAssertEqual(snapshotRowCount(in: rendered), expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
     }
 }
 
