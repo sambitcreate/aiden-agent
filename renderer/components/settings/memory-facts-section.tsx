@@ -14,6 +14,7 @@ import {
   toast,
 } from "../ui";
 import { workspacesApi } from "../../lib/ipc";
+import { noWorkspaceHome, workspaceChoices } from "../../lib/no-workspace";
 import { queryKeys } from "../../lib/queries";
 import type { Workspace } from "../../lib/types";
 import type { WorkspaceMemoryFactView } from "../../../main/services/workspace-memory-facts";
@@ -32,7 +33,12 @@ function factDetails(fact: WorkspaceMemoryFactView): string {
 }
 
 /** What Aiden remembers in one workspace, with a permanent delete per fact. */
-export function MemoryFactsSection({ workspaces }: { workspaces: Workspace[] }) {
+export function MemoryFactsSection({ workspaces: registry }: { workspaces: Workspace[] }) {
+  // No workspace chats share one memory, listed once under their home record.
+  const workspaces = React.useMemo(() => {
+    const home = noWorkspaceHome(registry);
+    return [...(home ? [{ ...home, name: "No workspace chats" }] : []), ...workspaceChoices(registry)];
+  }, [registry]);
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = React.useState<string>();
   const workspaceId =

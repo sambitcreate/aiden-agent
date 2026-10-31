@@ -11,6 +11,7 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
+  MessageCircle,
   Pencil,
   SquareTerminal,
   Users,
@@ -197,7 +198,7 @@ export function WorkspaceChip({
     menuOpen && isRepo && git?.hasRemote === true,
   );
   const githubUrl = identity.data ? githubRepositoryUrl(identity.data.canonicalKey) : null;
-  const Icon = isRepo ? FolderGit2 : Folder;
+  const Icon = isRepo ? FolderGit2 : workspace.noWorkspace ? MessageCircle : Folder;
 
   if (!folderPath) {
     return (

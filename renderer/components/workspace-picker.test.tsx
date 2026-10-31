@@ -20,6 +20,7 @@ let calls: BotTestIpcCall[];
 let handlers: Record<string, (...args: unknown[]) => unknown>;
 let selected: string[];
 let scratchCreated: number;
+let noWorkspaceChosen: number;
 /** When set, moving the draft waits for this before it finishes. */
 let selectGate: Promise<void> | null;
 
@@ -43,6 +44,7 @@ beforeEach(() => {
   localStorage.clear();
   selected = [];
   scratchCreated = 0;
+  noWorkspaceChosen = 0;
   selectGate = null;
   handlers = {
     "chats:list": () => [],
@@ -92,6 +94,9 @@ function Harness({
             }}
             onCreateScratchWorkspace={async () => {
               scratchCreated += 1;
+            }}
+            onChooseNoWorkspace={async () => {
+              noWorkspaceChosen += 1;
             }}
             onOpenFolder={async () => undefined}
             openRequest={request}
@@ -173,6 +178,7 @@ test("the trigger opens a menu with the five most recent workspaces and the acti
   assert.ok(names[6]?.startsWith("Open folder…"));
   assert.equal(names[7], "Clone repository…");
   assert.ok(names[8]?.startsWith("Scratch chat"));
+  assert.ok(names[9]?.startsWith("No workspace"));
   assert.equal(names.some((name) => /Don.t work in a workspace/u.test(name)), false);
   assert.equal(screen.queryAllByLabelText("Current workspace").length, 1);
   assert.equal(document.activeElement === search(), true, "the search field is focused on open");
@@ -180,7 +186,7 @@ test("the trigger opens a menu with the five most recent workspaces and the acti
   await act(async () => {
     fireEvent.click(screen.getByRole("option", { name: "All workspaces (7)" }));
   });
-  assert.equal(optionNames().filter((name) => !/^(Open folder|Clone|Scratch)/u.test(name)).length, 7);
+  assert.equal(optionNames().filter((name) => !/^(Open folder|Clone|Scratch|No workspace)/u.test(name)).length, 7);
 });
 
 test("typing searches all workspaces, past the recent five", async () => {
@@ -198,6 +204,40 @@ test("Scratch chat keeps today's scratch-folder behaviour", async () => {
   await wait();
   assert.equal(scratchCreated, 1);
   assert.equal(screen.queryByRole("dialog") === null, true, "the menu closes");
+});
+
+const HIDDEN = workspace("hidden", "No workspace", 2_000, {
+  folderPath: "/Users/me/Library/Application Support/Aiden Agent/chat-folders/kind-fern-hike",
+  noWorkspace: true,
+});
+
+test("No workspace is one choice: hidden chat folders are never listed, and choosing it moves the draft", async () => {
+  await openMenu([...MANY, HIDDEN], "api");
+  const names = optionNames();
+  assert.equal(names.filter((name) => name.startsWith("No workspace")).length, 1);
+  assert.equal(names.some((name) => name.includes("kind-fern-hike")), false);
+  await type(search(), "fern");
+  assert.equal(optionNames().some((name) => name.includes("kind-fern-hike")), false, "search skips them too");
+  await type(search(), "");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("option", { name: /^No workspace/u }));
+  });
+  await wait();
+  assert.equal(noWorkspaceChosen, 1);
+  assert.equal(screen.queryByRole("dialog") === null, true, "the menu closes");
+});
+
+test("a draft that already has no workspace shows that row as current, and choosing it changes nothing", async () => {
+  await openMenu([...MANY, HIDDEN], "hidden");
+  const row = screen.getByRole("option", { name: /^No workspace/u });
+  assert.equal(row.querySelector("[aria-label='Current workspace']") !== null, true);
+  await act(async () => {
+    fireEvent.click(row);
+  });
+  await wait();
+  assert.equal(noWorkspaceChosen, 0);
+  assert.deepEqual(selected, []);
+  assert.equal(screen.queryByRole("dialog") === null, true);
 });
 
 test("a typed path offers Open for a folder and moves the draft to the registered workspace", async () => {
@@ -434,6 +474,10 @@ test("the headline names the workspace as a menu button, and a scratch chat asks
   rerender(<NewChatHeadline workspace={scratch} workspaces={[scratch]} onChooseWorkspace={() => undefined} />);
   assert.ok(screen.queryByText("What’s on your mind?") !== null);
   assert.equal(screen.queryByRole("button") === null, true);
+
+  // A No workspace chat has no project to name either.
+  rerender(<NewChatHeadline workspace={HIDDEN} workspaces={[HIDDEN]} onChooseWorkspace={() => undefined} />);
+  assert.ok(screen.queryByText("What’s on your mind?") !== null);
 });
 
 test("a blocked picker stays closed, even when asked to open, and describes why on its trigger", async () => {
