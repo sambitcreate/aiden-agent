@@ -692,6 +692,12 @@ test("manifest collections and root skills use bounded plugin containment and pr
     assert.equal(declared.filter((skill) => skill.name === "tools:custom").length, 1);
     assert.ok(!declared.some((skill) => skill.name === "tools:escaped"));
   }
+  // A manifest that names one SKILL.md gets that skill, not every skill nested beside it.
+  await writeSkill(path.join(root, "extra"), "stray", "Undeclared nested body.");
+  await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ skills: "./extra/SKILL.md" }));
+  const single = await discoverSkillCandidates(undefined, home);
+  assert.equal(single.filter((skill) => skill.name === "tools:custom").length, 1);
+  assert.ok(!single.some((skill) => skill.name === "tools:stray"), "a declared SKILL.md does not import its folder's nested skills");
 });
 
 test("malformed plugin metadata and nonboolean enablement fail closed without hiding ordinary skills", async (t) => {

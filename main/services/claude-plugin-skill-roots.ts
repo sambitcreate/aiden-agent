@@ -89,7 +89,9 @@ export async function claudePluginSkillRoots(home: string, workspaceRoot?: strin
       const relative = path.relative(root, path.resolve(root, candidate));
       if (relative === ".." || relative.startsWith(`..${path.sep}`)) continue;
       // A manifest may name a skill directory, a collection, or SKILL.md itself.
-      searches.push({ base: candidate.endsWith("SKILL.md") ? path.dirname(relative) : relative, maxDepth: 12 });
+      // A named SKILL.md is that one file: depth 0 reads it without walking its folder.
+      const file = candidate.endsWith("SKILL.md");
+      searches.push({ base: file ? path.dirname(relative) : relative, maxDepth: file ? 0 : 12 });
     }
     searches.push({ base: "", maxDepth: 0 });
     roots.push({ root, namespace, scope: setting.workspace || install.scope === "project" || install.scope === "local" ? "workspace" : "global", searches });
