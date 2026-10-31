@@ -309,6 +309,7 @@ export interface OfflineRouteRelease {
 
 const ROUTE_REMOVED = "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
 const ROUTE_BY_HAND = "Remove it by hand with `tailscale serve --https=443 --set-path=/api/aiden/v1 off`.";
+const UNFINISHED_CHANGE = `Aiden's Tailscale route may have an unfinished change, so it was left alone. ${ROUTE_BY_HAND}`;
 
 /**
  * Before the service goes away, take Aiden's Tailscale Serve route down with
@@ -322,6 +323,7 @@ export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRo
   const status = await remoteServerStatus(agentDir);
   // A server that does not answer is handled like a stopped one: the controller takes the same route lock.
   if (status && !status.remoteOff && !status.unanswered) {
+    if (status.tailscaleRouteState === "reconciliation_required") return UNFINISHED_CHANGE;
     if (!status.tailscaleConnected) return undefined;
     const { remoteDaemonCommand } = await import("./daemon-control.ts");
     try {
@@ -334,9 +336,10 @@ export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRo
   const { JsonStore } = await import("./state.ts");
   const store = new JsonStore<{ tailscaleOwnership?: AidenTailscaleOwnership; tailscalePendingOutcome?: unknown }>(join(agentDir, "remote.json"), {});
   const saved = await store.load().catch(() => undefined);
+  // A first connect or takeover that did not report back leaves a pending outcome before any saved ownership.
+  if (saved?.tailscalePendingOutcome) return UNFINISHED_CHANGE;
   const ownership = saved?.tailscaleOwnership;
   if (!ownership?.target) return undefined;
-  if (saved?.tailscalePendingOutcome) return `Aiden's Tailscale route has an unfinished change, so it was left alone. ${ROUTE_BY_HAND}`;
   try {
     const { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
     const runner = offline.runner === undefined ? await createSystemTailscaleCommandRunner() : offline.runner;

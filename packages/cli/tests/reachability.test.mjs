@@ -355,6 +355,13 @@ test("uninstall takes down Aiden's Tailscale route only when it is connected", a
   } finally {
     daemon.close();
   }
+  const unfinished = await fakeDaemon((command, args) => args[0] === "status" ? { tailscaleConnected: false, tailscaleRouteState: "reconciliation_required" } : new Error("unexpected"));
+  try {
+    assert.match(await api.releaseTailscaleRoute(unfinished.dir), /unfinished change.*tailscale serve --https=443/);
+    assert.deepEqual(unfinished.asked, ["remote status"]);
+  } finally {
+    unfinished.close();
+  }
   assert.equal(await api.releaseTailscaleRoute(mkdtempSync(join(tmpdir(), "aiden-reach-none-"))), undefined, "no running server, nothing to remove");
 });
 
@@ -437,6 +444,12 @@ test("uninstall removes the route a stopped server saved as its own, through Tai
 
   saveOwnership({ tailscalePendingOutcome: { operation: "connect" } });
   assert.match(await api.releaseTailscaleRoute(agentDir, offline), /unfinished change.*tailscale serve --https=443/);
+
+  // A first connect that never reported back has a pending outcome but no saved ownership yet; it is still named.
+  writeFileSync(join(agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: "both", tailscalePendingOutcome: { operation: "connect", target } }));
+  calls.length = 0;
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /unfinished change.*tailscale serve --https=443/);
+  assert.deepEqual(calls, [], "an unfinished change is never touched");
 });
 
 test("aiden remote check exits non-zero when a step fails", (t) => {

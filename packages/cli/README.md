@@ -95,7 +95,7 @@ The service runs the built `dist/app/cli.js` of this checkout with the current N
 | --- | --- |
 | `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service |
 | `aiden service status` | Whether the service is installed and running, and where its logs are |
-| `aiden service uninstall` | Stop the service and remove it, then take down Aiden's Tailscale Serve route (through Tailscale directly once the server has stopped; a route that is no longer Aiden's is left alone with the command to remove it by hand). If the service can't be stopped, the route is left in place so the still-running server stays reachable |
+| `aiden service uninstall` | Stop the service and remove it, then take down Aiden's Tailscale Serve route (through Tailscale directly once the server has stopped; a route that is no longer Aiden's, or one with an unfinished change, is left alone with the command to remove it by hand). If the service can't be stopped, the route is left in place so the still-running server stays reachable |
 | `aiden remote network local\|tailscale\|both` | Change who can reach a running server; Tailscale is set up for you |
 
 `aiden serve stop` stops the server without removing the service; it starts again at the next boot or login.
