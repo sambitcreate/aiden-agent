@@ -12,6 +12,8 @@ import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { RemoteNetwork } from "./remote.ts";
 import type { TailscaleFacts } from "./reachability.ts";
+import type { AidenTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
+import type { AidenTailscaleOwnership } from "../../../main/services/aiden-remote-tailscale-route.js";
 
 export const LAUNCHD_LABEL = "com.sambitcreate.aiden-agent.serve";
 export const SYSTEMD_UNIT = "aiden.service";
@@ -302,21 +304,54 @@ export async function chooseNetwork(host: ServiceHost, interactive: boolean, sou
   return tailscaleReady(facts) ? question.recommended : "local";
 }
 
+export interface OfflineRouteRelease {
+  runner?: AidenTailscaleCommandRunner | null;
+  withRouteLock?: <T>(action: () => Promise<T>) => Promise<T>;
+}
+
+const ROUTE_REMOVED = "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
+const ROUTE_BY_HAND = "Remove it by hand with `tailscale serve --https=443 --set-path=/api/aiden/v1 off`.";
+
 /**
  * Before the service goes away, take Aiden's Tailscale Serve route down with
  * it, so the tailnet name does not keep pointing at a server that no longer
- * runs. Returns the line to print, if any.
+ * runs. A running server removes its own route; for a stopped one, the route
+ * it saved as its own is removed through Tailscale directly. Returns the line
+ * to print, if any.
  */
-export async function releaseTailscaleRoute(agentDir: string): Promise<string | undefined> {
+export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRouteRelease = {}): Promise<string | undefined> {
   const { remoteServerStatus } = await import("./reachability.ts");
-  if (!(await remoteServerStatus(agentDir))?.tailscaleConnected) return undefined;
-  const { remoteDaemonCommand } = await import("./daemon-control.ts");
-  try {
-    await remoteDaemonCommand(agentDir, "remote", ["tailscale-disconnect"]);
-    return "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
-  } catch (error) {
-    return `Could not remove Aiden's Tailscale route (${error instanceof Error ? error.message : String(error)}). \`tailscale serve status\` shows it.`;
+  const status = await remoteServerStatus(agentDir);
+  if (status && !status.remoteOff) {
+    if (!status.tailscaleConnected) return undefined;
+    const { remoteDaemonCommand } = await import("./daemon-control.ts");
+    try {
+      await remoteDaemonCommand(agentDir, "remote", ["tailscale-disconnect"]);
+      return ROUTE_REMOVED;
+    } catch (error) {
+      return `Could not remove Aiden's Tailscale route (${error instanceof Error ? error.message : String(error)}). ${ROUTE_BY_HAND}`;
+    }
   }
+  const { JsonStore } = await import("./state.ts");
+  const store = new JsonStore<{ tailscaleOwnership?: AidenTailscaleOwnership; tailscalePendingOutcome?: unknown }>(join(agentDir, "remote.json"), {});
+  const saved = await store.load().catch(() => undefined);
+  const ownership = saved?.tailscaleOwnership;
+  if (!ownership?.target) return undefined;
+  if (saved?.tailscalePendingOutcome) return `Aiden's Tailscale route has an unfinished change, so it was left alone. ${ROUTE_BY_HAND}`;
+  try {
+    const { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
+    const runner = offline.runner === undefined ? await createSystemTailscaleCommandRunner() : offline.runner;
+    const controller = new AidenRemoteTailscaleController(runner, offline.withRouteLock ? { withRouteLock: offline.withRouteLock } : {});
+    await controller.disconnect(ownership.target, ownership, () => store.update((draft) => { delete draft.tailscaleOwnership; }));
+    return ROUTE_REMOVED;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `Could not remove Aiden's Tailscale route (${tailscaleReason(reason)}). ${ROUTE_BY_HAND}`;
+  }
+}
+
+function tailscaleReason(code: string): string {
+  return code === "tailscale_route_conflict" ? "the route there is no longer Aiden's" : code === "tailscale_not_installed" ? "Tailscale is not installed" : code;
 }
 
 /** The Tailscale network a server already uses, read from its saved Remote settings; a reinstall keeps it instead of falling back to local. */

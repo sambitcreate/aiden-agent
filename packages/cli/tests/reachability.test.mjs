@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const api = await import("../dist/parity-test-api.js");
@@ -300,4 +301,52 @@ test("uninstall takes down Aiden's Tailscale route only when it is connected", a
     daemon.close();
   }
   assert.equal(await api.releaseTailscaleRoute(mkdtempSync(join(tmpdir(), "aiden-reach-none-"))), undefined, "no running server, nothing to remove");
+});
+
+test("uninstall removes the route a stopped server saved as its own, through Tailscale directly", async (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "aiden-reach-stopped-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  const target = "http://127.0.0.1:43177/api/aiden/v1";
+  const ownership = { path: "/api/aiden/v1", target };
+  const saveOwnership = (extra = {}) => writeFileSync(join(agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: "both", tailscaleOwnership: ownership, ...extra }));
+  let routed = true;
+  const calls = [];
+  const runner = {
+    async run(args) {
+      calls.push(args.join(" "));
+      if (args[0] === "serve" && args[1] === "status") {
+        const handlers = { "/other": { Proxy: "http://127.0.0.1:9" }, ...(routed ? { "/api/aiden/v1": { Proxy: target } } : {}) };
+        return JSON.stringify({ TCP: { "443": { HTTPS: true } }, Web: { "box.tail1234.ts.net:443": { Handlers: handlers } } });
+      }
+      if (args.includes("off")) { routed = false; return ""; }
+      throw new Error(`unexpected tailscale ${args.join(" ")}`);
+    },
+  };
+  const offline = { runner, withRouteLock: (action) => action() };
+
+  saveOwnership();
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /Removed Aiden's Tailscale route/);
+  assert.ok(calls.includes("serve --https=443 --set-path=/api/aiden/v1 off"), calls.join("\n"));
+  assert.equal(routed, false);
+  assert.equal(JSON.parse(readFileSync(join(agentDir, "remote.json"), "utf8")).tailscaleOwnership, undefined, "the saved ownership is cleared with the route");
+  assert.equal(await api.releaseTailscaleRoute(agentDir, offline), undefined, "nothing saved, nothing to remove");
+
+  // Someone else's handler now sits on Aiden's path: it is left alone, with the command to remove it by hand.
+  saveOwnership();
+  routed = true;
+  const foreign = { async run(args) { if (args[1] === "status") return JSON.stringify({ Web: { "box.tail1234.ts.net:443": { Handlers: { "/api/aiden/v1": { Proxy: "http://127.0.0.1:5000" } } } } }); throw new Error(`unexpected tailscale ${args.join(" ")}`); } };
+  assert.match(await api.releaseTailscaleRoute(agentDir, { runner: foreign, withRouteLock: (action) => action() }), /no longer Aiden's.*tailscale serve --https=443 --set-path=\/api\/aiden\/v1 off/);
+
+  saveOwnership({ tailscalePendingOutcome: { operation: "connect" } });
+  assert.match(await api.releaseTailscaleRoute(agentDir, offline), /unfinished change.*tailscale serve --https=443/);
+});
+
+test("aiden remote check exits non-zero when a step fails", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiden-reach-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, "home"));
+  const cli = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "dist", "app", "cli.js");
+  const result = spawnSync(process.execPath, [cli, "remote", "check"], { encoding: "utf8", timeout: 60_000, env: { ...process.env, HOME: join(root, "home"), AIDEN_CODING_AGENT_DIR: join(root, "agent"), PI_OFFLINE: "1" } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /✗ The Aiden server is not running/);
 });
