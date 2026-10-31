@@ -24,7 +24,12 @@ export interface TailscaleFacts {
   operatorUnverified?: boolean;
   /** An exit node is on without local network access, which can cut off phones on the same Wi-Fi. */
   exitNodeWithoutLan?: boolean;
+  /** Tailscale did not answer in time (for example a wedged tailscaled), so nothing else is known. */
+  unresponsive?: boolean;
 }
+
+/** How long `remote check` and the install question wait for Tailscale before treating it as not answering. */
+export const TAILSCALE_FACTS_TIMEOUT_MS = 10_000;
 
 export interface TailscaleHost { platform: NodeJS.Platform; uid: number; user: string }
 
@@ -44,8 +49,24 @@ function jsonRecord(text: string): Record<string, unknown> | undefined {
   }
 }
 
-/** Reads Tailscale's status, Serve config and settings. Every read is optional: an unreadable fact is left out. */
-export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost()): Promise<TailscaleFacts> {
+/**
+ * Reads Tailscale's status, Serve config and settings. Every read is optional:
+ * an unreadable fact is left out. A Tailscale that has not answered within
+ * `timeoutMs` is reported as unresponsive rather than holding up the caller.
+ */
+export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost = systemTailscaleHost(), timeoutMs = TAILSCALE_FACTS_TIMEOUT_MS): Promise<TailscaleFacts> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<TailscaleFacts>((resolveLate) => {
+    timer = setTimeout(() => resolveLate({ installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false, unresponsive: true }), timeoutMs);
+  });
+  try {
+    return await Promise.race([readTailscaleFactsNow(runner, host), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readTailscaleFactsNow(runner: AidenTailscaleCommandRunner | null, host: TailscaleHost): Promise<TailscaleFacts> {
   const status = await new AidenRemoteTailscaleController(runner).status();
   if (!status.installed || !runner) return { installed: false, signedIn: false, httpsCertificates: false, funnelOn443: false };
   const signedIn = status.dnsName !== undefined && status.errorCode !== "not_connected" && status.errorCode !== "status_unavailable";
@@ -102,6 +123,7 @@ function signInFix(platform: NodeJS.Platform): string {
 
 /** One line on what Tailscale needs before Aiden can use it, or that it is ready. */
 export function tailscaleSummary(facts: TailscaleFacts, platform: NodeJS.Platform): string {
+  if (facts.unresponsive) return `Tailscale: did not answer within ${TAILSCALE_FACTS_TIMEOUT_MS / 1000}s. Check that \`tailscale status\` works.`;
   if (!facts.installed) return "Tailscale: not installed on this server (https://tailscale.com/download).";
   if (!facts.signedIn) return `Tailscale: installed but not signed in. ${signInFix(platform)}`;
   if (!facts.httpsCertificates) return `Tailscale: signed in as ${facts.dnsName}, but HTTPS certificates are off. Turn them on at ${ADMIN_DNS_URL}.`;
@@ -132,6 +154,7 @@ export interface CheckItem { state: CheckState; text: string }
 
 /** Every Tailscale step in order. Steps that depend on an earlier failed one are left out. */
 export function tailscaleChecklist(facts: TailscaleFacts, platform: NodeJS.Platform): CheckItem[] {
+  if (facts.unresponsive) return [{ state: "fail", text: `Tailscale did not answer within ${TAILSCALE_FACTS_TIMEOUT_MS / 1000}s. Check that it is running (\`tailscale status\`), then run \`aiden remote check\` again.` }];
   if (!facts.installed) return [{ state: "fail", text: "Tailscale is not installed. Install it from https://tailscale.com/download." }];
   const items: CheckItem[] = [{ state: "ok", text: "Tailscale is installed" }];
   if (!facts.signedIn) return [...items, { state: "fail", text: `Tailscale is not signed in or not running. ${signInFix(platform)}` }];

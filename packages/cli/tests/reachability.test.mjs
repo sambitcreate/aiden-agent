@@ -73,6 +73,22 @@ test("the operator step is a Linux non-root concern, and unreadable settings lea
   assert.match(api.tailscaleChecklist({ ...unreadable, signedIn: false }, "darwin").at(-1).text, /Open the Tailscale app and sign in/);
 });
 
+test("a Tailscale that does not answer is reported as such instead of holding up the check", async () => {
+  const wedged = { run: () => new Promise(() => {}) };
+  const started = Date.now();
+  const facts = await api.readTailscaleFacts(wedged, linux, 50);
+  assert.ok(Date.now() - started < 5_000, "the read gives up at its deadline");
+  assert.equal(facts.unresponsive, true);
+  assert.equal(api.tailscaleReady(facts), false);
+  assert.equal(api.recommendNetwork(facts, false), "local");
+  const checklist = api.tailscaleChecklist(facts, "linux");
+  assert.equal(checklist.length, 1);
+  assert.equal(checklist[0].state, "fail");
+  assert.match(checklist[0].text, /did not answer.*tailscale status/);
+  assert.match(api.networkQuestion(facts, false, "linux").text, /did not answer/);
+  assert.equal((await api.readTailscaleFacts(tailscaleRunner(), linux, 5_000)).unresponsive, undefined, "a prompt answer is read as usual");
+});
+
 test("an exit node without local network access is a warning, not a failure", async () => {
   const facts = await api.readTailscaleFacts(tailscaleRunner({ prefs: { OperatorUser: "sam", ExitNodeID: "nExit1", ExitNodeAllowLANAccess: false } }), linux);
   assert.equal(api.tailscaleReady(facts), true);
