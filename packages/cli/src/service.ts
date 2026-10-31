@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { RemoteNetwork } from "./remote.ts";
+import type { TailscaleFacts } from "./reachability.ts";
 
 export const LAUNCHD_LABEL = "com.sambitcreate.aiden-agent.serve";
 export const SYSTEMD_UNIT = "aiden.service";
@@ -278,15 +279,26 @@ async function askNetwork(question: { text: string; recommended: RemoteNetwork }
 }
 
 /** Ask what is ready on this machine, then the person (or, without a terminal, use Tailscale only when it is ready). */
-async function chooseNetwork(host: ServiceHost, interactive: boolean): Promise<RemoteNetwork> {
+export interface NetworkChoiceSources {
+  facts?: () => Promise<TailscaleFacts>;
+  cloud?: () => Promise<boolean>;
+  ask?: (question: { text: string; recommended: RemoteNetwork }) => Promise<RemoteNetwork>;
+}
+
+/**
+ * The install's network: asked in a terminal with the suggestion as the
+ * default; without one, the suggestion only when Tailscale is ready, so an
+ * unattended install never picks a network that cannot work yet.
+ */
+export async function chooseNetwork(host: ServiceHost, interactive: boolean, sources: NetworkChoiceSources = {}): Promise<RemoteNetwork> {
   const { looksLikeCloudServer, networkQuestion, readTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
-  const { createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
-  const [facts, cloud] = await Promise.all([
-    createSystemTailscaleCommandRunner().then((runner) => readTailscaleFacts(runner, { platform: host.platform, uid: host.uid, user: host.user })),
-    looksLikeCloudServer(),
-  ]);
+  const readFacts = sources.facts ?? (async () => {
+    const { createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
+    return readTailscaleFacts(await createSystemTailscaleCommandRunner(), { platform: host.platform, uid: host.uid, user: host.user });
+  });
+  const [facts, cloud] = await Promise.all([readFacts(), (sources.cloud ?? (() => looksLikeCloudServer()))()]);
   const question = networkQuestion(facts, cloud, host.platform);
-  if (interactive) return askNetwork(question);
+  if (interactive) return (sources.ask ?? askNetwork)(question);
   return tailscaleReady(facts) ? question.recommended : "local";
 }
 

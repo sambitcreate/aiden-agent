@@ -13,11 +13,11 @@ const api = await import("../dist/parity-test-api.js");
 const linux = { platform: "linux", uid: 1000, user: "sam" };
 
 /** A tailscale CLI that answers status, Serve status and prefs from fixtures. */
-function tailscaleRunner({ backend = "Running", online = true, dnsName = "box.tail1234.ts.net.", certDomains = ["box.tail1234.ts.net"], funnel = {}, prefs = { OperatorUser: "sam" } } = {}) {
+function tailscaleRunner({ backend = "Running", online = true, dnsName = "box.tail1234.ts.net.", certDomains = ["box.tail1234.ts.net"], funnel = {}, web, prefs = { OperatorUser: "sam" } } = {}) {
   return {
     async run(args) {
       if (args[0] === "status") return JSON.stringify({ BackendState: backend, Self: { Online: online, ...(dnsName ? { DNSName: dnsName } : {}) }, CertDomains: certDomains });
-      if (args[0] === "serve") return JSON.stringify({ AllowFunnel: funnel });
+      if (args[0] === "serve") return JSON.stringify({ AllowFunnel: funnel, ...(web ? { Web: web } : {}) });
       if (args[0] === "debug" && prefs instanceof Error) throw prefs;
       if (args[0] === "debug") return JSON.stringify(prefs);
       throw new Error(`unexpected tailscale ${args.join(" ")}`);
@@ -41,6 +41,8 @@ test("each missing Tailscale step is named with its own fix, and the install que
     [tailscaleRunner({ certDomains: [] }), /HTTPS certificates are off.*login\.tailscale\.com\/admin\/dns/],
     [tailscaleRunner({ prefs: { OperatorUser: "" } }), /sudo tailscale set --operator=\$USER/],
     [tailscaleRunner({ funnel: { "box.tail1234.ts.net:443": true } }), /Funnel is on for HTTPS port 443/],
+    // Some Tailscale versions mark Funnel on the 443 listener itself; Aiden's route refuses that too.
+    [tailscaleRunner({ web: { "box.tail1234.ts.net:443": { Handlers: { "/": { Proxy: "http://127.0.0.1:3000" } }, Funnel: true } } }), /Funnel is on for HTTPS port 443/],
   ];
   for (const [runner, fix] of cases) {
     const facts = await api.readTailscaleFacts(runner, linux);
@@ -162,6 +164,15 @@ test("remote check prints both sections and fails when the Tailscale address doe
     assert.deepEqual(probed, [endpoint, endpoint]);
   } finally {
     daemon.close();
+  }
+  const remoteOff = await fakeDaemon(() => new Error("Remote is off for this server. Restart it with `aiden serve` (without --no-remote) to use Remote controls."));
+  try {
+    const out = sink();
+    assert.equal(await api.remoteCheckCommand(remoteOff.dir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, out }), false);
+    assert.match(out.text, /✗ The server is running with Remote off\. Restart it without `--no-remote`/);
+    assert.doesNotMatch(out.text, /not running/, "a running server is not reported as stopped");
+  } finally {
+    remoteOff.close();
   }
   const localOnly = await fakeDaemon(() => ({ connectionMode: "lan", lanEndpoint: "https://box.local:49320/api/aiden/v1", tailscaleConnected: false }));
   try {

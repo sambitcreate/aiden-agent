@@ -218,6 +218,21 @@ function networkDouble({ connectionMode = "lan", tailscaleConnected = false, con
   return { service, tailscale, calls, mode: () => mode };
 }
 
+test("the install network is asked in a terminal and, without one, follows the suggestion only when Tailscale is ready", async () => {
+  const host = { platform: "linux", uid: 1000, user: "sam" };
+  const ready = { installed: true, signedIn: true, dnsName: "box.tail1234.ts.net", httpsCertificates: true, funnelOn443: false, operatorNeeded: false };
+  const signedOut = { installed: true, signedIn: false, httpsCertificates: false, funnelOn443: false };
+  const choose = (facts, cloud, interactive, ask) => api.chooseNetwork(host, interactive, { facts: async () => facts, cloud: async () => cloud, ask });
+  assert.equal(await choose(ready, true, false), "tailscale", "a cloud server with Tailscale ready goes Tailscale-only");
+  assert.equal(await choose(ready, false, false), "both", "a home server with Tailscale ready keeps the local network too");
+  assert.equal(await choose(signedOut, true, false), "local", "an unattended install never picks a network that cannot work yet");
+  assert.equal(await choose(signedOut, false, false), "local");
+  const asked = [];
+  assert.equal(await choose(signedOut, true, true, async (question) => { asked.push(question); return "both"; }), "both", "the person's answer wins");
+  assert.equal(asked[0].recommended, "tailscale", "a cloud server is pointed at Tailscale even before it is set up");
+  assert.match(asked[0].text, /sudo tailscale up/);
+});
+
 test("choosing a network sets the mode and connects Tailscale only when the choice needs it", async () => {
   const tailscaleOnly = networkDouble();
   assert.equal((await api.setRemoteNetwork(tailscaleOnly.service, tailscaleOnly.tailscale, "tailscale")).connectionMode, "tailscale");

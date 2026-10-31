@@ -6,6 +6,7 @@ import {
   createSystemTailscaleCommandRunner,
   type AidenTailscaleCommandRunner,
 } from "../../../main/services/aiden-remote-tailscale.js";
+import { aidenTailscaleFunnelOn443 } from "../../../main/services/aiden-remote-tailscale-route.js";
 import { remoteDaemonCommand } from "./daemon-control.ts";
 import { tailscaleSetupMessage, type RemoteNetwork } from "./remote.ts";
 
@@ -45,7 +46,7 @@ export async function readTailscaleFacts(runner: AidenTailscaleCommandRunner | n
   const status = await new AidenRemoteTailscaleController(runner).status();
   if (!status.installed || !runner) return { installed: false, signedIn: false, httpsCertificates: false, funnelOn443: false };
   const signedIn = status.dnsName !== undefined && status.errorCode !== "not_connected" && status.errorCode !== "status_unavailable";
-  const funnelOn443 = Object.entries(status.serveStatus?.AllowFunnel ?? {}).some(([authority, allowed]) => allowed === true && authority.endsWith(":443"));
+  const funnelOn443 = status.serveStatus ? aidenTailscaleFunnelOn443(status.serveStatus) : false;
   const facts: TailscaleFacts = {
     installed: true,
     signedIn,
@@ -152,14 +153,20 @@ export interface ServerReachability {
   tailscaleEndpoint?: string;
   tailscaleConnected?: boolean;
   tailscaleErrorCode?: string;
+  /** The server is running with Remote off (`--no-remote`). */
+  remoteOff?: boolean;
 }
 
-/** `remote status` from the running server, or undefined when none answers within `timeoutMs`. */
+/** `remote status` from the running server, `{ remoteOff: true }` when it runs without Remote, or undefined when none answers within `timeoutMs`. */
 export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): Promise<ServerReachability | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<undefined>((resolveLate) => { timer = setTimeout(() => resolveLate(undefined), timeoutMs); });
   try {
-    return await Promise.race([remoteDaemonCommand(agentDir, "remote", ["status"]).then((value) => value as ServerReachability, () => undefined), late]);
+    const asked = remoteDaemonCommand(agentDir, "remote", ["status"]).then(
+      (value) => value as ServerReachability,
+      (error: unknown) => /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : undefined,
+    );
+    return await Promise.race([asked, late]);
   } finally {
     clearTimeout(timer);
   }
@@ -168,7 +175,8 @@ export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): P
 /** How the running server can be reached. `answered` is the live Tailscale check, when one ran. */
 export function serverChecklist(server: ServerReachability | undefined, facts: TailscaleFacts, cloud: boolean, answered?: boolean): CheckItem[] {
   if (!server) return [{ state: "fail", text: "The Aiden server is not running. Start it with `aiden service install` or `aiden serve`." }];
-  if (server.running === false) return [{ state: "fail", text: "Remote access is off. Start the server without `--no-remote`." }];
+  if (server.remoteOff) return [{ state: "fail", text: "The server is running with Remote off. Restart it without `--no-remote`, or run it as a service with `aiden service install`." }];
+  if (server.running === false) return [{ state: "fail", text: "Remote is on but not listening. See the server log (`aiden service status` says where it is)." }];
   const mode = server.connectionMode;
   const items: CheckItem[] = [];
   if (mode === "lan" || mode === "both") {
