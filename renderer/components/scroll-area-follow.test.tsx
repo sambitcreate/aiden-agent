@@ -507,6 +507,27 @@ test("small chained scrolls add up even when a streaming chunk lands between the
   assert.equal(port.top(), place, "the next chunk leaves the reader's place alone");
 });
 
+test("opening another chat starts small upward movement over", () => {
+  const Chat = ({ chat, chunks }: { chat: string; chunks: number }) => (
+    <ScrollArea autoScrollToBottom autoScrollDeps={[chunks]} autoScrollResetKey={chat} streaming>
+      <iframe title="Interactive visual" sandbox="allow-scripts" />
+      <p>{chat} chunk {chunks}</p>
+    </ScrollArea>
+  );
+  const view = render(<Chat chat="first" chunks={1} />);
+  const port = scrollport();
+  port.grow(40);
+  view.rerender(<Chat chat="first" chunks={2} />);
+  port.moveTo(port.bottom() - 0.75);
+  assert.equal(port.following(), true);
+
+  port.grow(200);
+  view.rerender(<Chat chat="second" chunks={1} />);
+  assert.equal(port.top(), port.bottom(), "the new chat opens at its last line");
+  port.moveTo(port.bottom() - 0.5);
+  assert.equal(port.following(), true, "movement in the previous chat does not count toward this one");
+});
+
 test("a content-height clamp after an embedded visual shrinks keeps live follow armed", () => {
   const view = render(<Transcript chunks={1} />);
   const port = scrollport();

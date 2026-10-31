@@ -1087,6 +1087,9 @@ export function ScrollArea({
       !streamingRef.current &&
       distance > 1 &&
       document.documentElement.dataset.reduceMotion !== "true";
+    // A jump starts any small upward movement over; an instant one lands
+    // without a scroll event that would otherwise reset it.
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "jump", smooth });
     window.clearTimeout(jumpSettleTimerRef.current);
     if (smooth) {
@@ -1263,6 +1266,7 @@ export function ScrollArea({
 
   React.useLayoutEffect(() => {
     if (autoScrollResetKey === undefined) return;
+    upwardDriftRef.current = 0;
     dispatchFollow({ type: "reset" });
     if (autoScrollToBottom) scheduleFollowBottom();
   }, [autoScrollResetKey, autoScrollToBottom, dispatchFollow, scheduleFollowBottom]);
