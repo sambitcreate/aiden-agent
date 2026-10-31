@@ -82,7 +82,7 @@ aiden service install
 2. **Tailscale only:** your devices from anywhere on your tailnet. The install sets Tailscale up the same way `aiden remote pair tailscale` does, and the local network listener stops answering.
 3. **Both.**
 
-Pass `--network local|tailscale|both` to skip the question (the default without a terminal is `local`). If Tailscale can't be set up, the install says what to do next and keeps the server on the network it had. Once the server is running, the install shows a pairing code in the terminal; `--no-pair` skips it, and Ctrl-C stops waiting without stopping the server.
+Pass `--network local|tailscale|both` to skip the question (the default without a terminal is `local`). A reinstall without `--network` keeps a server that already uses Tailscale on its current network instead of asking. If Tailscale can't be set up, the install says what to do next and keeps the server on the network it had. Once the server is running, the install shows a pairing code in the terminal; `--no-pair` skips it, and Ctrl-C stops waiting without stopping the server.
 
 - **Linux** gets a systemd user unit, `~/.config/systemd/user/aiden.service`, that runs `aiden serve --no-pair`. It turns on lingering (`loginctl enable-linger`) so the server starts at boot without a login; when that needs root, it tells you to run `sudo loginctl enable-linger $USER` once. Run the install as the server's user over SSH (not through `su` or `sudo`), because systemd user services need that user's session. Logs: `journalctl --user -u aiden`.
 - **macOS** gets a LaunchAgent, `~/Library/LaunchAgents/com.sambitcreate.aiden-agent.serve.plist`, that runs while you are logged in. On a Mac without a screen, turn on automatic login. Logs go to `<agentDir>/serve.log`.
