@@ -96,7 +96,7 @@ test("the packaged soak has fixed UI actions, aggregate receipt timing, and no I
     settlement.lastIndexOf("app.quit()") >
       settlement.lastIndexOf("writeSubagentPackagedSoakReceipt("),
   );
-  const shutdownStart = main.indexOf("async function shutdownAndQuit");
+  const shutdownStart = main.indexOf("async function runShutdownAndQuit");
   const shutdownEnd = main.indexOf(
     "\nasync function refreshCloseGuardFromRenderer",
     shutdownStart,

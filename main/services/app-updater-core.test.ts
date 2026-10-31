@@ -294,7 +294,7 @@ test("no available update returns to idle", async () => {
 
 test("Restart now uses Aiden's protected shutdown before launching the installer", () => {
   const main = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
-  const shutdownStart = main.indexOf("async function shutdownAndQuit");
+  const shutdownStart = main.indexOf("async function runShutdownAndQuit");
   const shutdownEnd = main.indexOf("async function refreshCloseGuardFromRenderer", shutdownStart);
   const shutdown = main.slice(shutdownStart, shutdownEnd);
   const cleanupIndex = shutdown.indexOf("cleanupApplication();");
