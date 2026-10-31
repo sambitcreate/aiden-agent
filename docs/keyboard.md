@@ -5,7 +5,8 @@ the keys that exist today. Keys are shown with Mac symbols; on Linux and
 Windows, `⌘` is `Ctrl`, `⌥` is `Alt` and `⇧` is `Shift`.
 
 Every key in the tables below, except the fixed keys (the approval keys, `/`,
-`F6`, the arrow keys and `↑` in the message box), lives in the
+`F6`, the arrow keys and `↑` in the message box, listed in
+`renderer/shared/built-in-keys.ts` and under **Built-in keys** in Settings), lives in the
 one command catalog (`renderer/shared/keybindings.ts`), so it can be changed
 or turned off in **Settings → Keyboard shortcuts**, and the native menus and button tooltips
 show the current choice. Keys added in a later release never take a shortcut
@@ -17,6 +18,7 @@ one starts unassigned.
 | Key | Does |
 | --- | --- |
 | `⌘K` | Command palette: commands, chats, models, providers, Settings, appearance, Bots |
+| `⌘/` | Keyboard shortcuts: every key as set in Settings plus the built-in ones, searchable |
 | `⌘N` / `⇧⌘N` | New chat / New chat in… |
 | `⇧⌘F` | Search chats |
 | `⌘1`–`⌘9` | Open the chat with that number (hold `⌘` to see the numbers); on the Bots page, the Bot on that row |
@@ -83,6 +85,27 @@ approval appears, screen readers announce it.
 
 In the Browser panel, `⌘.` starts page markup instead of stopping the reply,
 but only while focus is inside the browser.
+
+## Keyboard list and menu bar
+
+`⌘/` (or **Help → Keyboard Shortcuts**) opens a searchable list of every key,
+grouped as General, Moving around, In a chat and Workspace. It shows the keys
+as set in Settings, leaves out commands with no key, and includes the built-in
+keys with when each one applies. **Change keys…** opens Settings → Keyboard
+shortcuts, which lists the same built-in keys under **Built-in keys**, below
+the ones you can change. `⌘/` also works from the message box.
+
+The menu bar has **View** (sidebar, terminal, Environment, the Focus commands),
+**Go** (back, forward, previous and next chat, Search chats, Bots, Scheduled,
+Profile), **Chat** (model, attach, find, stop and the open chat's actions) and
+**Help → Keyboard Shortcuts**, next to File, Edit and Window. Each item shows
+its current key, and items that can't run right now (no chat open, nothing to
+stop) are greyed out. These items only show their key: the key itself still
+follows the rules on this page (for example, it doesn't act while you type in
+the terminal). On Linux, `Alt` opens the menu bar.
+
+When first-run setup finishes, the message box has focus, so you can start
+typing straight away.
 
 ## From ⌘K
 

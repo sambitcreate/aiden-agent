@@ -86,3 +86,39 @@ test("the attention tier supplied for a local chat drives the triage view", () =
     ],
   );
 });
+
+test("No workspace chats share one Chats group instead of a row per hidden folder", () => {
+  const hidden = (id: string, createdAt: number): Workspace => ({
+    id,
+    name: "No workspace",
+    folderPath: `/data/chat-folders/${id}`,
+    permission: "ask",
+    noWorkspace: true,
+    createdAt,
+    updatedAt: createdAt,
+  });
+  const registry = [...workspaces, hidden("chat-b", 12), hidden("chat-a", 11)];
+  const result = organizeSidebar({
+    projects: localSidebarProjects(registry),
+    chats: localSidebarChats(
+      registry,
+      [
+        ...chats,
+        { id: "trip", title: "Trip ideas", workspaceId: "chat-a", createdAt: 9, updatedAt: 95 },
+        { id: "recipe", title: "Soup", workspaceId: "chat-b", createdAt: 9, updatedAt: 96 },
+      ],
+      () => "none",
+    ),
+    search: "",
+    view: "projects",
+    chatSort: "last_activity",
+    projectSort: "last_activity",
+    projectOrder: [],
+    now: 100,
+  });
+  const chatsGroup = result.projectGroups.filter((group) => group.project.workspace.noWorkspace);
+  assert.equal(chatsGroup.length, 1);
+  assert.equal(chatsGroup[0].project.name, "Chats");
+  assert.equal(chatsGroup[0].project.workspace.id, "chat-a", "the oldest hidden record stands for the group");
+  assert.deepEqual(chatIds(chatsGroup[0].chats), ["recipe", "trip"]);
+});

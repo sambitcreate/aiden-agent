@@ -1165,6 +1165,14 @@ final class AidenWorkspaceChatsModel {
 }
 
 enum AidenDraftSendReconciliation {
+    /// A turn the Mac refused without running it: the phone drops the saved attempt and shows the
+    /// Mac's reason. A 409 is settled only for `workspace_unavailable` (a moved or deleted folder),
+    /// which the Mac sends before anything runs; other conflicts may have an unknown outcome.
+    static func refusalSettlesSend(status: Int, code: AidenRemoteErrorCode) -> Bool {
+        [400, 401, 403, 404, 413, 422, 429].contains(status)
+            || (status == 409 && code == AidenRemoteErrorCode(rawValue: "workspace_unavailable"))
+    }
+
     static func failedDraft(submitted: String, current: String) -> String {
         guard !current.isEmpty else { return submitted }
         guard current != submitted else { return current }
@@ -1347,6 +1355,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
+    @ObservationIgnored private let voiceLaunchContext: AidenRemoteRequestContext?
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -1553,6 +1562,7 @@ final class AidenChatViewModel {
             liveActivities: liveActivities ?? .shared
         )
         modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
+        voiceLaunchContext = try? coordinator.requestContext(for: preferenceInstanceId)
         self.networkPath = networkPath ?? AidenNetworkPathMonitor.shared.availability
         self.chat = chat
         self.allowsMutations = allowsMutations
@@ -1584,6 +1594,7 @@ final class AidenChatViewModel {
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
         modelPreferenceContext = nil
+        voiceLaunchContext = nil
         networkPath = nil
         self.chat = chat
         allowsMutations = false
@@ -3156,8 +3167,9 @@ final class AidenChatViewModel {
                 current: pendingAttachments
             )
             streamState = nil
-            if case AidenRemoteClientError.server(let status, _) = error,
-               [400, 401, 403, 404, 413, 422, 429].contains(status), let session = draftSession {
+            if case AidenRemoteClientError.server(let status, let body) = error,
+               AidenDraftSendReconciliation.refusalSettlesSend(status: status, code: body.code),
+               let session = draftSession {
                 await draftStore.settlePendingSend(key: attempt.key, session: session)
                 pendingSend = nil
                 turnAttempts.reset()
@@ -3606,7 +3618,8 @@ final class AidenChatViewModel {
     func startVoiceForLaunch(if requested: Bool, start: () async -> Void) async {
         guard requested, !didConsumeVoiceLaunch else { return }
         didConsumeVoiceLaunch = true
-        guard !isReadOnlyPresentation, !isRemoved, !isStreaming, pendingQuestion == nil else { return }
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
+              let context = voiceLaunchContext, coordinator.isCurrent(context), !Task.isCancelled else { return }
         await start()
     }
 
@@ -8679,11 +8692,37 @@ struct AidenQuestionCard: View {
     let prompt: AidenPendingQuestion
     let onSubmit: (AidenQuestionRespondRequest) -> Void
 
-    @State private var draft = AidenQuestionComposerDraft()
+    @State private var draft: AidenQuestionComposerDraft
+
+    init(
+        model: AidenChatViewModel? = nil,
+        prompt: AidenPendingQuestion,
+        onSubmit: @escaping (AidenQuestionRespondRequest) -> Void
+    ) {
+        self.model = model
+        self.prompt = prompt
+        self.onSubmit = onSubmit
+        // Callers key the card by prompt id, so a new prompt starts fresh.
+        _draft = State(initialValue: AidenQuestionComposerDraft(questions: prompt.questions))
+    }
 
     var stopButton: AidenChatStopButton? { model.map { AidenChatStopButton(model: $0) } }
 
     private var answers: [AidenQuestionAnswer] { draft.answers(for: prompt.questions) }
+
+    private var hint: String {
+        let recommended = !AidenQuestionAnswerDraft.recommendedSelections(for: prompt.questions).isEmpty
+        switch (prompt.questions.count > 1, recommended) {
+        case (true, true):
+            return String(localized: "Recommended answers are already selected. Questions you leave blank are skipped.")
+        case (true, false):
+            return String(localized: "Answer what you can — unanswered questions are skipped.")
+        case (false, true):
+            return String(localized: "The recommended answer is already selected. Change it or type your own.")
+        case (false, false):
+            return String(localized: "Choose an option or type your own answer.")
+        }
+    }
 
     private func binding(for index: Int) -> Binding<String> {
         Binding(
@@ -8708,9 +8747,7 @@ struct AidenQuestionCard: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(palette.foreground)
 
-                        Text(prompt.questions.count > 1
-                             ? String(localized: "Answer what you can — unanswered questions are skipped.")
-                             : String(localized: "Choose an option or type your own answer."))
+                        Text(hint)
                             .font(.caption)
                             .foregroundStyle(palette.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -8761,6 +8798,7 @@ struct AidenQuestionCard: View {
 
                         ForEach(question.options, id: \.label) { option in
                             let selected = draft.selections[index]?.contains(option.label) == true
+                            let label = AidenQuestionAnswerDraft.recommendedLabel(option.label)
                             Button {
                                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
                                     draft.toggle(option.label, questions: prompt.questions)
@@ -8775,9 +8813,19 @@ struct AidenQuestionCard: View {
                                         .frame(width: 20)
                                         .accessibilityHidden(true)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(option.label)
-                                            .font(.callout)
-                                            .foregroundStyle(palette.foreground)
+                                        HStack(spacing: 6) {
+                                            Text(label.text)
+                                                .font(.callout)
+                                                .foregroundStyle(palette.foreground)
+                                            if label.recommended {
+                                                Text("Recommended")
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(palette.accent)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(palette.accent.opacity(0.12), in: Capsule())
+                                            }
+                                        }
                                         Text(option.description)
                                             .font(.caption)
                                             .foregroundStyle(palette.secondary)
@@ -8794,7 +8842,9 @@ struct AidenQuestionCard: View {
                                 selected ? palette.accent.opacity(0.10) : palette.canvas,
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                             )
-                            .accessibilityLabel(option.label)
+                            .accessibilityLabel(label.recommended
+                                ? String(localized: "\(label.text), recommended")
+                                : label.text)
                             .accessibilityValue(selected
                                 ? String(localized: "Selected")
                                 : String(localized: "Not selected"))
@@ -9498,19 +9548,23 @@ private struct AidenVisualRowView: View {
     }
 }
 
+/// A one-row view of reasoning that never opens or closes on its own. While
+/// the model thinks, the row shows the latest finished line in place, so a fast
+/// turn with many short thoughts never moves the transcript. Opening it is the
+/// reader's choice.
 private struct AidenReasoningCard: View {
     @Environment(\.aidenPalette) private var palette
     @Environment(\.aidenReduceMotion) private var reduceMotion
     let text: String
     let label: String
     let active: Bool
-    @State private var isExpanded = true
-    @State private var userControlled = false
+    @State private var isExpanded = false
+    /// Keeps its last text once thinking ends so the line can fade out in place.
+    @State private var liveLine = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                userControlled = true
                 withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                     isExpanded.toggle()
                 }
@@ -9519,7 +9573,25 @@ private struct AidenReasoningCard: View {
                     Text(label)
                         .font(.caption.weight(.semibold))
                         .aidenActivityShimmer(active)
-                    Spacer(minLength: 6)
+                        .layoutPriority(1)
+                    ZStack(alignment: .leading) {
+                        if !liveLine.isEmpty {
+                            Text(liveLine)
+                                .id(liveLine)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .offset(y: 4)),
+                                    removal: .opacity
+                                ))
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(palette.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(active && !isExpanded ? 1 : 0)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.3), value: active)
+                    .accessibilityHidden(true)
                     Image(systemName: "chevron.right")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(palette.secondary)
@@ -9546,16 +9618,16 @@ private struct AidenReasoningCard: View {
         .padding(.horizontal, 12)
         .background(palette.raised, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .contain)
-        .task {
-            guard active else {
-                isExpanded = false
-                return
-            }
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, !userControlled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
-                isExpanded = false
-            }
+        .onChange(of: text, initial: true) { refreshLiveLine() }
+        .onChange(of: active) { refreshLiveLine() }
+    }
+
+    private func refreshLiveLine() {
+        guard active else { return }
+        let line = AidenAgentActivityPresentation.latestReasoningLine(text)
+        guard !line.isEmpty, line != liveLine else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+            liveLine = line
         }
     }
 }

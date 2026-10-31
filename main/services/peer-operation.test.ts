@@ -58,6 +58,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "runRespondQuestion", resourceId: "run_1", itemId: "prompt_1", idempotencyKey: KEY }, "respondRunQuestion"],
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
+    [{ operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" }, "getBotSessionImage"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
@@ -249,14 +250,21 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
   assert.equal(content.mimeType, "image/png");
   assert.deepEqual([...content.bytes], [...png]);
   assert.ok(!Buffer.isBuffer(content.bytes));
-  for (const invalid of [
-    { mimeType: "text/html", data: png },
-    { mimeType: "image/png", data: Buffer.alloc(0) },
-    { mimeType: "image/png", data: "iVBOR" },
-  ])
-    await assert.rejects(
-      peerOperationResult({ operation: "attachmentContent" }, invalid),
-    );
+  // A Bot's shared image (revision 45) comes back the same way.
+  const shared = (await peerOperationResult(
+    { operation: "botSessionImage" },
+    { mimeType: "image/jpeg", data: png },
+  )) as { mimeType: string; bytes: Uint8Array };
+  assert.deepEqual([shared.mimeType, [...shared.bytes]], ["image/jpeg", [...png]]);
+  for (const operation of ["attachmentContent", "botSessionImage"])
+    for (const invalid of [
+      { mimeType: "text/html", data: png },
+      { mimeType: "image/png", data: Buffer.alloc(0) },
+      { mimeType: "image/png", data: "iVBOR" },
+    ])
+      await assert.rejects(
+        peerOperationResult({ operation }, invalid),
+      );
 });
 
 test("fork operations reach the contract's fork routes with the headers each one declares", () => {

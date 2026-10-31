@@ -213,3 +213,16 @@ test("studio commands never reserve a shortcut", () => {
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
 });
+
+test("⌘/ opens the keyboard list from the message box too", () => {
+  const bindings = effectiveBindings(undefined);
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, editable: true }, "darwin"),
+    "shortcuts.show",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, terminal: true }, "darwin"),
+    null,
+    "the terminal keeps it",
+  );
+});

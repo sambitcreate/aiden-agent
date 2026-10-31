@@ -43,6 +43,7 @@ async function host(options: { wired?: boolean; acceptStrippedBasePath?: boolean
   let accepting = true;
   const transports: AidenPairingRequestTransport[] = [];
   const requests = new AidenRemotePairingRequestService({
+    admission: () => ({ id: "test-host-window", expiresAt: Number.MAX_SAFE_INTEGER }),
     instanceId: stored.instanceId,
     devices: registry,
     accepting: () => accepting,
