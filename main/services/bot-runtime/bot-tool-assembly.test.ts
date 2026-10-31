@@ -11,7 +11,8 @@ import { Harness, MemoryStorage, ToolResultEntry, type Conversation } from "@ear
 import type { BotRuntimeEffectiveAuthority } from "../bot-runtime-authority.js";
 import type { ResolvedModelRuntime } from "../model-runtime.js";
 import { declarePiRuntimeReplay } from "../pi-runtime-tool.js";
-import { buildSkillTools } from "../skill-tools.js";
+import { buildSkillTools, SKILL_TOOL_NAME } from "../skill-tools.js";
+import { LOAD_TOOLS_TOOL_NAME } from "../on-demand-tools.js";
 import { botRuleLabel, defaultBotRules, type BotRule } from "../../../renderer/shared/bot-rules.js";
 import { BOT_HANDOFF_RESULT_ENTRY_KIND } from "../../../renderer/shared/bot-handoffs.js";
 import type { BotClassifiableAction } from "../bot-rules/classify.js";
@@ -30,7 +31,6 @@ import {
   CUSTOM_NONE,
   FULL_GRANTS,
   MAIL_SERVER,
-  NOTES_SKILL_TOOL,
   PNG_1X1,
   READ_INBOX_TOOL,
   SEND_EMAIL_TOOL,
@@ -132,7 +132,7 @@ interface Group {
 
 const GROUPS: Group[] = [
   { label: "an MCP connection tool", tool: SEND_EMAIL_TOOL, args: { text: "hi" } },
-  { label: "a skill", tool: NOTES_SKILL_TOOL, args: {} },
+  { label: "a skill", tool: SKILL_TOOL_NAME, args: { name: "Meal Notes" } },
   { label: "web search", tool: "web_search", args: { text: "news" } },
   { label: "subagents", tool: "subagent", args: { text: "delegate" } },
   { label: "Computer Use", tool: "computer_use", args: { text: "click" } },
@@ -141,13 +141,20 @@ const GROUPS: Group[] = [
   { label: "sharing an image", tool: "share_image", args: { path: "photo.png" } },
 ];
 
+/** Tools a request offers: declared ones plus those its `load_tools` catalog lists. */
+function offeredTools(messages: Parameters<typeof getCurrentTools>[0]): string[] {
+  const declared = getCurrentTools(messages);
+  const catalog = declared.find((tool) => tool.name === LOAD_TOOLS_TOOL_NAME)?.description ?? "";
+  return [...declared.map((tool) => tool.name), ...[...catalog.matchAll(/^- ([a-z_]+):/gmu)].map((match) => match[1]!)];
+}
+
 async function offeredUnder(authority: (home: string) => BotRuntimeEffectiveAuthority): Promise<string[]> {
   const home = botHome();
   const state = assemblyState(authority(home), false);
   let offered: string[] = [];
   const fauxModels = createFauxModels([
     (context) => {
-      offered = getCurrentTools(context.messages).map((tool) => tool.name);
+      offered = offeredTools(context.messages);
       return fauxAssistantMessage("ok");
     },
   ]);
@@ -189,7 +196,7 @@ for (const group of GROUPS) {
     const candidates = allCandidates(state.authority, state);
     const fauxModels = createFauxModels([
       (context) => {
-        assert.ok(getCurrentTools(context.messages).some((tool) => tool.name === group.tool));
+        assert.ok(offeredTools(context.messages).includes(group.tool));
         // The person switches the Bot to Custom Access while the model answers.
         state.authority = customNone(home);
         return fauxAssistantMessage([fauxToolCall(group.tool, group.args)], { stopReason: "toolUse" });
@@ -302,7 +309,7 @@ test("a skill whose content fingerprint changed after the offer is refused at ca
   const fauxModels = createFauxModels([
     () => {
       state.catalog.skills[0] = { ...state.catalog.skills[0]!, contentFingerprint: "edited" };
-      return fauxAssistantMessage([fauxToolCall(NOTES_SKILL_TOOL, {})], { stopReason: "toolUse" });
+      return fauxAssistantMessage([fauxToolCall(SKILL_TOOL_NAME, { name: "Meal Notes" })], { stopReason: "toolUse" });
     },
     fauxAssistantMessage("ok"),
   ]);
@@ -1098,6 +1105,35 @@ test("rules that can't be read fail the call closed", async () => {
     assert.equal(turn.computer.executions.length, 0);
     assert.deepEqual(turn.deps.approvals, []);
     assert.match(resultText(results[0]), /rules couldn't be read/u);
+  } finally {
+    await harness.close(ctx);
+  }
+});
+
+test("a Bot declares a rarely used tool only after loading it, and keeps it declared", async () => {
+  const home = botHome();
+  const state = assemblyState(full(home), false);
+  const declared: string[][] = [];
+  const fauxModels = createFauxModels([
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage([fauxToolCall(LOAD_TOOLS_TOOL_NAME, { names: ["routines"] })], { stopReason: "toolUse" });
+    },
+    (context) => {
+      declared.push(getCurrentTools(context.messages).map((tool) => tool.name));
+      return fauxAssistantMessage("loaded");
+    },
+  ]);
+  const deps = assemblyDeps(state, { candidates: (current) => allCandidates(current, state) });
+  const { harness, root } = await memoryHarness(deps, fauxModels);
+  try {
+    await (await root.submit({ type: "input", content: "plan a routine" }, ctx)).wait(ctx);
+    assert.ok(declared[0]!.includes(LOAD_TOOLS_TOOL_NAME));
+    assert.ok(!declared[0]!.includes("routines"), "held back at first");
+    assert.ok(declared[0]!.includes("web_search"), "everyday tools stay declared");
+    assert.ok(declared[1]!.includes("routines"), "declared once loaded");
+    const [result] = await toolResults(root);
+    assert.equal(result!.isError, false);
   } finally {
     await harness.close(ctx);
   }

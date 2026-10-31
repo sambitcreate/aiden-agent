@@ -1,4 +1,5 @@
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
 import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
@@ -997,6 +998,8 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /** A hidden workspace for one No workspace chat: its own managed folder, global settings. */
+  createNoWorkspace: () => invoke<Workspace>("workspaces:createNoWorkspace"),
   /**
    * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
    * given workspace's folder). Never creates anything.
@@ -1584,6 +1587,9 @@ export const chatsApi = {
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
+  /** The questions and approvals the interrupted reply was waiting on, questions first. */
+  interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
+  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

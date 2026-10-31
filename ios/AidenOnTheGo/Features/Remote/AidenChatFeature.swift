@@ -1435,6 +1435,7 @@ final class AidenChatViewModel {
     @ObservationIgnored private var draftGeneration: UInt64 = 0
     @ObservationIgnored private var composerGeneration: UInt64 = 0
     @ObservationIgnored private var didConsumeVoiceLaunch = false
+    @ObservationIgnored private let voiceLaunchContext: AidenRemoteRequestContext?
     @ObservationIgnored private var uploadTask: Task<Int, Never>?
     @ObservationIgnored private var ownedUploadReferences: [String: (AidenAttachmentReference, AidenRemoteRequestContext, AidenRemoteClient)] = [:]
     @ObservationIgnored private var attachmentCleanupTasks: [String: Task<Void, Never>] = [:]
@@ -1641,6 +1642,7 @@ final class AidenChatViewModel {
             liveActivities: liveActivities ?? .shared
         )
         modelPreferenceContext = try? coordinator.requestContext(for: preferenceInstanceId)
+        voiceLaunchContext = try? coordinator.requestContext(for: preferenceInstanceId)
         self.networkPath = networkPath ?? AidenNetworkPathMonitor.shared.availability
         self.chat = chat
         self.allowsMutations = allowsMutations
@@ -1672,6 +1674,7 @@ final class AidenChatViewModel {
     init(readOnlyFixture chat: AidenChat) {
         runtime = .readOnlyFixture
         modelPreferenceContext = nil
+        voiceLaunchContext = nil
         networkPath = nil
         self.chat = chat
         allowsMutations = false
@@ -3729,7 +3732,8 @@ final class AidenChatViewModel {
     func startVoiceForLaunch(if requested: Bool, start: () async -> Void) async {
         guard requested, !didConsumeVoiceLaunch else { return }
         didConsumeVoiceLaunch = true
-        guard !isReadOnlyPresentation, !isRemoved, !isStreaming, pendingQuestion == nil else { return }
+        guard !isReadOnlyPresentation, !isRemoved, isConnected, !isStreaming, pendingQuestion == nil,
+              let context = voiceLaunchContext, coordinator.isCurrent(context), !Task.isCancelled else { return }
         await start()
     }
 

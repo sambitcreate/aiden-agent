@@ -54,6 +54,9 @@ const STAGED_ATTACHMENT_ID = /^att_[A-Za-z0-9_-]{43}$/u;
 /** A Bot question's or hand-off's durable wait id, as the host's answer routes accept it. */
 const BOT_WAIT_ID = /^[A-Za-z0-9-]{1,64}$/u;
 
+/** Operations whose answer is bounded image bytes, not JSON. */
+export const PEER_BINARY_OPERATIONS: ReadonlySet<string> = new Set(["attachmentContent", "botSessionImage"]);
+
 /** Run-control operations reconcile from the host feed's run state. */
 export const PEER_RUN_OPERATIONS: ReadonlySet<string> = new Set([
   "runCancel",
@@ -143,7 +146,7 @@ export async function peerOperationResult(
 ): Promise<unknown> {
   const input = peerRecord(operation);
   const name = peerText(input.operation, 40);
-  if (name === "attachmentContent") return binaryContent(value);
+  if (PEER_BINARY_OPERATIONS.has(name)) return binaryContent(value);
   if (name === "server") {
     const { peerRoutes: _mainOnlyRoutes, ...projection } = peerRecord(value);
     await validatePeerResponse(name, projection);
@@ -341,6 +344,9 @@ export function peerOperationRequest(
       break;
     case "botSession":
       path = `/bots/${id()}/session`;
+      break;
+    case "botSessionImage":
+      path = `/bots/${id()}/session/images/${item()}`;
       break;
     case "createChat":
       path = "/chats";
