@@ -106,7 +106,7 @@ When the agent shows, shares or generates a picture, Aiden On The Go for iPhone 
 
 ## Paired-Mac voice input
 
-In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
+In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit dictation action in the app or the intentional iOS voice shortcut; externally opened URLs never start recording. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
 
 The Mac processes that recording locally. Aiden does not persist the recording or transcript, include either in Remote Access diagnostics, or send them to Aiden's model-provider integrations or an Aiden-operated service. Normal chat submission remains a separate user action.
 
@@ -151,7 +151,10 @@ key within the safe retry window; it never runs automatically. When the window e
 review the conversation on the host before dismissing the notice and making a new
 attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records
-stay in the app's private storage and are scoped to that pairing.
+stay in the app's private storage and are scoped to that pairing. Editable mobile
+drafts and unconfirmed-send records are excluded from backups and do not move to
+a replacement phone through backup restore. iOS marks existing draft storage during app startup even when no chat is opened
+and retains its existing protected storage class; Android keeps its backup and device-transfer exclusions.
 
 On Android, **Nearby** discovers desktops on the local network. New Android pairings
 require a desktop supporting the Android device identity (contract revision 31); an
@@ -161,3 +164,23 @@ setup-code verification and certificate validation still establish trust. Connec
 errors distinguish network reachability, secure-identity verification, and app-version
 problems. A secure-identity failure requires verification and pairing repair, rather
 than a trust-bypass retry.
+
+## External links and shortcuts
+
+On iOS and Android, an external new-chat link waits for connection and workspace
+readiness, then asks before creating a chat. Waiting grants no installation
+switch, chat creation or recording authority; newer navigation supersedes the
+waiting request. The
+confirmation names its desktop installation and workspace before any installation
+switch or host write. The legacy `aiden-otg://new-chat-voice` link opens this same
+confirmation and cannot start the microphone, even when microphone permission is
+already granted. Use the in-app microphone button to dictate. No recognized text
+is sent automatically. Existing-chat notification and widget links still open
+their paired conversation.
+
+iOS App Intents deliver a short-lived, one-use action inside the foreground app
+process. The intentional **New Chat with Voice** shortcut retains dictation using
+the selected mode and ordinary OS permission checks. URL parameters and Android
+Intent extras cannot claim internal-action authority. A cancelled, expired,
+revoked or stale creation approval is discarded, and creation is never retried
+automatically after an uncertain result.
