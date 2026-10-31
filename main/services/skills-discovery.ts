@@ -429,7 +429,7 @@ async function scanAllSkillCandidates(
     );
   }
 
-  roots.push(...pluginScanConfigs(home, workspaceRoot));
+  roots.push(...(await pluginScanConfigs(home, workspaceRoot)));
 
   try {
     roots.sort(
@@ -466,9 +466,9 @@ async function scanAllSkillCandidates(
   }
 }
 
-function pluginScanConfigs(home: string, workspaceRoot?: string): ScanConfig[] {
+async function pluginScanConfigs(home: string, workspaceRoot?: string): Promise<ScanConfig[]> {
   const seen = new Set<string>();
-  return claudePluginSkillRoots(home, workspaceRoot).filter((plugin) => {
+  return (await claudePluginSkillRoots(home, workspaceRoot)).filter((plugin) => {
     const key = JSON.stringify([plugin.scope, plugin.namespace, plugin.root]);
     if (seen.has(key)) return false;
     seen.add(key);
