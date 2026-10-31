@@ -23,7 +23,7 @@ import {
   type GitPushInput,
 } from "../services/git.js";
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
-import { GitRepoWatcher } from "../services/git-repo-watcher.js";
+import { workspaceGitWatcher as gitRepoWatcher } from "../services/workspace-git-watcher-main.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
 import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
 import {
@@ -147,12 +147,6 @@ async function withOptionalWorkspaceOperation<T>(
   );
 }
 
-// Repository changes (commit, checkout, stage, fetch, push) are pushed to the
-// renderer so its Git queries can poll slowly as a safety net only.
-const gitRepoWatcher = new GitRepoWatcher({
-  notify: (workspaceId, generation) => ipcMain.broadcast("git:changed", { workspaceId, generation }),
-});
-
 /** Closes every Git metadata watcher; called once at quit. */
 export function disposeWorkspaceGitWatchers(): void {
   gitRepoWatcher.dispose();
@@ -234,15 +228,9 @@ export function registerWorkspaceHandlers(): void {
     workspaceApplicationService.update(asString(id, "id"), patch),
   );
 
-  ipcMain.handle("workspaces:remove", async (_event, id: unknown) => {
-    const workspaceId = asString(id, "id");
-    try {
-      return await workspaceApplicationService.remove(workspaceId);
-    } finally {
-      // A later display read re-observes, so closing after a failed remove is harmless.
-      gitRepoWatcher.close(workspaceId);
-    }
-  });
+  ipcMain.handle("workspaces:remove", async (_event, id: unknown) =>
+    workspaceApplicationService.remove(asString(id, "id")),
+  );
 
   ipcMain.handle("workspaces:gitInfo", async (event, workspaceId: unknown) =>
     withOptionalWorkspaceOperation(event, workspaceId, async (resolved, signal) => {
@@ -414,11 +402,7 @@ export function registerWorkspaceHandlers(): void {
         event,
         () => new Error("Workspace access requires the active renderer document."),
       );
-      try {
-        return await workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
-      } finally {
-        gitRepoWatcher.close(id);
-      }
+      return workspaceWorktreeApplicationService.remove(owner, id, undefined, { force });
     },
   );
 
