@@ -71,6 +71,38 @@ remain in place. Remote callers receive the same reason via the existing
 Remote retry. This phase does not claim control over independently detached or
 externally launched processes.
 
+## Deleted worktree folder (PR pending)
+
+A chat whose managed worktree folder was deleted outside Aiden (for example
+with `rm -rf` or the Finder) is checked at the checkout root like any other
+workspace folder. Sends are refused before they are added to the chat, and the
+notice above the composer offers two actions:
+
+- **Restore worktree** (`workspaces:restoreDeletedWorktree`) is offered only
+  while the branch still exists, no other worktree has it checked out, no
+  Aiden removal of it is pending, and the folder it lived in is still there.
+  Under the repository's mutation lock it verifies the old ownership token in
+  Git's admin directory, clears the stale registration with a plain
+  `git worktree remove` (`--force` only on Git versions that need it, and only
+  while the folder is still missing), checks the same branch out again at the
+  same managed path with hooks disabled, writes a new ownership token and saves
+  the workspace record. If any step after `worktree add` fails, the save
+  included, the new checkout is removed again so Restore can be retried. Then
+  `.worktreeinclude` files are copied in again. It never creates, moves or
+  deletes the branch, so commits survive and uncommitted changes, which went
+  with the folder, do not. It refuses a present folder, a foreign token, a
+  moved registration, a pending removal, a No Access workspace, a branch that
+  is gone, and a branch checked out elsewhere.
+- **Check again** stays, because putting a folder back from the Trash is the
+  only way to keep uncommitted work; the notice says so.
+- **New chat in main checkout** opens a draft in the repository's main
+  workspace (the nested-subpath match, or the repository root, compared by
+  real path) in checkout mode with the unsent message text. Attachments stay
+  in the old chat's composer. The old chat is left as it was.
+
+Phones and paired Macs get `workspace_unavailable` with a path-free message
+telling the person to restore it from the chat on the Mac.
+
 ## Remaining phases
 
 - Setup script with bounded execution and explicit attended authority.

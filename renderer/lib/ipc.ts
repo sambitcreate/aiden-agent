@@ -1035,6 +1035,9 @@ export const workspacesApi = {
   /** Whether the workspace's folder is still on disk. */
   folderPresence: (workspaceId: string) =>
     invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
+  /** Put back an Aiden-managed worktree whose folder was deleted, on its branch as it stands now. */
+  restoreDeletedWorktree: (workspaceId: string) =>
+    invoke<Workspace>("workspaces:restoreDeletedWorktree", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),

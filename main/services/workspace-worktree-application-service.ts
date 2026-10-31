@@ -135,6 +135,17 @@ export interface WorkspaceWorktreeApplicationDependencies {
     workspaceSubpath: string,
     signal?: AbortSignal,
   ): Promise<GitCreatedWorktree>;
+  /**
+   * Put back a deleted managed checkout at its recorded path and branch.
+   * Required only by `restoreDeleted`.
+   */
+  restoreDeletedCheckout?(
+    managed: ManagedWorktree,
+    root: string,
+    workspaceSubpath: string,
+    commit: (restored: GitCreatedWorktree) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<GitCreatedWorktree>;
   saveWorkspace(workspace: Workspace): Promise<Workspace>;
   removeWorkspace(workspaceId: string): Promise<void>;
   beginWorkspaceMutation(workspaceId: string): () => void;
@@ -797,7 +808,95 @@ export function createWorkspaceWorktreeApplicationService(
     return operation;
   };
 
-  return { create, createFromBase, discardInterruptedWorktree, remove, restore };
+  /**
+   * A managed worktree whose folder was deleted outside Aiden: put its
+   * checkout back at the same path on its branch, as the branch stands now,
+   * and copy the `.worktreeinclude` files in again. Whatever was not
+   * committed went with the folder. The workspace keeps its id, so its chats
+   * carry on where they were.
+   */
+  const restoreDeleted = async (
+    owner: WorkspaceOperationDocumentOwner,
+    workspaceId: string,
+  ): Promise<Workspace> => {
+    const { restoreDeletedCheckout } = dependencies;
+    if (!restoreDeletedCheckout) throw new Error("Restoring a deleted worktree is unavailable.");
+    return dependencies.environment.runRecord(owner, workspaceId, async (workspace, signal) => {
+      // Taken before any await: runRecord has just checked that no other
+      // change (a Remove) holds the workspace, so none can slip in between.
+      const finishMutation = dependencies.beginWorkspaceMutation(workspaceId);
+      try {
+        const managed = workspace.managedWorktree;
+        if (!managed || !managed.worktreeGitDir || !managed.ownershipToken || !workspace.folderPath) {
+          throw new Error("This workspace is not a worktree Aiden can restore.");
+        }
+        if (workspace.permission === "none") {
+          throw new Error("This workspace has no folder access, so Aiden can't restore its worktree.");
+        }
+        if (await dependencies.workspacePathExists(managed.worktreePath)) {
+          throw new Error("The worktree folder is already there.");
+        }
+        const subpath = path.relative(managed.worktreePath, workspace.folderPath);
+        if (subpath.startsWith("..") || path.isAbsolute(subpath)) {
+          throw new Error("This workspace is not a worktree Aiden can restore.");
+        }
+        const root = await dependencies.ensureWorktreeRoot();
+        const record = (worktree: GitCreatedWorktree, provisionedFiles: string[]): Workspace => ({
+          ...workspace,
+          folderPath: worktree.workspacePath,
+          managedWorktree: {
+            ...managed,
+            worktreePath: worktree.path,
+            worktreeGitDir: worktree.worktreeGitDir,
+            ownershipToken: worktree.ownershipToken,
+            worktreeDevice: worktree.worktreeDevice,
+            worktreeInode: worktree.worktreeInode,
+            provisionedFiles,
+          },
+          updatedAt: dependencies.now(),
+        });
+        // Saved inside Git's lock: if the save fails, the new checkout is
+        // removed again and the record still matches the missing folder.
+        let saved: Workspace | undefined;
+        const worktree = await restoreDeletedCheckout(
+          managed,
+          root,
+          subpath,
+          async (restored) => {
+            saved = await dependencies.saveWorkspace(record(restored, []));
+          },
+          signal,
+        );
+        const provisionedFiles: string[] = [];
+        try {
+          await dependencies.provisionIncludedFiles({
+            sourceRoot: (await dependencies.repositoryPaths(managed.repositoryPath)).topLevel,
+            worktreePath: worktree.path,
+            signal,
+            onProvisioned: (relativePath) => provisionedFiles.push(relativePath),
+          });
+        } catch (error) {
+          // The checkout is back either way; a missing local file is easier
+          // to notice and fix than a worktree that stays gone.
+          dependencies.logError("git", "Aiden could not copy every .worktreeinclude file into a restored worktree.", error);
+        }
+        if (provisionedFiles.length) {
+          try {
+            saved = await dependencies.saveWorkspace(record(worktree, provisionedFiles));
+          } catch (error) {
+            // Unrecorded copies only make a later Remove ask before deleting them.
+            dependencies.logError("git", "Aiden could not record the files copied into a restored worktree.", error);
+          }
+        }
+        dependencies.notifyChanged();
+        return saved!;
+      } finally {
+        finishMutation();
+      }
+    });
+  };
+
+  return { create, createFromBase, discardInterruptedWorktree, remove, restore, restoreDeleted };
 }
 
 export type WorkspaceWorktreeApplicationService = ReturnType<
