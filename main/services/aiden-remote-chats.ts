@@ -2348,6 +2348,11 @@ export class AidenRemoteChatService {
           const messageId = `message_${randomUUID()}`;
           let appended = false;
           let appendedChat: Chat | undefined;
+          // Held, not spent, until the append runs: every refusal before it
+          // (busy, workspace changing, skill unavailable) gives the uploads
+          // back so the phone's resend under a fresh key can still use them.
+          let taken: ReturnType<AidenRemoteAttachmentStore["reserve"]> | undefined;
+          let appendAttempted = false;
           try {
             turn.onReleased(owner.owner.onInvalidated(turn.release));
             // Again now that this turn holds the chat. A pause recorded after
@@ -2368,7 +2373,10 @@ export class AidenRemoteChatService {
                 ),
               );
             }
-            const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
+            taken = parsed.attachmentIds === undefined
+              ? undefined
+              : this.attachments.reserve(deviceId, chatId, parsed.attachmentIds);
+            const attachments = taken?.attachments;
             try {
               if (parsed.skill) turn.reserveSkillPreparation();
               turn.reserveAppendPayload(
@@ -2436,6 +2444,7 @@ export class AidenRemoteChatService {
                 throw skillInvocationRemoteError(error);
               }
             }
+            appendAttempted = true;
             const chat = await appendChatMessageWithReconciliation({
               messageId,
               append: () => this.options.chatStore.appendMessage(
@@ -2459,6 +2468,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            taken?.commit();
             turn.settleAsyncWork();
             const started = await startSurfaceGeneration(
               this.options.generation.start,
@@ -2482,6 +2492,9 @@ export class AidenRemoteChatService {
               message: projectAidenRemoteChat({ ...chat, messages: [message] }).messages[0]!,
             };
           } catch (error) {
+            // Once the append was attempted the message may hold them.
+            if (appendAttempted) taken?.commit();
+            else taken?.restore();
             turn.release();
             turn.settleAsyncWork();
             this.options.streams.markStartError(deviceId, streamId, error);

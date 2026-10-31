@@ -4,8 +4,8 @@ import { rm } from "node:fs/promises";
 import { createChatApplicationService } from "../../../main/services/chat-application-service.js";
 import { AidenRemoteChatService } from "../../../main/services/aiden-remote-chats.js";
 import { AidenRemoteModelService } from "../../../main/services/aiden-remote-models.js";
-import { AidenRemoteStreamService, aidenRemoteStreamStoreOptions, normalizeAidenRemoteStreamSnapshot, removeRevokedDeviceStreams, type AidenRemoteStreamSnapshot } from "../../../main/services/aiden-remote-streams.js";
-import { DataStore } from "../../../main/services/data-store.js";
+import { AidenRemoteStreamService, removeRevokedDeviceStreams } from "../../../main/services/aiden-remote-streams.js";
+import { AidenRemoteStreamJournal } from "../../../main/services/aiden-remote-stream-journal.js";
 import type { AidenIdempotencyLedger, AidenIdempotencySnapshot } from "../../../main/services/aiden-remote-operation-contract.js";
 import type { AidenRemoteStateRegistry } from "../../../main/services/aiden-remote-state.js";
 import type { createDaemonChats } from "./daemon-chats.ts";
@@ -54,12 +54,14 @@ export async function createCliRemoteChats(agentDir: string, daemon: ReturnType<
   });
   // Same policy as the desktop journal: an unreadable file is kept aside as a
   // rescue copy and replaced instead of failing startup and every persist.
-  const snapshots = new DataStore<AidenRemoteStreamSnapshot>("remote-streams.json", { version: 1, streams: [] }, () => agentDir, aidenRemoteStreamStoreOptions());
+  // Same two-file journal as the desktop: finished streams in remote-streams.json,
+  // in-progress ones in remote-streams-live.json.
+  const journal = new AidenRemoteStreamJournal("remote-streams.json", () => agentDir);
   const revoked = new Set((await state.snapshot()).devices.filter((device) => device.revokedAt !== undefined).map((device) => device.id));
-  const snapshot = removeRevokedDeviceStreams(normalizeAidenRemoteStreamSnapshot(await snapshots.load()), revoked);
-  await snapshots.save(snapshot);
+  const snapshot = removeRevokedDeviceStreams(await journal.load(), revoked);
+  await journal.replace(snapshot);
   const streams = new AidenRemoteStreamService({ now: Date.now, cancel: daemon.llmClient.cancel, approve: daemon.llmClient.approve,
-    snapshot, persist: (value) => snapshots.save(value), idempotency, persistIdempotency,
+    snapshot, persist: (write) => journal.save(write), idempotency, persistIdempotency,
     onPersistenceError: () => process.stderr.write("aiden: Remote stream persistence failed.\n"),
   });
   const chats = new AidenRemoteChatService({ application, chatStore: daemon.chatStore, generation: daemon.llmClient,

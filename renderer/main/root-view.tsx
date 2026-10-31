@@ -35,6 +35,7 @@ import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from ".
 import { AppCommandPalette } from "../components/command-palette";
 import { KeyboardRegions } from "../components/keyboard-regions";
 import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
+import { WorkspaceSettingsDialog } from "../components/workspace-settings-dialog";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
@@ -628,6 +629,7 @@ function RootContent() {
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
         <KeyboardRegions />
         <KeyboardShortcutsDialog />
+        <WorkspaceSettingsDialog />
         <PairingRequestSheet />
         {capabilities.bots ? <BotConnectionSetupHost /> : null}
       </div>

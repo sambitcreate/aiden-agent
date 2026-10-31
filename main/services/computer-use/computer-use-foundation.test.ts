@@ -6,7 +6,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } fro
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -667,6 +667,46 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
   } finally {
     await transport.close();
     fake.destroy();
+  }
+});
+
+test("a message waiting on a full bridge pipe fails when teardown destroys the pipe", async () => {
+  // A bridge that never reads: the first write fills the pipe and waits for drain.
+  const stuckInput = new Writable({ highWaterMark: 1, write: () => undefined });
+  const output = new PassThrough();
+  const diagnostics = new PassThrough();
+  const bridge = Object.assign(new EventEmitter(), {
+    connected: false,
+    exitCode: null,
+    kill: () => false,
+    pid: undefined,
+    signalCode: null,
+    stderr: diagnostics,
+    stdin: stuckInput,
+    stdio: [stuckInput, output, diagnostics, null, null],
+    stdout: output,
+  }) as unknown as ChildProcess;
+  const transport = new AuthenticatedBridgeTransport(bridge, 1024);
+  try {
+    await transport.start();
+    const sent = transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    stuckInput.destroy();
+    let timer: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      sent.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve("still waiting"), 1_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.equal(outcome, "rejected");
+  } finally {
+    await transport.close();
+    output.destroy();
+    diagnostics.destroy();
   }
 });
 
@@ -1348,6 +1388,43 @@ test("broker death invalidates its session and a later session launches a fresh 
   const events = await readEvents(logPath);
   assert.equal(events.filter((event) => event.event === "spawn" && event.command === "bridge").length, 2);
   await rm(root, { recursive: true, force: true });
+});
+
+test("a runtime directory that can never be removed does not block later sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-stuck-cleanup-"));
+  const logPath = path.join(root, "events.jsonl");
+  let stuckDirectory: string | null = null;
+  let stuckAttempts = 0;
+  const host = fakeHost(root, logPath, [], {
+    removeDirectory: async (directory, options) => {
+      stuckDirectory ??= String(directory);
+      if (directory === stuckDirectory) {
+        stuckAttempts += 1;
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+      await rm(directory, options);
+    },
+  });
+  try {
+    await host.createSession();
+    const bridge = (await readEvents(logPath)).find(
+      (event) => event.event === "spawn" && event.command === "bridge",
+    );
+    process.kill(bridge?.pid as number, "SIGKILL");
+    await waitForCondition(() => !host.running);
+    for (let session = 0; session < 4; session += 1) {
+      const next = await host.createSession();
+      assert.equal(next.ready, true);
+      await next.close();
+    }
+    await host.shutdown();
+    assert.ok(stuckAttempts >= 2, "the stuck directory is retried before it is given up");
+    assert.ok(stuckAttempts <= 4, "the stuck directory is not retried forever");
+  } finally {
+    await host.shutdown();
+    if (stuckDirectory) await rm(stuckDirectory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("shutdown retries cleanup that failed after an unexpected bridge exit", async () => {

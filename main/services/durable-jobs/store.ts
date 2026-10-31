@@ -1,3 +1,4 @@
+import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -102,7 +103,9 @@ export class DurableJobStore {
     this.checkFiles();
     this.db = new DatabaseSync(this.file);
     try {
-      this.db.exec("PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON;");
+      this.db.exec("PRAGMA busy_timeout=100;");
+      initializeSqliteReclamation(this.db);
+      this.db.exec("PRAGMA foreign_keys=ON;");
       const version = Number(
         (
           this.db.prepare("PRAGMA user_version").get() as {
@@ -153,6 +156,7 @@ export class DurableJobStore {
         throw error;
       }
       this.checkFiles();
+      reclaimSqlitePages(this.db);
     } catch (error) {
       this.db.close();
       throw error;
@@ -658,6 +662,7 @@ export class DurableJobStore {
   }
   close(): void {
     if (!this.closed) {
+      reclaimSqlitePages(this.db);
       this.db.close();
       this.closed = true;
     }

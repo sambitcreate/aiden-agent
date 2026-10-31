@@ -4,6 +4,7 @@ import { FileArchive, FolderOpen, Loader2, ShieldAlert, Trash2 } from "lucide-re
 import { diagnosticsApi } from "../../lib/ipc";
 import { quarantinedChatsNotice, type DiagnosticSupportStatusView } from "../../shared/diagnostics";
 import { AlertDialog, Button, Field, FieldSet, toast } from "../ui";
+import { UsageDataSettings } from "../usage-data";
 
 type Confirmation = "delete" | "dump-export" | "mode" | null;
 type Action = "delete" | "export" | "mode" | "reveal" | null;
@@ -107,6 +108,7 @@ export function DiagnosticsSettings() {
   const busy = action !== null;
   return (
     <>
+      <UsageDataSettings />
       <FieldSet title="Diagnostics">
         <Field
           label="Local evidence"
