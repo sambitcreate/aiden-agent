@@ -148,7 +148,9 @@ same in the composer, the command palette, Bots, and scheduled tasks. The Bot
 capability catalog carries opaque grant ids, so the Bot model picker finds the
 real provider by its label (only when exactly one provider has that label) and
 uses the model's display name as the Claude or Grok hint. iOS
-(`AidenProviderIcon`) and Android (`AidenProviderIcon`) follow the same rule.
+(`AidenProviderIcon`) and Android (`AidenProviderIcon`) use the same marks for
+new work; some native lists, such as the iOS scheduled-task model picker and
+the iOS Bot model rows, still show text or an initial.
 
 ## Loading and optimistic updates
 
