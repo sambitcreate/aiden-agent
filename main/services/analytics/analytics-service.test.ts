@@ -304,6 +304,34 @@ test("switching off then back on while the opt-out is still sending leaves it on
   assert.equal(created[1]!.state(), "open");
 });
 
+test("switching off and back on while startup is still connecting leaves sending on", async (t) => {
+  const created: ReturnType<typeof fakeTransport>[] = [];
+  let releaseFirst: (() => void) | undefined;
+  let calls = 0;
+  const h = harness({
+    initial: { enabled: true, noticeShownAt: "2026-10-01T00:00:00.000Z" },
+    createTransport: async () => {
+      if (++calls === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+      const fake = fakeTransport();
+      created.push(fake);
+      return fake.transport;
+    },
+  });
+  t.after(h.cleanup);
+
+  const starting = h.service.start();
+  while (!releaseFirst) await new Promise((resolve) => setImmediate(resolve));
+  await h.service.setEnabled(false);
+  const turningOn = h.service.setEnabled(true);
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFirst();
+  await Promise.all([starting, turningOn]);
+
+  const live = created.filter((fake) => fake.state() === "open");
+  assert.equal(live.length, 1, "exactly one transport is left sending");
+  assert.ok(live[0]!.queued.some((message) => message.event === "app_opened"));
+});
+
 test("switching usage data back on in Settings while the notice waits answers it and starts sending", async (t) => {
   const h = harness();
   t.after(h.cleanup);

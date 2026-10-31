@@ -143,11 +143,13 @@ for (const [button, choice] of [
   });
 }
 
-test("turning usage data back on in Settings answers an open notice and closes it", async () => {
+test("changing the Settings switch while the notice is open closes it without answering it", async () => {
+  // Mirrors main: the notice is pending only while usage data is on and the
+  // notice unanswered, and switching it on in Settings answers the notice.
   let saved = status({ noticePending: true });
   const calls = installBotTestIpc({
     "analytics:status": () => saved,
-    "analytics:setEnabled": (enabled) => (saved = status({ enabled: enabled as boolean, noticePending: !enabled })),
+    "analytics:setEnabled": (enabled) => (saved = status({ enabled: enabled as boolean, noticePending: false })),
   });
   render(
     <>
@@ -157,14 +159,12 @@ test("turning usage data back on in Settings answers an open notice and closes i
   );
   await flush();
   const notice = () => screen.queryByRole("region", { name: "Aiden now shares anonymous usage data" });
+  assert.ok(notice());
 
   fireEvent.click(screen.getByRole("switch", SWITCH));
   await flush();
-  assert.ok(notice(), "turning usage data off leaves the notice waiting");
 
-  fireEvent.click(screen.getByRole("switch", SWITCH));
-  await flush();
-  assert.deepEqual(channelCalls(calls, "analytics:setEnabled"), [[false], [true]]);
+  assert.deepEqual(channelCalls(calls, "analytics:setEnabled"), [[false]]);
   assert.equal(notice(), null);
   assert.deepEqual(channelCalls(calls, "analytics:markNoticeShown"), []);
 });

@@ -223,17 +223,22 @@ export function createAnalyticsService(options: AnalyticsServiceOptions): Analyt
     const state = await options.store.read();
     if (!analyticsSendStatus(state, { env: options.env, hasKey }).canSend) return;
     if (core) return;
-    activation ??= activate()
-      .catch((error: unknown) => log("Analytics could not start.", error))
-      .finally(() => {
-        activation = undefined;
-      });
+    if (!activation) {
+      const run: Promise<void> = activate()
+        .catch((error: unknown) => log("Analytics could not start.", error))
+        .finally(() => {
+          if (activation === run) activation = undefined;
+        });
+      activation = run;
+    }
     return activation;
   }
 
   // Stops capture and drops whatever is queued, without sending it.
   async function stop(): Promise<void> {
     generation += 1;
+    // An activation started before this stop gives up; the next one starts fresh.
+    activation = undefined;
     if (timer !== undefined) stopTimer(timer);
     timer = undefined;
     activeDay = undefined;
