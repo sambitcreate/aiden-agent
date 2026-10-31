@@ -42,7 +42,7 @@ Pages follow the workspace's access setting, the same way chats do:
 - **Ask**: when Aiden creates or changes a page, the approval card lists every command it can run. Allowing it approves exactly that set of commands, and any later change to them needs approval again. The person can also review and allow a page from the tab, which reads its sources at once. Each button press shows the exact command and waits for **Run**. File sources run without approval, because chats under Ask read workspace files without asking.
 - **Full access**: sources and buttons run without asking.
 
-Changing a workspace's access cancels any refresh or button already running. Commands run with the same environment as `run_command`, and Aiden's own secrets are withheld.
+Changing a workspace's access cancels any refresh or button already running. Commands run with the same environment as `run_command`, and Aiden's own secrets are withheld. Like `run_command`, a source or button command that leaves a background job holding its output has that job stopped 1 second after the command exits; redirect a job's output (`> file 2>&1 &`) if it should keep running.
 
 ## Managing pages
 

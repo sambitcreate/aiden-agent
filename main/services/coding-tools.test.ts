@@ -26,6 +26,7 @@ import { runToolCall } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createPiCodemodeTool } from "./pi-codemode.js";
 import { advanceAttendedToolErrorState } from "./assistant/tool-loop-guard.js";
+import { processRunning } from "../shared/process-liveness-test-support.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1534,6 +1535,135 @@ test("pinned edit_file keeps ordinary files above the subagent content cap edita
   }
 });
 
+test("write_file streams a large existing file and refuses one past the replace limit", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-huge-"));
+  try {
+    const write = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    // Sparse files take no disk. The streamed hash must match what the native writer checks.
+    const large = path.join(root, "large.log");
+    await fs.writeFile(large, "first\nsecond\n");
+    await fs.truncate(large, 100 * 1024 * 1024);
+    const result = await write.execute("large", { path: "large.log", content: "a\nb\n" });
+    assert.equal(await fs.readFile(large, "utf8"), "a\nb\n");
+    // Two newline-terminated lines, then the zero-filled tail as one final line.
+    assert.deepEqual([result.details?.additions, result.details?.deletions], [2, 3]);
+
+    // 600 MiB is past both the replace limit and V8's maximum string length.
+    const huge = path.join(root, "huge.log");
+    await fs.writeFile(huge, "keep\n");
+    await fs.truncate(huge, 600 * 1024 * 1024);
+    await assert.rejects(
+      write.execute("huge", { path: "huge.log", content: "x" }),
+      /huge\.log is larger than write_file's 256 MiB limit for replacing a file/u,
+    );
+    assert.equal((await fs.stat(huge)).size, 600 * 1024 * 1024);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("write_file counts lines of a large pre-image exactly as it does for a small one", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-write-large-"));
+  try {
+    const write = buildPinnedCodingTools(root).find((tool) => tool.name === "write_file");
+    assert.ok(write);
+    const line = `${"x".repeat(1023)}\n`;
+    const large = `${line.repeat(17 * 1024)}tail without newline`;
+    await fs.writeFile(path.join(root, "large.txt"), large);
+    const replaced = await write.execute("large", { path: "large.txt", content: "one\n" });
+    assert.equal(replaced.details?.deletions, 17 * 1024 + 1);
+    assert.equal(replaced.details?.additions, 1);
+    await fs.writeFile(path.join(root, "small.txt"), "keep\ndrop\n");
+    const edited = await write.execute("small", { path: "small.txt", content: "keep\nadd\n" });
+    assert.deepEqual([edited.details?.additions, edited.details?.deletions], [1, 1]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+async function fileHead(target: string, bytes: number): Promise<string> {
+  const head = Buffer.alloc(bytes);
+  const handle = await fs.open(target, "r");
+  try {
+    await handle.read(head, 0, bytes, 0);
+  } finally {
+    await handle.close();
+  }
+  return head.toString("utf8");
+}
+
+test("edit_file edits a file of exactly its size limit and refuses one byte more, untouched", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-huge-"));
+  const limit = 64 * 1024 * 1024;
+  try {
+    const edit = buildPinnedCodingTools(root).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+    const atLimit = path.join(root, "at-limit.log");
+    await fs.writeFile(atLimit, "before\n");
+    await fs.truncate(atLimit, limit);
+    await edit.execute("at-limit", { path: "at-limit.log", old_string: "before", new_string: "after!" });
+    assert.equal(await fileHead(atLimit, 7), "after!\n");
+    assert.equal((await fs.stat(atLimit)).size, limit);
+
+    const over = path.join(root, "huge.log");
+    await fs.writeFile(over, "before\n");
+    await fs.truncate(over, limit + 1);
+    await assert.rejects(
+      edit.execute("huge", { path: "huge.log", old_string: "before", new_string: "after" }),
+      /huge\.log is larger than edit_file's 64 MiB limit; use write_file or run_command/u,
+    );
+    assert.equal(await fileHead(over, 7), "before\n");
+    assert.equal((await fs.stat(over)).size, limit + 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("edit_file reads what a file grew to after its size check, and refuses growth past the limit", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-edit-growth-"));
+  try {
+    const target = path.join(root, "growing.log");
+    let growTo = 0;
+    const grow = async () => {
+      const handle = await fs.open(target, "a");
+      try {
+        // Appended after the check: the edit must still see the tail.
+        await handle.write(Buffer.concat([Buffer.alloc(growTo - "head\n".length - "tail\n".length), Buffer.from("tail\n")]));
+      } finally {
+        await handle.close();
+      }
+    };
+    const edit = buildPinnedCodingTools(root, { afterFileStat: grow }).find((tool) => tool.name === "edit_file");
+    assert.ok(edit);
+
+    await fs.writeFile(target, "head\n");
+    growTo = 3 * 1024 * 1024;
+    await edit.execute("grown", { path: "growing.log", old_string: "tail", new_string: "TAIL" });
+    const grownSize = (await fs.stat(target)).size;
+    assert.equal(grownSize, growTo);
+    const handle = await fs.open(target, "r");
+    try {
+      const tail = Buffer.alloc(5);
+      await handle.read(tail, 0, 5, grownSize - 5);
+      assert.equal(tail.toString("utf8"), "TAIL\n");
+    } finally {
+      await handle.close();
+    }
+
+    await fs.writeFile(target, "head\n");
+    growTo = 64 * 1024 * 1024 + 1;
+    await assert.rejects(
+      edit.execute("too-big", { path: "growing.log", old_string: "tail", new_string: "TAIL" }),
+      /growing\.log is larger than edit_file's 64 MiB limit/u,
+    );
+    assert.equal((await fs.stat(target)).size, growTo);
+    assert.equal(await fileHead(target, 5), "head\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("run_command reports real exit failures through Pi and codemode without re-executing effects", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-outcome-"));
   try {
@@ -1605,6 +1735,33 @@ test("run_command cancellation kills the shell process group", async () => {
     await assert.rejects(running, /test cancellation/);
     assert.ok(Date.now() - startedAt < 3_000, "command process group should settle promptly");
   } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("run_command returns when a background job keeps the shell's output pipe open", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-held-pipe-"));
+  let background = 0;
+  try {
+    const runCommand = buildCodingTools(root).find((tool) => tool.name === "run_command")!;
+    const startedAt = Date.now();
+    // The job inherits stdout, so the pipe stays open after the shell exits.
+    const result = await runCommand.execute("held", { command: "sleep 30 &\necho $! > job.pid\necho done" });
+    assert.ok(Date.now() - startedAt < 10_000, "the command must not wait for the 30 s job");
+    assert.notEqual(result.isError, true);
+    const text = result.content[0].type === "text" ? result.content[0].text : "";
+    assert.match(text, /done/u);
+    assert.match(text, /background processes still holding the output were stopped/u, "the model must learn the job was stopped");
+    // A command with nothing left in the background gets no note.
+    const detached = await runCommand.execute("detached", { command: "echo plain" });
+    assert.doesNotMatch(detached.content[0].type === "text" ? detached.content[0].text : "", /were stopped/u);
+    background = Number(await fs.readFile(path.join(root, "job.pid"), "utf8"));
+    assert.equal(processRunning(background), false, "the job holding the pipe is stopped with the command's group");
+  } finally {
+    if (background > 0) {
+      try { process.kill(background, "SIGKILL"); } catch { /* Already exited. */ }
+    }
     await fs.rm(root, { recursive: true, force: true });
   }
 });
