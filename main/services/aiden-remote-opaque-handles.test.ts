@@ -160,3 +160,21 @@ test("failed identity inspection drains its other path lookup before releasing m
   } finally { release(); }
   await rejection;
 });
+
+test("one device cannot take the whole handle store from other paired devices", () => {
+  const now = 1_000;
+  const store = new AidenOpaqueHandleStore({ maxEntries: 4, maxEntriesPerDevice: 2, now: () => now });
+  const phone = (inode: string) => claims({ deviceId: "phone", filesystemInode: inode });
+  store.issue("file", phone("1"), { listing: "phone:workspace" });
+  store.issue("file", phone("2"), { listing: "phone:workspace" });
+  rejectsCode(() => store.issue("file", phone("3")), "handle_capacity");
+
+  const tablet = claims({ deviceId: "tablet", filesystemInode: "t" });
+  assert.doesNotThrow(() => store.issue("file", tablet));
+  assert.doesNotThrow(() => store.issue("file", { ...tablet, filesystemInode: "t2" }));
+
+  // Re-listing frees the phone's own superseded, never-opened handles.
+  store.supersedeListing("phone:workspace");
+  const fresh = store.issue("file", phone("3"), { listing: "phone:workspace" });
+  assert.deepEqual(store.resolve(fresh, "file", phone("3"), { now }).filesystemInode, "3");
+});

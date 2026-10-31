@@ -25,6 +25,11 @@ import {
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
+import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
+import {
+  workspaceFolderCheckApplies,
+  type WorkspaceFolderPresenceResult,
+} from "../../renderer/shared/workspace-folder-presence.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -156,6 +161,22 @@ function observeGitRepository(resolved: WorkspaceEnvironmentDirectory | undefine
 export function registerWorkspaceHandlers(): void {
   ipcMain.handle("workspaces:list", async () => workspaceApplicationService.list());
 
+  // Settings → Memory: what Aiden remembers in a workspace, and deleting a fact.
+  const memoryFacts = async () => {
+    const [{ createWorkspaceMemoryFacts }, { memoryStore }, { configStore }] = await Promise.all([
+      import("../services/workspace-memory-facts.js"),
+      import("../services/memory-store-main.js"),
+      import("../services/config-store.js"),
+    ]);
+    return createWorkspaceMemoryFacts({ getWorkspace: (id) => configStore.getWorkspace(id), store: memoryStore });
+  };
+  ipcMain.handle("workspaces:memoryFacts", async (_event, workspaceId: unknown) =>
+    (await memoryFacts()).list(workspaceId),
+  );
+  ipcMain.handle("workspaces:deleteMemoryFact", async (_event, workspaceId: unknown, factId: unknown) =>
+    (await memoryFacts()).remove(workspaceId, factId),
+  );
+
   ipcMain.handle(
     "workspaces:get",
     async (_event, id: unknown) => workspaceApplicationService.get(asString(id, "id")),
@@ -167,7 +188,9 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("workspaces:createFromFolder", async (event) => {
     const parent = BrowserWindow.fromWebContents(event.sender);
-    const options: OpenDialogOptions = { properties: ["openDirectory"] };
+    // createDirectory adds Finder's New Folder button on macOS, so a workspace
+    // can start in a folder that doesn't exist yet.
+    const options: OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] };
     const result = parent
       ? await dialog.showOpenDialog(parent, options)
       : await dialog.showOpenDialog(options);
@@ -196,6 +219,10 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("workspaces:createScratch", async () =>
     workspaceApplicationService.createScratch(),
+  );
+
+  ipcMain.handle("workspaces:createNoWorkspace", async () =>
+    workspaceApplicationService.createNoWorkspace(),
   );
 
   ipcMain.handle("workspaces:update", async (_event, id: unknown, patch: unknown) =>
@@ -398,6 +425,20 @@ export function registerWorkspaceHandlers(): void {
       return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
     },
   );
+
+  // Whether the workspace's folder is still on disk, so the composer can say it
+  // was moved or deleted before a send fails inside a tool.
+  ipcMain.handle("workspaces:folderPresence", async (_event, workspaceId: unknown) => {
+    if (typeof workspaceId !== "string" || !workspaceId) throw new Error("A workspace id is required.");
+    const workspace = await workspaceApplicationService.get(workspaceId);
+    if (!workspace || !workspaceFolderCheckApplies(workspace)) {
+      return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
+    }
+    return {
+      presence: await workspaceFolderPresence(workspace.folderPath!),
+      folder: displayWorkspaceFolder(workspace.folderPath!),
+    } satisfies WorkspaceFolderPresenceResult;
+  });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
   ipcMain.handle("workspaces:openFolder", async (event, workspaceId: unknown) =>

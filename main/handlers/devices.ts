@@ -8,7 +8,7 @@ import { createDeviceFeatures, type DeviceFeatures } from "../services/devices/d
 import { registerDeviceFeatureHandlersWith } from "../services/devices/device-feature-ipc.js";
 import { createDeviceRecorder } from "../services/devices/device-recording.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import { startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
+import { rendererProxyOrigins, startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
 import { registerDeviceHandlersWith } from "../services/devices/device-ipc.js";
 import {
   createDeviceService,
@@ -27,6 +27,7 @@ import {
   createLocalDeviceHost,
   defaultLocalDeviceHostDeps,
   reservePort,
+  terminateRunningDeviceCommands,
 } from "../services/devices/local-device-host.js";
 import {
   createSshDeviceHost,
@@ -41,19 +42,6 @@ const SSH_PATH = "/usr/bin/ssh";
 
 let deviceService: DeviceService | null = null;
 let deviceFeatures: DeviceFeatures | null = null;
-
-function proxyAllowedOrigins(): string[] {
-  const origins = ["file://"];
-  const devServer = process.env.AIDEN_RENDERER_URL;
-  if (devServer) {
-    try {
-      origins.push(new URL(devServer).origin);
-    } catch {
-      // A malformed dev URL cannot load the renderer either.
-    }
-  }
-  return origins;
-}
 
 function defaultDeviceService(): DeviceService {
   if (deviceService) return deviceService;
@@ -93,7 +81,7 @@ function defaultDeviceService(): DeviceService {
         ),
     },
     startProxy: (resolveHub) =>
-      startDeviceHubProxy({ resolveHub, allowedOrigins: proxyAllowedOrigins() }),
+      startDeviceHubProxy({ resolveHub, allowedOrigins: rendererProxyOrigins() }),
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
   });
   return deviceService;
@@ -177,6 +165,16 @@ export async function shutdownDevices(): Promise<void> {
   for (const timer of timers) clearTimeout(timer);
   // The service bounds its own helpers' stop, and always runs so they never outlive the app.
   await deviceService?.stop();
+}
+
+/**
+ * Quit's Devices budget is shorter than the recordings, SSH and `daemon stop`
+ * timeouts added together. When it runs out first, this applies the helpers'
+ * own timeout fallback (SIGTERM) at once and refuses any the still-running
+ * shutdown chain starts afterwards, so none is left running after quit.
+ */
+export function terminateDeviceHelperCommands(): void {
+  terminateRunningDeviceCommands();
 }
 
 export function registerDeviceHandlers(): void {

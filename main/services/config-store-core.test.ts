@@ -19,6 +19,7 @@ import {
   splitStoredProvider,
 } from "./portable-config-core.js";
 import { freshWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { defaultWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import type { AssistantConfig, StoredProvider, Workspace } from "./types.js";
 
 function expectedWebSearchSettings(enabled: boolean) {
@@ -533,6 +534,61 @@ test("a workspace keeps only a literal scratch mark across saves and reloads", a
   assert.equal((await h.store.getWorkspace("scratch"))?.scratch, true);
 });
 
+test("workspace skill and connector off-lists survive restarts, and a damaged list never loses the workspace", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  await h.store.saveWorkspace({ ...base, id: "client", name: "Client", disabledSkills: ["Deploy"], disabledMcpServerIds: ["gmail"] });
+  await h.store.saveWorkspace({ ...base, id: "damaged", name: "Damaged" });
+  const local = await readJson<{ workspaces: Array<Record<string, unknown>> }>(h.localFile);
+  for (const entry of local.workspaces) {
+    if (entry.id === "damaged") Object.assign(entry, { disabledSkills: "deploy", disabledMcpServerIds: [7, "notion"] });
+  }
+  await fs.writeFile(h.localFile, JSON.stringify(local), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  const client = await next.getWorkspace("client");
+  assert.deepEqual(client?.disabledSkills, ["deploy"]);
+  assert.deepEqual(client?.disabledMcpServerIds, ["gmail"]);
+  const damaged = await next.getWorkspace("damaged");
+  assert.equal(damaged?.name, "Damaged");
+  assert.equal("disabledSkills" in (damaged ?? {}), false);
+  assert.deepEqual(damaged?.disabledMcpServerIds, ["notion"]);
+
+  // Turning everything back on removes the stored list.
+  await next.saveWorkspace({ ...client!, disabledSkills: undefined });
+  assert.equal("disabledSkills" in ((await next.getWorkspace("client")) ?? {}), false);
+});
+
+test("a workspace keeps only a literal No workspace mark across saves and reloads", async (t) => {
+  const h = await harness(t);
+  const base = { permission: "ask" as const, createdAt: 1, updatedAt: 1 };
+  // No workspace chats use the global skills and connectors, so an off-list is never kept for them.
+  await h.store.saveWorkspace({
+    ...base,
+    id: "chat",
+    name: "No workspace",
+    folderPath: "/x/chats/kind-fern-hike",
+    noWorkspace: true,
+    disabledSkills: ["deploy"],
+    disabledMcpServerIds: ["gmail"],
+  });
+  await h.store.saveWorkspace({ ...base, id: "odd", name: "Odd", noWorkspace: 1 as unknown as true });
+  const listed = new Map((await h.store.listWorkspaces()).map((workspace) => [workspace.id, workspace]));
+  assert.equal(listed.get("chat")?.noWorkspace, true);
+  assert.equal("noWorkspace" in (listed.get("odd") ?? {}), false);
+  await h.store.saveWorkspace({ ...listed.get("chat")!, permission: "full" });
+  const chat = await h.store.getWorkspace("chat");
+  assert.equal(chat?.noWorkspace, true);
+  assert.equal("disabledSkills" in (chat ?? {}), false);
+  assert.equal("disabledMcpServerIds" in (chat ?? {}), false);
+});
+
 test("resetUserSetup clears setup and preferences while preserving skills and workspaces", async (t) => {
   const h = await harness(t);
   await h.store.saveProvider(provider);
@@ -628,6 +684,48 @@ test("reads and writes survive a restart of the whole store", async (t) => {
   });
 });
 
+test("analytics consent stays in machine-local settings.json, apart from app settings", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const saved = await h.store.updateAnalyticsState((state) => ({
+    ...state,
+    installId: "0b6f4a6e-3c1d-4f8e-9a2b-7c5d1e0f9a8b",
+    noticeShownAt: "2026-10-30T12:00:00.000Z",
+  }));
+  // An unrelated settings write must not drop the analytics state.
+  await h.store.setSettings({ exaEnabled: false });
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), saved);
+  assert.equal(saved.enabled, true);
+  assert.equal("analytics" in (await next.getSettings()), false);
+  const portableText = await fs.readFile(h.portableFile, "utf-8").catch(() => "");
+  assert.equal(portableText.includes("0b6f4a6e"), false);
+  assert.equal((await readJson<{ analytics?: { installId?: string } }>(h.settingsFile)).analytics?.installId, saved.installId);
+});
+
+test("damaged analytics state reads back as the default instead of failing", async (t) => {
+  const h = await harness(t);
+  await h.store.setSettings({ exaEnabled: true });
+  const file = await readJson<Record<string, unknown>>(h.settingsFile);
+  await fs.writeFile(h.settingsFile, JSON.stringify({ ...file, analytics: { enabled: "nope", installId: 7 } }), "utf-8");
+
+  const next = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    fakeSecrets().port,
+  );
+  assert.deepEqual(await next.getAnalyticsState(), { enabled: true });
+});
+
 test("hand-edited dictation preferences reach consumers only in supported shapes", async (t) => {
   const h = await harness(t);
   await h.store.setSettings({ exaEnabled: true });
@@ -639,6 +737,7 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
     voiceLanguage: "klingon!",
     voiceTranslateToEnglish: "yes",
     voiceTrimSilence: 0,
+    localVoicePreload: "yes",
     dictationDictionary: [
       { from: "  aiden  ", to: "Aiden" },
       { from: 42, to: "nope" },
@@ -661,6 +760,7 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
   assert.equal(runtime.voiceLanguage, undefined);
   assert.equal(runtime.voiceTranslateToEnglish, undefined);
   assert.equal(runtime.voiceTrimSilence, undefined);
+  assert.equal(runtime.localVoicePreload, undefined);
   assert.deepEqual(runtime.dictationDictionary, [
     { from: "aiden", to: "Aiden" },
     { from: "pie", to: "Pi" },
@@ -669,7 +769,12 @@ test("hand-edited dictation preferences reach consumers only in supported shapes
 
 test("saved voice language and decode preferences survive a restart", async (t) => {
   const h = await harness(t);
-  await h.store.setSettings({ voiceLanguage: "de", voiceTranslateToEnglish: true, voiceTrimSilence: false });
+  await h.store.setSettings({
+    voiceLanguage: "de",
+    voiceTranslateToEnglish: true,
+    voiceTrimSilence: false,
+    localVoicePreload: false,
+  });
   const restarted = createConfigStore(
     createPortableConfigStores(
       () => path.dirname(h.portableFile),
@@ -681,6 +786,7 @@ test("saved voice language and decode preferences survive a restart", async (t) 
   assert.equal(runtime.voiceLanguage, "de");
   assert.equal(runtime.voiceTranslateToEnglish, true);
   assert.equal(runtime.voiceTrimSilence, false);
+  assert.equal(runtime.localVoicePreload, false);
 });
 
 test("clearing the voice provider returns to Automatic after a restart", async (t) => {
@@ -1593,6 +1699,47 @@ test("Web Search config updates are durable and do not touch provider transport"
     selected.webSearch?.selection,
   );
   assert.equal(h.secrets.keys.exa, undefined, "settings persistence must not create a credential");
+});
+
+test("web page settings persist through their own seam and never through a broad settings patch", async (t) => {
+  const h = await harness(t);
+  assert.deepEqual(await h.store.getWebFetchSettings(), defaultWebFetchSettings());
+  const accountId = "0123456789abcdef0123456789abcdef";
+  const saved = await h.store.updateWebFetchSettings((current) => ({
+    ...current,
+    extract: { ...current.extract, accountId },
+  }));
+  assert.equal(saved.extract.accountId, accountId);
+  const restarted = createConfigStore(
+    createPortableConfigStores(
+      () => path.dirname(h.portableFile),
+      () => path.dirname(h.localFile),
+    ),
+    h.secrets.port,
+  );
+  assert.deepEqual(await restarted.getWebFetchSettings(), saved);
+  // Machine-local: the account ID never reaches the portable config.
+  assert.doesNotMatch(await fs.readFile(h.portableFile, "utf-8").catch(() => ""), new RegExp(accountId, "u"));
+  await assert.rejects(
+    () => h.store.setSettings({ webFetch: { ...saved, enabled: false } }),
+    /own settings call/u,
+  );
+  await assert.rejects(
+    () => h.store.updateWebFetchSettings((current) => ({ ...current, extract: { ...current.extract, accountId: "nope" } })),
+    /supported version 1/u,
+  );
+  assert.deepEqual(await restarted.getWebFetchSettings(), saved);
+});
+
+test("a future web page settings document survives and reads as off", async (t) => {
+  const h = await harness(t);
+  const future = { version: 2, enabled: true, extract: { enabled: true, model: "future-model" } };
+  await fs.writeFile(h.settingsFile, JSON.stringify({ settings: { webFetch: future, profileName: "Before" } }), "utf-8");
+  assert.equal((await h.store.getSettings()).webFetch, undefined);
+  assert.equal((await h.store.getWebFetchSettings()).enabled, false);
+  await h.store.setSettings({ profileName: "After" });
+  assert.deepEqual((await readJson<{ settings: { webFetch: unknown } }>(h.settingsFile)).settings.webFetch, future);
+  await assert.rejects(() => h.store.updateWebFetchSettings((current) => current), /newer version/u);
 });
 
 test("future Web Search settings survive unrelated writes and project closed across restart", async (t) => {
@@ -3178,6 +3325,32 @@ test("chat appearance mutations merge inside the settings lease and reject stale
   assert.equal(saved.appearance?.mode, "dark");
   assert.equal(saved.appearance?.chatWidth, "wide");
   await assert.rejects(h.store.updateAppControl({ ...operation, value: "light" }, () => true), /Settings changed/u);
+});
+
+test("chat color theme and new-chat model controls save what Settings would save", async (t) => {
+  const h = await harness(t);
+  const { appControlRevision, appControlValue } = await import("./app-controls-core.js");
+  const { getPresetVariant, normalizeAppearanceConfig } = await import("../../renderer/shared/appearance.js");
+  await h.store.setSettings({ appControlPolicy: "safe", lastProviderId: "lmstudio", lastModel: "qwen3-8b" });
+  let state = { settings: await h.store.getSettings() };
+  await h.store.setSettings({ appearance: { ...normalizeAppearanceConfig(state.settings.appearance), mode: "dark", chatWidth: "wide" } });
+  state = { settings: await h.store.getSettings() };
+  await h.store.updateAppControl({ control: "appearance.theme", value: "moss", expectedRevision: appControlRevision(state, "appearance.theme"), operationId: "theme" }, () => true);
+  let saved = await h.store.getSettings();
+  assert.deepEqual(saved.appearance?.light, getPresetVariant("moss", "light"));
+  assert.deepEqual(saved.appearance?.dark, getPresetVariant("moss", "dark"));
+  assert.equal(appControlValue({ settings: saved }, "appearance.theme"), "moss");
+  // Other appearance choices are kept.
+  assert.equal(saved.appearance?.mode, "dark");
+  assert.equal(saved.appearance?.chatWidth, "wide");
+
+  state = { settings: saved };
+  await h.store.updateAppControl({ control: "models.newChat", value: "openai::gpt-5.5", expectedRevision: appControlRevision(state, "models.newChat"), operationId: "model" }, () => true);
+  saved = await h.store.getSettings();
+  assert.equal(saved.lastProviderId, "openai");
+  assert.equal(saved.lastModel, "gpt-5.5");
+  // The model control leaves the switches alone.
+  assert.equal(saved.skillsEnabled, state.settings.skillsEnabled);
 });
 
 test("chat controls cannot widen a disabled or revoked paired-host policy", async (t) => {

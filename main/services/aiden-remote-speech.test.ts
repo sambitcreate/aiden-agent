@@ -195,6 +195,28 @@ test("remote speech status lists the pinned catalog with capabilities and passes
   const validate = new Ajv2020({ strict: false }).compile({ $ref: "#/components/schemas/SpeechStatus", components: spec.components });
   assert.equal(validate(status), true, JSON.stringify(validate.errors));
   assert.equal(validate(fixture.speechStatus), true, JSON.stringify(validate.errors));
+
+  // On Apple silicon the desktop also lists Parakeet on Metal, and recommends it instead.
+  const { speechModelsForHost } = await import("./local-speech-catalog.js");
+  const appleSilicon = createSpeechModelManager({
+    root: () => root,
+    catalog: speechModelsForHost({ platform: "darwin", arch: "arm64" }),
+    fetchImpl: () => Promise.reject(new Error("no network in tests")),
+  });
+  const appleStatus = await new AidenRemoteSpeechServiceCore({
+    configStore: { getSettings: async () => ({ localVoiceModel: "" }), setSettings: async () => {} },
+    listModels: appleSilicon.listModels,
+    localModelDownloadStates: () => [],
+    downloadModel: async () => {}, cancelDownload: () => false, deleteModel: async () => {},
+    releaseRecognizer: async () => {}, engineStatus: async () => ({ ready: true, error: null }),
+    transcribePcm16Base64: async () => "", recordUsage: async () => {},
+  }).status();
+  assert.deepEqual(
+    appleStatus.models.filter((model) => model.recommended).map((model) => [model.id, model.quant]),
+    [["parakeet-v3-metal", "Q8_0"]],
+  );
+  assert.equal(appleStatus.models.length, status.models.length + 1);
+  assert.equal(validate(appleStatus), true, JSON.stringify(validate.errors));
 });
 
 test("remote speech status reports the model Automatic actually uses", async () => {

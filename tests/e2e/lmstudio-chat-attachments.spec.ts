@@ -138,3 +138,36 @@ test("deterministic LM Studio chat sends the exact keyless multimodal payload", 
   await expect(page.locator("textarea")).toHaveValue("");
   await expect(page.getByRole("button", { name: `Remove ${CLIPBOARD_IMAGE_NAME}` })).toHaveCount(0);
 });
+
+test("a composer taller than a short window keeps its input and Send in view", async ({ aiden }, testInfo) => {
+  const { page, app } = aiden;
+  await finishLmStudioOnboarding(page);
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows().find((item) => item.isVisible())!;
+    window.setMinimumSize(640, 480);
+    window.setSize(740, 520);
+  });
+  const composer = page.locator("textarea");
+  await composer.evaluate((element, base64) => {
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const clipboard = new DataTransfer();
+    for (let index = 0; index < 12; index += 1) {
+      clipboard.items.add(new File([bytes], `clipboard-${index}.png`, { type: "image/png" }));
+    }
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }));
+  }, await safePngBase64());
+  await expect(page.getByRole("button", { name: /^Remove Pasted image/u })).toHaveCount(12);
+  await composer.fill(Array.from({ length: 10 }, (_, index) => `Line ${index + 1} of a long message`).join("\n"));
+  // The chips, the grown text box and the action row add up to more than the window below the toolbar.
+  // What no longer fits leaves through the top, so the text box and Send stay on screen.
+  const viewportHeight = await page.evaluate(() => window.innerHeight);
+  const send = page.getByRole("button", { name: "Send message", exact: true });
+  await expect.poll(async () => {
+    const box = await send.boundingBox();
+    return box ? box.y + box.height : Number.POSITIVE_INFINITY;
+  }).toBeLessThanOrEqual(viewportHeight);
+  const input = (await composer.boundingBox())!;
+  expect(input.y + input.height).toBeLessThanOrEqual(viewportHeight);
+  await page.screenshot({ path: testInfo.outputPath("tall-composer-short-window.png") });
+  await expect(send).toBeEnabled();
+});

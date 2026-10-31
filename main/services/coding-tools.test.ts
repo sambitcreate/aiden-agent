@@ -128,9 +128,17 @@ test("share_image admits verified PNG bytes from absolute paths without exposing
       ),
     );
     const shared: import("./types.js").Attachment[] = [];
-    const tool = createShareImageTool({ workspaceRoot: root, share: (attachment) => shared.push(attachment) });
+    const calls: string[] = [];
+    const tool = createShareImageTool({
+      workspaceRoot: root,
+      share: (attachment, toolCallId) => {
+        shared.push(attachment);
+        calls.push(toolCallId);
+      },
+    });
     const result = await tool.execute("share-1", { path: imagePath });
     assert.equal(shared.length, 1);
+    assert.deepEqual(calls, ["share-1"], "the image is placed at the call that shared it");
     assert.equal(shared[0]?.name, "Preview.png");
     assert.equal(shared[0]?.mimeType, "image/png");
     assert.match(shared[0]?.id ?? "", /^shared_/u);
@@ -1555,17 +1563,17 @@ test("run_command reports real exit failures through Pi and codemode without re-
     assert.deepEqual(outcomes, [true]);
     assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "x", "reporting a failure must not rerun its effects");
 
-    const firstGuard = advanceAttendedToolErrorState(0, [{ isError: outcomes[0] }]);
+    const firstGuard = advanceAttendedToolErrorState(undefined, [{ isError: outcomes[0] }]);
     assert.equal(firstGuard.shouldStop, false);
     const retry = await runCommand.execute("retry", { command: "node failure.cjs" });
     assert.equal(retry.isError, true);
-    assert.equal(advanceAttendedToolErrorState(firstGuard.consecutiveErrorTurns, [retry]).shouldStop, true);
+    assert.equal(advanceAttendedToolErrorState(firstGuard, [retry]).shouldStop, true);
     assert.equal(await fs.readFile(path.join(root, "attempts"), "utf8"), "xx", "only the explicit retry may execute again");
 
     const success = await runCommand.execute("success", { command: "node -e 'process.stdout.write(\"ok\")'" });
     assert.notEqual(success.isError, true);
     assert.equal(success.content[0].type === "text" ? success.content[0].text : "", "ok");
-    assert.equal(advanceAttendedToolErrorState(1, [success]).consecutiveErrorTurns, 0);
+    assert.equal(advanceAttendedToolErrorState(firstGuard, [success]).totalFailures, 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -2677,9 +2685,20 @@ test("foreground glob agrees with native glob on normal patterns, hidden paths a
     for (const file of ["src/a.ts", "src/b.js", "src/sub/c.ts", "root.txt", ".meta/config.json"]) await fs.writeFile(path.join(root, file), "safe");
     await fs.symlink("src", path.join(root, "link"));
     await fs.symlink("sub", path.join(root, "src/alias"));
-    for (const pattern of ["*", "**", "**/*", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "**/*/*.ts", "**/*/**/c.ts", "**/*/", "src/**/..", "{src,link}/**/*", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
+    for (const pattern of ["*", "**", "src/**", "src/*/", "src", "src/*.{js,ts}", "src/@(a|b).*", "./src/*.ts", ".meta/*", "link/*.ts", "*/a.ts", "src/**/..", "src/{sub,alias}/*", path.join(root, "src/*.ts"), `{${path.join(root, "src/*.ts")},src/*.js}`, `{src/*.js,${path.join(root, "src/*.ts")}}`, `{${path.join(root, "src")},${path.join(root, "link")}}/*.ts`]) {
       const expected = (await (async () => { const values: string[] = []; for await (const value of fs.glob(pattern, { cwd: root })) values.push(value); return values; })()).sort().join("\n") || "[no matches]";
       assert.equal(await foregroundText(root, "glob", { pattern }), expected, pattern);
+    }
+    // Node 24.22 (Electron 43.8) never steps into a symlink after `**`; Node 22 still does.
+    // Aiden follows the newer rule on every runtime, so these patterns need fixed answers.
+    for (const [pattern, expected] of [
+      ["**/*", "link root.txt src src/a.ts src/alias src/b.js src/sub src/sub/c.ts"],
+      ["**/*/*.ts", "src/a.ts src/sub/c.ts"],
+      ["**/*/**/c.ts", "src/sub/c.ts"],
+      ["**/*/", "src src/sub"],
+      ["{src,link}/**/*", "link/a.ts link/alias link/b.js link/sub link/sub/c.ts src/a.ts src/alias src/b.js src/sub src/sub/c.ts"],
+    ]) {
+      assert.equal(await foregroundText(root, "glob", { pattern }), expected.split(" ").join("\n"), pattern);
     }
     await fs.writeFile(path.join(root, ".env"), "SECRET");
     assert.equal(await foregroundText(root, "glob", { pattern: ".env" }), "[no matches]");

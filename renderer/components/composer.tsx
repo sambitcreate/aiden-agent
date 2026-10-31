@@ -8,6 +8,7 @@ import { formatContextTokenCount, type ChatContextPressureV1 } from "../shared/c
 // picker, voice input, and send/stop.
 
 import * as React from "react";
+import { flushSync } from "react-dom";
 import {
   AlertDialog,
   Button,
@@ -17,6 +18,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
@@ -25,6 +27,7 @@ import {
   ListPlus,
   Loader2,
   Lock,
+  MessageCircle,
   Mic,
   OctagonAlert,
   Paperclip,
@@ -37,17 +40,19 @@ import { AidenIcon } from "./aiden-icon";
 import { BusySendButton, type BusySendMode } from "./busy-send-button";
 import { ComposerContextBar, useAutoHideComposerContext } from "./composer-context-bar";
 import { useComposerContextChips } from "./use-composer-context-chips";
+import { FollowThroughChips } from "./follow-through-chips";
 import { ChatPullRequestsChip } from "./chat-pull-requests";
 import { GitBranchPicker, type GitBranchPickerDraft } from "./git-branch-picker";
 import { isWorktreeSendCancelled } from "../lib/draft-worktree-send";
 import { WorkspacePicker, type WorkspaceMenuRequest } from "./workspace-picker";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import { useVoiceRecorder } from "../lib/use-voice-recorder";
+import { dictationInsertion } from "../lib/dictation-insertion";
 import {
   GEMINI_RECORDED_RETRY_DESCRIPTION,
   GEMINI_RECORDED_RETRY_TITLE,
 } from "../lib/gemini-recorded-retry";
-import { attachmentsApi, browserApi } from "../lib/ipc";
+import { attachmentsApi, browserApi, chatsApi } from "../lib/ipc";
 import { browserAnnotationAttachments, browserAnnotationContext } from "../lib/browser-annotation-context";
 import { browserAnnotationDelivery } from "../lib/browser-annotation-delivery";
 import { composerImageAttach } from "../lib/composer-attach";
@@ -61,7 +66,7 @@ import {
   acceptComposerAttachments,
 } from "../lib/composer-attachment-operation";
 import { composerPlaceholder } from "../lib/composer-placeholder";
-import { useCommandSystem } from "../lib/command-system";
+import { useCommandHandler, useCommandSystem } from "../lib/command-system";
 import {
   consumeSlashToken,
   completeSlashCommandToken,
@@ -85,7 +90,9 @@ import {
   selectedSkillStatus,
 } from "../lib/slash-command-core";
 import {
+  type SlashCommandActionHandlers,
   attemptSlashCommandAction,
+  executeSlashCommandAction,
   slashCommandAvailability,
   validateSlashCommandArgument,
 } from "../lib/slash-command-actions";
@@ -109,7 +116,13 @@ import {
   ComposerSlashPalettePresence,
 } from "./composer-slash-palette";
 import type { SettingsSection } from "../shared/settings-section";
-import type { SkillCatalogEntry, SkillInvocationV1, SkillSource } from "../shared/slash-commands";
+import {
+  SLASH_COMMANDS,
+  type SkillCatalogEntry,
+  type SkillInvocationV1,
+  type SkillSource,
+} from "../shared/slash-commands";
+import { ariaKeyShortcut, prettyAccelerator, type CommandId } from "../shared/keybindings";
 import { filterForkTurnChoices, forkSummaryRows, forkTurnEligibility } from "../lib/chat-copy-view";
 import { MAX_FORK_QUERY_CODE_UNITS, type ChatForkPosition } from "../shared/chat-copy-contract";
 import {
@@ -121,6 +134,7 @@ import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract"
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
 import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
+import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -132,6 +146,19 @@ const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/heif",
 ]);
 const MAX_CLIPBOARD_IMAGE_BYTES = 8 * 1024 * 1024;
+
+
+/** Palette commands that run the / command of the same name, so both stay one action. */
+const PALETTE_SLASH_COMMANDS: Partial<Record<CommandId, string>> = {
+  "chat.rename": "name",
+  "chat.duplicate": "clone",
+  "chat.export": "export",
+  "chat.compact": "compact",
+  "chat.fork": "fork",
+  "chat.copyLatest": "copy",
+  "chat.details": "session",
+  "workspace.access": "access",
+};
 
 interface ComposerProps {
   /** True when a provider + model are selected and a message can be sent. */
@@ -189,6 +216,8 @@ interface ComposerProps {
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  /** Workspace menu's No workspace: the draft joins the Chats group (global settings, hidden folder). */
+  onChooseNoWorkspace?: () => Promise<void>;
   /** Workspace menu's Open folder…: native picker, then move the draft there. */
   onOpenFolderAsWorkspace?: () => Promise<void>;
   /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
@@ -377,6 +406,7 @@ export function Composer({
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onChooseNoWorkspace,
   onOpenFolderAsWorkspace,
   workspaceMenuRequest,
   onCreateGitWorktree,
@@ -655,21 +685,70 @@ export function Composer({
       skillScopeId,
     ],
   );
-  const canSend =
-    (text.trim().length > 0 || attachments.length > 0) &&
-    submissionAllowed &&
-    !composing &&
-    (!selectedSkillState || selectedSkillState.state === "valid");
+  /**
+   * Where dictation lands, fixed when recording starts. Live words show at this
+   * spot in a read-only draft until the final text replaces them.
+   */
+  const [dictationAnchor, setDictationAnchor] = React.useState<{ start: number; end: number } | null>(null);
+  const dictationAnchorRef = React.useRef(dictationAnchor);
+  dictationAnchorRef.current = dictationAnchor;
+  const insertDictation = React.useCallback(
+    (transcript: string) => {
+      const input = inputRef?.current;
+      const anchor = dictationAnchorRef.current;
+      // Take the live words out of the textarea first, so the insert edits the real draft.
+      if (anchor) flushSync(() => setDictationAnchor(null));
+      const selection = anchor ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : null);
+      const active = document.activeElement;
+      const typingElsewhere =
+        active instanceof HTMLElement &&
+        active !== input &&
+        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable);
+      if (input?.isConnected && !input.readOnly && !input.disabled && !typingElsewhere) {
+        const insertion = dictationInsertion(input.value, selection, transcript);
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(insertion.start, insertion.end);
+        // A native insert lands on the textarea's undo stack, so ⌘Z takes the dictation back out.
+        if (document.execCommand("insertText", false, insertion.insert)) {
+          input.setSelectionRange(insertion.caret, insertion.caret);
+          updateSelection({ start: insertion.caret, end: insertion.caret });
+          return;
+        }
+      }
+      setText((current) => dictationInsertion(current, selection, transcript).text);
+    },
+    [inputRef, setText, updateSelection],
+  );
   const voice = useVoiceRecorder(
     (heard) => {
       const transcript = applyDictationDictionary(
         heard,
         parseDictationDictionary(dictationDictionaryRef.current),
       );
-      if (!firstSendPendingRef.current) setText((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+      if (!firstSendPendingRef.current) insertDictation(transcript);
     },
     { model: settings.data?.voiceModel },
   );
+  React.useLayoutEffect(() => {
+    if (!voice.recording) return;
+    const input = inputRef?.current;
+    setDictationAnchor((current) => current ?? (input ? { start: input.selectionStart, end: input.selectionEnd } : selection));
+  }, [inputRef, selection, voice.recording]);
+  React.useEffect(() => {
+    if (!voice.recording && !voice.transcribing) setDictationAnchor(null);
+  }, [voice.recording, voice.transcribing]);
+  const liveDictation = [voice.liveTranscript.committed, voice.liveTranscript.tentative].filter(Boolean).join(" ");
+  const dictationPreviewing =
+    dictationAnchor !== null && liveDictation.length > 0 && !firstSendPending && (voice.recording || voice.transcribing);
+  const composerValue = dictationPreviewing ? dictationInsertion(text, dictationAnchor, liveDictation).text : text;
+  // While live words show, the draft on screen is not the draft that would be
+  // sent, so sending waits for the final text.
+  const canSend =
+    (text.trim().length > 0 || attachments.length > 0) &&
+    submissionAllowed &&
+    !composing &&
+    !dictationPreviewing &&
+    (!selectedSkillState || selectedSkillState.state === "valid");
 
   React.useLayoutEffect(() => {
     slashPaletteBlockedRef.current = slashPaletteBlocked;
@@ -682,6 +761,13 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  // The latest prompt, when it has a finished reply and can be edited in a fork.
+  const lastPromptForkId = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return null;
+    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
+    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
+    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  }, [completedForkTurns, onForkChat, sessionChat]);
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -766,6 +852,13 @@ export function Composer({
       navigationBlockedReason: slashNavigationBlockedReason,
       sessionActionBlockedReason: slashSessionBlockedReason,
       sideQuestionBlockedReason,
+      followThroughBlockedReason: !surfaces.localContext
+        ? "Available in workspace chats on this computer."
+        : !workspace?.folderPath
+          ? "This chat has no folder."
+          : workspace.permission === "none"
+            ? "Turn on folder access for this chat first."
+            : undefined,
       chatCloneBlockedReason: forkEligibility.cloneBlocked
         ? "This chat has too many messages to clone safely. Fork from an earlier turn instead."
         : undefined,
@@ -816,6 +909,7 @@ export function Composer({
       sideQuestionBlockedReason,
       slashSession,
       selectedSkill,
+      surfaces.localContext,
       text,
       voice.recording,
       voice.transcribing,
@@ -1166,6 +1260,20 @@ export function Composer({
     [chatId, onSend, onQueue, onSteer, isGenerating, hasQueuedMessages, freezeWhileSending, setText, updateAttachments],
   );
 
+  const copyLatestResponse = React.useCallback(async () => {
+    if (!latestAssistantResponse) return;
+    await navigator.clipboard.writeText(latestAssistantResponse);
+    toast.success("Latest response copied");
+  }, [latestAssistantResponse]);
+  const openAccessMenu = React.useCallback(() => {
+    setPermissionMenuOpen(true);
+    requestAnimationFrame(() => permissionControlRef.current?.focus());
+  }, []);
+  const openForkDialog = React.useCallback(() => {
+    setForkQuery("");
+    setForkDialogOpen(true);
+  }, []);
+
   const selectSlashResult = React.useCallback(
     async (result: SlashResult, submittedSession?: SlashSession) => {
       // A palette pick uses the live slash session; Send passes the command it parsed.
@@ -1247,26 +1355,35 @@ export function Composer({
         executeCommand: commandSystem.execute,
         openSettings: (section) => onOpenSettings?.(section),
         requestRename,
-        copyLatestResponse: async () => {
-          if (!latestAssistantResponse) return;
-          await navigator.clipboard.writeText(latestAssistantResponse);
-          toast.success("Latest response copied");
-        },
+        copyLatestResponse,
         openReview: () => onOpenReview?.(),
-        openAccess: () => {
-          setPermissionMenuOpen(true);
-          requestAnimationFrame(() => permissionControlRef.current?.focus());
-        },
-        openFork: () => {
-          setForkQuery("");
-          setForkDialogOpen(true);
-        },
+        openAccess: openAccessMenu,
+        openFork: openForkDialog,
         cloneChat,
         exportChat,
         compactChat,
         openSessionDetails: () => setSessionDialogOpen(true),
         openLogout: () => setLogoutChooserOpen(true),
         openWorktree: createWorktreeFromSlash,
+        followThrough: async (action, argument) => {
+          try {
+            if (action === "follow") {
+              await chatsApi.followPullRequest(chatId);
+              toast.success("Following this pull request. The chat hears about failed checks, conflicts and reviews.");
+              return true;
+            }
+            if (!argument) {
+              toast.info("Add the check after /until, for example /until npm test.");
+              return false;
+            }
+            await chatsApi.setDoneWhenCheck(chatId, argument);
+            toast.success(`Aiden runs ${argument} after each answer until it passes, 5 checks at most.`);
+            return true;
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "That could not be set up.");
+            return false;
+          }
+        },
         submitComposerInstruction: async (instruction, prompt) => {
           const nextPrompt = prompt.trim() || consumeSlashToken(text, session).trim();
           const missingPromptMessage =
@@ -1359,10 +1476,11 @@ export function Composer({
       // A generic late slash-token commit would overwrite the next-turn draft.
       if (result.command.action.kind === "composer-instruction") return;
       const usesDraftOnlyCommit =
-        result.command.action.kind === "session" &&
-        (result.command.action.action === "clone" ||
-          result.command.action.action === "export" ||
-          result.command.action.action === "worktree");
+        result.command.action.kind === "follow-through" ||
+        (result.command.action.kind === "session" &&
+          (result.command.action.action === "clone" ||
+            result.command.action.action === "export" ||
+            result.command.action.action === "worktree"));
       if (
         asyncAction &&
         !(usesDraftOnlyCommit
@@ -1395,7 +1513,9 @@ export function Composer({
       slashTracker.epoch,
       dismissSlash,
       inputRef,
-      latestAssistantResponse,
+      copyLatestResponse,
+      openAccessMenu,
+      openForkDialog,
       cloneChat,
       createWorktreeFromSlash,
       exportChat,
@@ -1522,6 +1642,66 @@ export function Composer({
       finishAttachmentRead(token);
     }
   };
+
+  // ⌘K and shortcuts reach the same chat actions as the / commands. The draft
+  // stays as typed: a palette pick consumes no slash token, so draft rules don't apply.
+  const paletteSlashContext = React.useMemo(
+    () => ({ ...slashActionContext, payloadAfterToken: false }),
+    [slashActionContext],
+  );
+  const paletteSlashHandlers: SlashCommandActionHandlers = {
+    executeCommand: commandSystem.execute,
+    openSettings: (section) => onOpenSettings?.(section),
+    requestRename,
+    copyLatestResponse,
+    openReview: () => onOpenReview?.(),
+    openAccess: openAccessMenu,
+    openFork: openForkDialog,
+    cloneChat,
+    exportChat,
+    compactChat,
+    openSessionDetails: () => setSessionDialogOpen(true),
+  };
+  const paletteSlashCommand = (commandId: CommandId) => {
+    const name = PALETTE_SLASH_COMMANDS[commandId];
+    const command = name ? SLASH_COMMANDS.find((item) => item.name === name) : undefined;
+    const available =
+      surfaces.slashCommands &&
+      command !== undefined &&
+      slashCommandAvailability(command, paletteSlashContext).available;
+    const run = () => {
+      if (!command) return;
+      const outcome = executeSlashCommandAction(command, "", paletteSlashHandlers);
+      if (outcome instanceof Promise) {
+        void outcome.catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "That command could not be completed.");
+        });
+      }
+    };
+    return [run, available] as const;
+  };
+  const [renameChat, renameAvailable] = paletteSlashCommand("chat.rename");
+  useCommandHandler("chat.rename", renameChat, renameAvailable);
+  const [duplicateChat, duplicateAvailable] = paletteSlashCommand("chat.duplicate");
+  useCommandHandler("chat.duplicate", duplicateChat, duplicateAvailable);
+  const [exportOpenChat, exportAvailable] = paletteSlashCommand("chat.export");
+  useCommandHandler("chat.export", exportOpenChat, exportAvailable);
+  const [compactOpenChat, compactAvailable] = paletteSlashCommand("chat.compact");
+  useCommandHandler("chat.compact", compactOpenChat, compactAvailable);
+  const [forkChat, forkAvailable] = paletteSlashCommand("chat.fork");
+  useCommandHandler("chat.fork", forkChat, forkAvailable);
+  const [copyLatest, copyAvailable] = paletteSlashCommand("chat.copyLatest");
+  useCommandHandler("chat.copyLatest", copyLatest, copyAvailable);
+  const [chatDetails, detailsAvailable] = paletteSlashCommand("chat.details");
+  useCommandHandler("chat.details", chatDetails, detailsAvailable);
+  const [changeAccess, accessAvailable] = paletteSlashCommand("workspace.access");
+  useCommandHandler("workspace.access", changeAccess, accessAvailable);
+  const attachDisabled =
+    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked;
+  useCommandHandler("composer.attach", () => void handleAttach(), surfaces.attachments && !attachDisabled);
+  useCommandHandler("chat.stop", onStop, isGenerating && canStopGeneration);
+  const attachBinding = commandSystem.binding("composer.attach");
+  const stopBinding = commandSystem.binding("chat.stop");
 
   const readDroppedAttachments = async (files: File[]) => {
     const token = beginAttachmentRead("Dropped files are loading before sending.");
@@ -1713,6 +1893,10 @@ export function Composer({
 
   const submit = async (busyModeOverride?: BusySendMode) => {
     if (sendPendingRef.current || composing) return;
+    if (dictationPreviewing) {
+      blockSend("Wait for dictation to finish before sending.");
+      return;
+    }
     if (attachmentOperationRef.current.isBusy || attaching) {
       blockSend("Wait for the selected attachments to finish loading before sending.");
       return;
@@ -1848,6 +2032,25 @@ export function Composer({
         }
       }
     }
+    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    if (
+      event.key === "ArrowUp" &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      text === "" &&
+      attachments.length === 0 &&
+      !selectedSkill &&
+      !isGenerating &&
+      lastPromptForkId
+    ) {
+      event.preventDefault();
+      void forkFromTurn(lastPromptForkId, "before");
+      return;
+    }
     if (
       escapeStopsGeneration({
         key: event.key,
@@ -1871,9 +2074,13 @@ export function Composer({
 
   const permission = workspace?.permission ?? "ask";
   const PermissionIcon = PERMISSION_META[permission].icon;
-  const folderName = workspace?.folderPath
-    ? workspace.folderPath.split("/").filter(Boolean).pop()
-    : workspace?.name;
+  const noWorkspace = isNoWorkspace(workspace);
+  const folderName = noWorkspace
+    ? NO_WORKSPACE_LABEL
+    : workspace?.folderPath
+      ? workspace.folderPath.split("/").filter(Boolean).pop()
+      : workspace?.name;
+  const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
   const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
@@ -1935,7 +2142,7 @@ export function Composer({
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
-        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
+        <div data-focus-region="composer" className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -1981,6 +2188,7 @@ export function Composer({
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                onChooseNoWorkspace={onChooseNoWorkspace}
                 onOpenFolder={onOpenFolderAsWorkspace}
                 busyReason={workspaceChangeBusyReason({
                   sending: sending || firstSendPending,
@@ -2007,7 +2215,7 @@ export function Composer({
                         : "Choose a workspace"
                     }
                   >
-                    <Folder className="size-4 shrink-0" />
+                    <WorkspaceChipIcon className="size-4 shrink-0" />
                     <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
                   </Button>
                 }
@@ -2021,7 +2229,7 @@ export function Composer({
                 disabled={!workspace?.folderPath}
                 aria-label={workspace?.folderPath ? "Open folder in file manager" : "Workspace"}
               >
-                <Folder className="size-4 shrink-0" />
+                <WorkspaceChipIcon className="size-4 shrink-0" />
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
@@ -2057,6 +2265,7 @@ export function Composer({
                 <ChatPullRequestsChip chatId={chatId} />
               </span>
             ) : null}
+            {contextChips.followThrough ? <FollowThroughChips chatId={chatId} /> : null}
             {/* Polite, focus-free notice when the PR chip appears mid-chat. */}
             <span role="status" className="sr-only">
               {pullRequestAnnouncement}
@@ -2181,25 +2390,38 @@ export function Composer({
             ) : null}
             <Textarea
               ref={inputRef}
-              value={text}
-              readOnly={composerInputLocked || firstSendPending}
-              aria-busy={composerInputLocked || firstSendPending || undefined}
+              // Approval keys stay off while this holds a draft, wherever focus is; the
+              // value marks staged attachments or a skill that the text alone doesn't show.
+              data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
+              data-focus-region-entry
+              value={composerValue}
+              readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
+              aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
               onChange={(event) => {
-                if (firstSendPendingRef.current) return;
+                if (firstSendPendingRef.current || dictationPreviewing) return;
                 setText(event.target.value);
                 updateSelection({
                   start: event.target.selectionStart,
                   end: event.target.selectionEnd,
                 });
+                // Until live words appear, dictation follows the caret.
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.target.selectionStart, end: event.target.selectionEnd });
+                }
               }}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              onSelect={(event) =>
+              onSelect={(event) => {
+                // Positions inside live dictation words do not exist in the draft.
+                if (dictationPreviewing) return;
                 updateSelection({
                   start: event.currentTarget.selectionStart,
                   end: event.currentTarget.selectionEnd,
-                })
-              }
+                });
+                if (dictationAnchorRef.current) {
+                  setDictationAnchor({ start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
+                }
+              }}
               onCompositionStart={() => {
                 markSlashInteraction();
                 setComposing(true);
@@ -2324,12 +2546,12 @@ export function Composer({
                   iconOnly
                   className="rounded-full"
                   onClick={handleAttach}
-                  disabled={
-                    attaching || (isGenerating && !onQueue) || sending || gitOperationBusy || composerInputLocked
-                  }
+                  disabled={attachDisabled}
                   aria-label={
                     attaching ? "Choosing or loading attachments" : "Attach files or images"
                   }
+                  aria-keyshortcuts={ariaKeyShortcut(attachBinding)}
+                  title={attachBinding ? `Attach files or images (${prettyAccelerator(attachBinding)})` : undefined}
                   aria-busy={attaching || undefined}
                 >
                   {attaching ? <Loader2 className="animate-spin" /> : <Plus />}
@@ -2476,18 +2698,7 @@ export function Composer({
                 ) : null}
               </div>
               <div className="composer-action-row ml-auto flex min-w-0 flex-1 items-center justify-end gap-1.5">
-                {voice.recording &&
-                (voice.liveTranscript.committed || voice.liveTranscript.tentative) ? (
-                  <span
-                    className="max-w-56 truncate text-small"
-                    role="status"
-                    aria-live="polite"
-                    aria-label="Live transcription"
-                  >
-                    <span className="text-primary">{voice.liveTranscript.committed}</span>{" "}
-                    <span className="text-tertiary">{voice.liveTranscript.tentative}</span>
-                  </span>
-                ) : voice.transcribing && voice.loadingModel ? (
+                {voice.transcribing && voice.loadingModel ? (
                   <span
                     className="max-w-56 truncate text-small text-secondary"
                     role="status"
@@ -2530,8 +2741,12 @@ export function Composer({
                     onClick={onStop}
                     disabled={!canStopGeneration}
                     aria-label="Stop generating"
-                    aria-keyshortcuts="Escape"
-                    title="Stop generating (Esc from an empty message)"
+                    aria-keyshortcuts={["Escape", ariaKeyShortcut(stopBinding)].filter(Boolean).join(" ")}
+                    title={
+                      stopBinding
+                        ? `Stop generating (${prettyAccelerator(stopBinding)}, or Esc from an empty message)`
+                        : "Stop generating (Esc from an empty message)"
+                    }
                   >
                     <Square className="fill-current" />
                   </Button>
@@ -2577,9 +2792,10 @@ export function Composer({
         title="Enable Full Access?"
         description={
           <Text variant="small" color="secondary">
-            Aiden will be able to read and edit files, and run commands in “
-            {folderName ?? "this workspace"}” without asking each time. You can change this any time
-            from the composer.
+            {noWorkspace
+              ? "Aiden will be able to read and edit files, and run commands in this chat’s own folder without asking each time. "
+              : <>Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}” without asking each time. </>}
+            You can change this any time from the composer.
           </Text>
         }
         confirmLabel="Enable Full Access"
@@ -2766,6 +2982,7 @@ export function Composer({
                   setLogoutConfirmOpen(true);
                 }}
               >
+                <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
                 <span>
                   <span className="block text-small-strong">{provider.label}</span>
                   <span className="block text-small text-tertiary">{provider.detail}</span>

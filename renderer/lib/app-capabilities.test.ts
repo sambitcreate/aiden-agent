@@ -25,3 +25,11 @@ test("each studio capability is independent of the others", () => {
     devices: true,
   });
 });
+
+test("Bot computers fail closed and stand apart from Computer Use", () => {
+  assert.equal(DISABLED_APP_CAPABILITIES.botComputers, false);
+  for (const value of ["true", 1, {}, null, undefined]) {
+    assert.equal(parseAppCapabilities({ botComputers: value, computerUse: true }).botComputers, false, JSON.stringify(value));
+  }
+  assert.deepEqual(parseAppCapabilities({ botComputers: true }), { ...DISABLED_APP_CAPABILITIES, botComputers: true });
+});

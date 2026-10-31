@@ -1,6 +1,11 @@
 // Global dictation state contract shared between the main-process coordinator
 // (main/services/dictation.ts) and the transcribe pill renderer (renderer/pill/).
 
+import type { VoiceProviderResolution } from "./voice-provider.js";
+
+/** A provider resolution that is ready to record with. */
+export type ReadyVoiceProvider = Extract<VoiceProviderResolution, { kind: "ready" }>;
+
 /** States the coordinator broadcasts to the pill on "dictation:state". */
 export type DictationState =
   /** Hotkey pressed while idle: pill should show and start recording. */
@@ -32,6 +37,8 @@ export interface DictationStatePayload {
   message?: string;
   /** Why a completed transcript could not be pasted automatically. */
   reason?: DictationCopiedReason;
+  /** "recording" only: the provider main resolved for this press, so the pill need not ask again. */
+  voice?: ReadyVoiceProvider;
 }
 
 /**

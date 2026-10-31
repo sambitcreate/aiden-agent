@@ -501,6 +501,11 @@
     <string name="bot_profile_choose_photo">Choose from Gallery</string>
     <string name="bot_profile_remove_photo">Remove photo</string>
     <string name="bot_profile_subtitle_placeholder">What it helps with</string>
+    <!-- Contract revision 37 (bot:handoffs): Pause and Resume in the profile menu, shared with iOS and desktop. -->
+    <string name="bot_menu_pause">Pause Bot</string>
+    <string name="bot_menu_resume">Resume Bot</string>
+    <string name="bot_profile_pause_failed">%1$s wasn’t paused. Please try again.</string>
+    <string name="bot_profile_resume_failed">%1$s wasn’t resumed. Please try again.</string>
 
     <!-- Bots: character -->
     <string name="bot_character_title">Character</string>
@@ -602,6 +607,9 @@
 
     <!-- Bots: routine notifications -->
     <string name="notification_bot_routine_body">%1$s: %2$s</string>
+    <!-- A Bot handed a step back while its chat wasn't on screen (contract revision 37). -->
+    <string name="notification_bot_handoff_action">Handed you a step</string>
+    <string name="notification_bot_handoff_sign_in">Needs you to sign in</string>
 
     <!-- Bots: advanced -->
     <string name="bot_advanced_title">Advanced</string>
@@ -706,6 +714,32 @@
     <string name="bot_session_check_mac">Check your Mac to finish.</string>
     <string name="bot_session_finish_on_mac">Finish on your Mac</string>
     <string name="bot_session_send">Send</string>
+    <!-- Bots: hand-offs and pause (contract revision 37), copy shared with iOS and desktop -->
+    <string name="bot_handoff_title">Your turn: %1$s</string>
+    <string name="bot_handoff_done">Done</string>
+    <string name="bot_handoff_skip">Skip</string>
+    <string name="bot_handoff_open">Open</string>
+    <string name="bot_handoff_open_host">Open %1$s</string>
+    <string name="bot_handoff_note_placeholder">Add a note and send to mark it done</string>
+    <string name="bot_handoff_sign_in_placeholder">Finish signing in on your Mac, or skip it.</string>
+    <string name="bot_handoff_no_note_placeholder">Enter it yourself, then tap Done.</string>
+    <string name="bot_handoff_mac_opened">Finish signing in on your Mac.</string>
+    <string name="bot_handoff_mac_closed">Open Aiden on your Mac to finish signing in.</string>
+    <string name="bot_handoff_step_mac_opened">Finish this step on your Mac.</string>
+    <string name="bot_handoff_step_mac_closed">Open Aiden on your Mac to finish this step.</string>
+    <string name="bot_handoff_on_mac_detail">This step is on the Bot’s own screen on your Mac.</string>
+    <string name="bot_paused_title">%1$s is paused.</string>
+    <string name="bot_paused_detail">%1$s won’t reply or run routines until you resume it.</string>
+    <string name="bot_paused_placeholder">%1$s is paused</string>
+    <!-- Bots: issues (contract revision 42), copy shared with iOS and desktop -->
+    <string name="bot_issue_needs_you">Needs you</string>
+    <string name="bot_issue_open_on_mac">Open on your Mac</string>
+    <string name="bot_issue_open_chat">Open chat</string>
+    <string name="bot_issue_resume_routine">Resume routine</string>
+    <string name="bot_issue_stop">Stop</string>
+    <string name="bot_issue_keep_waiting">Keep waiting</string>
+    <string name="bot_issue_stale">This card changed. Pull to refresh and try again.</string>
+    <string name="bot_issue_not_sent">That didn’t reach your Mac. Please try again.</string>
     <string name="bot_files_connect">Connect to your Mac to see files.</string>
     <string name="bot_files_unavailable">Files aren’t available for this Bot right now.</string>
     <string name="bot_files_loading">Loading files</string>
@@ -832,7 +866,32 @@
     <string name="chat_title_fallback">Chat</string>
     <string name="chat_approval_review_only">This paired device can review approvals but cannot respond.</string>
     <string name="chat_approval_schedule_write_required">Schedule write access is required to approve this task.</string>
+    <string name="chat_approval_deny_only">Allow this on your Mac. You can deny it here.</string>
+    <string name="chat_approval_paused_note">Aiden is paused until you choose.</string>
+    <string name="chat_approval_automation_note">Check the exact schedule and unattended access before Aiden saves it.</string>
     <string name="chat_approval_confirm_on_desktop">Review the full unattended access scope and confirm in Aiden on your paired desktop. You can deny it here.</string>
+    <!-- Contract revision 39: the scheduled-task approval card. -->
+    <string name="chat_schedule_next_run">Next run %1$s</string>
+    <string name="chat_schedule_runs_in">Runs in</string>
+    <string name="chat_schedule_anywhere">Anywhere on your computer</string>
+    <string name="chat_schedule_no_project">No project</string>
+    <string name="chat_schedule_access">Access</string>
+    <string name="chat_schedule_read_only">Read-only</string>
+    <string name="chat_schedule_full_access">Full access</string>
+    <string name="chat_schedule_model">Model</string>
+    <string name="chat_schedule_runs">Runs</string>
+    <string name="chat_schedule_script">Script</string>
+    <string name="chat_schedule_notifications">Notifications</string>
+    <string name="chat_schedule_on">On</string>
+    <string name="chat_schedule_off">Off</string>
+    <string name="chat_schedule_time_zone">Time zone</string>
+    <string name="chat_schedule_instructions">Instructions</string>
+    <string name="chat_schedule_truncated">Shortened to fit. The full text is on your computer.</string>
+    <string name="chat_schedule_scheduling_off">Scheduling is off. This task will be saved but will not run automatically until you enable scheduling.</string>
+    <string name="chat_schedule_stays_paused">This task stays paused.</string>
+    <string name="chat_schedule_footer">Scheduled work runs on your desktop while Aiden is open and the computer is awake.</string>
+    <string name="chat_schedule_more_details">Scroll for more details</string>
+    <string name="chat_schedule_row_description">%1$s, %2$s</string>
     <string name="chat_composer_placeholder">Message Aiden</string>
     <string name="chat_progress_hide">Hide progress</string>
     <string name="chat_progress_show">Show progress</string>
@@ -850,6 +909,30 @@
     <string name="chat_questionnaire_skipped">Skipped</string>
     <string name="chat_questionnaire_dismissed">Dismissed</string>
     <string name="chat_questionnaire_no_answer">No answer</string>
+    <!-- Chat: values a web page read in extract mode (contract revision 38) -->
+    <string name="chat_web_extract_recap_cd">Values read from %1$s</string>
+    <string name="chat_web_extract_guess">Guess</string>
+    <string name="chat_web_extract_absent">Not on the page</string>
+    <string name="chat_web_extract_not_found">Not found on the page</string>
+    <string name="chat_web_extract_source_line">“%1$s”</string>
+    <string name="chat_web_extract_cut">Only the first part of the page was read.</string>
+    <string name="chat_web_extract_failed">Couldn’t read the values: %1$s. The page was read instead.</string>
+    <string name="chat_web_extract_error_setup">the extraction model is not set up</string>
+    <string name="chat_web_extract_error_auth">the extraction model rejected every saved key</string>
+    <string name="chat_web_extract_error_quota">the extraction model is rate-limited or out of quota</string>
+    <string name="chat_web_extract_error_timeout">the extraction model did not answer in time</string>
+    <string name="chat_web_extract_error_unavailable">the extraction model could not be reached</string>
+    <string name="chat_web_extract_error_invalid_response">the extraction model sent an answer Aiden could not read</string>
+    <!-- Chat: a browser recording the agent saved (contract revision 46) -->
+    <string name="chat_browser_recording_title">Browser recording</string>
+    <string name="chat_browser_recording_cd">Browser recording, %1$s</string>
+    <string name="chat_browser_recording_meta">%1$s · %2$s</string>
+    <string name="chat_browser_recording_play">Play</string>
+    <string name="chat_browser_recording_loading">Loading…</string>
+    <string name="chat_browser_recording_on_mac">Watch this recording on your Mac.</string>
+    <string name="chat_browser_recording_missing">This recording is no longer on the Mac.</string>
+    <string name="chat_browser_recording_failed">Couldn’t load this recording. Try again.</string>
+    <string name="chat_browser_recording_unplayable">This recording can’t play on this phone.</string>
 
     <!-- Chat: inline visuals (contract revision 28) -->
     <string name="chat_visual_snapshot_description">Snapshot from your Mac</string>
@@ -947,7 +1030,10 @@
     <string name="chat_question_title">Aiden needs your input</string>
     <string name="chat_question_multi_hint">Answer what you can — unanswered questions are skipped.</string>
     <string name="chat_question_single_hint">Choose an option or type your own answer.</string>
+    <string name="chat_question_multi_recommended_hint">Recommended answers are already selected. Questions you leave blank are skipped.</string>
+    <string name="chat_question_single_recommended_hint">The recommended answer is already selected. Change it or type your own.</string>
     <string name="chat_question_select_all">Select all that apply</string>
+    <string name="chat_question_recommended">Recommended</string>
     <string name="chat_question_custom_answer_cd">Custom answer</string>
     <string name="chat_question_custom_placeholder">Type your answer</string>
     <string name="chat_question_type_something_cd">Type something. Shows a field for a custom answer</string>

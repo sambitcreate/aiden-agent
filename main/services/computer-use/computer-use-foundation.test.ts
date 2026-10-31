@@ -2,14 +2,19 @@ import assert from "node:assert/strict";
 import childProcess, { type ChildProcess } from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { EventEmitter, getEventListeners } from "node:events";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { codesignVerifyArguments, resolveCuaDriverInstallation } from "./binary.js";
+import {
+  codesignVerifyArguments,
+  resolveCuaDriverInstallation,
+  resolveVendoredCuaDriverExecutable,
+  vendoredCuaDriverNoticePath,
+} from "./binary.js";
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CuaDriverError,
@@ -415,6 +420,57 @@ test("driver installation resolution rejects unsupported platforms and symlinked
   }
 });
 
+test("the driver a Bot computer's guest gets is only the vendored, pinned executable inside a real helper bundle", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-copy-"));
+  const options = { appPath: root, isPackaged: false, platform: "darwin" as const, resourcesPath: root };
+  const helper = path.join(root, "build", "computer-use", "CuaDriver.app");
+  const driver = path.join(helper, "Contents", "MacOS", "cua-driver");
+  try {
+    // Nothing vendored yet: the person is told how to vendor, and nothing is copied.
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing" && /computer-use:vendor/u.test(error.message),
+    );
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable({ ...options, platform: "linux" }),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "unsupported_platform",
+    );
+
+    // A file in the right place that isn't the pinned release is refused before any signature check.
+    await mkdir(path.dirname(driver), { recursive: true });
+    await writeFile(driver, "#!/bin/sh\necho not the pinned driver\n", { mode: 0o755 });
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) =>
+        error instanceof CuaDriverError && error.code === "driver_integrity_failed" && /pinned 0\.36\.0 release/u.test(error.message),
+    );
+
+    // A helper bundle that is a symlink to another folder is never the vendored one.
+    const elsewhere = path.join(root, "elsewhere.app");
+    await rename(helper, elsewhere);
+    await symlink(elsewhere, helper);
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "driver_missing",
+    );
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(
+      resolveVendoredCuaDriverExecutable(options, cancelled.signal),
+      (error: unknown) => error instanceof CuaDriverError && error.code === "cancelled",
+    );
+    // The licence notice travels with the copy, from inside the same helper bundle.
+    assert.equal(vendoredCuaDriverNoticePath(options), path.join(helper, "Contents", "Resources", "LICENSE.cua-driver.md"));
+    assert.equal(
+      vendoredCuaDriverNoticePath({ ...options, isPackaged: true, resourcesPath: "/Applications/Aiden Agent.app/Contents/Resources" }),
+      "/Applications/Aiden Agent.app/Contents/Helpers/CuaDriver.app/Contents/Resources/LICENSE.cua-driver.md",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("live codesign verification avoids unsupported strict process requirements", () => {
   assert.deepEqual(codesignVerifyArguments("+4242", "identifier test"), [
     "--verify",
@@ -611,6 +667,46 @@ test("inbound MCP framing accepts the exact 64 MiB contract boundary and poisons
   } finally {
     await transport.close();
     fake.destroy();
+  }
+});
+
+test("a message waiting on a full bridge pipe fails when teardown destroys the pipe", async () => {
+  // A bridge that never reads: the first write fills the pipe and waits for drain.
+  const stuckInput = new Writable({ highWaterMark: 1, write: () => undefined });
+  const output = new PassThrough();
+  const diagnostics = new PassThrough();
+  const bridge = Object.assign(new EventEmitter(), {
+    connected: false,
+    exitCode: null,
+    kill: () => false,
+    pid: undefined,
+    signalCode: null,
+    stderr: diagnostics,
+    stdin: stuckInput,
+    stdio: [stuckInput, output, diagnostics, null, null],
+    stdout: output,
+  }) as unknown as ChildProcess;
+  const transport = new AuthenticatedBridgeTransport(bridge, 1024);
+  try {
+    await transport.start();
+    const sent = transport.send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+    stuckInput.destroy();
+    let timer: NodeJS.Timeout | undefined;
+    const outcome = await Promise.race([
+      sent.then(
+        () => "resolved",
+        () => "rejected",
+      ),
+      new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve("still waiting"), 1_000);
+      }),
+    ]);
+    clearTimeout(timer);
+    assert.equal(outcome, "rejected");
+  } finally {
+    await transport.close();
+    output.destroy();
+    diagnostics.destroy();
   }
 });
 
@@ -1292,6 +1388,43 @@ test("broker death invalidates its session and a later session launches a fresh 
   const events = await readEvents(logPath);
   assert.equal(events.filter((event) => event.event === "spawn" && event.command === "bridge").length, 2);
   await rm(root, { recursive: true, force: true });
+});
+
+test("a runtime directory that can never be removed does not block later sessions", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-stuck-cleanup-"));
+  const logPath = path.join(root, "events.jsonl");
+  let stuckDirectory: string | null = null;
+  let stuckAttempts = 0;
+  const host = fakeHost(root, logPath, [], {
+    removeDirectory: async (directory, options) => {
+      stuckDirectory ??= String(directory);
+      if (directory === stuckDirectory) {
+        stuckAttempts += 1;
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+      await rm(directory, options);
+    },
+  });
+  try {
+    await host.createSession();
+    const bridge = (await readEvents(logPath)).find(
+      (event) => event.event === "spawn" && event.command === "bridge",
+    );
+    process.kill(bridge?.pid as number, "SIGKILL");
+    await waitForCondition(() => !host.running);
+    for (let session = 0; session < 4; session += 1) {
+      const next = await host.createSession();
+      assert.equal(next.ready, true);
+      await next.close();
+    }
+    await host.shutdown();
+    assert.ok(stuckAttempts >= 2, "the stuck directory is retried before it is given up");
+    assert.ok(stuckAttempts <= 4, "the stuck directory is not retried forever");
+  } finally {
+    await host.shutdown();
+    if (stuckDirectory) await rm(stuckDirectory, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("shutdown retries cleanup that failed after an unexpected bridge exit", async () => {

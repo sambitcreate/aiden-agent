@@ -100,3 +100,38 @@ export function providerFailurePresentation(
       }[failure.category],
   };
 }
+
+/** The one next step a failure card offers, chosen from the failure's cause. */
+export type ProviderFailureAction = "try_again" | "open_providers" | "continue" | "compact";
+
+const FAILURE_ACTIONS: Record<ProviderFailureCategoryV1, ProviderFailureAction> = {
+  network: "try_again",
+  timeout: "try_again",
+  service_unavailable: "try_again",
+  rate_limit: "try_again",
+  interrupted: "try_again",
+  unknown: "try_again",
+  authentication: "open_providers",
+  quota: "open_providers",
+  invalid_request: "open_providers",
+  output_limit: "continue",
+  context_window: "compact",
+  context_management: "compact",
+};
+
+export function providerFailureAction(failure: ProviderFailureV1): ProviderFailureAction {
+  return FAILURE_ACTIONS[failure.category];
+}
+
+export const PROVIDER_FAILURE_ACTION_LABELS: Record<ProviderFailureAction, string> = {
+  try_again: "Try again",
+  open_providers: "Open Providers",
+  continue: "Continue",
+  compact: "Compact and try again",
+};
+
+/** The visible follow-up turn a failure card sends for Try again and Continue. */
+export const PROVIDER_FAILURE_FOLLOW_UPS = {
+  try_again: "Try that again.",
+  continue: "Continue from where you stopped.",
+} as const satisfies Partial<Record<ProviderFailureAction, string>>;

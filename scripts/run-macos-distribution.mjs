@@ -238,24 +238,44 @@ export async function runDistributionTransaction({ prepare, build, verify, promo
   }
 }
 
+/**
+ * The npm steps of a release build, in order. Helpers are vendored and
+ * verified against their pins (cua-driver, then Lume for Bot computers)
+ * before anything is compiled or packaged.
+ */
+export const MAC_DISTRIBUTION_NPM_STEPS = Object.freeze([
+  "release:preflight",
+  "release:update-model-capabilities",
+  "computer-use:vendor",
+  "bot-computers:vendor",
+  "generative-ui:vendor",
+  "build:native",
+  "build",
+  "package:model-catalog",
+]);
+
+export async function buildMacDistribution(
+  staging,
+  {
+    npm = (script) => runCommand("/usr/bin/env", ["npm", "run", script]),
+    run = runCommand,
+    enableAutoUpdates = false,
+  } = {},
+) {
+  for (const script of MAC_DISTRIBUTION_NPM_STEPS) await npm(script);
+  await run(
+    path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"),
+    distributionElectronBuilderArguments(staging, { enableAutoUpdates }),
+  );
+}
+
 export async function runMacDistribution() {
-  const npm = (script) => runCommand("/usr/bin/env", ["npm", "run", script]);
   const enableAutoUpdates = process.env.AIDEN_ENABLE_AUTO_UPDATES === "1";
+  // Lets the build embed the analytics project key (AIDEN_POSTHOG_PROJECT_KEY).
+  process.env.AIDEN_DISTRIBUTION_BUILD = "1";
   return runDistributionTransaction({
     prepare: () => beginMacDistribution(repositoryRoot),
-    build: async ({ staging }) => {
-      await npm("release:preflight");
-      await npm("release:update-model-capabilities");
-      await npm("computer-use:vendor");
-      await npm("generative-ui:vendor");
-      await npm("build:native");
-      await npm("build");
-      await npm("package:model-catalog");
-      await runCommand(
-        path.join(repositoryRoot, "node_modules", ".bin", "electron-builder"),
-        distributionElectronBuilderArguments(staging, { enableAutoUpdates }),
-      );
-    },
+    build: ({ staging }) => buildMacDistribution(staging, { enableAutoUpdates }),
     verify: async ({ staging }) => {
       const appPath = await discoverPackagedApp(staging);
       await verifyMacPackage(appPath);

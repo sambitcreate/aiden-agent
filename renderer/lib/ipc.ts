@@ -1,8 +1,24 @@
 import type { PeerProjectSource } from "../shared/peer-project-clone";
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
+import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
+import {
+  parseUsageLimitWaits,
+  USAGE_LIMITS_CHANGED_CHANNEL,
+  type UsageLimitWaitView,
+  type UsageLimitsChangedEvent,
+} from "../shared/usage-limits";
+import {
+  parseSpendingLimitUsd,
+  parseSpendingStatusView,
+  SPENDING_CHANGED_CHANNEL,
+  type SpendingChangedEvent,
+  type SpendingStatusView,
+} from "../shared/spending";
+import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -16,6 +32,19 @@ import type {
   FirstMessageWorktreeResult,
 } from "../shared/worktree-on-send";
 import { ACP_HARNESS_STATUS_CHANNEL, parseAcpHarnessStatus, type AcpHarnessStatus } from "../shared/acp-harness.js";
+import {
+  BOT_COMPUTER_CHANNELS,
+  BOT_COMPUTERS_CHANGED_CHANNEL,
+  parseBotComputerPointer,
+  parseBotComputerStatus,
+  parseBotComputersStatus,
+  parseBotComputerViewerGrant,
+  type BotComputerPointer,
+  type BotComputersSettings,
+  type BotComputersStatus,
+  type BotComputerStatus,
+  type BotComputerViewerGrant,
+} from "../shared/bot-computers.js";
 import type { AgentsInstructionNotice } from "../shared/agents-instructions-notice";
 import type { ChatForkPosition } from "../shared/chat-copy-contract";
 import type {
@@ -67,6 +96,7 @@ import type {
   McpStatus,
   McpToolSummary,
   McpPendingLaunchApproval,
+  McpMacAppStatus,
   ModelInfo,
   ModelInsightsActionResult,
   ModelInsightsStatus,
@@ -106,8 +136,9 @@ import type {
 } from "./types";
 import type { OnboardingOutcome, OnboardingSnapshot } from "../shared/onboarding";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
+import type { WebFetchRendererSnapshot } from "../shared/web-fetch-settings";
 import type {
-  WebSearchKeyPoolProviderId,
+  WebKeyPoolId,
   WebSearchKeyPoolRendererState,
   WebSearchKeyPoolStrategy,
 } from "../shared/web-search-key-pool";
@@ -151,6 +182,7 @@ import type {
 } from "../shared/chat-run-input";
 import type { ToolApprovalDetails } from "../shared/assistant";
 import type { ToolApprovalRuleView, ToolApprovalScope } from "../shared/tool-approval-scope";
+import type { ToolApprovalPreview } from "../shared/tool-approval-preview";
 import {
   parseSubagentHistoryDetailV1,
   type SubagentHistoryDetailV1,
@@ -189,6 +221,7 @@ import type {
   AidenRemoteSettingsSnapshot,
 } from "../shared/aiden-remote";
 import type { ChatArtifactEventV1 } from "../shared/chat-artifacts";
+import type { ModelCallRetryView } from "../shared/model-call-retry";
 import type {
   ImageGenerationActionResult,
   ImageGenerationAddCustomModelRequest,
@@ -211,6 +244,8 @@ import type {
   ChatSidebarPullRequests,
 } from "../shared/chat-pull-requests";
 import { parseBtwEvent, type BtwEventV1, type BtwStartReceiptV1 } from "../shared/btw";
+import { parseChatFollowThrough, type ChatFollowThroughV1 } from "../shared/follow-through";
+import type { BackgroundJobOutput } from "../shared/background-jobs";
 import {
   parseDeviceHostCheck,
   type DeviceHostCheck,
@@ -368,6 +403,9 @@ export const appApi = {
   setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
+  /** The commands that can run now, so the menu bar greys out the rest. */
+  setMenuCommands: (commandIds: readonly string[]) =>
+    invoke<boolean>("app:setMenuCommands", [...commandIds]),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
@@ -529,6 +567,61 @@ export const modelPaceApi = {
   clear: () => invoke<void>("modelPace:clear"),
 };
 
+/** Replies waiting for a provider usage limit to clear, on this Mac. */
+export const usageLimitsApi = {
+  list: async () => parseUsageLimitWaits(await invoke<unknown>("usageLimits:list")),
+  /** Send the waiting reply's test request now; false when it was tried in the last 30 seconds. */
+  retryNow: (ownerKind: UsageLimitWaitView["ownerKind"], ownerId: string) =>
+    invoke<boolean>("usageLimits:retryNow", ownerKind, ownerId),
+  onChanged: (handler: (waits: UsageLimitWaitView[]) => void) =>
+    onNotification<UsageLimitsChangedEvent>(USAGE_LIMITS_CHANGED_CHANNEL, (event) => handler(parseUsageLimitWaits(event?.waits))),
+};
+
+export type BotSpendingLimitChoice = { kind: "default" } | { kind: "none" } | { kind: "amount"; usd: number };
+
+function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
+  const choice = value as { kind?: unknown; usd?: unknown } | null;
+  if (choice?.kind === "none") return { kind: "none" };
+  const usd = choice?.kind === "amount" ? parseSpendingLimitUsd(choice.usd) : undefined;
+  return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
+}
+
+function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
+  const status = value as Partial<Record<keyof AnalyticsStatusView, unknown>> | null;
+  return {
+    enabled: status?.enabled === true,
+    envDisabled: status?.envDisabled === true,
+    hasKey: status?.hasKey === true,
+    noticePending: status?.noticePending === true,
+  };
+}
+
+/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+export const analyticsApi = {
+  status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
+  setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
+  markNoticeShown: async (choice: AnalyticsNoticeChoice) =>
+    parseAnalyticsStatus(await invoke<unknown>("analytics:markNoticeShown", choice)),
+  registry: () => invoke<AnalyticsRegistryView>("analytics:registry"),
+};
+
+export const spendingApi = {
+  status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
+  /** Raise the chat's limit, or the Bot's month, by the limit once more. */
+  allowMore: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
+    parseSpendingStatusView(await invoke<unknown>("spending:allowMore", ownerKind, ownerId)),
+  botLimit: async (botId: string) => parseBotSpendingLimitChoice(await invoke<unknown>("spending:botLimit", botId)),
+  /** "default" follows Settings, null is no limit, a number is the Bot's own. */
+  setBotLimit: async (botId: string, choice: "default" | null | number) =>
+    parseBotSpendingLimitChoice(await invoke<unknown>("spending:setBotLimit", botId, choice)),
+  /** `ownerId` "*" means every chat or every Bot (the limits in Settings changed). */
+  onChanged: (handler: (event: SpendingChangedEvent) => void) =>
+    onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
+      if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
+};
+
 export const computerUseApi = {
   status: (force = false) => invoke<ComputerUseStatus>("computerUse:status", force),
   setEnabled: (enabled: boolean) => invoke<ComputerUseStatus>("computerUse:setEnabled", enabled),
@@ -590,6 +683,12 @@ export const skillsApi = {
   catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
   /** @deprecated Compatibility alias for the renderer-safe catalog. */
+  /** Every skill a workspace could switch off, with whether it is off there. */
+  workspaceChoices: (workspaceId: string) =>
+    invoke<import("../../main/services/skill-registry").WorkspaceSkillChoice[]>(
+      "skills:workspaceChoices",
+      workspaceId,
+    ),
   discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
@@ -624,6 +723,10 @@ export const mcpApi = {
   liveStatus: () => invoke<McpLiveStatus[]>("mcp:liveStatus"),
   /** The server's tools from its last discovery (never connects); null when none yet. */
   toolList: (id: string) => invoke<McpToolSummary[] | null>("mcp:toolList", id),
+  /** Whether a Mac app connector's app (iMCP) is installed and open. Read-only. */
+  macAppStatus: (presetId: string) => invoke<McpMacAppStatus>("mcp:macAppStatus", presetId),
+  /** Open a Mac app connector's installed app. Only when the person chooses Open. */
+  openMacApp: (presetId: string) => invoke<{ opened: true }>("mcp:openMacApp", presetId),
   onStatusChanged: (handler: (status: McpLiveStatus) => void) =>
     onNotification<McpLiveStatus>("mcp:statusChanged", handler),
   oauthStatus: (id: string) =>
@@ -679,19 +782,30 @@ export const webSearchApi = {
   removeCredential: (providerId: WebSearchProviderId) =>
     invoke<WebSearchRendererSnapshot>("webSearch:removeCredential", providerId),
   keyPool: {
-    get: (providerId: WebSearchKeyPoolProviderId) =>
+    get: (providerId: WebKeyPoolId) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:get", providerId),
-    add: (providerId: WebSearchKeyPoolProviderId, key: string, label?: string) =>
+    add: (providerId: WebKeyPoolId, key: string, label?: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:add", providerId, key, label),
-    remove: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    remove: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:remove", providerId, entryId),
-    reorder: (providerId: WebSearchKeyPoolProviderId, entryIds: string[]) =>
+    reorder: (providerId: WebKeyPoolId, entryIds: string[]) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:reorder", providerId, entryIds),
-    setStrategy: (providerId: WebSearchKeyPoolProviderId, strategy: WebSearchKeyPoolStrategy) =>
+    setStrategy: (providerId: WebKeyPoolId, strategy: WebSearchKeyPoolStrategy) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:setStrategy", providerId, strategy),
-    resetCooldown: (providerId: WebSearchKeyPoolProviderId, entryId: string) =>
+    resetCooldown: (providerId: WebKeyPoolId, entryId: string) =>
       invoke<WebSearchKeyPoolRendererState>("webSearch:keyPool:resetCooldown", providerId, entryId),
   },
+};
+
+// ── Web pages (web_fetch) and extract mode ───────────────────────────
+export const webFetchApi = {
+  get: () => invoke<WebFetchRendererSnapshot>("webSearch:pages:get"),
+  setEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setEnabled", enabled),
+  setExtractEnabled: (enabled: boolean) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractEnabled", enabled),
+  setExtractAccountId: (accountId: string | null) =>
+    invoke<WebFetchRendererSnapshot>("webSearch:pages:setExtractAccountId", accountId),
 };
 
 // ── Telegram remote control ──────────────────────────────────────────
@@ -856,7 +970,7 @@ export const shortcutApi = {
 /** Native folder picker (uses the default-exposed dialog bridge). Returns null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const res = await window.aidenAPI.dialog.showOpenDialog({
-    properties: ["openDirectory"],
+    properties: ["openDirectory", "createDirectory"],
   });
   if (res.canceled || !res.filePaths?.length) return null;
   return res.filePaths[0];
@@ -902,11 +1016,20 @@ export const workspacesApi = {
   peerClone: (input: { cloneId: string; hostId: string; workspaceId: string; selection: string; files: string[] }) => invoke<PeerOperationOutcome>("workspaces:peerClone", input),
   cancelPeerClone: (cloneId: string) => invoke<boolean>("workspaces:peerCloneCancel", cloneId),
   list: () => invoke<Workspace[]>("workspaces:list"),
+  memoryFacts: (workspaceId: string) =>
+    invoke<import("../../main/services/workspace-memory-facts").WorkspaceMemoryFactView[]>(
+      "workspaces:memoryFacts",
+      workspaceId,
+    ),
+  deleteMemoryFact: (workspaceId: string, factId: string) =>
+    invoke<boolean>("workspaces:deleteMemoryFact", workspaceId, factId),
   get: (id: string) => invoke<Workspace | null>("workspaces:get", id),
   create: (input: { name?: string; permission?: WorkspacePermission }) =>
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /** A hidden workspace for one No workspace chat: its own managed folder, global settings. */
+  createNoWorkspace: () => invoke<Workspace>("workspaces:createNoWorkspace"),
   /**
    * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
    * given workspace's folder). Never creates anything.
@@ -932,13 +1055,22 @@ export const workspacesApi = {
     onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
-    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+    patch: {
+      name?: string;
+      permission?: WorkspacePermission;
+      memoryEnabled?: boolean;
+      disabledSkills?: string[];
+      disabledMcpServerIds?: string[];
+    },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   /** Credential-free repository identity, or null outside a repository with a network remote. */
   repositoryIdentity: (workspaceId: string) =>
     invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
+  /** Whether the workspace's folder is still on disk. */
+  folderPresence: (workspaceId: string) =>
+    invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
@@ -989,6 +1121,63 @@ export const browserApi = {
   setLinkPreference: (value: import("../shared/browser").BrowserLinkOpening) =>
     invoke<import("../shared/browser").BrowserLinkOpening>("browser:set-link-preference", value),
   openExternal: (url: string) => invoke<void>("browser:open-external", url),
+  openFileExternal: (workspaceId: string, path: string) => invoke<void>("browser:open-file-external", workspaceId, path),
+  /** A video the agent recorded, by the id its chat step names; null once it is gone. */
+  recording: (recordingId: string) =>
+    invoke<{ mimeType: string; data: Uint8Array } | null>("browser:recording", recordingId),
+  revealRecording: (recordingId: string) => invoke<void>("browser:reveal-recording", recordingId),
+};
+
+async function botComputersStatus(channel: string): Promise<BotComputersStatus> {
+  const status = parseBotComputersStatus(await invoke<unknown>(channel));
+  if (!status) throw new Error("Aiden returned an invalid Bot computer status.");
+  return status;
+}
+
+async function botComputer(channel: string, botId: string): Promise<BotComputerStatus> {
+  const computer = parseBotComputerStatus(await invoke<unknown>(channel, botId));
+  if (!computer) throw new Error("Aiden returned an invalid Bot computer.");
+  return computer;
+}
+
+/** Settings → Bot computers and the profile's Computer section (Apple silicon only). */
+export const botComputersApi = {
+  status: () => botComputersStatus(BOT_COMPUTER_CHANNELS.status),
+  setUp: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUp),
+  cancelSetUp: () => invoke<void>(BOT_COMPUTER_CHANNELS.cancelSetUp),
+  updateBase: () => botComputersStatus(BOT_COMPUTER_CHANNELS.updateBase),
+  removeEverything: () => botComputersStatus(BOT_COMPUTER_CHANNELS.removeEverything),
+  updateSettings: (patch: Partial<BotComputersSettings>) =>
+    invoke<BotComputersSettings>(BOT_COMPUTER_CHANNELS.updateSettings, patch),
+  give: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.give, botId),
+  reset: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.reset, botId),
+  remove: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.remove, botId),
+  stop: (botId: string) => invoke<void>(BOT_COMPUTER_CHANNELS.stop, botId),
+  /** The Computer tab's stream target. `start` boots a stopped computer; only a person's switch to the tab passes it. */
+  viewerGrant: async (botId: string, options: { start: boolean }): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.viewerGrant, botId, options));
+    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
+    return grant;
+  },
+  takeOver: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.takeOver, botId),
+  giveBack: (botId: string) => botComputer(BOT_COMPUTER_CHANNELS.giveBack, botId),
+  pointer: async (botId: string): Promise<BotComputerPointer | null> =>
+    parseBotComputerPointer(await invoke<unknown>(BOT_COMPUTER_CHANNELS.pointer, botId)),
+  /** Element control (the guest driver lane) on a ready base without it; progress arrives as broadcasts. */
+  setUpElementControl: () => botComputersStatus(BOT_COMPUTER_CHANNELS.setUpElementControl),
+  checkPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.checkPermissions),
+  skipPermissions: () => invoke<void>(BOT_COMPUTER_CHANNELS.skipPermissions),
+  /** The base computer's screen while setup waits for the person's grants. */
+  baseViewerGrant: async (): Promise<BotComputerViewerGrant> => {
+    const grant = parseBotComputerViewerGrant(await invoke<unknown>(BOT_COMPUTER_CHANNELS.baseViewerGrant));
+    if (!grant) throw new Error("Aiden returned an invalid viewer grant.");
+    return grant;
+  },
+  onChanged: (handler: (status: BotComputersStatus) => void) =>
+    onNotification<unknown>(BOT_COMPUTERS_CHANGED_CHANNEL, (payload) => {
+      const status = parseBotComputersStatus(payload);
+      if (status) handler(status);
+    }),
 };
 
 async function invokeDeviceToolchain(channel: string): Promise<DeviceToolchainState> {
@@ -1337,6 +1526,22 @@ export const chatsApi = {
   btwCancel: (chatId: string, requestId: string) =>
     invoke<boolean>("chats:btwCancel", { chatId, requestId }),
   btwClear: (chatId: string) => invoke<void>("chats:btwClear", { chatId }),
+  // Follow-through: background jobs, followed pull requests and the done-when check.
+  followThrough: async (chatId: string): Promise<ChatFollowThroughV1> => {
+    const value = parseChatFollowThrough(await invoke<unknown>("chats:followThrough", chatId));
+    if (!value || value.chatId !== chatId) throw new Error("The follow-through response was invalid.");
+    return value;
+  },
+  backgroundJobOutput: (chatId: string, jobId: string) =>
+    invoke<BackgroundJobOutput>("chats:followThroughJobOutput", { chatId, jobId }),
+  stopBackgroundJob: (chatId: string, jobId: string) =>
+    invoke<void>("chats:followThroughStopJob", { chatId, jobId }),
+  followPullRequest: (chatId: string) => invoke<void>("chats:followThroughFollowPullRequest", { chatId }),
+  stopFollowingPullRequest: (chatId: string, ref: { host: string; repository: string; number: number }) =>
+    invoke<void>("chats:followThroughStopFollow", { chatId, ...ref }),
+  setDoneWhenCheck: (chatId: string, command: string) =>
+    invoke<void>("chats:followThroughSetCheck", { chatId, command }),
+  clearDoneWhenCheck: (chatId: string) => invoke<void>("chats:followThroughClearCheck", { chatId }),
   onBtwEvent: (handler: (event: BtwEventV1) => void) =>
     onNotification<unknown>("chats:btw-event", (payload) => {
       const event = parseBtwEvent(payload);
@@ -1381,6 +1586,9 @@ export const chatsApi = {
   rename: (id: string, title: string) => invoke<void>("chats:rename", id, title),
   renameWithFoundationModels: (id: string) =>
     invoke<ChatTitleRenameResult>("chats:renameWithFoundationModels", id),
+  /** Change the model this chat answers with; other chats and new chats keep theirs. */
+  setModel: (id: string, providerId: string, model: string) =>
+    invoke<Chat | null>("chats:setModel", id, providerId, model),
   /**
    * Clone the whole visible chat, or fork it at `forkAt`. A fork with
    * `summary` also summarizes what the source did after the fork point.
@@ -1413,6 +1621,11 @@ export const chatsApi = {
     invoke<Chat>("chats:dismissComputerUseContinue", chatId),
   remove: (id: string) => invoke<void>("chats:remove", id),
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
+  /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
+  replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
+  /** The questions and approvals the interrupted reply was waiting on, questions first. */
+  interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
+  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -1514,6 +1727,10 @@ export const botsApi = {
     invoke<BotSessionState>("bots:dismiss", { botId, requestId }),
   /** Stop the reply that is running now. */
   stop: (botId: string) => invoke<BotSessionState>("bots:stop", botId),
+  /** Pause the Bot (its turn, routines and replies) until `unpause`; the button reads Resume. */
+  pause: (botId: string) => invoke<BotSessionState>("bots:pause", botId),
+  /** Clear the pause. An interrupted turn then shows its Resume card again. */
+  unpause: (botId: string) => invoke<BotSessionState>("bots:unpause", botId),
   /** Remove a queued message before its turn starts. */
   withdraw: (botId: string, submissionId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-session-service").BotWithdrawResult>("bots:withdraw", {
@@ -1529,6 +1746,28 @@ export const botsApi = {
    */
   answerQuestion: (botId: string, waitId: string, answer: import("../shared/ask-user-question").AskUserQuestionResponseV1) =>
     invoke<{ answered: boolean }>("bots:answerQuestion", { botId, waitId, answer }),
+  /**
+   * Answer the Bot's hand-off card by its wait id with Done or Skip, and an
+   * optional note; `answered` is false once the card is no longer waiting.
+   */
+  answerHandoff: (
+    botId: string,
+    waitId: string,
+    outcome: import("../shared/bot-handoffs").BotHandoffOutcome,
+    note?: string,
+  ) =>
+    invoke<{ answered: boolean }>("bots:answerHandoff", {
+      botId,
+      waitId,
+      outcome,
+      ...(note === undefined ? {} : { note }),
+    }),
+  /** Open on a hand-off card: its page in the Bot's browser or the system browser. */
+  openHandoff: (botId: string, waitId: string) =>
+    invoke<{ opened: import("../../main/services/bot-runtime/bot-handoff-open").BotHandoffOpened }>("bots:openHandoff", {
+      botId,
+      waitId,
+    }),
   pendingApprovals: (botId: string) =>
     invoke<import("../../main/services/bot-runtime/bot-approvals").BotApprovalPrompt[]>(
       "bots:pendingApprovals",
@@ -1556,6 +1795,9 @@ export const botsApi = {
     read: (botId: string, path: string) =>
       invoke<import("./types").WorkspaceFileDocument>("bots:files:read", botId, path),
   },
+  /** "Add to this Bot" on a connect card: an app already connected in Aiden joins this Bot's Custom access. */
+  grantConnection: (botId: string, pluginId: string) =>
+    invoke<void>("bots:connections:grant", botId, pluginId),
   /** Not now on a connect card: this Bot won't suggest that connection again. */
   dismissConnection: (botId: string, pluginId: string) =>
     invoke<void>("bots:connections:dismiss", botId, pluginId),
@@ -1571,6 +1813,13 @@ export const botsApi = {
       invoke<import("../../main/services/scheduled-bot-routines").BotRoutine>("bots:routines:update", input),
     delete: (input: import("../../main/services/scheduled-bot-routines").BotRoutineDeleteInput) =>
       invoke<void>("bots:routines:delete", input),
+    /** Start one run now (Run now on the "skipped while paused" notice). */
+    runNow: (botId: string, routineId: string, expectedUpdatedAt?: number) =>
+      invoke<{ runId: string }>("bots:routines:runNow", {
+        botId,
+        routineId,
+        ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }),
+      }),
   },
   /** What a Bot remembers (USER.md and MEMORY.md), and the person's edits to it. */
   memory: {
@@ -1578,6 +1827,17 @@ export const botsApi = {
     /** A replace, remove or clear; a stale entry id answers `entry_not_found` with the fresh view. */
     edit: (input: import("../shared/bot-memory").BotMemoryEditInput) =>
       invoke<import("../shared/bot-memory").BotMemoryEditResult>("bots:memory:edit", input),
+  },
+  /** A Bot's rules: what it must ask about first or hand to the person. */
+  rules: {
+    get: (botId: string) => invoke<import("../shared/bot-rules").BotRulesView>("bots:rules:get", botId),
+    /** One change against the view's revision; a refused change answers its reason with the fresh view. */
+    update: (input: import("../shared/bot-rules").BotRulesUpdateInput) =>
+      invoke<import("../shared/bot-rules").BotRulesUpdateResult>("bots:rules:update", input),
+  },
+  /** A Bot's own browser: its workspace for the `browser:*` channels, or null when the Bot is gone. */
+  browser: {
+    workspace: (botId: string) => invoke<{ workspaceId: string } | null>("bots:browser:workspace", botId),
   },
   /** Any write to a Bot's memory: the person's, the Bot's own, a review or a compaction flush. */
   onMemoryChanged: (handler: (event: import("../shared/bot-memory").BotMemoryChangedEvent) => void) =>
@@ -1589,6 +1849,52 @@ export const botsApi = {
         "bots:routineProposals:respond",
         input,
       ),
+  },
+  /** Routines that run when something happens: a file change or the routine's link. */
+  eventRoutines: {
+    list: (botId: string) => invoke<import("../shared/bot-event-routines").BotEventRoutineView[]>("bots:eventRoutines:list", { botId }),
+    create: (input: { botId: string; name: string; prompt: string; trigger: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<{ routine: import("../shared/bot-event-routines").BotEventRoutineView; link?: string | null; token?: string }>("bots:eventRoutines:create", input),
+    update: (input: { botId: string; id: string; enabled?: boolean; name?: string; prompt?: string; trigger?: import("../shared/bot-routine-trigger").BotRoutineTrigger }) =>
+      invoke<import("../shared/bot-event-routines").BotEventRoutineView>("bots:eventRoutines:update", input),
+    remove: (input: { botId: string; id: string }) => invoke<{ removed: boolean }>("bots:eventRoutines:remove", input),
+    rotateLink: (input: { botId: string; id: string }) =>
+      invoke<{ link: string | null; token: string }>("bots:eventRoutines:rotateLink", input),
+    /** Calls `listener` with the Bot's id when its routines change or a watch saves a check. */
+    onChanged: (listener: (botId: string) => void) =>
+      onNotification<{ botId?: unknown }>("bots:eventRoutines:changed", (payload) => {
+        if (typeof payload?.botId === "string") listener(payload.botId);
+      }),
+  },
+  /** What a Bot learned: the page's overview, Undo, and lesson answers. */
+  learning: {
+    get: (botId: string) => invoke<import("../shared/bot-learning-overview").BotLearningOverview>("bots:learning:get", { botId }),
+    undo: (input: { botId: string; changeId: string }) => invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undo", input),
+    undoInChat: (input: { botId: string; target: { kind: "lesson"; lessonId: string } | { kind: "change"; changeId: string } }) =>
+      invoke<{ ok: true } | { ok: false; code: string }>("bots:learning:undoInChat", input),
+    respondLesson: (input: { botId: string; lessonId: string; decision: "keep" | "dismiss" }) =>
+      invoke<{ status: "active" | "dismissed" }>("bots:lessons:respond", input),
+    removeLesson: (input: { botId: string; lessonId: string }) => invoke<void>("bots:lessons:remove", input),
+  },
+  /** Skills a Bot proposed (or found in its folder) and the person's answer. */
+  skillProposals: {
+    respond: (input: { botId: string; proposalId: string; decision: "add" | "dismiss" }) =>
+      invoke<{ status: "added" | "dismissed" }>("bots:skillProposals:respond", input),
+  },
+  /** A Bot's health checks: the newest report, and Check now. */
+  health: {
+    report: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport | null>("bots:health:report", { botId }),
+    check: (botId: string) =>
+      invoke<import("../shared/bot-health").BotHealthReport>("bots:health:check", { botId }),
+  },
+  /** "Needs you" issues the host raised for a Bot, and the person's answers. */
+  issues: {
+    list: (input: { botId: string; open?: boolean }) =>
+      invoke<import("../shared/bot-issues").BotIssue[]>("bots:issues:list", input),
+    /** One of the card's actions; a settled issue answers `not_open`. */
+    act: (input: { botId: string; issueId: string; action: import("../shared/bot-issues").BotIssueAction }) =>
+      invoke<{ result: "done" | "not_open" }>("bots:issues:act", input),
   },
   getTelegramBinding: (id: string) =>
     invoke<import("../shared/bots").TelegramBotBindingView | null>("bots:getTelegramBinding", id),
@@ -1648,6 +1954,8 @@ export interface ApprovalPrompt {
   toolName: string;
   summary: string;
   details?: ToolApprovalDetails;
+  /** The exact command or file change, sent only to the desktop that owns the chat. */
+  preview?: ToolApprovalPreview;
   canAllow?: boolean;
   /** Allow scopes offered for this call; absent means allow once only. */
   scopes?: ToolApprovalScope[];
@@ -1718,6 +2026,8 @@ export interface StreamCallbacks {
   onQuestionnaire?: (prompt: AskUserQuestionPromptV1) => void;
   onTodo?: (snapshot: TodoSnapshotViewV1) => void;
   onStatus?: (phase: ChatStatusPhase) => void;
+  /** A failed model request waits before it is sent again. */
+  onRetrying?: (retry: ModelCallRetryView) => void;
   /** The AGENTS.md files cut short or skipped for this response (empty: all fit). */
   onAgentsInstructionNotices?: (notices: AgentsInstructionNotice[]) => void;
   onContextPressure?: (pressure: ChatContextPressureV1 | null) => void;
@@ -1760,6 +2070,9 @@ export function startGeneration(
         }
         return { ok: true as const };
       }
+      // Main never took the turn, so nothing will ever arrive on this stream.
+      fallbackDetachedLifecycleStream(streamId);
+      dispose();
       return {
         ok: false as const,
         error: new Error("Generation was rejected before it accepted this message."),

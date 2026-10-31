@@ -250,6 +250,17 @@ test("projects display_image as a safe relative GUI artifact action", () => {
   });
 });
 
+test("projects a Bot computer step with its intent, never typed text or the command", () => {
+  assert.deepEqual(safeToolDescriptor("computer", { action: "type", text: "SECRET TEXT", intent: "Type the search terms" }), {
+    label: "Use its computer",
+    detail: "Type the search terms",
+  });
+  assert.deepEqual(safeToolDescriptor("computer_shell", { command: "export TOKEN=SECRET", description: "Set up the project" }), {
+    label: "Run command in its computer",
+    detail: "Set up the project",
+  });
+});
+
 test("projects generate_image with only its model and a known aspect ratio, never the prompt", () => {
   const descriptor = safeToolDescriptor("generate_image", {
     provider: "fal",
@@ -903,6 +914,70 @@ test("an answered questionnaire keeps its recap through timeline replay, and onl
   assert.equal(parseGenerationTimeline(tampered), undefined);
   const misplaced = structuredClone(snapshot);
   toolSteps(misplaced)[1]!.questionnaire = toolSteps(snapshot)[0]!.questionnaire;
+  assert.equal(parseGenerationTimeline(misplaced), undefined);
+});
+
+test("a web page step shows only the host, and an extract recap survives replay", () => {
+  const recap = {
+    version: 1,
+    host: "acme.example",
+    cut: false,
+    fields: [{ name: "price", status: "extracted", value: "20", confidence: 0.97, sourceLine: "Pro is $20 per month." }],
+  };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status, details, url] of [
+    ["read", "web_fetch", "completed", recap, "https://acme.example/pricing?token=secret"],
+    ["bare", "web_fetch", "completed", null, "acme.example/docs"],
+    ["other", "read_file", "completed", recap, undefined],
+    ["failed", "web_fetch", "failed", recap, "https://acme.example"],
+  ] as const) {
+    projector.toolStarted(id, tool, url === undefined ? {} : { url });
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.finish("completed");
+  const steps = toolSteps(snapshot);
+  assert.deepEqual(steps.map((step) => step.detail), ["acme.example", "acme.example", undefined, "acme.example"]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /token|secret|pricing/u);
+  assert.deepEqual(steps.map((step) => step.extraction), [recap, undefined, undefined, undefined]);
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+
+  const tampered = structuredClone(snapshot);
+  delete (toolSteps(tampered)[0]!.extraction!.fields[0] as { sourceLine?: string }).sourceLine;
+  assert.equal(parseGenerationTimeline(tampered), undefined);
+  const misplaced = structuredClone(snapshot);
+  toolSteps(misplaced)[2]!.extraction = toolSteps(snapshot)[0]!.extraction;
+  assert.equal(parseGenerationTimeline(misplaced), undefined);
+});
+
+test("a recording stop step carries only the video's id, type, length and size, and survives replay", () => {
+  const recording = {
+    id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678",
+    mimeType: "video/mp4",
+    durationMs: 12_400,
+    sizeBytes: 1_048_576,
+  };
+  const projector = new GenerationTimelineProjector("generation-1", () => {});
+  for (const [id, tool, status, details] of [
+    // What the browser tool returns: the path and tab stay in the model's text, not the step.
+    ["stop", "browser_recording_stop", "completed", { recording }],
+    ["path", "browser_recording_stop", "completed", { recording: { ...recording, path: "/Users/me/Library/rec.mp4" } }],
+    ["gif", "browser_recording_stop", "completed", { recording: { ...recording, mimeType: "image/gif" } }],
+    ["other", "browser_snapshot", "completed", { recording }],
+    ["failed", "browser_recording_stop", "failed", { recording }],
+  ] as const) {
+    projector.toolStarted(id, tool, {});
+    projector.toolFinished(id, status, details);
+  }
+  const snapshot = projector.finish("completed");
+  assert.deepEqual(toolSteps(snapshot).map((step) => step.recording), [recording, undefined, undefined, undefined, undefined]);
+  assert.doesNotMatch(JSON.stringify(snapshot), /Users|rec\.mp4/u);
+  assert.deepEqual(parseGenerationTimeline(JSON.parse(JSON.stringify(snapshot))), snapshot);
+
+  const tampered = structuredClone(snapshot);
+  (toolSteps(tampered)[0]!.recording as { id: string }).id = "../../etc/passwd";
+  assert.equal(parseGenerationTimeline(tampered), undefined);
+  const misplaced = structuredClone(snapshot);
+  toolSteps(misplaced)[3]!.recording = toolSteps(snapshot)[0]!.recording;
   assert.equal(parseGenerationTimeline(misplaced), undefined);
 });
 

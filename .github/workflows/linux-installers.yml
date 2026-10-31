@@ -30,7 +30,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
 
       - name: Install Linux package dependencies
@@ -43,6 +43,9 @@ jobs:
         run: npm run type-check && npm run lint && npm run test:linux-contracts && node --test scripts/install.test.mjs
 
       - name: Build and verify Linux installers
+        env:
+          # dist:linux is a distribution build and the checks below launch it.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run models:refresh

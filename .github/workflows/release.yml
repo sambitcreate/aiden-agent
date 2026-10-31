@@ -35,7 +35,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
 
       - name: Resolve the declared release version
@@ -59,6 +59,12 @@ jobs:
           if [[ "$should_publish" != true ]]; then
             echo "$release_tag already exists; skipping release without changing its version."
           fi
+
+      - name: Require the analytics project key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
 
       - name: Install locked dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
@@ -141,11 +147,18 @@ jobs:
         if: ${{ steps.version.outputs.publish == 'true' }}
         env:
           AIDEN_ENABLE_AUTO_UPDATES: "1"
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12 }}
         run: npm run dist
+
+      - name: Verify the built app carries the analytics key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: grep -qF "$AIDEN_POSTHOG_PROJECT_KEY" build/main/index.js || { echo "::error::The built main bundle does not carry the analytics project key."; exit 1; }
 
       # Source maps are excluded from app.asar; keep them for symbolication.
       # The name must not match the publish job's release-* download pattern.
@@ -204,7 +217,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
 
       - name: Resolve the declared release version
@@ -226,6 +239,12 @@ jobs:
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "publish=$should_publish" >> "$GITHUB_OUTPUT"
 
+      - name: Require the analytics project key
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+        run: test -n "$AIDEN_POSTHOG_PROJECT_KEY" || { echo "::error::The AIDEN_POSTHOG_PROJECT_KEY secret is missing."; exit 1; }
+
       - name: Install Linux package dependencies
         if: ${{ steps.version.outputs.publish == 'true' }}
         run: sudo apt-get update && sudo apt-get install --yes rpm xvfb pkg-config libsecret-1-dev libselinux1-dev
@@ -240,10 +259,15 @@ jobs:
 
       - name: Build and verify Linux distributions
         if: ${{ steps.version.outputs.publish == 'true' }}
+        env:
+          AIDEN_POSTHOG_PROJECT_KEY: ${{ secrets.AIDEN_POSTHOG_PROJECT_KEY }}
+          # The version checks below launch the release build.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run models:refresh
           npm run dist:linux
+          grep -qF "$AIDEN_POSTHOG_PROJECT_KEY" build/main/index.js || { echo "::error::The built main bundle does not carry the analytics project key."; exit 1; }
           node scripts/verify-linux-package.mjs release/linux-distribution
           node scripts/prepare-linux-update-feed.mjs release/linux-distribution "${{ matrix.arch }}" "$(node -p 'require("./package.json").version')"
           sudo apt-get install --yes ./release/linux-distribution/*.deb
@@ -263,6 +287,7 @@ jobs:
           smoke_root="$RUNNER_TEMP/aiden-linux-release-smoke-${{ matrix.arch }}"
           mkdir -p "$smoke_root/home" "$smoke_root/config" "$smoke_root/cache" "$smoke_root/data"
           set +e
+          AIDEN_ANALYTICS=0 \
           HOME="$smoke_root/home" \
           XDG_CONFIG_HOME="$smoke_root/config" \
           XDG_CACHE_HOME="$smoke_root/cache" \
@@ -324,7 +349,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
 
       - name: Resolve release identity
         id: version

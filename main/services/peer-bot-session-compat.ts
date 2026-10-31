@@ -10,6 +10,7 @@ import {
   AIDEN_REMOTE_BOT_SESSION_STATES,
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteBotApproval,
+  parseAidenRemoteBotHandoff,
   parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionActivity,
@@ -34,6 +35,7 @@ const SESSION_KEYS = [
   "approval",
   "activity",
   "queued",
+  "handoff",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,6 +77,10 @@ export function peerBotSessionCompat(value: unknown): unknown {
     ["approval", parseAidenRemoteBotApproval],
   ] as const) {
     if (session[key] !== null && !parses(parse, session[key])) session[key] = null;
+  }
+  // A hand-off this client cannot read is left for the host's own window.
+  if (has(session, "handoff") && session.handoff !== null && !parses(parseAidenRemoteBotHandoff, session.handoff)) {
+    session.handoff = null;
   }
   if (
     has(session, "activity") &&

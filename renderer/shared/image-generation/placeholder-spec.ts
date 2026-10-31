@@ -28,9 +28,10 @@ export const IMAGE_SCAN_SPEC = {
    * Layout: the placeholder (and the generated image that replaces it) stands
    * alone at the requested shape, width = min(available, maxWidth,
    * maxHeight × aspect), with the card corner radius and its caption row below.
+   * Message-sized, like a photo in Messages: about the phone apps' caps.
    */
-  maxWidth: 672,
-  maxHeight: 512,
+  maxWidth: 360,
+  maxHeight: 320,
   cornerRadius: 12,
   /** One scan pass, in milliseconds, during the first minute. */
   periodMs: 2_800,

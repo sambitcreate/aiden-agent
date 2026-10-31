@@ -17,6 +17,7 @@ import {
   Lightbulb,
   MessageSquare,
   Mic2,
+  Monitor,
   MousePointer2,
   Palette,
   Plug,
@@ -31,6 +32,7 @@ import {
 } from "lucide-react";
 import { Text } from "./ui";
 import { onboardingModelDescription } from "../lib/onboarding-provider";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 import type { KeyboardPlatform } from "../shared/keybindings";
 import {
   FeatureArt,
@@ -149,7 +151,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "create",
     title: "Workspaces & Worktrees",
     description:
-      "Start a chat in any folder, clone a repository, or use a scratch space. Chats stay grouped with isolated worktrees in one workspace outline.",
+      "Start a chat in any folder, clone a repository, use a scratch space, or just chat with no workspace while Aiden keeps a private folder for files and Git. Chats stay grouped with isolated worktrees in one workspace outline.",
     icon: FolderGit2,
     size: "wide",
   },
@@ -240,6 +242,15 @@ export const onboardingFeatures: OnboardingFeature[] = [
     size: "standard",
   },
   {
+    id: "botComputers",
+    group: "control",
+    title: "Bot computers",
+    description:
+      "Give a Bot its own macOS virtual machine, apart from your Mac. Watch it work in the Bot's Computer tab and take over anytime. Set it up in Settings → Bot computers; nothing downloads until you choose Set up.",
+    icon: Monitor,
+    size: "standard",
+  },
+  {
     id: "schedules",
     group: "control",
     title: "Scheduled Automations",
@@ -253,7 +264,7 @@ export const onboardingFeatures: OnboardingFeature[] = [
     group: "control",
     title: "Voice & Dictation",
     description:
-      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, or explicitly connect cloud transcription and review what it can access.",
+      "Speak in the composer or dictate system-wide. Tap, hold, or both, and teach Aiden your names and terms in Voice settings. On-device models keep audio on this computer, and on Apple silicon your words appear as you speak. Or explicitly connect cloud transcription and review what it can access.",
     icon: Mic2,
     size: "standard",
   },
@@ -374,6 +385,7 @@ export function OnboardingFeatureGallery({
                 return (
                   <article
                     key={feature.id}
+                    ref={pauseWhenUnseen}
                     tabIndex={0}
                     aria-label={`${feature.title}. ${feature.description}`}
                     data-onboarding-feature={feature.id}

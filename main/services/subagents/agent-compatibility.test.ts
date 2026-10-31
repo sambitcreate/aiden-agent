@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createModels, Type } from "@earendil-works/pi-ai";
+import { createModels, getCurrentTools, Type } from "@earendil-works/pi-ai";
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -42,6 +42,7 @@ import {
   subagentsEnabled,
 } from "./feature-flag.js";
 import { createSubagentOutboundApprovalBrokerV2 } from "./outbound-approval-v2.js";
+import { runSubagentChild, type SubagentChildRunnerPolicy } from "./subagent-child-runner.js";
 
 const EMPTY_USAGE = {
   input: 0,
@@ -51,6 +52,128 @@ const EMPTY_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+async function reportBudgetFixture(options: {
+  policy?: SubagentChildRunnerPolicy;
+  now?: () => number;
+  onEffect?: () => void;
+  report?: () => AssistantMessage;
+  signal?: AbortSignal;
+} = {}) {
+  const core = createFauxCore({ provider: "child-report-budget", models: [{ id: "bounded" }] });
+  let effects = 0;
+  core.setResponses(Array.from({ length: 5 }, () => (context) => {
+    if (!getCurrentTools(context.messages).length) {
+      return options.report?.() ?? fauxAssistantMessage("Partial checks: fixture reads settled. Blocker: acceptance checks remain unrun; no task verification.");
+    }
+    return fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" });
+  }));
+  const registry = new SubagentRuntimeRegistry();
+  const result = await runSubagentChild({
+    authority: { generationId: "budget", chatId: "chat-budget", workspaceId: "workspace-budget" },
+    groupId: "report-budget",
+    runtime: runtimeFrom(core.getModel() as Model<Api>, core.streamSimple),
+    thinkingLevel: "high",
+    workspaceRoot: "/unused",
+    permission: "none",
+    inheritedCeiling: [],
+    context: { mode: "fresh", revisionHash: "0".repeat(64), messages: [] },
+    request: { role: "scout", label: "Inspect", task: "Inspect fixtures and report checks and blockers." },
+    policy: { maxTurns: 3, deadlineMs: 10_000, ...options.policy },
+    now: options.now,
+    signal: options.signal,
+    dependencies: {
+      buildTools: async () => [{
+        name: "inspect_fixture", label: "Inspect fixture", description: "Inspect one fixture.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          effects += 1;
+          options.onEffect?.();
+          return { content: [{ type: "text", text: "Fixture inspected; acceptance checks unrun." }], details: {} };
+        },
+      }],
+      createChild: (spec) => registry.create(spec),
+    },
+  });
+  return { result, effects, core, registry };
+}
+
+test("tool-heavy children reserve their last authorized turn for an incomplete text report", async () => {
+  const { result, effects, core, registry } = await reportBudgetFixture();
+  assert.equal(core.state.callCount, 3);
+  assert.equal(effects, 2);
+  assert.equal(result.status, "failed");
+  assert.match(result.summary, /Partial checks: fixture reads settled/u);
+  assert.match(result.summary, /Blocker: acceptance checks remain unrun/u);
+  assert.match(result.warning ?? "", /turn limit/u);
+  assert.match(result.warning ?? "", /incomplete, unverified/u);
+  assert.equal(registry.activeCount, 0);
+});
+
+test("reporting consumes remaining tool and wall-clock budgets without extending either", async () => {
+  let clock = 0;
+  for (const scenario of [
+    { policy: { maxTurns: 5, maxToolCalls: 1 }, warning: /tool-call limit/u },
+    { policy: { maxTurns: 5 }, now: () => clock, onEffect: () => { clock = 9_500; }, warning: /remaining deadline/u },
+  ]) {
+    const { result, effects, core } = await reportBudgetFixture(scenario);
+    assert.equal(effects, 1);
+    assert.equal(core.state.callCount, 2);
+    assert.equal(result.status, "failed");
+    assert.match(result.warning ?? "", scenario.warning);
+    assert.match(result.summary, /acceptance checks remain unrun/u);
+  }
+});
+
+test("report-only turn cannot execute stale tool names or start another provider turn", async () => {
+  const { result, effects, core } = await reportBudgetFixture({
+    report: () => fauxAssistantMessage(fauxToolCall("inspect_fixture", {}), { stopReason: "toolUse" }),
+  });
+  assert.equal(effects, 2);
+  assert.equal(core.state.callCount, 3);
+  assert.equal(result.status, "failed");
+  assert.equal(result.summary, "");
+  assert.match(result.warning ?? "", /did not provide a final text report/u);
+});
+
+test("single-turn child cannot send an extra request for its reporting reserve", async () => {
+  const { result, effects, core } = await reportBudgetFixture({ policy: { maxTurns: 1 } });
+  assert.equal(effects, 1);
+  assert.equal(core.state.callCount, 1);
+  assert.equal(result.status, "failed");
+  assert.equal(result.summary, "");
+});
+
+test("aborted reports and parent cancellation never become partial verification claims", async () => {
+  const aborted = await reportBudgetFixture({
+    report: () => fauxAssistantMessage("Draft result must stay private", { stopReason: "aborted", errorMessage: "aborted" }),
+  });
+  assert.equal(aborted.result.status, "failed", "unsolicited provider abort retains the existing failure classification");
+  assert.equal(aborted.result.summary, "");
+  const cancellation = new AbortController();
+  await assert.rejects(reportBudgetFixture({
+    signal: cancellation.signal,
+    report: () => {
+      cancellation.abort(new Error("Parent stopped during report"));
+      return fauxAssistantMessage("Draft result must stay private", { stopReason: "aborted", errorMessage: "aborted" });
+    },
+  }), /Parent stopped during report/u);
+});
+
+test("a reporting turn that runs out of time discards its draft without extending the deadline", async () => {
+  let clock = 0;
+  const { result, core, effects } = await reportBudgetFixture({
+    now: () => clock,
+    report: () => {
+      clock = 10_001;
+      return fauxAssistantMessage("Draft result must stay private");
+    },
+  });
+  assert.equal(result.status, "timed_out");
+  assert.equal(result.summary, "");
+  assert.equal(core.state.callCount, 3);
+  assert.equal(effects, 2);
+});
 
 function semanticCheckpointSummary(label: string): string {
   return `## Goal\n${label}\n\n## Constraints & Preferences\n- none\n\n## Progress\n### Done\n- [x] preserved state\n\n### In Progress\n- [ ] continue\n\n### Blocked\n- none\n\n## Key Decisions\n- preserve continuity\n\n## Next Steps\n1. Continue\n\n## Critical Context\n- ${label}`;
@@ -1218,12 +1341,12 @@ test("main-process shutdown continues to application quit after the subagent dea
   const source = await readFile(new URL("../../index.ts", import.meta.url), "utf-8");
   const parentAbortStart = source.indexOf(
     "llmClient.abortAll();",
-    source.indexOf("async function shutdownAndQuit"),
+    source.indexOf("async function runShutdownAndQuit"),
   );
   const settlementStart = source.indexOf(
-    "const subagentsSettled = await subagentRuntimeRegistry.shutdown();",
+    "subagentRuntimeRegistry.shutdown(),",
   );
-  const parentSettlementStart = source.indexOf("await llmClient.shutdown();", parentAbortStart);
+  const parentSettlementStart = source.indexOf("llmClient.shutdown(),", parentAbortStart);
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",

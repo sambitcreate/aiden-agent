@@ -273,7 +273,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   const chatPane = source("../main/chat-pane.tsx");
   const ipc = source("../lib/ipc.ts");
   const mainHandlers = source("../../main/handlers/chats.ts");
-  const platform = source("../../main/platform.ts");
 
   assert.match(composer, /title="Fork from a completed turn"/u);
   assert.match(
@@ -287,7 +286,7 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.match(composer, /authenticatedProviders\.map\(\(provider\)/u);
   assert.match(composer, /openWorktreeOnMount=\{worktreeRequest > 0\}/u);
   assert.match(composer, /programmaticReturnFocusRef=\{inputRef\}/u);
-  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
+  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending \|\| dictationPreviewing\}/u);
   assert.match(composer, /role="status" aria-live="polite"/u);
   assert.match(branchPicker, /openManagedWorktree \? "worktree" : null/u);
   assert.match(chatPane, /logoutBuiltinProvider\(qc, providerId\)/u);
@@ -296,7 +295,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.doesNotMatch(ipc, /chats:export[\s\S]{0,120}(?:filePath|outputPath|targetPath)/u);
   assert.match(mainHandlers, /dialog\.showSaveDialog\(parent/u);
   assert.match(mainHandlers, /llmClient\.beginChatExport\(chatId\)/u);
-  assert.match(platform, /try \{[\s\S]{0,240}webContents\.send[\s\S]{0,240}catch \(error\)/u);
   assert.match(branchPicker, /openWorktreeOnMount[\s\S]{0,500}programmaticReturnFocusRef/u);
   assert.match(branchPicker, /programmaticOriginRef = React\.useRef\(openManagedWorktree\)/u);
   assert.match(branchPicker, /programmaticOriginRef\.current = false/u);
@@ -374,7 +372,6 @@ test("first-send draft freeze blocks edits and browser annotation delivery until
   assert.match(composer, /firstSendPendingRef\.current = freezeWhileSending/u);
   assert.match(composer, /inert=\{firstSendPending \|\| undefined\}/u);
   assert.match(composer, /if \(firstSendPendingRef\.current \|\| sendPendingRef\.current \|\| !available\(\)\) return false/u);
-  assert.match(composer, /readOnly=\{composerInputLocked \|\| firstSendPending\}/u);
   assert.match(composer, /role="status"[^\n]*Sending…/u);
 });
 

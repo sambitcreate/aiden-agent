@@ -9,7 +9,7 @@ Status: Implemented (2026-10-07), merged in PR #371 and shipped in 0.55.0; pendi
 - the loopback MCP bridge, prompt reconstruction, and activity mapping;
 - the session store, runtime, provider wrapper, pinned-release installer, launcher, and generation host.
 
-**Antigravity (`main/services/antigravity/`)** pins runtime 1.3.0 for macOS (arm64 and Intel) and Linux (x64 and arm64), and adds an isolated profile, Google sign-in with a paste-back fallback, and the service with its lazy provider.
+**Antigravity (`main/services/antigravity/`)** pins runtime 1.4.3 (1.3.0 until 2026-10-27) for macOS (arm64 and Intel) and Linux (x64 and arm64), and adds an isolated profile, Google sign-in with a paste-back fallback, and the service with its lazy provider.
 
 **Integration points:**
 - `providers:harness:*` IPC drives the runtime section in the provider setup dialog.
@@ -21,7 +21,7 @@ Status: Implemented (2026-10-07), merged in PR #371 and shipped in 0.55.0; pendi
 **Tests:** `npm run test:acp` runs fake-ACP-agent behavioural suites end to end through the real process and connection stack, plus the installer, launcher, auth, service and UI tests.
 
 **Deviations from the plan below:**
-- **Runtime version.** 1.3.0 replaced 1.1.1/1.2.x and adds an Intel macOS build. The spike found its temp footprint negligible.
+- **Runtime version.** 1.3.0 replaced 1.1.1/1.2.x and adds an Intel macOS build. The spike found its temp footprint negligible. 1.4.3 replaced 1.3.0 on 2026-10-27 (see the spike notes).
 - **Rewind and edit-resubmit stay enabled.** A history mismatch starts a fresh agent session with a bounded reconstruction and a visible "Started a fresh agent session" activity row, instead of hiding those controls.
 - **No origin label.** Native activity reuses Aiden's tool rows without an "Antigravity" origin field, so the Remote contract is unchanged; the assistant message already names the provider.
 - **No logo.** Antigravity uses the neutral initial provider icon until brand-asset terms are confirmed.
@@ -132,6 +132,7 @@ The desktop app cannot load Pi extensions, so a port is required in either case.
    - It injects `GEMINI_HOME`, `AGY_ACP_FORCE_FILE_STORAGE=1`, `ANTIGRAVITY_HARNESS_PATH`, `PYTHONUNBUFFERED=1` and a per-process `TMPDIR=userData/antigravity/tmp/run-*`. Choose a path with no spaces or colons, because Python splits `BROWSER` on `:` and shell-splits its contents.
    - The process runs in a detached group and is stopped with SIGTERM, then SIGKILL after 1 s.
    - Aiden adds what T3 lacks: a pid ledger and a startup sweep of orphaned processes and `run-*` directories.
+   - Each launch carries a random `AIDEN_ACP_RUN` marker that its tools inherit, so the sweep also stops a crashed agent's leftover tools after the agent itself is gone (2026-10-29). Quit stops every agent the launcher started, including sign-in and validation agents, within a 4 s budget, and an exit hook kills any that remain.
    - Aiden's packaged fuses set `runAsNode: false`, so T3's `ELECTRON_RUN_AS_NODE` helpers cannot run. The `BROWSER` hook is a tiny `/bin/sh` script; Aiden ships on macOS and Linux only.
 4. **Isolate the profile.**
    - `GEMINI_HOME=userData/antigravity/profile` (mode 0700), with `settings.json` rewritten on each launch and no credentials in it.

@@ -1421,6 +1421,51 @@ test("a Bot that cannot take messages at all is told once and the update is not 
   );
 });
 
+test("a message to a paused Bot is answered with its one line, consumed once, and shows no typing", async () => {
+  const owner = person(42, "owner");
+  const dir = await mkdtemp(join(tmpdir(), "aiden-tg-paused-"));
+  const delivered: TelegramBotReply[] = [];
+  let sends = 0;
+  const ingress = createTelegramBotIngress({
+    file: join(dir, "outbox.json"),
+    session: {
+      send: async () => {
+        sends += 1;
+        throw Object.assign(new Error("This Bot is paused. Resume it to continue."), {
+          name: "BotSessionError",
+          reason: "paused_by_person",
+        });
+      },
+      awaitReply: async () => assert.fail("a paused Bot has no reply to wait for"),
+    },
+    deliver: async (reply) => void delivered.push(reply),
+    botName: async () => "Ada",
+  });
+  const { service, api, config } = harness({
+    enabled: true,
+    allowedUserId: 42,
+    profile: "work",
+    resolveBotBinding: async () => durableBinding,
+    existingChats: [{ id: durableBinding.backingChatId, workspaceId: "bot-home-a", botId: "bot-a" }],
+    batches: [[makeUpdate(7, makeMessage(10, owner, "plan dinner"))]],
+    autoStop: true,
+    botIngress: ingress,
+  });
+  try {
+    await service.start();
+    await waitFor(() => config.persistOffsetCalls() === 1);
+    assert.equal(sends, 1, "the update is not redelivered");
+    assert.deepEqual(delivered.map(({ text }) => text), ["Ada is paused. Resume it in Aiden to continue."]);
+    assert.equal(api.sentMessages.filter(({ text }) => text.startsWith("⚠️")).length, 0, "a pause is not an error");
+    assert.equal(api.sendChatActionCalls(), 0, "a paused Bot is not typing");
+    assert.deepEqual(await ingress.rows(), []);
+  } finally {
+    service.stop();
+    ingress.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("an ordinary unbound route never enters Bot validation or changes fallback routing", async () => {
   const owner = person(42, "owner");
   let validationCalls = 0;

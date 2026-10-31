@@ -306,7 +306,8 @@ function webSearchServer(options: ServerOptions = {}) {
       calls.filter(
         (call) =>
           call.channel.startsWith("webSearch:") &&
-          call.channel !== "webSearch:get",
+          call.channel !== "webSearch:get" &&
+          call.channel !== "webSearch:pages:get",
       ),
   };
 }

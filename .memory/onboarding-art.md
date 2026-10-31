@@ -68,3 +68,16 @@ A gitignored throwaway at `tmp/onboarding-art-preview.html` renders the real gal
 `npm run dev:renderer`:
 `http://127.0.0.1:4143/tmp/onboarding-art-preview.html?group=create|extend|control&scheme=light|dark&preset=<id>&motion=off`.
 `npx playwright screenshot` against it works for headless review.
+
+## Platform-filtered tiles (2026-10-21)
+- `visibleOnboardingFeatures(features, { computerUse, bots, botComputers, platform })` hides `computerUse`,
+  `bots` and `botComputers` (the last needs `botComputers && bots`, so Apple silicon only). The tint test now
+  renders the tour each platform really shows (`hostPlatformCapabilities` for Apple silicon, Intel and Linux)
+  and checks neighbours there, because hiding a tile makes two others adjacent.
+- `guided-setup.spec.ts` substitutes `app:getInfo` capabilities to render the Bot computers tile on an Apple
+  silicon Mac (art and description under Reduce Motion) and its absence on an Intel Mac.
+
+## Off-screen pause (2026-10-29)
+Each gallery tile joins the shared off-screen observer (`pauseWhenUnseen` from `renderer/lib/offscreen-pause.ts`).
+`onboarding-art.css` pauses `.oa-art` animations under `.oa-tile[data-offscreen]` or `:root[data-document-hidden]`.
+Paused tiles are out of view, so nothing visible changes. Covered by `renderer/components/onboarding-feature-gallery.test.tsx`.

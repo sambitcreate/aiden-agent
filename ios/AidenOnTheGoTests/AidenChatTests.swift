@@ -186,6 +186,284 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(restored.draft.contains("Later edit"))
     }
 
+    @MainActor
+    func testBusyMacSendIsResentAfterTheServerDelayUnderAFreshKey() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                if turns.record(request) == 1 {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"A turn is already starting","requestId":"busy","retryable":true,"details":{"retryAfterSeconds":4}}}"#.utf8))
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let sleeper = AidenGatedSleep()
+        model.rateLimitedSendRetrySleep = { try await sleeper.sleep($0) }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+
+        // Busy is not a failure: no error, the request is kept, and its resend
+        // waits the server's delay.
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertFalse(model.canSend, "The kept request blocks a second, different send")
+        try await waitUntil { sleeper.requested == [.seconds(4)] }
+        XCTAssertEqual(turns.count, 1)
+
+        sleeper.release()
+        try await waitUntil { turns.count == 2 && model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.presentedError)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let sent = turns.values
+        XCTAssertNotEqual(sent[0].key, sent[1].key, "The Mac refuses a replay of a key it rejected, so the resend uses a new one")
+        XCTAssertEqual(
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[0].body)),
+            try JSONDecoder().decode(AidenTurnStart.self, from: XCTUnwrap(sent[1].body))
+        )
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testBusyMacResendNeverCrossesToAReplacementPairingOfTheSameMac() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+            onCoordinator: { coordinator = $0 }
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        let credentials = AidenRecordedAuthorizations()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                credentials.record(request.value(forHTTPHeaderField: "Authorization"))
+                if turns.record(request) == 1 {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"A turn is already starting","requestId":"busy","retryable":true,"details":{"retryAfterSeconds":4}}}"#.utf8))
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        let sleeper = AidenGatedSleep()
+        model.rateLimitedSendRetrySleep = { try await sleeper.sleep($0) }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        try await waitUntil { sleeper.requested == [.seconds(4)] }
+        XCTAssertTrue(model.isWaitingToRetryRateLimitedSend)
+
+        // An earlier retained-data write holds the installation data gate, so
+        // the re-pair below publishes its new device but cannot purge the old
+        // pairing's saved send yet.
+        let originalContext = try coordinator.requestContext()
+        let (gateEntered, enteredSignal) = AsyncStream<Void>.makeStream()
+        let (gateRelease, releaseSignal) = AsyncStream<Void>.makeStream()
+        let heldGate = Task { @MainActor in
+            await coordinator.withRetainedInstallationData(for: originalContext) {
+                enteredSignal.yield()
+                for await _ in gateRelease { break }
+            }
+        }
+        for await _ in gateEntered { break }
+        let endpoint = URL(string: "https://aiden.test/api/aiden/v1")!
+        let repair = Task { @MainActor in
+            try await coordinator.activatePairing(
+                payload: AidenRemotePairing.PairingPayload(
+                    bootstrap: AidenRemotePairing.PairingBootstrap(
+                        protocolVersion: 1,
+                        instanceId: "instance-progress-lifecycle",
+                        endpoint: endpoint,
+                        serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                        secret: String(repeating: "B", count: 43),
+                        expiresAt: Date().addingTimeInterval(120)
+                    ),
+                    trust: AidenRemoteContractFixture.PairingTrust(mode: .system)
+                ),
+                exchange: AidenRemoteContractFixture.PairingExchange(
+                    protocolVersion: 1,
+                    instanceId: "instance-progress-lifecycle",
+                    deviceId: "device-replacement",
+                    credential: "credential-replacement",
+                    capabilities: [.serverRead, .workspaceRead, .chatRead, .chatWrite, .tasksRead, .agentsRead, .approvalRespond],
+                    endpoint: endpoint,
+                    serverSpkiSha256: "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                )
+            )
+        }
+        try await waitUntil { coordinator.installationStore.activeInstallation?.deviceId == "device-replacement" }
+        XCTAssertEqual(coordinator.activeInstanceId, "instance-progress-lifecycle", "The same Mac stays active")
+
+        // The server's delay passes while the old pairing's data is still on disk.
+        sleeper.release()
+        try await waitUntil { !model.isWaitingToRetryRateLimitedSend && !model.isStarting }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(turns.count, 1, "The resend of a message made under the old pairing is never sent with the new one")
+        XCTAssertFalse(credentials.values.contains { $0?.contains("credential-replacement") == true })
+
+        releaseSignal.yield()
+        _ = await heldGate.value
+        try await repair.value
+        XCTAssertEqual(turns.count, 1)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testBusyMacResendsStopAfterTheirLimitAndLeaveRetryToThePerson() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        let automaticSends = 1 + AidenChatViewModel.maxRateLimitedSendRetries
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let n = turns.record(request)
+                if n <= automaticSends {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Busy","requestId":"busy","retryable":true}}"#.utf8))
+                }
+                if n == automaticSends + 1 {
+                    return (AidenChatProgressLifecycleURLProtocol.connectionLostStatus, "", Data())
+                }
+                return (202, "application/json", Data(#"{"turnId":"turn-recovery","streamId":"stream-recovery","status":"queued","message":{"id":"accepted-message","role":"user","text":"Hello","createdAt":"2026-09-22T00:00:00Z"}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        try await waitUntil { turns.count == automaticSends && !model.isStarting && !model.isWaitingToRetryRateLimitedSend }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(turns.count, automaticSends, "Resends stop at their limit")
+        XCTAssertNil(model.presentedError)
+        XCTAssertNotNil(model.pendingSend)
+        XCTAssertTrue(model.canRetrySend)
+        XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment.",
+            "The Mac refused every attempt, so the notice says it is busy rather than that delivery is unknown"
+        )
+
+        // The person's Retry clears the busy notice; this time the answer is lost.
+        await model.send(retry: true)
+        try await waitUntil { turns.count == automaticSends + 1 && !model.isStarting }
+        XCTAssertFalse(model.isPendingSendRefusedBecauseBusy)
+        XCTAssertNotNil(model.pendingSend, "An unconfirmed send stays saved")
+        XCTAssertEqual(
+            model.sendRecoveryMessage,
+            "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+        )
+
+        await model.send(retry: true)
+        try await waitUntil { model.pendingSend == nil && !model.isStarting }
+        XCTAssertNil(model.sendRecoveryMessage)
+        XCTAssertTrue(model.chat.messages.contains { $0.id == "accepted-message" })
+        let keys = turns.values.map(\.key)
+        XCTAssertEqual(keys.count, automaticSends + 2)
+        XCTAssertEqual(Set(keys.dropLast()).count, automaticSends + 1, "Every resend after a refusal carries a fresh key")
+        XCTAssertEqual(keys[automaticSends], keys[automaticSends + 1], "A send whose answer was lost replays its key")
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testRateLimitTheMacMarksFinalStillFailsTheSend() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let turns = AidenRecordedTurnStarts()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                turns.record(request)
+                return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Daily limit reached","requestId":"limit","retryable":false,"details":{"retryAfterSeconds":5}}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        model.rateLimitedSendRetrySleep = { _ in XCTFail("A final refusal is never resent") }
+        await model.load(observeProgress: false)
+        model.draft = "Hello"
+        await model.send()
+        XCTAssertEqual(model.presentedError, "Daily limit reached")
+        XCTAssertNil(model.pendingSend)
+        XCTAssertFalse(model.isWaitingToRetryRateLimitedSend)
+        XCTAssertEqual(model.draft, "Hello")
+        XCTAssertEqual(turns.count, 1)
+        model.stopProgressObservation()
+    }
+
+    @MainActor
+    func testMissingFolderRefusalShowsTheMacsReasonAndTheSameMessageSendsOnceItIsBack() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            cache: AidenChatCache(root: root.appending(path: "cache")),
+            draftStore: AidenChatDraftStore(root: root.appending(path: "drafts"))
+        )
+        let fixture = AidenStreamRecoveryFixture(chat: model.chat)
+        let refusal = "The folder for this workspace was moved or deleted. Restore it on your Mac, then send again."
+        final class Turns: @unchecked Sendable {
+            let lock = NSLock()
+            var count = 0
+            var folderBack = false
+        }
+        let turns = Turns()
+        AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+            if request.httpMethod == "POST", request.url?.path.hasSuffix("/turns") == true {
+                let folderBack = turns.lock.withLock { turns.count += 1; return turns.folderBack }
+                if folderBack {
+                    return (503, "application/json", Data(#"{"error":{"code":"internal_error","message":"Try again","requestId":"folder-2","retryable":true}}"#.utf8))
+                }
+                return (409, "application/json", Data(#"{"error":{"code":"workspace_unavailable","message":"\#(refusal)","requestId":"folder-1","retryable":false}}"#.utf8))
+            }
+            return fixture.response(request)
+        }
+        await model.load(observeProgress: false)
+        model.draft = "Fix the header"
+        await model.send()
+        // Nothing ran on the Mac, so this is a refusal, not an unknown delivery.
+        XCTAssertEqual(model.presentedError, refusal)
+        XCTAssertNil(model.pendingSend)
+        XCTAssertEqual(model.draft, "Fix the header")
+        XCTAssertTrue(model.canSend)
+        turns.lock.withLock { turns.folderBack = true }
+        await model.send()
+        XCTAssertEqual(turns.lock.withLock { turns.count }, 2)
+    }
+
+    func testOnlyAMissingFolderConflictCountsAsARefusedSend() {
+        let missing = AidenRemoteErrorCode(rawValue: "workspace_unavailable")
+        let conflict = AidenRemoteErrorCode(rawValue: "revision_conflict")
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: missing))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 409, code: conflict))
+        XCTAssertFalse(AidenDraftSendReconciliation.refusalSettlesSend(status: 503, code: missing))
+        XCTAssertTrue(AidenDraftSendReconciliation.refusalSettlesSend(status: 422, code: conflict))
+    }
+
     func testPendingSendSurvivesRelaunchExpiresAndIsPurgedWithPairing() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -653,6 +931,336 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: stopped, reasoningVisible: false))
         XCTAssertTrue(AidenAgentActivityPresentation.showsLiveToolRows(liveTools, timeline: nil, reasoningVisible: true))
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
+    }
+
+    func testLiveReasoningLineIsTheLatestFinishedSentenceNeverTheUnfinishedTail() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line(""), "")
+        XCTAssertEqual(line("Still forming the first thought"), "")
+        XCTAssertEqual(line("Read the diff. Then group the"), "Read the diff.")
+        XCTAssertEqual(line("Read the diff. Group the hunks by story! Check the style? "), "Check the style?")
+        // A sentence is finished only once whitespace follows its punctuation.
+        XCTAssertEqual(line("Read the diff. Group by story."), "Read the diff.")
+        XCTAssertEqual(line(#"He said "stage it first." Then "#), #"He said "stage it first.""#)
+        // Decimals and versions do not end a sentence.
+        XCTAssertEqual(line("Pin v4.1 before 2.5 ships. And"), "Pin v4.1 before 2.5 ships.")
+    }
+
+    func testLiveReasoningLineCountsFinishedLinesAndDropsMarkdownMarkers() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line("**Mapping hunk boundaries**\n\nREADME has"), "Mapping hunk boundaries")
+        XCTAssertEqual(line("## Plan the split\nStart"), "Plan the split")
+        XCTAssertEqual(line("- Stage `hunk 1` with the fix\n"), "Stage hunk 1 with the fix")
+        XCTAssertEqual(line("1. Check   the build\n\n\n"), "Check the build")
+        // Blank lines and bare markers never become the line.
+        XCTAssertEqual(line("Read the diff.\n\n**\n\n"), "Read the diff.")
+        // A Windows line break ends a line like a bare newline does.
+        XCTAssertEqual(line("Plan the split\r\nStart"), "Plan the split")
+    }
+
+    private func extractStepJSON(
+        id: Int,
+        toolName: String = "web_fetch",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        extraction: String?
+    ) -> String {
+        let recap = extraction.map { #","extraction":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Fetch web page","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset),"detail":"acme.example"\#(recap)}"#
+    }
+
+    private func extractRecapJSON(_ fields: [String], extra: String = "") -> String {
+        #"{"version":1,"host":"acme.example","cut":false\#(extra),"fields":[\#(fields.joined(separator: ","))]}"#
+    }
+
+    private let extractedPrice = #"{"name":"pro_monthly","status":"extracted","value":"20","confidence":0.97,"sourceLine":"Pro is $20 per month."}"#
+
+    func testWebExtractRecapDecodesExtractedUncertainAndAbsentValues() throws {
+        let recap = extractRecapJSON([
+            extractedPrice,
+            #"{"name":"team_yearly","status":"uncertain","value":"1399","confidence":0.92,"notFound":true}"#,
+            #"{"name":"seats","status":"uncertain","value":"50","confidence":0.4,"sourceLine":"Up to 50 seats."}"#,
+            #"{"name":"enterprise","status":"null"}"#,
+        ])
+        let step = try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: recap))
+        let extraction = try XCTUnwrap(step.extraction)
+        XCTAssertEqual(extraction.host, "acme.example")
+        XCTAssertEqual(extraction.fields.map(\.status), [.extracted, .uncertain, .uncertain, .absent])
+        XCTAssertEqual(extraction.fields.map(\.label), ["pro monthly", "team yearly", "seats", "enterprise"])
+        XCTAssertEqual(extraction.fields[0].sourceLine, "Pro is $20 per month.")
+        XCTAssertEqual(extraction.fields[1].notFound, true)
+        XCTAssertNil(extraction.fields[1].sourceLine)
+        XCTAssertNil(extraction.fields[3].value)
+        // The step is still an activity line, not a questionnaire.
+        XCTAssertFalse(step.isQuestionnaire)
+
+        // A failed extraction carries its reason and no fields.
+        let failed = try XCTUnwrap(try decodeQuestionnaireStep(
+            extractStepJSON(id: 1, extraction: extractRecapJSON([], extra: #","error":"quota""#))
+        ).extraction)
+        XCTAssertEqual(failed.error, .quota)
+        XCTAssertEqual(failed.error?.message, "the extraction model is rate-limited or out of quota")
+
+        // The recap survives the chat cache's encode/decode round trip.
+        let roundTripped = try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step))
+        XCTAssertEqual(roundTripped.extraction, extraction)
+    }
+
+    func testMalformedOrMisplacedWebExtractRecapIsDroppedButTheStepStillDecodes() throws {
+        let invalidRecaps: [(String, String)] = [
+            ("no fields and no error", extractRecapJSON([])),
+            ("an error with fields", extractRecapJSON([extractedPrice], extra: #","error":"quota""#)),
+            ("unknown error", extractRecapJSON([], extra: #","error":"teapot""#)),
+            ("seventeen fields", extractRecapJSON((0..<17).map { #"{"name":"f\#($0)","status":"null"}"# })),
+            ("duplicate names", extractRecapJSON([extractedPrice, extractedPrice])),
+            ("extracted without its page line", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9}"#])),
+            ("extracted marked not found", extractRecapJSON([#"{"name":"pro","status":"extracted","value":"20","confidence":0.9,"sourceLine":"Pro is $20.","notFound":true}"#])),
+            ("absent with a value", extractRecapJSON([#"{"name":"pro","status":"null","value":"20"}"#])),
+            ("notFound false", extractRecapJSON([#"{"name":"pro","status":"uncertain","notFound":false}"#])),
+            ("confidence above one", extractRecapJSON([#"{"name":"pro","status":"uncertain","confidence":1.2}"#])),
+            ("field name with a space", extractRecapJSON([#"{"name":"pro monthly","status":"null"}"#])),
+            ("field name starting with a digit", extractRecapJSON([#"{"name":"1price","status":"null"}"#])),
+            ("newline in a source line", extractRecapJSON([#"{"name":"pro","status":"uncertain","sourceLine":"Pro is\n$20"}"#])),
+            ("double space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20  USD"}"#])),
+            ("no-break space in a value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"20 USD"}"#])),
+            ("value over 200 characters", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "9", count: 201))"}"#])),
+            ("null value", extractRecapJSON([#"{"name":"pro","status":"uncertain","value":null}"#])),
+            ("unknown status", extractRecapJSON([#"{"name":"pro","status":"maybe"}"#])),
+            ("unknown version", #"{"version":2,"host":"acme.example","cut":false,"fields":[\#(extractedPrice)]}"#),
+            ("not an object", #""acme.example""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(extractStepJSON(id: 3, extraction: invalid))
+            XCTAssertNil(step.extraction, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "web_fetch", name)
+        }
+
+        // Boundary values the host accepts still decode.
+        let boundary = extractRecapJSON((0..<16).map { index in
+            index == 0
+                ? #"{"name":"pro","status":"uncertain","value":"\#(String(repeating: "😀", count: 200))"}"#
+                : #"{"name":"f\#(index)","status":"null"}"#
+        })
+        XCTAssertEqual(try decodeQuestionnaireStep(extractStepJSON(id: 1, extraction: boundary)).extraction?.fields.count, 16)
+
+        let valid = extractRecapJSON([extractedPrice])
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, toolName: "web_search", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "running", extraction: valid)).extraction)
+        XCTAssertNil(try decodeQuestionnaireStep(extractStepJSON(id: 1, status: "failed", extraction: valid)).extraction)
+    }
+
+    func testChronologicalProjectionShowsExtractedValuesAfterTheLineThatReadThem() throws {
+        let recap = extractRecapJSON([extractedPrice])
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "web_search", contentOffset: 7, questionnaire: nil),
+            extractStepJSON(id: 2, contentOffset: 7, extraction: recap),
+            questionnaireStepJSON(id: 3, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .extraction, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1", "tool-2", "tool-3"], ["tool-2"], []])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        XCTAssertEqual(rows[2].steps.first?.extraction?.fields.first?.value, "20")
+
+        // The page read stays in the activity feed and its tally; fallback
+        // transcripts list its values after the feed.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-2", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.extractionSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.summary(timeline), "Explored 1 file, 1 web search, 1 web page")
+        XCTAssertEqual(AidenAgentActivityPresentation.line(for: timeline.steps[1]), "Fetched web page acme.example")
+    }
+
+    // MARK: Browser recordings (contract revision 46)
+
+    private static let fixtureRecordingID = "recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+
+    private func recordingStepJSON(
+        id: Int,
+        toolName: String = "browser_recording_stop",
+        status: String = "completed",
+        contentOffset: Int = 0,
+        recording: String?
+    ) -> String {
+        let recap = recording.map { #","recording":\#($0)"# } ?? ""
+        return #"{"id":"tool-\#(id)","order":\#(id - 1),"kind":"tool","toolCallId":"call-\#(id)","toolName":"\#(toolName)","label":"Stop browser recording","status":"\#(status)","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":\#(contentOffset)\#(recap)}"#
+    }
+
+    private func recordingRecapJSON(
+        id: String = AidenChatTests.fixtureRecordingID,
+        mimeType: String = #""video/mp4""#,
+        durationMs: String = "12400",
+        sizeBytes: String = "1048576",
+        extra: String = ""
+    ) -> String {
+        #"{"id":"\#(id)","mimeType":\#(mimeType),"durationMs":\#(durationMs),"sizeBytes":\#(sizeBytes)\#(extra)}"#
+    }
+
+    func testBrowserRecordingStepFromTheSharedFixtureDecodesAndRoundTrips() throws {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "contract", withExtension: "json"))
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let section = try XCTUnwrap(root["browserRecordings"] as? [String: Any])
+        let rawStep = try XCTUnwrap(section["step"] as? [String: Any])
+        let rawRecording = try XCTUnwrap(rawStep["recording"] as? [String: Any])
+
+        let step = try JSONDecoder().decode(AidenAgentStep.self, from: JSONSerialization.data(withJSONObject: rawStep))
+        let recording = try XCTUnwrap(step.recording)
+        XCTAssertEqual(recording.id, rawRecording["id"] as? String)
+        XCTAssertEqual(recording.mimeType, .mp4)
+        XCTAssertEqual(recording.durationMs, rawRecording["durationMs"] as? Int)
+        XCTAssertEqual(recording.sizeBytes, rawRecording["sizeBytes"] as? Int)
+        XCTAssertTrue(recording.playsOnPhone)
+        // 12.4 s of 1 MiB reads as the desktop card shows it.
+        XCTAssertEqual(recording.durationLabel, "0:12")
+        XCTAssertEqual(recording.sizeLabel, "1.0 MB")
+        XCTAssertEqual(recording.accessibilityLabel, "Browser recording, 0:12")
+        // The fixture's route names the same chat-relative recording.
+        XCTAssertEqual(section["recordingPath"] as? String, "/chats/chat_fixture_01/recordings/\(recording.id)")
+        // The stop step stays an ordinary activity line, not a questionnaire or extract.
+        XCTAssertFalse(step.isQuestionnaire)
+        XCTAssertNil(step.extraction)
+
+        // The chat cache writes the recap back with exactly the keys the Mac sent.
+        let reencoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(step)) as? [String: Any])
+        let reencodedRecording = try XCTUnwrap(reencoded["recording"] as? [String: Any])
+        XCTAssertEqual(NSDictionary(dictionary: reencodedRecording), NSDictionary(dictionary: rawRecording))
+        XCTAssertEqual(try JSONDecoder().decode(AidenAgentStep.self, from: JSONEncoder().encode(step)).recording, recording)
+    }
+
+    func testMalformedOrMisplacedBrowserRecordingIsDroppedButTheStepStillDecodes() throws {
+        let invalidRecaps: [(String, String)] = [
+            ("an extra key", recordingRecapJSON(extra: #","path":"/Users/me/rec.mp4""#)),
+            ("no size", #"{"id":"\#(Self.fixtureRecordingID)","mimeType":"video/mp4","durationMs":12400}"#),
+            ("uppercase hex", recordingRecapJSON(id: "recording-0F1E2D3C-4B5A-4678-9ABC-DEF012345678")),
+            ("another prefix", recordingRecapJSON(id: "capture-0f1e2d3c-4b5a-4678-9abc-def012345678")),
+            ("a path in the id", recordingRecapJSON(id: "recording-../../0f1e2d3c-4b5a-4678-9abc-def0123")),
+            ("a short id", recordingRecapJSON(id: "recording-0f1e2d3c")),
+            ("QuickTime", recordingRecapJSON(mimeType: #""video/quicktime""#)),
+            ("a negative length", recordingRecapJSON(durationMs: "-1")),
+            ("a length over six minutes", recordingRecapJSON(durationMs: "360001")),
+            ("a fractional length", recordingRecapJSON(durationMs: "12400.5")),
+            ("a length as text", recordingRecapJSON(durationMs: #""12400""#)),
+            ("an empty file", recordingRecapJSON(sizeBytes: "0")),
+            ("a file over 128 MiB", recordingRecapJSON(sizeBytes: "134217729")),
+            ("a null size", recordingRecapJSON(sizeBytes: "null")),
+            ("not an object", #""recording""#),
+        ]
+        for (name, invalid) in invalidRecaps {
+            let step = try decodeQuestionnaireStep(recordingStepJSON(id: 3, recording: invalid))
+            XCTAssertNil(step.recording, name)
+            XCTAssertEqual(step.id, "tool-3", name)
+            XCTAssertEqual(step.toolName, "browser_recording_stop", name)
+        }
+
+        // Boundary values the desktop parser accepts still decode.
+        let boundaries = [
+            recordingRecapJSON(durationMs: "0", sizeBytes: "1"),
+            recordingRecapJSON(durationMs: "360000", sizeBytes: "134217728"),
+            recordingRecapJSON(mimeType: #""video/webm""#),
+        ]
+        for boundary in boundaries {
+            XCTAssertNotNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, recording: boundary)).recording, boundary)
+        }
+
+        // A recap only belongs on a completed stop step.
+        let valid = recordingRecapJSON()
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, toolName: "browser_recording_start", recording: valid)).recording)
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, status: "running", recording: valid)).recording)
+        XCTAssertNil(try decodeQuestionnaireStep(recordingStepJSON(id: 1, status: "failed", recording: valid)).recording)
+    }
+
+    func testBrowserRecordingLabelsMatchTheDesktopCard() {
+        func recording(durationMs: Int = 0, sizeBytes: Int = 1, mimeType: AidenBrowserRecordingRecap.MimeType = .mp4) -> AidenBrowserRecordingRecap {
+            AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: mimeType, durationMs: durationMs, sizeBytes: sizeBytes)
+        }
+        // M:SS, rounded to the nearest second, half up.
+        let durations: [(Int, String)] = [
+            (0, "0:00"), (499, "0:00"), (500, "0:01"), (7_000, "0:07"),
+            (59_499, "0:59"), (59_500, "1:00"), (90_000, "1:30"), (360_000, "6:00"),
+        ]
+        for (milliseconds, label) in durations {
+            XCTAssertEqual(recording(durationMs: milliseconds).durationLabel, label, "\(milliseconds) ms")
+        }
+        // KB below 1 MiB (never 0 KB), MB with one decimal at or above it.
+        let sizes: [(Int, String)] = [
+            (1, "1 KB"), (511, "1 KB"), (1_536, "2 KB"), (655_360, "640 KB"), (1_048_575, "1024 KB"),
+            (1_048_576, "1.0 MB"), (1_310_720, "1.3 MB"), (1_258_291, "1.2 MB"), (134_217_728, "128.0 MB"),
+        ]
+        for (bytes, label) in sizes {
+            XCTAssertEqual(recording(sizeBytes: bytes).sizeLabel, label, "\(bytes) bytes")
+        }
+        // Only MP4 plays on the phone; a WebM fallback is watched on the Mac.
+        XCTAssertTrue(recording().playsOnPhone)
+        XCTAssertFalse(recording(mimeType: .webm).playsOnPhone)
+    }
+
+    func testChronologicalProjectionShowsARecordingAfterTheLineThatStoppedIt() throws {
+        let steps = [
+            questionnaireStepJSON(id: 1, toolName: "browser_navigate", contentOffset: 7, questionnaire: nil),
+            recordingStepJSON(id: 2, contentOffset: 7, recording: recordingRecapJSON()),
+            questionnaireStepJSON(id: 3, toolName: "read_file", contentOffset: 7, questionnaire: nil),
+        ]
+        let timeline = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-1","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(steps.joined(separator: ","))]}"#.utf8
+        ))
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline))
+        XCTAssertEqual(rows.map(\.kind), [.text, .tool, .recording, .text])
+        XCTAssertEqual(rows.map { $0.steps.map(\.id) }, [[], ["tool-1", "tool-2", "tool-3"], ["tool-2"], []])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        XCTAssertEqual(rows[2].steps.first?.recording?.id, Self.fixtureRecordingID)
+
+        // The stop stays in the activity feed; fallback transcripts list the card after it.
+        XCTAssertEqual(AidenAgentActivityPresentation.activitySteps(timeline, reasoningVisible: false).map(\.id), ["tool-1", "tool-2", "tool-3"])
+        XCTAssertEqual(AidenAgentActivityPresentation.recordingSteps(timeline).map(\.id), ["tool-2"])
+        XCTAssertEqual(AidenAgentActivityPresentation.extractionSteps(timeline), [])
+
+        // An extract and a recording in one group each follow it, in timeline order.
+        let mixedSteps = [
+            recordingStepJSON(id: 1, contentOffset: 7, recording: recordingRecapJSON()),
+            extractStepJSON(id: 2, contentOffset: 7, extraction: extractRecapJSON([extractedPrice])),
+        ]
+        let mixed = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"stream-2","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[\#(mixedSteps.joined(separator: ","))]}"#.utf8
+        ))
+        let mixedRows = try XCTUnwrap(AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: mixed))
+        XCTAssertEqual(mixedRows.map(\.kind), [.text, .tool, .recording, .extraction, .text])
+    }
+
+    func testBrowserRecordingFailuresTellAGoneRecordingFromOtherFailures() throws {
+        let envelope = try AidenRemoteJSONDecoder.decode(
+            AidenRemoteErrorEnvelope.self,
+            from: Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+        )
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.server(statusCode: 404, body: envelope.error)), .missing)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.unexpectedStatus(404)), .missing)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.server(statusCode: 503, body: envelope.error)), .failed)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: AidenRemoteClientError.invalidResponse), .failed)
+        XCTAssertEqual(AidenBrowserRecordingLoad.failure(after: URLError(.notConnectedToInternet)), .failed)
+        XCTAssertNotEqual(AidenBrowserRecordingLoad.missingMessage, AidenBrowserRecordingLoad.failedMessage)
+    }
+
+    func testBrowserRecordingFileIsNamedByItsIdAndTypeAndIsRemovedAfterPlaying() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-recording-file-\(UUID())", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D])
+        let mp4 = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
+        let file = try AidenBrowserRecordingFile.write(video, for: mp4, in: root)
+        XCTAssertEqual(file.lastPathComponent, "\(Self.fixtureRecordingID).mp4")
+        XCTAssertEqual(file.deletingLastPathComponent().path, AidenBrowserRecordingFile.directory(in: root).path)
+        XCTAssertEqual(try Data(contentsOf: file), video)
+        AidenBrowserRecordingFile.remove(file)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        let webm = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .webm, durationMs: 1_000, sizeBytes: 4)
+        XCTAssertEqual(AidenBrowserRecordingFile.url(for: webm, in: root).lastPathComponent, "\(Self.fixtureRecordingID).webm")
+
+        // An id the recorder never names is never written.
+        let escaping = AidenBrowserRecordingRecap(id: "../recording", mimeType: .mp4, durationMs: 1_000, sizeBytes: video.count)
+        XCTAssertThrowsError(try AidenBrowserRecordingFile.write(video, for: escaping, in: root))
+        XCTAssertThrowsError(try AidenBrowserRecordingFile.write(Data(), for: mp4, in: root))
     }
 
     func testProgressPresentationFiltersDeletedTasksAndUsesVisibleOrderForActiveStep() throws {
@@ -1212,6 +1820,40 @@ final class AidenChatTests: XCTestCase {
     }
 
     @MainActor
+    func testAppStartupMigratesExistingDraftStorageWithoutOpeningAConversation() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "launch-draft-migration-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let drafts = AidenChatDraftStore(root: root)
+        let session = await drafts.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await drafts.save("Draft from an earlier app version", session: session)
+        var existingRoot = root
+        var legacyValues = URLResourceValues()
+        legacyValues.isExcludedFromBackup = false
+        try existingRoot.setResourceValues(legacyValues)
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: AidenInstallationStore(keychain: AidenChatProgressMemoryKeychain()),
+            chatDraftStore: drafts,
+            clientFactory: { _, _ in XCTFail("Unpaired startup migration must be offline"); throw AidenRemoteClientError.installationChanged }
+        )
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, false)
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        let retained = await drafts.load(session: session)
+        XCTAssertEqual(retained, "Draft from an earlier app version")
+    }
+
+    @MainActor
+    func testDictationLaunchCannotRecordAfterPairingRemoval() async throws {
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, onCoordinator: { coordinator = $0 })
+        await coordinator.removeInstallation("instance-progress-lifecycle")
+        var recordings = 0
+        await model.startVoiceForLaunch(if: true) { recordings += 1 }
+        XCTAssertEqual(recordings, 0)
+    }
+
+    @MainActor
     func testDictationLaunchCannotReplayAfterQuestionComposerReturns() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "aiden-question-voice-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root); AidenChatProgressLifecycleURLProtocol.reset() }
@@ -1700,6 +2342,69 @@ final class AidenChatTests: XCTestCase {
             mac.lock.withLock { mac.queries },
             ["scheme=dark&theme=dusk", "scheme=dark&theme=dusk", "scheme=light&theme=dusk"]
         )
+    }
+
+    @MainActor
+    func testBrowserRecordingPlaysFromTheMacAndSaysWhenOneIsGone() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        final class Mac: @unchecked Sendable {
+            let lock = NSLock()
+            var paths: [String] = []
+        }
+        let mac = Mac()
+        let presentID = Self.fixtureRecordingID
+        let goneID = "recording-11111111-2222-4333-8444-555555555555"
+        let video = Data([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70] + Array(repeating: UInt8(7), count: 32))
+        let notFound = Data(#"{"error":{"code":"not_found","message":"This recording is no longer on the Mac.","requestId":"request-1","retryable":false}}"#.utf8)
+        let serverJSON = #"{"protocolVersion":1,"instanceId":"instance-progress-lifecycle","name":"Progress Lifecycle Mac","appVersion":"1.0","capabilities":["server:read","workspace:read","chat:read","chat:write"],"serverCapabilities":["server:read","workspace:read","chat:read","chat:write"],"features":["chat-browser-recordings-v1"],"connectionMode":"lan","serverTime":"2026-09-14T12:00:00Z"}"#
+        let model = try await makeProgressLifecycleModel(
+            mode: .denied,
+            responseOverride: { request in
+                let path = request.url?.path ?? ""
+                switch path {
+                case "/api/aiden/v1/server":
+                    return (200, "application/json", Data(serverJSON.utf8))
+                case "/api/aiden/v1/chats/chat-progress-lifecycle/recordings/\(presentID)":
+                    mac.lock.withLock { mac.paths.append(path) }
+                    return (200, "video/mp4", video)
+                case "/api/aiden/v1/chats/chat-progress-lifecycle/recordings/\(goneID)":
+                    mac.lock.withLock { mac.paths.append(path) }
+                    return (404, "application/json; charset=utf-8", notFound)
+                default:
+                    return nil
+                }
+            }
+        )
+        XCTAssertTrue(model.supportsBrowserRecordings)
+
+        let present = AidenBrowserRecordingRecap(id: presentID, mimeType: .mp4, durationMs: 12_400, sizeBytes: video.count)
+        let played = await model.browserRecording(present)
+        guard case .ready(let file) = played else {
+            return XCTFail("The Mac's recording should be saved for the player, got \(played).")
+        }
+        defer { AidenBrowserRecordingFile.remove(file) }
+        XCTAssertEqual(file.lastPathComponent, "\(presentID).mp4")
+        XCTAssertEqual(try Data(contentsOf: file), video)
+
+        let gone = AidenBrowserRecordingRecap(id: goneID, mimeType: .mp4, durationMs: 1_000, sizeBytes: 1_024)
+        let goneResult = await model.browserRecording(gone)
+        XCTAssertEqual(goneResult, .missing)
+
+        // A WebM recording is watched on the Mac; the phone never asks for it.
+        let webm = AidenBrowserRecordingRecap(id: presentID, mimeType: .webm, durationMs: 12_400, sizeBytes: video.count)
+        let webmResult = await model.browserRecording(webm)
+        XCTAssertEqual(webmResult, .failed)
+        XCTAssertEqual(mac.lock.withLock { mac.paths.count }, 2)
+    }
+
+    @MainActor
+    func testBrowserRecordingsStayOnTheMacWhenItDoesNotServeThem() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let model = try await makeProgressLifecycleModel(mode: .denied)
+        XCTAssertFalse(model.supportsBrowserRecordings)
+        let recording = AidenBrowserRecordingRecap(id: Self.fixtureRecordingID, mimeType: .mp4, durationMs: 1_000, sizeBytes: 1_024)
+        let result = await model.browserRecording(recording)
+        XCTAssertEqual(result, .failed)
     }
 
     @MainActor
@@ -4166,8 +4871,9 @@ final class AidenChatTests: XCTestCase {
             instanceId: "instance-progress-lifecycle", chatId: model.chat.id, chatWriteToken: cache.reserveChatWrite()
         )
         await model.load(observeProgress: false)
+        // `done` drains the rest of the reply over a few reveal ticks.
         for _ in 0..<200 {
-            if model.streamState == .done, fixture.chatReads >= 2 { break }
+            if model.streamState == .done, fixture.chatReads >= 2, model.liveText == "prefix suffix" { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(model.streamState, .done)
@@ -4264,6 +4970,32 @@ final class AidenChatTests: XCTestCase {
         return (model, fixture)
     }
 
+    /// Releases reveal ticks one at a time until `condition` holds, since a
+    /// paced reveal shows a burst over several ticks. Returns the ticks used.
+    @MainActor
+    @discardableResult
+    private func releaseRevealTicks(
+        _ ticks: AidenManualRevealTicks,
+        until condition: @MainActor () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws -> Int {
+        var released = 0
+        while !condition() {
+            guard released < 40 else {
+                XCTFail("The reveal never reached the condition.", file: file, line: line)
+                return released
+            }
+            try await waitUntil({ ticks.pending > 0 || condition() }, file: file, line: line)
+            guard ticks.pending > 0 else { continue }
+            ticks.releaseAll()
+            released += 1
+            // Let the released tick run before the condition is checked.
+            try await waitUntil({ ticks.pending > 0 || condition() }, file: file, line: line)
+        }
+        return released
+    }
+
     @MainActor
     func testRevealTicksShowWholeWordsAndReleaseAHeldFragmentOnTheNextTick() async throws {
         defer { AidenChatProgressLifecycleURLProtocol.reset() }
@@ -4284,7 +5016,8 @@ final class AidenChatTests: XCTestCase {
         ticks.releaseAll()
         try await waitUntil { model.liveText == "Hello wor" }
 
-        // A burst of tokens between ticks lands as one update.
+        // A burst of tokens between ticks is paced out over several ticks,
+        // a whole word or more at a time, rather than landing at once.
         for (offset, token) in ["ld, ", "how ", "are ", "you?"].enumerated() {
             AidenChatProgressLifecycleURLProtocol.pushEvent(
                 AidenRevealStreamFixture.frame(2 + offset, "text_delta", #"{"text":"\#(token)"}"#)
@@ -4293,14 +5026,111 @@ final class AidenChatTests: XCTestCase {
         try await waitUntil { ticks.pending == 1 }
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(model.liveText, "Hello wor")
-        ticks.releaseAll()
-        try await waitUntil { model.liveText != "Hello wor" }
-        XCTAssertEqual(model.liveText, "Hello world, how are ")
+        var revealed = [model.liveText]
+        while model.liveText != "Hello world, how are you?" {
+            try await waitUntil { ticks.pending == 1 }
+            ticks.releaseAll()
+            try await waitUntil { model.liveText != revealed.last }
+            revealed.append(model.liveText)
+            XCTAssertLessThan(revealed.count, 20, "the burst drains in a few ticks")
+        }
+        XCTAssertGreaterThan(revealed.count, 2, "the burst is paced over more than one tick")
+        for step in revealed.dropFirst().dropLast() {
+            XCTAssertEqual(step.last?.isWhitespace, true, "a paced tick ends on a word boundary: \(step)")
+        }
     }
 
     @MainActor
-    func testDoneRevealsEverythingBufferedBeforeTheTranscriptIsRead() async throws {
-        try await assertTerminalRevealsBufferedText(type: "done", payload: #"{"messageId":"reply"}"#, state: .done)
+    func testTheSettledReplyReplacesTheLiveReplyInOneUpdate() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Hello world"}"#))
+        try await waitUntil { ticks.pending == 1 }
+        ticks.releaseAll()
+        try await waitUntil { !model.liveText.isEmpty }
+        fixture.commit(AidenChatMessage(id: "reply", role: .assistant, text: "Hello world", createdAt: Date()))
+
+        // Every main-actor suspension is a chance to draw a frame. None may
+        // draw the settled reply while the live copy is still up.
+        let framesShowingBoth = AidenMainActorCounter()
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                if model.showsLiveResponse, model.chat.messages.contains(where: { $0.id == "reply" }) {
+                    framesShowingBoth.value += 1
+                }
+                await Task.yield()
+            }
+        }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply" }) && !model.showsLiveResponse }
+        sampler.cancel()
+        XCTAssertEqual(framesShowingBoth.value, 0, "the reply was drawn twice during the hand-off")
+        XCTAssertEqual(model.liveText, "")
+    }
+
+    @MainActor
+    func testAReplyWithOnlyToolsStaysOnScreenUntilTheSettledTranscriptArrives() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(1, "tool_started", #"{"toolId":"tool-1","name":"read_file"}"#)
+        )
+        try await waitUntil { !model.tools.isEmpty }
+        fixture.commit(AidenChatMessage(id: "reply", role: .assistant, text: "Read the file.", createdAt: Date()))
+        let held = expectation(description: "settled transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertFalse(model.isStreaming)
+        XCTAssertTrue(model.showsLiveResponse, "the tool rows stay until the transcript that holds them is read")
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
+        try await waitUntil { model.chat.messages.contains(where: { $0.id == "reply" }) }
+        XCTAssertFalse(model.showsLiveResponse)
+    }
+
+    @MainActor
+    func testDoneKeepsRevealingBufferedTextInsteadOfDumpingIt() async throws {
+        defer { AidenChatProgressLifecycleURLProtocol.reset() }
+        let ticks = AidenManualRevealTicks()
+        defer { ticks.releaseAll() }
+        let (model, fixture) = try await makeRevealModel(ticks: ticks)
+        let words = (0..<60).map { "word\($0)" }.joined(separator: " ")
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"\#(words)"}"#)
+        )
+        try await waitUntil { ticks.pending == 1 }
+        let readsBeforeTerminal = fixture.chatReads
+        let held = expectation(description: "done transcript read held")
+        AidenChatProgressLifecycleURLProtocol.holdNextRequest(endingIn: "/chats/" + model.chat.id) { held.fulfill() }
+        AidenChatProgressLifecycleURLProtocol.pushEvent(
+            AidenRevealStreamFixture.frame(2, "done", #"{"messageId":"reply"}"#, terminal: true)
+        )
+        await fulfillment(of: [held], timeout: 5)
+        XCTAssertEqual(model.streamState, .done)
+        XCTAssertEqual(fixture.chatReads, readsBeforeTerminal + 1, "done reads the transcript without waiting for the reveal")
+        XCTAssertEqual(model.liveText, "", "done does not dump the buffered text in one frame")
+        // While the transcript is read, ticks drain what is left, faster:
+        // each tick shows a growing prefix of the reply, never all of it.
+        var revealed = [model.liveText]
+        let used = try await releaseRevealTicks(ticks) {
+            if revealed.last != model.liveText { revealed.append(model.liveText) }
+            return model.liveText == words
+        }
+        XCTAssertGreaterThan(used, 1, "the end of a reply is not shown in one tick")
+        XCTAssertLessThan(used, 20, "the end of a reply drains within a few ticks")
+        XCTAssertEqual(model.liveText, words)
+        for (shorter, longer) in zip(revealed, revealed.dropFirst()) {
+            XCTAssertTrue(longer.hasPrefix(shorter), "the reveal only appends")
+        }
+        AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
     }
 
     @MainActor
@@ -4349,9 +5179,7 @@ final class AidenChatTests: XCTestCase {
         XCTAssertTrue(model.chat.isBotChat)
 
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(1, "text_delta", #"{"text":"Old shown "}"#))
-        try await waitUntil { ticks.pending == 1 }
-        ticks.releaseAll()
-        try await waitUntil { model.liveText == "Old shown " }
+        try await releaseRevealTicks(ticks) { model.liveText == "Old shown " }
         // Reasoning, then reply text received but not yet revealed.
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(2, "reasoning_delta", #"{"text":"Thinking"}"#))
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(3, "text_delta", #"{"text":"old buffered "}"#))
@@ -4374,9 +5202,7 @@ final class AidenChatTests: XCTestCase {
         // The cumulative replacement after the reset starts from empty.
         AidenChatProgressLifecycleURLProtocol.releaseHeldRequest()
         AidenChatProgressLifecycleURLProtocol.pushEvent(AidenRevealStreamFixture.frame(5, "text_delta", #"{"text":"Fresh copy "}"#))
-        try await waitUntil { ticks.pending == 1 }
-        ticks.releaseAll()
-        try await waitUntil { !model.liveText.isEmpty }
+        try await releaseRevealTicks(ticks) { model.liveText.count >= "Fresh copy ".count }
         XCTAssertEqual(model.liveText, "Fresh copy ")
     }
 
@@ -5410,7 +6236,11 @@ final class AidenChatTests: XCTestCase {
             case .reasoning: return "reasoning"
             case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
             case .questionnaire: return "questionnaire"
+            case .extraction: return "extraction"
+            case .recording: return "recording"
             case .visual(let visual): return "visual:\(visual.id)"
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
             }
         }
         XCTAssertEqual(rows.map(describe), [
@@ -5444,6 +6274,64 @@ final class AidenChatTests: XCTestCase {
             AidenChronologicalProjection.rows(text: "Before.After.", reasoning: "", timeline: timeline)?.map(describe),
             ["text:Before.", "tool:call-1", "text:After."]
         )
+    }
+
+    func testChronologicalRowsDrawEachImageBeneathTheStepThatProducedIt() throws {
+        // Revision 44: an assistant image names the step that made it.
+        let message = try AidenRemoteJSONDecoder.decode(AidenChatMessage.self, from: Data(#"""
+        {"id":"m1","role":"assistant","text":"Before.Middle.After.","createdAt":"2026-08-18T19:00:01.000Z",
+         "attachments":[
+           {"id":"shared_a","name":"Shared.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-2"},
+           {"id":"shown","name":"Shown.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"},
+           {"id":"loose","name":"Loose.png","mimeType":"image/png","kind":"image","size":10},
+           {"id":"odd","name":"Odd.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-0"}],
+         "timeline":{"version":3,"generationId":"g","status":"completed","startedAt":1000,"finishedAt":2000,"steps":[
+           {"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"display_image","label":"Display image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},
+           {"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"share_image","label":"Share image","status":"completed","startedAt":1100,"updatedAt":1200,"finishedAt":1200,"contentOffset":14}]}}
+        """#.utf8))
+        let attachments = try XCTUnwrap(message.attachments)
+        XCTAssertEqual(attachments.map(\.toolCallId), ["call-2", "call-1", nil, nil], "a malformed step id is dropped, not the image")
+
+        let images = AidenImageGenerationPlaceholderState.stripImageAttachments(for: message)
+        let rows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: message.text, reasoning: "", timeline: message.timeline, images: images
+        ))
+        func describe(_ row: AidenChronologicalRow) -> String {
+            switch row.kind {
+            case .text: return "text:\(row.text)"
+            case .tool: return "tool:" + row.steps.compactMap(\.toolCallId).joined(separator: ",")
+            case .images(let images): return "images:" + images.map(\.id).joined(separator: ",")
+            case .imageSlot(let call): return "slot:\(call)"
+            default: return "other"
+            }
+        }
+        XCTAssertEqual(rows.map(describe), [
+            "text:Before.", "tool:call-1", "images:shown", "text:Middle.", "tool:call-2", "images:shared_a", "text:After.",
+        ])
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "Row identities must stay unique for ForEach.")
+        // Only images without a step are left for the strip after the reply.
+        XCTAssertEqual(AidenChronologicalProjection.placedImageIDs(in: rows), ["shown", "shared_a"])
+        // The offline transcript cache keeps the step.
+        XCTAssertEqual(try JSONDecoder().decode(AidenChatMessage.self, from: JSONEncoder().encode(message)), message)
+
+        // While the reply streams, a generate_image placeholder sits beneath its
+        // step, split from the next step exactly as its image will be once the
+        // reply commits, so nothing moves at the hand-off.
+        let live = try JSONDecoder().decode(AidenGenerationTimeline.self, from: Data(
+            #"{"version":3,"generationId":"g","status":"running","startedAt":1000,"steps":[{"id":"tool-1","order":0,"kind":"tool","toolCallId":"call-1","toolName":"generate_image","label":"Generate image","status":"completed","startedAt":1000,"updatedAt":1100,"finishedAt":1100,"contentOffset":7},{"id":"tool-2","order":1,"kind":"tool","toolCallId":"call-2","toolName":"web_search","label":"Search","status":"running","startedAt":1100,"updatedAt":1200,"contentOffset":7}]}"#.utf8
+        ))
+        let liveRows = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, imageSlots: ["call-1", "call-7"]
+        ))
+        XCTAssertEqual(liveRows.map(describe), ["text:Before.", "tool:call-1", "slot:call-1", "tool:call-2", "text:Here it is."])
+        XCTAssertEqual(AidenChronologicalProjection.placedImageSlots(in: liveRows), ["call-1"], "a slot without its step stays after the reply")
+        let generated = try JSONDecoder().decode(AidenMessageAttachment.self, from: Data(
+            #"{"id":"generated","name":"Image.png","mimeType":"image/png","kind":"image","size":10,"toolCallId":"call-1"}"#.utf8
+        ))
+        let committed = try XCTUnwrap(AidenChronologicalProjection.rows(
+            text: "Before.Here it is.", reasoning: "", timeline: live, images: [generated]
+        ))
+        XCTAssertEqual(committed.map(describe), ["text:Before.", "tool:call-1", "images:generated", "tool:call-2", "text:Here it is."])
     }
 
     func testMalformedVisualIsDroppedWhileItsMessageAndChatSurvive() throws {
@@ -6143,30 +7031,32 @@ final class AidenChatTests: XCTestCase {
         XCTAssertNil(AidenChatModelAuthority.macOnlyAgentNotice(chat: bot, catalog: catalog, replyModelLabel: "Gemini Flash"))
     }
 
-    func testRememberedHostModelChoiceWinsWhileTheHostStillOffersIt() throws {
+    func testRememberedHostModelChoiceSeedsOnlyAChatWithoutItsOwnModel() throws {
         let catalog = try JSONDecoder().decode(
             AidenModelCatalog.self,
             from: Data(
-                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
+                #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"},{"id":"gpt-hidden","label":"Hidden","hidden":true}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#.utf8
             )
         )
-        var chat = sampleChat()
-        chat.botId = nil
-        chat.providerId = "google"
-        chat.modelId = "gemini-flash"
+        let rememberedChoice = AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        var newChat = sampleChat()
+        newChat.botId = nil
+        newChat.providerId = nil
+        newChat.modelId = nil
+        newChat.messages = []
 
-        let remembered = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+        let seeded = AidenChatModelAuthority.resolvedSelection(
+            chat: newChat,
             catalog: catalog,
-            selectedProviderId: "google",
-            selectedModelId: "gemini-flash",
+            selectedProviderId: nil,
+            selectedModelId: nil,
             selectedThinkingLevel: nil,
-            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+            remembered: rememberedChoice
         )
-        XCTAssertEqual(remembered, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max"))
+        XCTAssertEqual(seeded, rememberedChoice)
 
         let staleLevel = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+            chat: newChat,
             catalog: catalog,
             selectedProviderId: nil,
             selectedModelId: nil,
@@ -6174,6 +7064,63 @@ final class AidenChatTests: XCTestCase {
             remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "ultra")
         )
         XCTAssertEqual(staleLevel.thinkingLevel, "medium")
+
+        // A new chat the host gave its default pair still takes the remembered choice.
+        var hostDefaultChat = newChat
+        hostDefaultChat.providerId = "google"
+        hostDefaultChat.modelId = "gemini-flash"
+        XCTAssertEqual(
+            AidenChatModelAuthority.resolvedSelection(
+                chat: hostDefaultChat,
+                catalog: catalog,
+                selectedProviderId: "google",
+                selectedModelId: "gemini-flash",
+                selectedThinkingLevel: nil,
+                remembered: rememberedChoice
+            ),
+            rememberedChoice
+        )
+
+        // A chat that already has messages keeps its own model, even when the
+        // selection was seeded from the remembered choice before its
+        // transcript arrived.
+        var chat = sampleChat()
+        chat.botId = nil
+        chat.providerId = "google"
+        chat.modelId = "gemini-flash"
+        let own = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: "max",
+            remembered: rememberedChoice
+        )
+        XCTAssertEqual(own, AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil))
+
+        // A hidden model the chat already uses stays its model.
+        var hiddenChat = chat
+        hiddenChat.providerId = "openai"
+        hiddenChat.modelId = "gpt-hidden"
+        let hidden = AidenChatModelAuthority.resolvedSelection(
+            chat: hiddenChat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-hidden",
+            selectedThinkingLevel: nil,
+            remembered: AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        )
+        XCTAssertEqual(hidden, AidenChatModelSelection(providerId: "openai", modelId: "gpt-hidden", thinkingLevel: nil))
+
+        // A pick in this chat (no remembered value passed) still wins.
+        let picked = AidenChatModelAuthority.resolvedSelection(
+            chat: chat,
+            catalog: catalog,
+            selectedProviderId: "openai",
+            selectedModelId: "gpt-5.6",
+            selectedThinkingLevel: "low"
+        )
+        XCTAssertEqual(picked, AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low"))
 
         var botChat = chat
         botChat.botId = "bot-life-manager"
@@ -6183,7 +7130,7 @@ final class AidenChatTests: XCTestCase {
             selectedProviderId: nil,
             selectedModelId: nil,
             selectedThinkingLevel: nil,
-            remembered: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+            remembered: rememberedChoice
         )
         XCTAssertEqual(bot.providerId, "google")
         XCTAssertEqual(bot.modelId, "gemini-flash")
@@ -6210,8 +7157,12 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(hidden.providerId, "openai")
         XCTAssertEqual(hidden.modelId, "gpt-5.6")
 
+        var newChat = chat
+        newChat.providerId = nil
+        newChat.modelId = nil
+        newChat.messages = []
         let removed = AidenChatModelAuthority.resolvedSelection(
-            chat: chat,
+            chat: newChat,
             catalog: catalog,
             selectedProviderId: nil,
             selectedModelId: nil,
@@ -6310,6 +7261,105 @@ final class AidenChatTests: XCTestCase {
         // is still running. It must not recreate the entry after the purge.
         model.selectModel(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
         XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"))
+    }
+
+    @MainActor
+    func testPickInAnExistingChatStaysWithThatChatAcrossReopeningAndLeavesTheNewChatDefault() async throws {
+        let suiteName = "AidenModelPreferencePerChat.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "aiden-model-per-chat-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let newChatDefault = AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil)
+        store.remember(newChatDefault, for: "instance-progress-lifecycle")
+        let catalog = #"{"providers":[{"id":"google","label":"Google","models":[{"id":"gemini-flash","label":"Gemini Flash"}]},{"id":"openai","label":"OpenAI","models":[{"id":"gpt-5.6","label":"GPT-5.6","thinkingLevels":["low","medium","max"],"defaultThinkingLevel":"medium"}]}],"defaults":{"providerId":"google","modelId":"gemini-flash"}}"#
+        // An existing chat: it has messages and the Mac's record of its own model.
+        let hostChat = #"{"id":"chat-progress-lifecycle","workspaceId":"workspace-1","title":"Progress lifecycle","providerId":"google","modelId":"gemini-flash","messages":[{"id":"message-1","role":"user","text":"Hello","createdAt":"2026-09-14T12:00:00Z"}],"createdAt":"2026-09-14T12:00:00Z","updatedAt":"2026-09-14T12:00:01Z","revision":"revision-1"}"#
+
+        func open() async throws -> AidenChatViewModel {
+            let model = try await makeProgressLifecycleModel(
+                mode: .denied,
+                cache: AidenChatCache(root: root),
+                draftStore: AidenChatDraftStore(root: root.appending(path: "drafts")),
+                modelPreferenceStore: AidenModelPreferenceStore(defaults: defaults)
+            )
+            AidenChatProgressLifecycleURLProtocol.setResponseOverride { request in
+                let path = request.url?.path ?? ""
+                if path.hasSuffix("/models") {
+                    return (200, "application/json", Data(catalog.utf8))
+                }
+                if path == "/api/aiden/v1/chats/chat-progress-lifecycle" {
+                    return (200, "application/json", Data(hostChat.utf8))
+                }
+                if request.httpMethod == "POST", path.hasSuffix("/turns") {
+                    return (429, "application/json", Data(#"{"error":{"code":"rate_limited","message":"Slow down","requestId":"request-1","retryable":false}}"#.utf8))
+                }
+                return nil
+            }
+            await model.load(observeProgress: false)
+            return model
+        }
+
+        let first = try await open()
+        XCTAssertEqual(first.selectedModelId, "gemini-flash", "an existing chat opens on its own model")
+        first.selectModel(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        XCTAssertEqual(
+            AidenModelPreferenceStore(defaults: defaults).selection(for: "instance-progress-lifecycle"),
+            newChatDefault,
+            "a pick in an existing chat never changes the model new chats start with"
+        )
+
+        // Left without sending, the chat reopens on the pick.
+        let reopened = try await open()
+        XCTAssertEqual(reopened.selectedProviderId, "openai")
+        XCTAssertEqual(reopened.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(reopened.selectedThinkingLevel, "max")
+
+        // A send the Mac turns away keeps the pick for the next visit.
+        reopened.draft = "Hello"
+        XCTAssertTrue(reopened.canSend)
+        await reopened.send()
+        XCTAssertNotNil(reopened.presentedError)
+        let afterRejection = try await open()
+        XCTAssertEqual(afterRejection.selectedModelId, "gpt-5.6")
+        XCTAssertEqual(afterRejection.selectedThinkingLevel, "max")
+    }
+
+    func testModelPreferenceStoreKeepsUnsentChatPicksUntilSentOrUnpaired() throws {
+        let suiteName = "AidenModelPreferenceChatPicks.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AidenModelPreferenceStore(defaults: defaults)
+        let pick = AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "max")
+        store.rememberChat(pick, for: "mac-a", chatID: "chat-a")
+        store.rememberChat(
+            AidenChatModelSelection(providerId: "google", modelId: "gemini-flash", thinkingLevel: nil),
+            for: "mac-a",
+            chatID: "chat-b"
+        )
+
+        let relaunched = AidenModelPreferenceStore(defaults: defaults)
+        XCTAssertEqual(relaunched.chatSelection(for: "mac-a", chatID: "chat-a"), pick)
+        XCTAssertNil(relaunched.selection(for: "mac-a"), "chat picks are not the new-chat default")
+        XCTAssertNil(relaunched.chatSelection(for: "mac-b", chatID: "chat-a"))
+
+        // The Mac accepted a send made with an older pick: the newer pick stays.
+        relaunched.forgetChat(
+            for: "mac-a",
+            chatID: "chat-a",
+            matching: AidenChatModelSelection(providerId: "openai", modelId: "gpt-5.6", thinkingLevel: "low")
+        )
+        XCTAssertEqual(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-a"), pick)
+        relaunched.forgetChat(for: "mac-a", chatID: "chat-a", matching: pick)
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-a"))
+        XCTAssertEqual(
+            AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-b")?.modelId,
+            "gemini-flash"
+        )
+
+        relaunched.purge(instanceID: "mac-a")
+        XCTAssertNil(AidenModelPreferenceStore(defaults: defaults).chatSelection(for: "mac-a", chatID: "chat-b"))
     }
 
     func testModelCatalogKeepsNormalizedCustomProviderArtworkThroughVisibleProjection() throws {
@@ -7862,12 +8912,282 @@ final class AidenChatTests: XCTestCase {
         )
     }
 
-    func testApprovalSummaryCollapsesWhitespaceForCompactDisclosure() {
+    func testApprovalCardNamesTheActionAndShowsTheExactRequest() {
+        // Desktop hosts prefix the request with the tool's name; the title says it instead.
         XCTAssertEqual(
-            AidenApprovalPresentation.oneLineSummary("Run command:\n  find ~/Downloads   -type f"),
-            "Run command: find ~/Downloads -type f"
+            AidenApprovalPresentation.headline(toolName: "run_command", kind: .action, summary: "Run command: npm test"),
+            "Run this command?"
         )
-        XCTAssertEqual(AidenApprovalPresentation.oneLineSummary(" \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: find ~/Downloads\n  -type f"),
+            "find ~/Downloads\n  -type f",
+            "The command keeps its own line breaks and spacing."
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_file", kind: .action, summary: "Edit file: src/forecast.ts"),
+            "Edit forecast.ts?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit_file", summary: "Edit file: src/forecast.ts"),
+            "src/forecast.ts"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "write_file", kind: .action, summary: "Create or replace file: notes/todo.md"),
+            "Write todo.md?"
+        )
+        // The CLI daemon's raw request stays whole when it has no readable form.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "edit", summary: #"edit: {"path":"a.ts"}"#),
+            #"edit: {"path":"a.ts"}"#
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit", kind: .action, summary: #"edit: {"path":"a.ts"}"#),
+            "Edit files?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "bash", kind: .action, summary: "Run command: ls -la"),
+            "Run this command?"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "bash", summary: "Run command: ls -la"), "ls -la")
+        // A prefix is only removed for the tool that writes it.
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "notion__search", summary: "Run command: rm -rf /"),
+            "Run command: rm -rf /"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "notion__search", kind: .action, summary: "Search Notion"),
+            "Approval needed"
+        )
+        // Scheduled-task titles match the Mac's card.
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "schedule_task", kind: .scheduledTask, summary: "Daily report"),
+            "Save this scheduled task?"
+        )
+        XCTAssertEqual(
+            AidenApprovalPresentation.headline(toolName: "edit_automation", kind: .scheduledTask, summary: "Daily report"),
+            "Change this automation?"
+        )
+        XCTAssertEqual(AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: " \n\t "), "Review requested action")
+        XCTAssertEqual(
+            AidenApprovalPresentation.requestedAction(toolName: "run_command", summary: "Run command: "),
+            "Run command:",
+            "An empty command is shown as sent rather than as a blank block."
+        )
+    }
+
+    func testApprovalCardSaysWhyItCannotBeAnsweredHere() {
+        func limit(_ kind: AidenApprovalKind, respond: Bool = true, write: Bool = true, allow: Bool = true) -> AidenApprovalLimit? {
+            AidenApprovalPresentation.limit(kind: kind, canRespond: respond, hasRequiredWriteCapability: write, canAllow: allow)
+        }
+        XCTAssertNil(limit(.action), "An approval this phone can answer shows the paused note instead.")
+        XCTAssertEqual(limit(.action, allow: false), AidenApprovalLimit(text: "Allow this on your Mac. You can deny it here.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, allow: false), AidenApprovalLimit(text: "This task must be approved on your paired desktop.", symbol: "desktopcomputer"))
+        XCTAssertEqual(limit(.scheduledTask, write: false), AidenApprovalLimit(text: "Schedule write access is required to approve this task.", symbol: "lock.fill"))
+        XCTAssertEqual(
+            limit(.scheduledTask, respond: false, write: false, allow: false),
+            AidenApprovalLimit(text: "This paired device can review approvals but cannot respond.", symbol: "lock.fill"),
+            "A review-only device says so before any other limit."
+        )
+    }
+
+    // MARK: Contract revision 39: scheduled-task approval cards
+
+    private func scheduleCard(
+        action: AidenApprovalSchedule.Action = .create,
+        nextRunAt: String? = "2026-10-23T16:00:00.000Z",
+        mode: AidenApprovalSchedule.Mode = .llm,
+        permission: AidenApprovalSchedule.Permission = .readOnly,
+        workspaceName: String? = nil,
+        connectors: [String] = [],
+        providerName: String? = "Provider A",
+        modelName: String? = "Model B",
+        notify: Bool = true,
+        enabled: Bool = true,
+        schedulerEnabled: Bool = true,
+        prompt: String? = "Summarize the overnight changes.",
+        script: String? = nil,
+        truncated: Bool = false
+    ) -> AidenApprovalSchedule {
+        AidenApprovalSchedule(
+            action: action, name: "Morning briefing", cadence: "Weekdays at 9:00 AM",
+            timezone: "America/Los_Angeles", nextRunAt: nextRunAt, mode: mode, permission: permission,
+            workspaceName: workspaceName, connectors: connectors, providerName: providerName,
+            modelName: modelName, notify: notify, enabled: enabled, schedulerEnabled: schedulerEnabled,
+            prompt: prompt, script: script, truncated: truncated
+        )
+    }
+
+    private var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        return calendar
+    }
+
+    private func presentation(_ schedule: AidenApprovalSchedule, now: Date = Date(timeIntervalSince1970: 1_792_670_400)) -> AidenScheduleCardPresentation {
+        // 2026-10-22T12:00:00Z, a Thursday.
+        AidenScheduleCardPresentation(schedule, now: now, calendar: utcCalendar, locale: Locale(identifier: "en_US"))
+    }
+
+    func testScheduleCardTitleSaysWhatApprovingWouldDo() {
+        let titles = AidenApprovalSchedule.Action.allCases.map { presentation(scheduleCard(action: $0)).title }
+        XCTAssertEqual(titles, [
+            "Save this scheduled task?",
+            "Update this scheduled task?",
+            "Pause this scheduled task?",
+            "Resume this scheduled task?",
+            "Delete this scheduled task?",
+            "Run this scheduled task now?",
+        ])
+    }
+
+    func testScheduleCardRunsInNamesTheNarrowestScopeTheTaskHas() {
+        func runsIn(_ schedule: AidenApprovalSchedule) -> String { presentation(schedule).runsIn.value }
+        XCTAssertEqual(runsIn(scheduleCard(workspaceName: "Project A", connectors: ["Connector A"])), "Project A")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full, connectors: ["Connector A", "Connector B"])), "Connector A, Connector B")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .full)), "Anywhere on your computer")
+        XCTAssertEqual(runsIn(scheduleCard(permission: .readOnly)), "No project")
+    }
+
+    func testScheduleCardRowsDescribeAccessModelAndDelivery() {
+        let briefing = presentation(scheduleCard(workspaceName: "Project A"))
+        XCTAssertEqual(briefing.rows.map(\.label), ["Runs in", "Access", "Model", "Notifications", "Time zone"])
+        XCTAssertEqual(briefing.rows.map(\.value), ["Project A", "Read-only", "Provider A · Model B", "On", "America/Los_Angeles"])
+        XCTAssertEqual(briefing.access.accessibilityLabel, "Access, Read-only")
+        XCTAssertFalse(briefing.isFullAccess)
+        XCTAssertEqual(briefing.contentTitle, "Instructions")
+        XCTAssertEqual(briefing.content, "Summarize the overnight changes.")
+        XCTAssertFalse(briefing.contentIsScript)
+
+        let full = presentation(scheduleCard(permission: .full, notify: false))
+        XCTAssertTrue(full.isFullAccess)
+        XCTAssertEqual(full.access.value, "Full access")
+        XCTAssertTrue(full.access.isWarning)
+        XCTAssertEqual(full.notifications.value, "Off")
+        XCTAssertEqual(full.rows.filter(\.isWarning).map(\.label), ["Access"], "only full access is flagged")
+
+        XCTAssertEqual(presentation(scheduleCard(modelName: nil)).model?.value, "Provider A")
+        let unnamed = presentation(scheduleCard(providerName: nil, modelName: nil))
+        XCTAssertNil(unnamed.model, "no empty Model row")
+        XCTAssertEqual(unnamed.rows.map(\.label), ["Runs in", "Access", "Notifications", "Time zone"])
+
+        let script = presentation(scheduleCard(
+            mode: .script, providerName: nil, modelName: nil, prompt: nil,
+            script: "npm test", truncated: true
+        ))
+        XCTAssertEqual(script.model?.label, "Runs")
+        XCTAssertEqual(script.model?.value, "Script")
+        XCTAssertEqual(script.contentTitle, "Script")
+        XCTAssertEqual(script.content, "npm test")
+        XCTAssertTrue(script.contentIsScript)
+        XCTAssertTrue(script.isTruncated)
+        XCTAssertFalse(briefing.isTruncated)
+    }
+
+    func testScheduleCardNamesTheNextRunOnlyWhenTheTaskStartsOnItsOwn() throws {
+        XCTAssertTrue(try XCTUnwrap(presentation(scheduleCard()).nextRun).hasPrefix("tomorrow at "))
+        XCTAssertNil(presentation(scheduleCard(nextRunAt: nil)).nextRun)
+        // Even if a next run arrives, a paused, unscheduled or deleted task does not show one.
+        XCTAssertNil(presentation(scheduleCard(enabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(schedulerEnabled: false)).nextRun)
+        XCTAssertNil(presentation(scheduleCard(action: .remove)).nextRun)
+        // The task as it will be once approved: resuming a paused task brings its next run back, pausing removes it.
+        XCTAssertNotNil(presentation(scheduleCard(action: .resume, enabled: false)).nextRun, "resumed")
+        XCTAssertNil(presentation(scheduleCard(action: .pause)).nextRun, "paused by this approval")
+    }
+
+    func testScheduleCardNextRunReadsAsADayInThePhonesTimeZone() throws {
+        let now = Date(timeIntervalSince1970: 1_792_670_400) // Thu 2026-10-22T12:00:00Z
+        let locale = Locale(identifier: "en_US")
+        func text(_ iso: String, now: Date = now, calendar: Calendar? = nil) throws -> String {
+            AidenScheduleCardPresentation.nextRunText(
+                try XCTUnwrap(AidenApprovalSchedule.utcInstant(iso)),
+                now: now, calendar: calendar ?? utcCalendar, locale: locale
+            )
+        }
+        let today = try text("2026-10-22T16:00:00Z")
+        XCTAssertTrue(today.hasPrefix("today at 4:00"), today)
+        XCTAssertTrue(try text("2026-10-23T09:00:00Z").hasPrefix("tomorrow at 9:00"))
+        // Calendar days, not 24-hour spans.
+        XCTAssertTrue(try text("2026-10-23T00:30:00Z", now: Date(timeIntervalSince1970: 1_792_711_800)).hasPrefix("tomorrow at "))
+        let saturday = try text("2026-10-24T16:00:00Z")
+        XCTAssertTrue(saturday.hasPrefix("Sat, Oct 24"), saturday)
+        XCTAssertFalse(saturday.contains("2026"), "this year's date leaves the year out")
+        let nextYear = try text("2027-01-05T16:00:00Z")
+        XCTAssertTrue(nextYear.contains("2027"), nextYear)
+        // Read in the phone's zone: 05:00 UTC on the 23rd is still the 22nd in Los Angeles.
+        var pacific = Calendar(identifier: .gregorian)
+        pacific.timeZone = try XCTUnwrap(TimeZone(identifier: "America/Los_Angeles"))
+        XCTAssertTrue(try text("2026-10-23T05:00:00Z", calendar: pacific).hasPrefix("today at 10:00"))
+    }
+
+    func testScheduleCardNotesExplainWhyATaskWillNotRun() {
+        XCTAssertNil(presentation(scheduleCard()).note)
+        XCTAssertEqual(presentation(scheduleCard(schedulerEnabled: false)).note, .schedulerOff)
+        XCTAssertEqual(
+            presentation(scheduleCard(enabled: false, schedulerEnabled: false)).note,
+            .schedulerOff,
+            "scheduling being off outranks a paused task"
+        )
+        XCTAssertEqual(presentation(scheduleCard(action: .update, enabled: false)).note, .paused)
+        XCTAssertNil(presentation(scheduleCard(action: .remove, enabled: false)).note, "a deleted task is not 'paused'")
+        // The Mac sends a card's state once approved: a pause arrives disabled and says so in its question.
+        XCTAssertNil(presentation(scheduleCard(action: .pause, enabled: false)).note, "a pause is not 'stays paused'")
+        XCTAssertNil(presentation(scheduleCard(action: .resume, enabled: false)).note, "a resumed task is not 'stays paused'")
+        XCTAssertEqual(presentation(scheduleCard(action: .runNow, enabled: false)).note, .paused, "running it once leaves it paused")
+        XCTAssertTrue(AidenScheduleCardPresentation.Note.schedulerOff.isWarning)
+        XCTAssertFalse(AidenScheduleCardPresentation.Note.paused.isWarning)
+    }
+
+    func testRememberedApprovalsSayWhatTheyCover() {
+        // The Mac remembers a command exactly, but a file by its path, whatever the change.
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "run_command"), "This exact command, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "run_command"), "This exact command in this workspace")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.chat, toolName: "edit_file"), "Any edit to this file, until Aiden quits")
+        XCTAssertEqual(AidenApprovalPresentation.scopeDetail(.always, toolName: "write_file"), "Any write to this file in this workspace")
+        XCTAssertNil(AidenApprovalPresentation.scopeDetail(.once, toolName: "edit_file"))
+    }
+
+    func testDeniedCallsAreSkippedAndPendingApprovalsAreNotCountedAsWork() {
+        func step(_ index: Int, _ toolName: String, _ status: AidenAgentStepStatus) -> AidenAgentStep {
+            AidenAgentStep(
+                id: "tool-\(index)", order: index, kind: .tool, toolName: toolName,
+                label: "Tool", status: status, startedAt: 1_000, updatedAt: 2_000,
+                finishedAt: 2_000, contentOffset: 0, durationMs: 1_000,
+                target: nil, detail: nil, lineChanges: nil
+            )
+        }
+        func timeline(_ status: AidenGenerationTimelineStatus, _ steps: [AidenAgentStep]) -> AidenGenerationTimeline {
+            AidenGenerationTimeline(
+                version: 3, generationId: "stream-1", status: status,
+                startedAt: 1_000, finishedAt: status == .running ? nil : 2_000, steps: steps
+            )
+        }
+        // The same sentences as the desktop activity header.
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [step(0, "run_command", .blocked)])),
+            "Skipped 1 command"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "read_file", .completed), step(1, "edit_file", .blocked), step(2, "write_file", .blocked),
+            ])),
+            "Explored 1 file, skipped 2 file changes"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.completed, [
+                step(0, "run_command", .completed), step(1, "run_command", .blocked), step(2, "web_fetch", .blocked),
+            ])),
+            "Ran 1 command, skipped 2 actions"
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.cancelled, [step(0, "run_command", .cancelled)])),
+            "Ran 1 command",
+            "A stopped call may have run partway, so it still counts."
+        )
+        XCTAssertEqual(
+            AidenAgentActivityPresentation.summary(timeline(.running, [step(0, "run_command", .awaitingApproval)])),
+            "Waiting for approval"
+        )
     }
 
     @MainActor
@@ -9581,11 +10901,17 @@ private final class AidenChatProgressLifecycleURLProtocol: URLProtocol, @uncheck
         contentType: String,
         data: Data
     ) -> (HTTPURLResponse, Data) {
+        var headers = ["Content-Type": contentType]
+        // Media routes answer as the Mac does (revision 46 recordings).
+        if contentType.hasPrefix("video/") {
+            headers["Cache-Control"] = "no-store"
+            headers["X-Content-Type-Options"] = "nosniff"
+        }
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: status,
             httpVersion: nil,
-            headerFields: ["Content-Type": contentType]
+            headerFields: headers
         )!
         return (response, data)
     }
@@ -11272,6 +12598,33 @@ extension AidenChatTests {
         ])
     }
 
+    func testRecommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended)") == ("(Recommended)", false))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres") == ("(Recommended) Postgres", false))
+
+        let questions = [
+            questionFixture(options: [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm (Recommended)", description: "Heavy."),
+                AidenRemoteQuestionOption(label: "2.0 mm (Recommended)", description: "Heavier."),
+            ]),
+            questionFixture(multiSelect: true, options: [
+                AidenRemoteQuestionOption(label: "Top (Recommended)", description: "Top edge."),
+                AidenRemoteQuestionOption(label: "Side", description: "Side edge."),
+                AidenRemoteQuestionOption(label: "Bottom (Recommended)", description: "Bottom edge."),
+            ]),
+            questionFixture(),
+        ]
+        let draft = AidenQuestionComposerDraft(questions: questions)
+        // Accepting them sends the full labels, which are the options' identities.
+        XCTAssertEqual(draft.answers(for: questions), [
+            .option(questionIndex: 0, answer: "1.0 mm (Recommended)"),
+            .multi(questionIndex: 1, selected: ["Top (Recommended)", "Bottom (Recommended)"]),
+        ])
+    }
+
     func testQuestionAnswerDraftBuildsWireAnswersInOrder() {
         let questions = [questionFixture(), questionFixture(multiSelect: true)]
         let answers = AidenQuestionAnswerDraft.answers(
@@ -11546,6 +12899,41 @@ final class AidenRunAlertTests: XCTestCase {
         // A prompt suppressed while active can still alert once the user leaves.
         await notify(notifier, .needsApproval, id: "a-active")
         XCTAssertEqual(center.posted.count, 3)
+    }
+
+    /// Contract revision 37 (G24): a hand-off alerts once while the person is
+    /// away, in fixed words, and opens the Bot's chat on its Mac.
+    func testABotHandoffAlertsOnceWhileAwayAndOpensTheBotsChat() async throws {
+        let center = FakeRunAlertCenter()
+        let notifier = notifier(center)
+        func handoff(_ waitID: String, kind: AidenBotHandoffKind = .action, onScreen: Bool = true) async {
+            await notifier.notifyBotHandoff(
+                waitID: waitID,
+                kind: kind,
+                instanceID: "mac-a",
+                botID: "bot_fixture_01",
+                botName: "Scout",
+                isChatOnScreen: onScreen
+            )
+        }
+
+        appState = .active
+        await handoff("wait-active")
+        XCTAssertTrue(center.posted.isEmpty, "the open app already shows the card")
+
+        appState = .background
+        await handoff("wait-1")
+        await handoff("wait-1")
+        await handoff("wait-2", kind: .signIn)
+        XCTAssertEqual(center.posted.count, 2, "each wait alerts once")
+        XCTAssertEqual(center.posted.map(\.content.title), ["Scout", "Scout"])
+        XCTAssertEqual(center.posted.map(\.content.body), ["Handed you a step", "Needs you to sign in"])
+        let content = try XCTUnwrap(center.posted.first?.content)
+        XCTAssertEqual(content.interruptionLevel, .timeSensitive)
+        let url = try XCTUnwrap(AidenRunAlertNotifier.deepLink(from: content.userInfo))
+        let request = try XCTUnwrap(AidenDeepLink.request(from: url))
+        XCTAssertEqual(request.destination, .botChat("bot_fixture_01"))
+        XCTAssertEqual(request.instanceId, "mac-a")
     }
 
     func testCompletionAndFailureAlertsNameTheChatWithoutTimeSensitivity() async throws {
@@ -13117,6 +14505,11 @@ private struct AidenFollowTriggerOwner: View {
 
 /// Reveal ticks the test releases by hand, so a test sees exactly what one
 /// streaming tick shows.
+@MainActor
+final class AidenMainActorCounter {
+    var value = 0
+}
+
 final class AidenManualRevealTicks: @unchecked Sendable {
     private let lock = NSLock()
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -13143,11 +14536,16 @@ final class AidenManualRevealTicks: @unchecked Sendable {
 /// test pushes each frame with `pushEvent`.
 private final class AidenRevealStreamFixture: @unchecked Sendable {
     private let lock = NSLock()
-    private let chat: AidenChat
+    private var chat: AidenChat
     private var reads = 0
     var chatReads: Int { lock.withLock { reads } }
 
     init(chat: AidenChat) { self.chat = chat }
+
+    /// Later transcript reads include `reply`, as the Mac's do once a run commits.
+    func commit(_ reply: AidenChatMessage) {
+        lock.withLock { chat.messages.append(reply) }
+    }
 
     func response(_ request: URLRequest) -> (Int, String, Data)? {
         lock.withLock {
@@ -13466,8 +14864,8 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertEqual(other, ["generation-0"])
     }
 
-    private func image(_ id: String) -> AidenMessageAttachment {
-        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10)
+    private func image(_ id: String, call: String? = nil) -> AidenMessageAttachment {
+        AidenMessageAttachment(id: id, name: "\(id).png", mimeType: "image/png", kind: .image, size: 10, toolCallId: call)
     }
 
     private func settledMessage(
@@ -13512,6 +14910,26 @@ final class AidenImageGenerationPlaceholderTests: XCTestCase {
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: displayOnly))
         let failed = settledMessage(steps: [imageStep(.failed)], attachments: [image("other")])
         XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: failed))
+    }
+
+    func testImagesThatNameTheirStepRevealOnlyTheGeneratedOne() {
+        // Revision 44: each image names its call, so the generated image is
+        // found even after a shared image and beside a displayed one.
+        let placed = settledMessage(
+            steps: [
+                imageStep(.completed, index: 1, toolName: "share_image"),
+                imageStep(.completed, index: 2),
+                imageStep(.completed, index: 3, toolName: "display_image"),
+            ],
+            attachments: [image("shared_a", call: "call-1"), image("generated", call: "call-2"), image("shown", call: "call-3")]
+        )
+        XCTAssertEqual(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: placed), "generated")
+        // A placed reply whose generated image never arrived reveals nothing.
+        let missing = settledMessage(
+            steps: [imageStep(.completed, index: 1, toolName: "share_image"), imageStep(.completed, index: 2)],
+            attachments: [image("shared_a", call: "call-1")]
+        )
+        XCTAssertNil(AidenImageGenerationPlaceholderState.arrivalRevealAttachmentID(in: missing))
     }
 
     func testElapsedTimeUsesHostTimestampsNotThePhoneClock() {
@@ -13673,26 +15091,39 @@ final class AidenMessageVisualSnapshotLayoutTests: XCTestCase {
         }
         .environment(AidenHapticCenter())
         let host = UIHostingController(rootView: view)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: width, height: 2000))
+        // Host in the app's scene. A window that belongs to no scene can take a
+        // layout pass whose thumbnail loads never reach the screen, leaving the
+        // spinners in place however long the test waits.
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: width, height: 2000)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
+
+        // The snapshot and the deck cards decode asynchronously, each behind a
+        // spinner. Measure once every spinner has given way to its image, so a
+        // slow load is never mistaken for a squeezed snapshot.
+        func isLoading(_ view: UIView) -> Bool {
+            view is UIActivityIndicatorView || view.subviews.contains(where: isLoading)
+        }
+        window.layoutIfNeeded()
+        XCTAssertTrue(isLoading(window), "the first pass shows the attachments loading")
+        let deadline = ContinuousClock.now + .seconds(5)
+        while isLoading(window), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertFalse(isLoading(window), "the snapshot and the image deck never finished loading")
 
         // The snapshot draws edge to edge at its own 4:3 shape.
         let expectedHeight = Int(((width - 32) * 3 / 4).rounded())
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        var rows = 0
-        for attempt in 0..<20 {
-            try await Task.sleep(for: .milliseconds(attempt == 0 ? 1500 : 200))
-            window.layoutIfNeeded()
-            let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
-                window.layer.render(in: context.cgContext)
-            }
-            rows = snapshotRowCount(in: rendered)
-            if abs(rows - expectedHeight) <= 3 { break }
+        window.layoutIfNeeded()
+        let rendered = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+            window.layer.render(in: context.cgContext)
         }
-        XCTAssertEqual(rows, expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
+        XCTAssertEqual(snapshotRowCount(in: rendered), expectedHeight, accuracy: 3, "the snapshot was squeezed instead of drawn at its own height")
     }
 }
 
@@ -13983,5 +15414,66 @@ private final class AidenCacheFirstMemoryKeychain: KeychainStoring {
     }
     func delete(_ key: KeychainStore.Key, scope: String) throws {
         values[KeychainStore.scopedKey(key, scope: scope)] = nil
+    }
+}
+
+/// Records each turn start's Idempotency-Key and body.
+private final class AidenRecordedTurnStarts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(key: String?, body: Data?)] = []
+    var values: [(key: String?, body: Data?)] { lock.withLock { recorded } }
+    var count: Int { lock.withLock { recorded.count } }
+
+    /// Returns how many turn starts have been recorded, this one included.
+    @discardableResult
+    func record(_ request: URLRequest) -> Int {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            var data = Data()
+            while stream.hasBytesAvailable {
+                let count = stream.read(&bytes, maxLength: bytes.count)
+                if count <= 0 { break }
+                data.append(contentsOf: bytes.prefix(count))
+            }
+            body = data
+        }
+        return lock.withLock {
+            recorded.append((request.value(forHTTPHeaderField: "Idempotency-Key"), body))
+            return recorded.count
+        }
+    }
+}
+
+/// A sleep that records what it was asked to wait and returns only when released.
+private final class AidenRecordedAuthorizations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String?] = []
+    var values: [String?] { lock.withLock { recorded } }
+    func record(_ value: String?) { lock.withLock { recorded.append(value) } }
+}
+
+private final class AidenGatedSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var durations: [Duration] = []
+    private var waiter: CheckedContinuation<Void, Never>?
+    var requested: [Duration] { lock.withLock { durations } }
+
+    func sleep(_ duration: Duration) async throws {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                durations.append(duration)
+                waiter = continuation
+            }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { waiter = nil }
+            return waiter
+        }
+        continuation?.resume()
     }
 }

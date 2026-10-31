@@ -4,6 +4,7 @@
 
 import { isGeminiUsageScope } from "../../renderer/shared/gemini-usage-scope.js";
 import {
+  effectiveLocalModelId,
   resolveVoiceProvider,
   type VoiceProviderResolution,
 } from "../../renderer/shared/voice-provider.js";
@@ -13,8 +14,11 @@ export interface VoiceProviderResolverDeps {
   settings(): Promise<Pick<AppSettings, "voiceProvider" | "localVoiceModel" | "geminiUsageScope">>;
   /** Installed on-device model ids in catalog order. */
   installedModels(): Promise<readonly string[]>;
-  /** Probing forks the speech worker on first use, so it runs only when needed. */
-  engineStatus(): Promise<{ ready: boolean }>;
+  /**
+   * Whether the engine that runs `modelId` can load. Probing forks the speech
+   * worker on first use, so it runs only when needed.
+   */
+  engineStatus(modelId: string): Promise<{ ready: boolean }>;
   hasOpenAIKey(): Promise<boolean>;
   hasGoogleKey(): Promise<boolean>;
 }
@@ -25,6 +29,29 @@ async function orFalse(check: () => Promise<boolean>): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * The installed models dictation can use. A chosen model stands or falls with
+ * its own engine. Without a usable choice, models whose engine cannot load are
+ * skipped, so Parakeet on Metal failing to load falls back to an installed
+ * sherpa-onnx model.
+ */
+async function usableLocalModels(
+  installed: readonly string[],
+  chosen: string | undefined,
+  engineStatus: VoiceProviderResolverDeps["engineStatus"],
+): Promise<{ installed: readonly string[]; engineReady: boolean }> {
+  const ready = (modelId: string) => orFalse(async () => (await engineStatus(modelId)).ready);
+  const effective = effectiveLocalModelId(chosen, installed);
+  if (!effective) return { installed, engineReady: false };
+  if (await ready(effective)) return { installed, engineReady: true };
+  if (effective === chosen) return { installed, engineReady: false };
+  const usable: string[] = [];
+  for (const modelId of installed) {
+    if (modelId !== effective && (await ready(modelId))) usable.push(modelId);
+  }
+  return usable.length > 0 ? { installed: usable, engineReady: true } : { installed, engineReady: false };
 }
 
 export function createVoiceProviderResolver(
@@ -39,18 +66,19 @@ export function createVoiceProviderResolver(
       installed = [];
     }
     const explicitCloud = settings.voiceProvider === "openai" || settings.voiceProvider === "gemini";
-    const [engineReady, hasOpenAIKey, hasGoogleKey] = await Promise.all([
-      installed.length > 0 && !explicitCloud
-        ? orFalse(async () => (await deps.engineStatus()).ready)
-        : Promise.resolve(false),
+    const chosen = settings.localVoiceModel || undefined;
+    const [local, hasOpenAIKey, hasGoogleKey] = await Promise.all([
+      explicitCloud
+        ? Promise.resolve({ installed, engineReady: false })
+        : usableLocalModels(installed, chosen, deps.engineStatus),
       orFalse(deps.hasOpenAIKey),
       orFalse(deps.hasGoogleKey),
     ]);
     return resolveVoiceProvider({
       explicit: settings.voiceProvider,
-      localModelId: settings.localVoiceModel || undefined,
-      installedLocalModels: installed,
-      engineReady,
+      localModelId: chosen,
+      installedLocalModels: local.installed,
+      engineReady: local.engineReady,
       hasOpenAIKey,
       // Voice goes to Google only after the user chose a Gemini usage scope
       // (the Gemini voice setup); a chat-only Google key is not consent.
@@ -76,7 +104,7 @@ export const resolveVoiceProviderNow = createVoiceProviderResolver({
       .listModels()
       .filter((model) => model.installed)
       .map((model) => model.id),
-  engineStatus: async () => (await import("./local-speech.js")).engineStatus(),
+  engineStatus: async (modelId) => (await import("./local-speech.js")).engineStatus(modelId),
   hasOpenAIKey: () => hasBuiltinApiKey("openai"),
   hasGoogleKey: async () => hasBuiltinApiKey((await import("./google-provider.js")).GOOGLE_PROVIDER_ID),
 });

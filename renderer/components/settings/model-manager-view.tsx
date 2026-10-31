@@ -178,6 +178,8 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
     await settingsApi.set({ localVoiceModel: id });
     await qc.invalidateQueries({ queryKey: queryKeys.settings });
     await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
+    // Parakeet on Metal and the other models run on different engines.
+    await qc.invalidateQueries({ queryKey: queryKeys.engineStatus });
   };
 
   const download = async (id: string) => {
@@ -188,6 +190,7 @@ export function ModelManagerView({ onBack }: { onBack: () => void }) {
       await qc.invalidateQueries({ queryKey: queryKeys.localModels });
       // Automatic voice resolution picks the download up; settings stay as chosen.
       await qc.invalidateQueries({ queryKey: queryKeys.voiceResolution });
+      await qc.invalidateQueries({ queryKey: queryKeys.engineStatus });
       toast.success("Model downloaded.");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

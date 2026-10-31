@@ -1,7 +1,8 @@
 // On-device speech model storage and a verified, resumable downloader.
 //
 // Layout under the injected root:
-//   .partial/<id>.tar.bz2.part   bytes received so far (kept across cancel/relaunch)
+//   .partial/<id>.tar.bz2.part   bytes received so far (kept across cancel/relaunch);
+//                                a single-file model uses the same name
 //   <id>.extracting/             staging directory for extraction
 //   <id>.replaced-<ms>/          the previous install, moved aside while a replacement is published
 //   <id>/                        the installed model (only the files the spec names)
@@ -16,9 +17,10 @@ import * as path from "node:path";
 import { finished } from "node:stream/promises";
 import { promisify } from "node:util";
 import {
-  SPEECH_MODELS,
+  PORTABLE_SPEECH_MODELS,
   formatSizeLabel,
   languagesLabel,
+  recommendedSpeechModelId,
   type SpeechModelSpec,
 } from "./local-speech-catalog.js";
 
@@ -50,7 +52,7 @@ export interface LocalModelDownloadState {
 
 export interface SpeechModelManagerDependencies {
   root(): string;
-  /** Tests inject tiny fixtures; defaults to the pinned catalog. */
+  /** The models this host offers; defaults to the portable (any host) catalog. Tests inject tiny fixtures. */
   catalog?: readonly SpeechModelSpec[];
   fetchImpl?: typeof fetch;
   /** Abort when no bytes arrive for this long. Default 60 s. */
@@ -103,6 +105,20 @@ class DiskFailure extends Error {
   constructor(readonly original: unknown) {
     super(diskFailureMessage(original));
   }
+}
+
+/**
+ * User-facing copy for a failed archive extraction. A full disk or quota gets
+ * the disk message; a timeout (a very slow volume) and any other tar failure
+ * get plain retry advice instead of the raw "Command failed: tar ..." text.
+ */
+export function extractFailureMessage(error: unknown): string {
+  const failure = error as { stderr?: unknown; message?: unknown; killed?: unknown; code?: unknown } | undefined;
+  const detail = `${typeof failure?.stderr === "string" ? failure.stderr : ""}\n${typeof failure?.message === "string" ? failure.message : ""}`;
+  if (failure?.code === "ENOSPC" || /No space left on device/i.test(detail)) return diskFailureMessage({ code: "ENOSPC" });
+  if (failure?.code === "EDQUOT" || /Disk quota exceeded/i.test(detail)) return diskFailureMessage({ code: "EDQUOT" });
+  if (failure?.killed === true) return "Unpacking the voice model took too long. Check that the disk has free space and try again.";
+  return "Aiden couldn't unpack the voice model. Press Download to try again.";
 }
 
 function tarBinary(): string {
@@ -179,7 +195,8 @@ async function hasRegularFiles(dir: string, files: Iterable<string>): Promise<bo
 }
 
 export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
-  const catalog = deps.catalog ?? SPEECH_MODELS;
+  const catalog = deps.catalog ?? PORTABLE_SPEECH_MODELS;
+  const recommendedId = recommendedSpeechModelId(catalog);
   const fetchImpl = deps.fetchImpl ?? fetch;
   const stallMs = deps.stallMs ?? 60_000;
   const connectMs = deps.connectMs ?? 15_000;
@@ -218,11 +235,11 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       name: spec.name,
       description: spec.description,
       sizeLabel: formatSizeLabel(spec.archive.bytes),
-      quant: "int8",
+      quant: spec.quant ?? "int8",
       languagesLabel: languagesLabel(spec),
       accuracy: spec.accuracy,
       speed: spec.speed,
-      recommended: spec.recommended,
+      recommended: spec.id === recommendedId,
       installed: isModelInstalled(spec.id),
       languages: [...spec.languages],
       capabilities: { ...spec.capabilities },
@@ -278,12 +295,24 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
       emit("extract", 0, 1);
       await fs.promises.rm(staging, { recursive: true, force: true });
       await fs.promises.mkdir(staging, { recursive: true, mode: 0o700 });
-      await execFileAsync(tarBinary(), ["-xjf", part, "-C", staging, "--strip-components=1"], {
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 300_000,
-        signal: controller.signal,
-      });
       const required = Object.values(spec.files);
+      if (spec.archive.format === "file") {
+        // The verified download is the model's one file: move it into place.
+        if (required.length !== 1) throw new Error(`${id} must name exactly one file.`);
+        await fs.promises.rename(part, path.join(staging, required[0]!));
+      } else {
+        try {
+          await execFileAsync(tarBinary(), ["-xjf", part, "-C", staging, "--strip-components=1"], {
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: 300_000,
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if (controller.signal.aborted) throw error;
+          deps.info?.(`Speech model "${id}" could not be extracted: ${String(error)}`);
+          throw new Error(extractFailureMessage(error));
+        }
+      }
       await pruneToSpec(staging, new Set(required));
       if (!(await hasRegularFiles(staging, required))) {
         throw new Error("The downloaded model is missing expected files.");
@@ -410,6 +439,12 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
     let downloaded = start;
     let lastEmit = 0;
     let stallTimer: NodeJS.Timeout | undefined;
+    const aborted = new Promise<never>((_, reject) => {
+      const onAbort = () => reject(new Error(String(controller.signal.reason)));
+      if (controller.signal.aborted) onAbort();
+      else controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    aborted.catch(() => {});
     const armStall = () => {
       clearTimeout(stallTimer);
       stallTimer = setTimeout(() => abortFor("stall"), stallMs);
@@ -430,7 +465,12 @@ export function createSpeechModelManager(deps: SpeechModelManagerDependencies) {
           throw new Error(OVERSIZE);
         }
         if (!file.write(chunk)) {
-          await Promise.race([new Promise<void>((resolve) => file.once("drain", resolve)), fileError]);
+          // Waiting on the disk is not a network stall: pause the stall timer
+          // so a slow or nearly full volume reports its own error. A cancel
+          // still ends the wait.
+          clearTimeout(stallTimer);
+          await Promise.race([new Promise<void>((resolve) => file.once("drain", resolve)), fileError, aborted]);
+          armStall();
         }
         downloaded += chunk.length;
         const now = Date.now();

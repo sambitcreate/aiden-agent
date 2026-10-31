@@ -58,6 +58,7 @@ function fixture(overrides: Partial<ChatApplicationDependencies> = {}) {
         return chat("created", input.workspaceId);
       },
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async (id: string, workspaceId: string) =>
         chat(id, workspaceId),
       remove: async () => undefined,
@@ -226,6 +227,12 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
   const events: string[] = [];
   const application = fixture({
     toolOutputStore: { deleteByChat: async () => { events.push("spills"); } },
+    // Agent scratch state is removed only after the chat is durably gone, and a
+    // cleanup that never finishes does not hold up the delete.
+    forgetDeletedChat: (chatId) => {
+      events.push(`scratch:${chatId}`);
+      return new Promise<void>(() => undefined);
+    },
     // Queued snapshots of the chat's visuals stop before anything is removed.
     visualSnapshots: { cancelChat: (chatId) => { events.push(`snapshots:${chatId}`); } },
     subagentRunStore: {
@@ -251,12 +258,13 @@ test("shared chat deletion removes staged artifacts after the durable tombstone"
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { events.push("chat"); },
     },
   });
   await application.service.remove("chat-1");
-  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete"]);
+  assert.deepEqual(events, ["snapshots:chat-1", "tombstone", "spills", "artifacts", "html-artifacts", "effects", "compaction", "chat", "complete", "scratch:chat-1"]);
 });
 
 test("shared chat deletion keeps admission closed while a durable delete is pending", async () => {
@@ -268,6 +276,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
       get: async () => chat(),
       create: async () => chat(),
       rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
       moveEmptyChatToWorkspace: async () => chat(),
       remove: async () => { throw new Error("disk failed"); },
     } as ChatApplicationDependencies["chatStore"],
@@ -278,6 +287,7 @@ test("shared chat deletion keeps admission closed while a durable delete is pend
     } as ChatApplicationDependencies["subagentRunStore"],
     piRuntimeEffectStore: { deleteChat: async () => { events.push("effects-delete"); } },
     piCompactionSessionStore: { deleteChat: async () => { events.push("compaction-delete"); } },
+    forgetDeletedChat: async () => { events.push("scratch"); },
   });
 
   await assert.rejects(application.service.remove("chat-1"), /disk failed/u);
@@ -332,6 +342,41 @@ test("a partial subagent tombstone failure still publishes the roll-forward boun
   );
   assert.deepEqual(events, ["v1-tombstone", "roll-forward"]);
   assert.equal(application.finishDeletionCalls(), 0);
+});
+
+test("a chat deletion that fails before its durable tombstone hands the chat back to follow-through", async () => {
+  const events: string[] = [];
+  const followThrough = {
+    deleteChat: async (chatId: string) => { events.push(`suppress:${chatId}`); },
+    restoreChat: (chatId: string) => { events.push(`restore:${chatId}`); },
+  };
+  const failed = fixture({
+    followThrough,
+    subagentRunStore: {
+      deleteChat: async () => { throw new Error("disk failed"); },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => [],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+  await assert.rejects(failed.service.remove("chat-1"), /subagent history/u);
+  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"]);
+  assert.equal(failed.finishDeletionCalls(), 1, "admission reopens for the retained chat");
+
+  events.length = 0;
+  const pending = fixture({
+    followThrough,
+    subagentRunStore: {
+      deleteChat: async () => { throw new Error("V2 tombstone failed"); },
+      completeChatDeletion: async () => undefined,
+      pendingChatDeletions: async () => ["chat-1"],
+    } as ChatApplicationDependencies["subagentRunStore"],
+  });
+  await assert.rejects(pending.service.remove("chat-1"), /subagent history/u);
+  assert.deepEqual(events, ["suppress:chat-1"], "a pending durable delete keeps the chat's runs ignored");
+
+  events.length = 0;
+  await fixture({ followThrough }).service.remove("chat-1");
+  assert.deepEqual(events, ["suppress:chat-1"], "a completed delete keeps the chat's runs ignored");
 });
 
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {
@@ -459,4 +504,33 @@ test("renderer rename and delete refuse feature-owned chats when asked to", asyn
   // Without the option the shared service keeps its existing behavior.
   await application.service.rename("design-chat", "Renamed");
   assert.deepEqual(events, ["renamed"]);
+});
+
+test("a committed deletion offers the chat's workspace for release, and a failed release keeps the deletion", async () => {
+  const released: string[] = [];
+  const application = fixture({
+    afterChatRemoved: async (workspaceId: string) => {
+      released.push(workspaceId);
+      throw new Error("trash unavailable");
+    },
+  });
+  await application.service.remove("chat-1");
+  assert.deepEqual(released, ["workspace-1"]);
+  assert.equal(application.finishDeletionCalls(), 1);
+
+  const uncommitted = fixture({
+    afterChatRemoved: async (workspaceId: string) => { released.push(`late:${workspaceId}`); },
+    chatStore: {
+      listRegular: async () => [],
+      list: async () => [],
+      get: async () => chat(),
+      create: async () => chat(),
+      rename: async () => chat(),
+      setChatModelSelection: async () => chat(),
+      moveEmptyChatToWorkspace: async () => chat(),
+      remove: async () => { throw new Error("disk failed"); },
+    } as ChatApplicationDependencies["chatStore"],
+  });
+  await assert.rejects(uncommitted.service.remove("chat-1"), /disk failed/u);
+  assert.deepEqual(released, ["workspace-1"], "nothing is released for a deletion that did not commit");
 });

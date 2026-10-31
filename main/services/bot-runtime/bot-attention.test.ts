@@ -2,22 +2,72 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createBotApprovals } from "./bot-approvals.js";
 import { wireBotAttention } from "./bot-attention.js";
+import { createBotHandoffs } from "./bot-handoffs.js";
 import { createBotQuestions } from "./bot-questions.js";
+import { createBotIssueService } from "../bot-issues/service.js";
+import type { BotIssueStore } from "../bot-issues/store.js";
+import type { BotIssue } from "../../../renderer/shared/bot-issues.js";
 import {
   optionAnswer,
   QUESTION_ARGS,
 } from "./test-support/question-fixtures.js";
 
+/** An in-memory issue store; the real service still owns dedupe and settlement. */
+function memoryIssueStore(): BotIssueStore {
+  let rows: BotIssue[] = [];
+  return {
+    async read() {
+      return rows;
+    },
+    async change(_botId, apply) {
+      const { issues, result } = apply(rows);
+      rows = [...issues];
+      return result;
+    },
+    async forgetBot() {
+      rows = [];
+    },
+  };
+}
+
 function setup() {
   const questions = createBotQuestions();
   const approvals = createBotApprovals({ publish() {}, withdraw() {} });
+  const handoffs = createBotHandoffs();
+  const issues = createBotIssueService({
+    store: memoryIssueStore(),
+    appendEntry: async () => undefined,
+    funnel: { deliver: async () => "sent" },
+    actions: {
+      resumeRoutine: async () => "resumed",
+      stopRun: async () => undefined,
+      snoozeStall: () => undefined,
+      openSettings: () => undefined,
+    },
+    now: () => 1_000,
+  });
   const sent: Array<{ channel: string; payload: unknown }> = [];
   const stop = wireBotAttention({
     questions,
     approvals,
+    handoffs,
+    issues,
     broadcast: (channel, payload) => void sent.push({ channel, payload }),
   });
-  return { questions, approvals, sent, stop };
+  return { questions, approvals, handoffs, issues, sent, stop };
+}
+
+function handOff(handoffs: ReturnType<typeof createBotHandoffs>, botId: string, waitId: string, signal?: AbortSignal) {
+  return handoffs.request({
+    botId,
+    waitId,
+    toolCallId: `call-${waitId}`,
+    kind: "action",
+    action: "Enter the 2FA code for your bank",
+    why: "Only you get the code on your phone.",
+    source: "tool",
+    signal,
+  });
 }
 
 function ask(
@@ -115,5 +165,54 @@ test("a second Bot's question carries its own id, and stopping the wiring silenc
   questions.answer("bot-a", "w1", optionAnswer("w1", "Blue"));
   questions.answer("bot-b", "w2", optionAnswer("w2", "Red"));
   await Promise.all([first, second]);
+  assert.equal(sent.length, 2, "nothing is broadcast after the unsubscribe");
+});
+
+test("a hand-off card opening, being answered and being withdrawn each tell the sidebar, with only the Bot id", async () => {
+  const { handoffs, sent, stop } = setup();
+  const answered = handOff(handoffs, "bot-a", "h1");
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot-a" } }]);
+  assert.equal(handoffs.answer("bot-a", "h1", { outcome: "done" }), "answered");
+  assert.deepEqual(await answered, { outcome: "done" });
+  assert.equal(sent.length, 2);
+
+  const controller = new AbortController();
+  const withdrawn = handOff(handoffs, "bot-b", "h2", controller.signal);
+  controller.abort();
+  await assert.rejects(withdrawn);
+  assert.deepEqual(
+    sent.slice(2).map((message) => message.payload),
+    [{ botId: "bot-b" }, { botId: "bot-b" }],
+  );
+  assert.equal(JSON.stringify(sent).includes("2FA"), false, "no hand-off text is broadcast");
+
+  stop();
+  const late = handOff(handoffs, "bot-a", "h3");
+  handoffs.answer("bot-a", "h3", { outcome: "skipped" });
+  await late;
+  assert.equal(sent.length, 4, "nothing is broadcast after the unsubscribe");
+});
+
+test("an issue raised and settled each tell the sidebar, with only the Bot id", async () => {
+  const { issues, sent, stop } = setup();
+  const raised = await issues.raise({
+    botId: "bot-a",
+    kind: "routine_failed",
+    dedupeKey: "routine:r1:failed",
+    title: "Couldn’t finish the morning briefing",
+    body: "The model was unavailable.",
+    routineId: "r1",
+    actions: [{ kind: "resume_routine", routineId: "r1" }],
+  });
+  assert.deepEqual(sent, [{ channel: "bots:attention", payload: { botId: "bot-a" } }]);
+  assert.equal(sent[0]!.channel, "bots:attention");
+  assert.equal(JSON.stringify(sent).includes("briefing"), false, "no issue text is broadcast");
+
+  assert.equal(await issues.resolve("bot-a", "routine:r1:failed", "fixed"), true);
+  assert.deepEqual(sent[1], { channel: "bots:attention", payload: { botId: "bot-a" } });
+  assert.equal(sent.length, 2, "the settle tells the row again");
+
+  stop();
+  await issues.raise({ ...raised, dedupeKey: "routine:r2:failed", routineId: "r2" });
   assert.equal(sent.length, 2, "nothing is broadcast after the unsubscribe");
 });

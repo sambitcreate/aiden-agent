@@ -1,3 +1,4 @@
+import { markHostCommandObservation } from "./pi-host-command-observation.js";
 // Filesystem + shell tools that let the Pi agent operate on a workspace folder.
 // Every path is resolved against — and confined to — the workspace root, so the
 // agent cannot read or write outside the folder the user opened. run_command
@@ -875,6 +876,8 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
       return `Edit file: ${String(a.path ?? "?")}`;
     case "run_command":
       return `Run command: ${String(a.command ?? "?")}`;
+    case "background_job":
+      return `Run in the background: ${String(a.command ?? "?")}`;
     case "generate_image":
       return `Send an image prompt to ${String(a.provider ?? "?")}/${String(a.model ?? "?")}${isImageAspectRatio(a.aspectRatio) ? ` at ${a.aspectRatio}` : ""} (may incur charges). Complete prompt (JSON-quoted): ${JSON.stringify(String(a.prompt ?? "?"))}`;
     case "classify":
@@ -2005,17 +2008,17 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
       }
       const combined = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
-        return textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS));
+        return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }
       const reason = result.timedOut
         ? "Command timed out."
         : result.outputLimitExceeded
           ? "Command exceeded the output limit."
           : `Command exited with error (code ${result.exitCode ?? "?"}).`;
-      return {
+      return markHostCommandObservation({
         ...textResult(await boundedToolOutput(`${reason}${combined ? `\n${combined}` : ""}`, MAX_OUTPUT_CHARS)),
         isError: true,
-      };
+      }, result);
     },
   };
 }

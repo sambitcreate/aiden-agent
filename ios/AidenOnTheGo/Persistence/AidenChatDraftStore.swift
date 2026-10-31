@@ -48,8 +48,7 @@ actor AidenChatDraftStore {
         }
         let data = try JSONEncoder().encode(pending)
         guard data.count <= maximumDraftBytes else { throw AidenRemoteContractError.payloadTooLarge }
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        try prepareDirectory(for: url)
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
@@ -58,6 +57,36 @@ actor AidenChatDraftStore {
         guard let data = try? Data(contentsOf: url), data.count <= maximumDraftBytes,
               let pending = try? JSONDecoder().decode(PendingSend.self, from: data), pending.key == key else { return }
         try? fileManager.removeItem(at: url)
+    }
+
+    /// Removes an admitted run input from the saved draft, if the saved draft
+    /// is still `original`, the draft the input was submitted from. Like
+    /// `settlePendingSend`, it accepts an older session: the Mac admitted the
+    /// text under this pairing, so the draft must not offer it again whichever
+    /// screen is current now. A draft saved since (text typed after the
+    /// composer cleared, even one starting the same way) is not touched, and
+    /// nothing is written when no draft is saved.
+    func consumeDraft(submitted: String, from original: String, session: Session) {
+        let url = fileURL(instanceId: session.instanceId, chatId: session.chatId)
+        guard let data = try? Data(contentsOf: url), data.count <= maximumDraftBytes,
+              let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
+              envelope.version == 1, envelope.instanceId == session.instanceId, envelope.chatId == session.chatId,
+              envelope.text == original else { return }
+        let remaining = AidenRunInputPresentation.consumedDraft(submitted: submitted, current: envelope.text)
+        guard remaining != envelope.text else { return }
+        if remaining.isEmpty {
+            try? fileManager.removeItem(at: url)
+            return
+        }
+        guard let next = try? JSONEncoder().encode(Envelope(
+            version: 1, instanceId: session.instanceId, chatId: session.chatId, text: remaining
+        )) else { return }
+        do {
+            try prepareDirectory(for: url)
+            try next.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown)
+        }
     }
 
     private func attemptURL(_ session: Session) -> URL {
@@ -74,13 +103,21 @@ actor AidenChatDraftStore {
     }
 
     private let beforeWrite: (@Sendable () async -> Void)?
+    private let excludeFromBackup: @Sendable (URL) throws -> Void
     private let root: URL
     private let fileManager: FileManager
     private let maximumDraftScalars = 100_000
     private let maximumDraftBytes = 400_000
     private var generations: [String: UInt64] = [:]
 
-    init(root: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil, fileManager: FileManager = .default) {
+    init(root: URL? = nil, beforeWrite: (@Sendable () async -> Void)? = nil, fileManager: FileManager = .default,
+         excludeFromBackup: @escaping @Sendable (URL) throws -> Void = { url in
+             var excludedURL = url
+             var values = URLResourceValues()
+             values.isExcludedFromBackup = true
+             try excludedURL.setResourceValues(values)
+         }) {
+        self.excludeFromBackup = excludeFromBackup
         self.beforeWrite = beforeWrite
         self.fileManager = fileManager
         if let root {
@@ -94,6 +131,33 @@ actor AidenChatDraftStore {
                 .appending(path: "AidenOnTheGo", directoryHint: .isDirectory)
                 .appending(path: "ChatDrafts-v1", directoryHint: .isDirectory)
         }
+        Self.migrateExistingRoot(self.root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+    }
+
+    /// Called unconditionally by app startup, even when no conversation is opened.
+    func migrateExistingStorage() {
+        Self.migrateExistingRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+    }
+
+    private static func migrateExistingRoot(_ root: URL, fileManager: FileManager,
+                                            excludeFromBackup: (URL) throws -> Void) {
+        guard fileManager.fileExists(atPath: root.path) else { return }
+        do { try prepareRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup) }
+        catch { AidenDiagnostics.record(.cache, event: .cacheFailed, outcome: .failed, code: .unknown) }
+    }
+
+    private static func prepareRoot(_ root: URL, fileManager: FileManager,
+                                    excludeFromBackup: (URL) throws -> Void) throws {
+        let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true, attributes: protection)
+        try fileManager.setAttributes(protection, ofItemAtPath: root.path)
+        try excludeFromBackup(root)
+    }
+
+    private func prepareDirectory(for url: URL) throws {
+        try Self.prepareRoot(root, fileManager: fileManager, excludeFromBackup: excludeFromBackup)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
     }
 
     func beginSession(instanceId: String, chatId: String) -> Session {
@@ -137,11 +201,7 @@ actor AidenChatDraftStore {
         ))
         guard data.count <= maximumDraftBytes else { return false }
         let url = fileURL(instanceId: session.instanceId, chatId: session.chatId)
-        try fileManager.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
-        )
+        try prepareDirectory(for: url)
         guard !Task.isCancelled, isCurrent(session) else { return false }
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return true

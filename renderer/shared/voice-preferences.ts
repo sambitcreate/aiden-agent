@@ -4,6 +4,7 @@ export interface VoicePreferencePatch {
   voiceLanguage?: string;
   voiceTranslateToEnglish?: boolean;
   voiceTrimSilence?: boolean;
+  localVoicePreload?: boolean;
 }
 
 export function parseVoicePreferencePatch(patch: Record<string, unknown>): VoicePreferencePatch {
@@ -14,10 +15,16 @@ export function parseVoicePreferencePatch(patch: Record<string, unknown>): Voice
   }
   if (typeof patch.voiceTranslateToEnglish === "boolean") result.voiceTranslateToEnglish = patch.voiceTranslateToEnglish;
   if (typeof patch.voiceTrimSilence === "boolean") result.voiceTrimSilence = patch.voiceTrimSilence;
+  if (typeof patch.localVoicePreload === "boolean") result.localVoicePreload = patch.localVoicePreload;
   return result;
 }
 
 export function voiceTrimSilenceEnabled(value: boolean | undefined): boolean {
+  return value !== false;
+}
+
+/** Load the on-device model ahead of the first dictation (default on). */
+export function localVoicePreloadEnabled(value: boolean | undefined): boolean {
   return value !== false;
 }
 

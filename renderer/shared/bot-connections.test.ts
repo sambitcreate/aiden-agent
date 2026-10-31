@@ -39,6 +39,9 @@ test("unknown and unavailable connectors have no suggestion", () => {
   assert.equal(connectionSuggestionFor("figma"), null);
   assert.deepEqual(connectionSuggestionFor("figma-desktop")?.setupEntry, { kind: "mcp-preset", presetId: "figma-desktop" });
   assert.equal(connectionSuggestionFor("__proto__"), null);
+  // A Mac app connector is set up in Settings on a Mac, never from a Bot's card.
+  assert.equal(connectionSuggestionFor("imcp"), null);
+  assert.ok(!rankConnections("my calendar, reminders and messages", ["imcp"]).some((suggestion) => suggestion.pluginId === "imcp"));
 });
 
 test("email words rank mail apps first, Gmail before Outlook", () => {

@@ -28,6 +28,10 @@ Pi delivers steering only after the current tool call returns, and a `subagent` 
 
 Stop cancels the response's subagents and settles each one as interrupted. A subagent that ignores cancellation is cut off after a short grace period. If it is still draining after that, it keeps its model deployment quarantined, but it no longer holds the chat's turn, so queued messages and new sends are not held behind it. Deleting, copying, exporting or moving the chat still waits for it. A response that fails for any other reason also cancels any child work it still owns when it settles.
 
+## Running subagents above the composer (desktop)
+
+While a chat's subagents run, a pill floats above the composer next to the todo chip, so the work stays visible with Quick View and the Environment panel closed. Clicking it, or pressing `⌘⇧S` (rebindable in Keyboard Shortcuts), opens a tray with one row per run: Stop for that run, Show in chat (expands a collapsed transcript group and focuses the run), and Open Subagents panel. When the batch finishes the pill shows a summary until it is dismissed; a dismissed run that later needs attention brings it back. On narrow windows the pill and todo chip wrap onto two lines and the transcript moves up by the row's height instead of being covered. The chat's top bar also shows a running count that toggles the Subagents tab.
+
 ## Stop and admitted input
 
 Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Telegram `/steer`, and the phone's Steer now and Queue to run next) is saved to the transcript before Pi accepts it. Pi holds it only for the current run. Stop ends that run, and Pi does not drain its steer or follow-up queues after an aborted terminal, so:
@@ -39,3 +43,7 @@ Steer and Queue input admitted through `admitChatRunInput` (desktop Steer, Teleg
 If Stop lands while an input is being admitted, the receipt says the input was committed but not admitted. Desktop and both phones show the same copy for that receipt: "Saved to the chat — the run was cancelled before it could use it" (Stop), "Saved to the chat — the run ended before it could use it" (the run finished), or "Saved to the chat — the run queue was full" (capacity). The harness test "Stop after a queued follow-up is admitted keeps it as history and never runs it" covers this behavior.
 
 On The Go also answers `ask_user_question` prompts through question cards (`chat-question-prompts-v1`), and its composer opens `/` skill and `@` mention palettes ranked like desktop.
+
+## Desktop question countdown
+
+While a question with a deadline is open, the desktop composer shows one countdown above the question card. Chat updates preserve the current answer and update that countdown in place. Answering or dismissing the question removes the countdown; a later question starts with its own card and countdown.

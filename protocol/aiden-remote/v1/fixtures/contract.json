@@ -1,5 +1,5 @@
 {
-  "contractRevision": 37,
+  "contractRevision": 48,
   "peerRouteAdvertisement": {"feature":"peer-routes-v1","routes":[{"endpoint":"https://fixture-peer.example.ts.net/api/aiden/v1","serverSpkiSha256":"sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}]},
   "providerCreation": {"label":"Fixture private model","baseUrl":"https://models.example.test/v1","kind":"openai","deployment":"hosted","needsKey":false,"models":[{"id":"fixture-vision","vision":true,"reasoning":false,"toolCall":true}],"confirmedForeground":true},
   "providerCreationReceipt": {"id":"custom:remote-fixture","label":"Fixture private model","models":["fixture-vision"]},
@@ -249,7 +249,7 @@
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 3, "timestamp": "2026-08-18T19:01:03.000Z", "type": "reasoning_delta", "terminal": false, "payload": { "text": "Checking invariants." } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 4, "timestamp": "2026-08-18T19:01:04.000Z", "type": "text_delta", "terminal": false, "payload": { "text": "The protocol " } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 5, "timestamp": "2026-08-18T19:01:05.000Z", "type": "tool_started", "terminal": false, "payload": { "toolId": "tool_fixture_01", "name": "read" } },
-    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }] } } },
+    { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 6, "timestamp": "2026-08-18T19:01:06.000Z", "type": "timeline", "terminal": false, "payload": { "timeline": { "version": 3, "generationId": "stream_fixture_01", "status": "running", "startedAt": 1787079660000, "steps": [{ "id": "tool-1", "order": 0, "kind": "tool", "toolCallId": "call-1", "toolName": "read_file", "label": "Read file", "status": "running", "startedAt": 1787079660000, "updatedAt": 1787079660000, "contentOffset": 0, "target": "README.md" }, { "id": "tool-2", "order": 1, "kind": "tool", "toolCallId": "call-2", "toolName": "write_file", "label": "Write file", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "target": "out/report.txt", "producedFile": { "relativePath": "out/report.txt", "operation": "written", "bytes": 12 } }, { "id": "tool-3", "order": 2, "kind": "tool", "toolCallId": "call-3", "toolName": "ask_user_question", "label": "Ask a question", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "questionnaire": { "version": 1, "outcome": "answered", "items": [{ "question": "Which format should the report use?", "header": "Format", "kind": "option", "answers": ["Plain text"] }, { "question": "Anything else to include?", "header": "Extras", "kind": "skipped", "answers": [] }] } }, { "id": "tool-4", "order": 3, "kind": "tool", "toolCallId": "call-4", "toolName": "web_fetch", "label": "Fetch web page", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079660000, "finishedAt": 1787079660000, "contentOffset": 0, "detail": "acme.example", "extraction": { "version": 1, "host": "acme.example", "cut": false, "fields": [{ "name": "pro_monthly", "status": "extracted", "value": "20", "confidence": 0.97, "sourceLine": "Pro is $20 per month, billed monthly." }, { "name": "team_yearly", "status": "uncertain", "value": "1399", "confidence": 0.92, "notFound": true }, { "name": "enterprise", "status": "null" }] } }] } } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 7, "timestamp": "2026-08-18T19:01:07.000Z", "type": "tool_finished", "terminal": false, "payload": { "toolId": "tool_fixture_01", "status": "succeeded" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 8, "timestamp": "2026-08-18T19:01:08.000Z", "type": "approval_required", "terminal": false, "payload": { "approvalId": "approval_fixture_01", "summary": "Allow a write operation?", "expiresAt": "2026-08-18T19:06:08.000Z" } },
     { "protocolVersion": 1, "streamId": "stream_fixture_01", "sequence": 9, "timestamp": "2026-08-18T19:01:09.000Z", "type": "question_required", "terminal": false, "payload": { "promptId": "q-fixture-01", "questions": [{ "question": "Which tolerance should the chamfer use?", "header": "Chamfer", "multiSelect": false, "options": [{ "label": "0.5 mm", "description": "Standard shop chamfer." }, { "label": "1.0 mm", "description": "Heavy chamfer for handling." }] }], "expiresAt": "2026-08-18T19:06:10.000Z" } },
@@ -1448,6 +1448,22 @@
       "resolvedAt": "2026-08-18T19:02:30.000Z"
     }
   },
+  "chatContextPressure": {
+    "chatId": "chat_fixture_01",
+    "pressure": {
+      "contextTokens": 48250,
+      "contextWindow": 200000,
+      "inputBudgetTokens": 168000,
+      "reservedTokens": 32000,
+      "percentOfWindow": 24.125,
+      "percentOfUsableInput": 28.72,
+      "shouldCompact": false,
+      "messageTokens": 30250,
+      "staticTokens": 18000,
+      "source": "provider-anchored",
+      "computedAt": 1787166120000
+    }
+  },
   "chatSkills": {
     "skills": [
       {
@@ -1539,7 +1555,7 @@
     "instanceId": "instance_fixture_01",
     "displayName": "Fixture Aiden",
     "platform": "mac",
-    "contractRevision": 37,
+    "contractRevision": 48,
     "pairingRequests": true
   },
   "hostFeedEvents": [
@@ -2134,7 +2150,7 @@
         "proposalId": "7d0c5c8e-2f0b-4c4e-9a59-3b6f1f0e9a11",
         "name": "Daily check-in",
         "prompt": "Check in briefly…",
-        "label": "Every day at 9:00 AM",
+        "label": "Every day at 9:00 AM · UTC",
         "status": "pending",
         "createdAt": "2026-08-19T15:02:05.000Z"
       },
@@ -2144,7 +2160,7 @@
         "proposalId": "0b6b7a52-6d0a-4a59-8a1e-2a8b0c4f7e22",
         "name": "Weekly meal plan",
         "prompt": "Plan this week's meals.",
-        "label": "Every Sunday at 9:00 AM",
+        "label": "Every Sunday at 9:00 AM · UTC",
         "status": "accepted",
         "routineId": "task_fixture_routine_02",
         "createdAt": "2026-08-19T15:03:00.000Z"
@@ -2398,6 +2414,937 @@
       "entries": [
         { "type": "message", "id": "entry_30", "role": "user", "text": "Plan dinners for this week.", "createdAt": "2026-10-14T09:00:00.000Z", "label": null, "submissionId": "17" }
       ]
+    }
+  },
+  "botHandoffs": {
+    "capability": "bot:handoffs",
+    "noNoteHandoff": {
+      "waitId": "8a1d3c5e-2b4f-4a6c-8d0e-1f2a3b4c5d6e",
+      "kind": "action",
+      "action": "Enter the code your bank texted you",
+      "takesNote": false
+    },
+    "onMacHandoff": {
+      "waitId": "3c7e9a1b-5d2f-4e8a-9b6c-0a1d2e3f4a5b",
+      "kind": "action",
+      "action": "Choose the delivery slot on the checkout page",
+      "why": "The shop wants you to pick the time yourself.",
+      "onMac": true
+    },
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_36",
+      "seq": 40,
+      "state": "running",
+      "interrupted": false,
+      "entries": [
+        { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
+        { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" }
+      ],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "handoff": {
+        "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f",
+        "kind": "action",
+        "action": "Enter the 2FA code your bank sent you",
+        "why": "The bank asks for a code only you can see.",
+        "open": { "url": "https://bank.example.com/verify" }
+      }
+    },
+    "events": [
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 41, "type": "handoff", "payload": { "handoff": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "kind": "action", "action": "Enter the 2FA code your bank sent you", "why": "The bank asks for a code only you can see.", "open": { "url": "https://bank.example.com/verify" } } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "type": "handoff", "payload": { "handoff": null } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 43, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" } } },
+      { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 44, "type": "state", "payload": { "state": "paused", "interrupted": false } }
+    ],
+    "answer": {
+      "request": { "outcome": "done", "note": "The code was from 9:01." },
+      "response": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f" }
+    },
+    "openOnMac": {
+      "request": {},
+      "response": { "waitId": "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "opened": true }
+    },
+    "pause": {
+      "request": {},
+      "response": { "state": "paused", "interrupted": false }
+    },
+    "unpause": {
+      "response": { "state": "idle", "interrupted": false }
+    },
+    "pausedSession": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_36",
+      "seq": 44,
+      "state": "paused",
+      "interrupted": false,
+      "entries": [
+        { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
+        { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
+        { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" }
+      ],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "handoff": null
+    },
+    "pausedSummary": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+      "health": "ready",
+      "sessionState": "paused",
+      "paused": true,
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-10-20T09:03:00.000Z",
+      "revision": "bot_revision_36"
+    },
+    "pausedDetail": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "instructions": "Find the important signal, explain it plainly, and keep the owner in control.",
+      "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+      "health": "ready",
+      "sessionState": "paused",
+      "paused": true,
+      "access": { "botId": "bot_fixture_01", "accessMode": "full", "revision": "bot_policy_revision_4", "policyEpoch": "bot_policy_epoch_4", "summary": "Can use your Mac, shell, enabled connections, and skills." },
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-10-20T09:03:00.000Z",
+      "revision": "bot_revision_36"
+    },
+    "pausedError": {
+      "error": { "code": "bot_paused", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
+    },
+    "legacy": {
+      "session": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 40,
+        "state": "running",
+        "interrupted": false,
+        "entries": [
+          { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
+          { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
+          { "type": "message", "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "role": "assistant", "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you" }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "events": [
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 41, "type": "entry", "payload": { "entry": { "type": "message", "id": "handoff-notice:4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f", "role": "assistant", "text": "Scout needs you on your Mac: Enter the 2FA code your bank sent you" } } },
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "type": "snapshot", "payload": { "session": { "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 42, "state": "running", "interrupted": false, "entries": [{ "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" }, { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" }], "hasOlder": false, "question": null, "approval": null } } },
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 43, "type": "entry", "payload": { "entry": { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" } } },
+        { "protocolVersion": 1, "botId": "bot_fixture_01", "epoch": "epoch_fixture_36", "seq": 44, "type": "state", "payload": { "state": "unavailable", "interrupted": false } }
+      ],
+      "pausedSession": {
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_36",
+        "seq": 44,
+        "state": "unavailable",
+        "interrupted": false,
+        "entries": [
+          { "type": "message", "id": "entry_40", "role": "user", "text": "Pay the electricity bill.", "createdAt": "2026-10-20T09:00:00.000Z" },
+          { "type": "message", "id": "entry_41", "role": "assistant", "text": "I've filled in the payment form.", "createdAt": "2026-10-20T09:00:30.000Z" },
+          { "type": "message", "id": "entry_handoff:call_fixture_36", "role": "user", "text": "You did this: Enter the 2FA code your bank sent you\n\nThe code was from 9:01.", "createdAt": "2026-10-20T09:02:00.000Z" }
+        ],
+        "hasOlder": false,
+        "question": null,
+        "approval": null
+      },
+      "pausedSummary": {
+        "id": "bot_fixture_01",
+        "name": "Scout",
+        "purpose": "Finds the signal in a busy week",
+        "avatar": { "semantic": { "version": 1, "shape": "orb", "color": "rose" } },
+        "health": "ready",
+        "sessionState": "unavailable",
+        "createdAt": "2026-08-18T17:00:00.000Z",
+        "updatedAt": "2026-10-20T09:03:00.000Z",
+        "revision": "bot_revision_36"
+      },
+      "pausedError": {
+        "error": { "code": "operation_stale", "message": "This Bot is paused. Resume it to continue.", "requestId": "request_fixture_36", "retryable": false }
+      }
+    }
+  },
+  "scheduleCards": {
+    "capability": "schedule:cards",
+    "streamApproval": {
+      "approval": {
+        "approvalId": "approval_fixture_schedule_01",
+        "streamId": "stream_fixture_01",
+        "chatId": "chat_fixture_01",
+        "summary": "Create scheduled task \"Morning briefing\" · Weekdays at 9:00 AM · Read-only access · project Aiden Agent (workspace_fixture_01) · OpenRouter / Qwen3 Coder",
+        "toolCallId": "tool_fixture_schedule_01",
+        "toolName": "schedule_task",
+        "expiresAt": "2026-10-22T19:06:08.000Z",
+        "canAllow": true,
+        "scopes": [
+          "once",
+          "chat"
+        ],
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      }
+    },
+    "phoneRunEvents": [
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 1,
+        "timestamp": "2026-10-22T19:10:01.000Z",
+        "type": "run.started",
+        "terminal": false,
+        "payload": {
+          "runId": "run_fixture_schedule_01",
+          "chatId": "chat_fixture_01",
+          "origin": "renderer"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 2,
+        "timestamp": "2026-10-22T19:10:02.000Z",
+        "type": "approval_required",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_02",
+          "summary": "Create scheduled task \"Inbox triage\" · Every hour (United Kingdom Time) · Full access · MCP Gmail (mcp_gmail), Linear (mcp_linear) · OpenRouter / Qwen3 Coder",
+          "toolCallId": "tool_fixture_schedule_02",
+          "toolName": "schedule_task",
+          "canAllow": true,
+          "scopes": [
+            "once",
+            "chat"
+          ],
+          "schedule": {
+            "action": "create",
+            "name": "Inbox triage",
+            "cadence": "Every hour",
+            "timezone": "Europe/London",
+            "nextRunAt": "2026-10-22T20:00:00.000Z",
+            "mode": "llm",
+            "permission": "full",
+            "connectors": [
+              "Gmail",
+              "Linear"
+            ],
+            "providerName": "OpenRouter",
+            "modelName": "Qwen3 Coder",
+            "notify": false,
+            "enabled": true,
+            "schedulerEnabled": true,
+            "prompt": "Label new support emails, draft replies to billing questions and file a Linear issue for each bug report."
+          }
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 3,
+        "timestamp": "2026-10-22T19:10:03.000Z",
+        "type": "approval_resolved",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_02",
+          "decision": "allow"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 4,
+        "timestamp": "2026-10-22T19:10:04.000Z",
+        "type": "approval_required",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_03",
+          "summary": "Change the assistant automation \"Daily standup\"?",
+          "toolCallId": "tool_fixture_schedule_03",
+          "toolName": "edit_automation",
+          "canAllow": false
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 5,
+        "timestamp": "2026-10-22T19:10:05.000Z",
+        "type": "approval_resolved",
+        "terminal": false,
+        "payload": {
+          "approvalId": "approval_fixture_schedule_03",
+          "decision": "deny"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 6,
+        "timestamp": "2026-10-22T19:10:06.000Z",
+        "type": "done",
+        "terminal": true,
+        "payload": {
+          "messageId": "message_fixture_assistant_03"
+        }
+      },
+      {
+        "protocolVersion": 1,
+        "streamId": "run_fixture_schedule_01",
+        "sequence": 6,
+        "timestamp": "2026-10-22T19:10:06.000Z",
+        "type": "run.ended",
+        "terminal": true,
+        "payload": {
+          "runId": "run_fixture_schedule_01",
+          "chatId": "chat_fixture_01",
+          "state": "done"
+        }
+      }
+    ],
+    "cards": [
+      {
+        "label": "create-read-only-project",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "full-access-connectors",
+        "schedule": {
+          "action": "create",
+          "name": "Inbox triage",
+          "cadence": "Every hour",
+          "timezone": "Europe/London",
+          "nextRunAt": "2026-10-22T20:00:00.000Z",
+          "mode": "llm",
+          "permission": "full",
+          "connectors": [
+            "Gmail",
+            "Linear"
+          ],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": false,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Label new support emails, draft replies to billing questions and file a Linear issue for each bug report."
+        }
+      },
+      {
+        "label": "scheduling-off",
+        "schedule": {
+          "action": "create",
+          "name": "Weekly dependency audit",
+          "cadence": "Every Monday at 8:00 AM",
+          "timezone": "America/New_York",
+          "mode": "script",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": false,
+          "script": "npm outdated --json > reports/outdated.json && npm audit --omit=dev"
+        }
+      },
+      {
+        "label": "paused-update",
+        "schedule": {
+          "action": "update",
+          "name": "Release notes draft",
+          "cadence": "Every Friday at 4:30 PM",
+          "timezone": "America/Los_Angeles",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": false,
+          "schedulerEnabled": true,
+          "prompt": "Draft release notes from the pull requests merged this week, grouped by feature area."
+        }
+      },
+      {
+        "label": "truncated-prompt",
+        "schedule": {
+          "action": "create",
+          "name": "Long research digest",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest. Read every new paper in my reading list and write a structured digest.",
+          "truncated": true
+        }
+      }
+    ],
+    "rejected": [
+      {
+        "label": "unknown-key",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "taskId": "task_fixture_01"
+        }
+      },
+      {
+        "label": "bidi-name",
+        "schedule": {
+          "action": "create",
+          "name": "Morning\u202ebriefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "control-in-cadence",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays\nat 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "script-in-llm-mode",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "script": "echo hi"
+        }
+      },
+      {
+        "label": "offset-next-run",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T09:00:00+02:00",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "empty-cadence",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "too-many-connectors",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "connectors": [
+            "Connector 0",
+            "Connector 1",
+            "Connector 2",
+            "Connector 3",
+            "Connector 4",
+            "Connector 5",
+            "Connector 6",
+            "Connector 7",
+            "Connector 8",
+            "Connector 9",
+            "Connector 10",
+            "Connector 11",
+            "Connector 12",
+            "Connector 13",
+            "Connector 14",
+            "Connector 15",
+            "Connector 16"
+          ],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "truncated-false",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review.",
+          "truncated": false
+        }
+      },
+      {
+        "label": "unknown-permission",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "admin",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "oversized-name",
+        "schedule": {
+          "action": "create",
+          "name": "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      },
+      {
+        "label": "oversized-prompt",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "notify": true,
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP"
+        }
+      },
+      {
+        "label": "missing-flag",
+        "schedule": {
+          "action": "create",
+          "name": "Morning briefing",
+          "cadence": "Weekdays at 9:00 AM",
+          "timezone": "America/Los_Angeles",
+          "nextRunAt": "2026-10-23T16:00:00.000Z",
+          "mode": "llm",
+          "permission": "read-only",
+          "workspaceName": "Aiden Agent",
+          "connectors": [],
+          "providerName": "OpenRouter",
+          "modelName": "Qwen3 Coder",
+          "enabled": true,
+          "schedulerEnabled": true,
+          "prompt": "Summarize yesterday's commits, open pull requests and failing checks in this project.\nKeep it under ten bullet points and flag anything that needs my review."
+        }
+      }
+    ]
+  },
+  "botImages": {
+    "capability": "bot:images",
+    "entry": {
+      "type": "shared_image",
+      "id": "entry_fixture_shared_image_01",
+      "name": "weekly-sales.png",
+      "mimeType": "image/png",
+      "size": 48213
+    },
+    "legacyEntry": {
+      "type": "message",
+      "id": "entry_fixture_shared_image_01",
+      "role": "assistant",
+      "text": "I shared an image: weekly-sales.png. Open this chat on your Mac to see it."
+    },
+    "imagePath": "/bots/bot_fixture_01/session/images/entry_fixture_shared_image_01"
+  },
+  "browserRecordings": {
+    "step": { "id": "tool-5", "order": 0, "kind": "tool", "toolCallId": "call-5", "toolName": "browser_recording_stop", "label": "Stop browser recording", "status": "completed", "startedAt": 1787079660000, "updatedAt": 1787079672400, "finishedAt": 1787079672400, "contentOffset": 0, "recording": { "id": "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", "mimeType": "video/mp4", "durationMs": 12400, "sizeBytes": 1048576 } },
+    "recordingPath": "/chats/chat_fixture_01/recordings/recording-0f1e2d3c-4b5a-4678-9abc-def012345678"
+  },
+  "botIssues": {
+    "capability": "bot:issues",
+    "session": {
+      "botId": "bot_fixture_01",
+      "epoch": "epoch_fixture_01",
+      "seq": 12,
+      "state": "idle",
+      "interrupted": false,
+      "entries": [],
+      "hasOlder": false,
+      "question": null,
+      "approval": null,
+      "issues": [
+        {
+          "id": "issue_fixture_preflight_01",
+          "kind": "preflight_failed",
+          "title": "Gmail needs reconnecting",
+          "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+          "actions": [],
+          "createdAt": "2026-10-27T08:58:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_routine_01",
+          "kind": "routine_paused",
+          "title": "Paused \"Morning brief\" after 3 failed tries",
+          "body": "Gmail needs signing in again.",
+          "routineId": "task_fixture_routine_01",
+          "actions": [
+            {
+              "kind": "open_chat"
+            },
+            {
+              "kind": "resume_routine",
+              "routineId": "task_fixture_routine_01"
+            }
+          ],
+          "createdAt": "2026-10-27T09:01:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_stall_01",
+          "kind": "run_stalled",
+          "title": "A reply has been quiet for 10 minutes",
+          "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+          "actions": [
+            {
+              "kind": "stop_run"
+            },
+            {
+              "kind": "keep_waiting"
+            }
+          ],
+          "createdAt": "2026-10-27T09:06:00.000Z",
+          "resolved": false
+        },
+        {
+          "id": "issue_fixture_fixed_01",
+          "kind": "routine_failed",
+          "title": "The evening round-up failed",
+          "body": "The model was unavailable.",
+          "actions": [],
+          "createdAt": "2026-10-26T19:00:00.000Z",
+          "resolved": true
+        }
+      ]
+    },
+    "events": [
+      {
+        "protocolVersion": 1,
+        "botId": "bot_fixture_01",
+        "epoch": "epoch_fixture_01",
+        "seq": 13,
+        "type": "issues",
+        "payload": {
+          "issues": [
+            {
+              "id": "issue_fixture_preflight_01",
+              "kind": "preflight_failed",
+              "title": "Gmail needs reconnecting",
+              "body": "The morning check couldn't reach Gmail. Reconnect it, and the briefing can run again.",
+              "actions": [],
+              "createdAt": "2026-10-27T08:58:00.000Z",
+              "resolved": false
+            },
+            {
+              "id": "issue_fixture_routine_01",
+              "kind": "routine_paused",
+              "title": "Paused \"Morning brief\" after 3 failed tries",
+              "body": "Gmail needs signing in again.",
+              "routineId": "task_fixture_routine_01",
+              "actions": [],
+              "createdAt": "2026-10-27T09:01:00.000Z",
+              "resolved": true
+            },
+            {
+              "id": "issue_fixture_stall_01",
+              "kind": "run_stalled",
+              "title": "A reply has been quiet for 10 minutes",
+              "body": "The Bot is still working on the invoices. Stop it, or give it more time.",
+              "actions": [
+                {
+                  "kind": "stop_run"
+                },
+                {
+                  "kind": "keep_waiting"
+                }
+              ],
+              "createdAt": "2026-10-27T09:06:00.000Z",
+              "resolved": false
+            }
+          ]
+        }
+      }
+    ],
+    "act": {
+      "request": {
+        "action": {
+          "kind": "stop_run"
+        }
+      },
+      "response": {
+        "result": "done"
+      }
+    },
+    "notOpen": {
+      "result": "not_open"
+    },
+    "summary": {
+      "id": "bot_fixture_01",
+      "name": "Scout",
+      "purpose": "Finds the signal in a busy week",
+      "avatar": {
+        "semantic": {
+          "version": 1,
+          "shape": "orb",
+          "color": "rose"
+        },
+        "asset": {
+          "assetRevision": "avatar_revision_3",
+          "mimeType": "image/png",
+          "width": 512,
+          "height": 512,
+          "byteSize": 1024
+        }
+      },
+      "health": "ready",
+      "sessionState": "interrupted",
+      "createdAt": "2026-08-18T17:00:00.000Z",
+      "updatedAt": "2026-08-18T18:45:00.000Z",
+      "revision": "bot_revision_7",
+      "issueCount": 2
+    },
+    "notification": {
+      "notifications": [
+        {
+          "id": "delivery_fixture_issue_01",
+          "kind": "issue",
+          "botId": "bot_fixture_01",
+          "botName": "Scout",
+          "routineName": "Gmail needs reconnecting",
+          "finishedAt": "2026-10-27T08:58:00.000Z",
+          "preview": "The morning check couldn't reach Gmail."
+        }
+      ],
+      "now": "2026-10-27T09:10:00.000Z"
+    }
+  },
+  "spending": {
+    "chat": {
+      "spending": {
+        "period": "chat",
+        "state": "nearing",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 4.1,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatReached": {
+      "spending": {
+        "period": "chat",
+        "state": "reached",
+        "limitUsd": 5,
+        "allowedUsd": 5,
+        "spentUsd": 5.37,
+        "allowMoreUsd": 5,
+        "revision": "sp_fixture_chat_1"
+      }
+    },
+    "chatAllowMore": {
+      "request": {},
+      "response": {
+        "spending": {
+          "period": "chat",
+          "state": "under",
+          "limitUsd": 5,
+          "allowedUsd": 10,
+          "spentUsd": 5.37,
+          "allowMoreUsd": 5,
+          "revision": "sp_fixture_chat_2"
+        }
+      }
+    },
+    "bot": {
+      "spending": {
+        "period": "month",
+        "state": "reached",
+        "limitUsd": 20,
+        "allowedUsd": 20,
+        "spentUsd": 20.4,
+        "allowMoreUsd": 20,
+        "periodStart": "2026-10-15T00:00:00.000Z",
+        "periodEnd": "2026-11-15T00:00:00.000Z",
+        "revision": "sp_fixture_bot_1"
+      }
+    },
+    "none": {
+      "spending": null
+    },
+    "refusal": {
+      "error": {
+        "code": "operation_stale",
+        "message": "This chat reached its $5.00 spending limit. Allow more to keep going.",
+        "requestId": "request_fixture_40",
+        "retryable": false
+      }
+    },
+    "conflict": {
+      "error": {
+        "code": "revision_conflict",
+        "message": "The spending limit changed. Refresh it before trying again.",
+        "requestId": "request_fixture_40",
+        "retryable": false,
+        "details": {
+          "currentRevision": "sp_fixture_chat_2"
+        }
+      }
     }
   }
 }

@@ -207,9 +207,24 @@ class AidenChatViewModel(
     private val _sendRecoveryError = MutableStateFlow<String?>(null)
     val sendRecoveryError = _sendRecoveryError.asStateFlow()
     val canRetrySend: Boolean get() = _pendingSend.value?.canRetry() == true && isConnected && !_isStarting.value && !_isSubmittingRunInput.value && (_pendingSend.value?.streamId != null || (activeStreamId == null && (_streamState.value == null || _streamState.value!!.isTerminal)))
+    /** The Mac was busy and the saved send will go out again on its own. */
+    private val _isWaitingToRetryRateLimitedSend = MutableStateFlow(false)
+    val isWaitingToRetryRateLimitedSend: StateFlow<Boolean> = _isWaitingToRetryRateLimitedSend.asStateFlow()
+    /**
+     * The Mac kept refusing the saved send with a retryable 429 until the automatic resends ran
+     * out. Nothing was appended, so Retry is safe.
+     */
+    private val _isPendingSendRefusedBecauseBusy = MutableStateFlow(false)
+    val isPendingSendRefusedBecauseBusy: StateFlow<Boolean> = _isPendingSendRefusedBecauseBusy.asStateFlow()
+    private var rateLimitedSendRetries = 0
+    private var rateLimitedSendRetryJob: Job? = null
+    /** Waits out a retryable 429 before sending again; tests shorten it. */
+    internal var rateLimitedSendRetryDelay: suspend (Long) -> Unit = { delay(it) }
     fun discardPendingSend() {
         if (_isStarting.value || _isSubmittingRunInput.value) return
         val session = draftSession ?: return
+        cancelRateLimitedSendRetry()
+        rateLimitedSendRetries = 0
         viewModelScope.launch {
             try {
                 withContext(ioDispatcher) { draftStore.savePendingSend(null, session) }
@@ -273,14 +288,23 @@ class AidenChatViewModel(
     private val turnAttempts = AidenTurnAttemptTracker()
     private val attachmentImageLoadMutex = Mutex()
     private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
-    private val boundClient = coordinator.client.value
     private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
     private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    /** The pairing this chat was opened under; a re-pair of the same Mac is a different one. */
+    private val pairing = coordinator.activePairing
     private val modelPreferenceStore = coordinator.modelPreferenceStore
     private var hasExplicitModelSelection = false
+    /** The client the transcript was last read with; a refreshed client rereads it. */
+    private var transcriptClient: AidenRemoteClient? = null
 
+    /**
+     * The coordinator's current client for this chat's pairing. A Retry or reconnect replaces
+     * the client object for the same pairing, and this chat must keep loading and sending with
+     * the new one; a switched, removed or re-paired installation yields null, and a response
+     * from an earlier client (`activeClient() !== client`) is never applied.
+     */
     private fun activeClient(): AidenRemoteClient? =
-        boundClient?.takeIf { coordinator.client.value === it }
+        coordinator.client.value?.takeIf { coordinator.holdsPairing(pairing) }
 
     val isReadOnlyPresentation: Boolean
         get() = coordinator.installationStore.activeInstallation == null
@@ -648,6 +672,13 @@ class AidenChatViewModel(
         }
         loadChat()
         loadCatalog()
+        // A reconnect gives the pairing a new client: reread the transcript with it so a chat
+        // opened while the Mac was unreachable fills in once Retry succeeds.
+        viewModelScope.launch {
+            coordinator.client.collect { client ->
+                if (client != null && client !== transcriptClient && activeClient() === client) loadChat()
+            }
+        }
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
             _streamState.collect { state ->
@@ -868,7 +899,13 @@ class AidenChatViewModel(
                 } else {
                     ProgressConnectionState.UNAVAILABLE
                 }
-                recovery.recoverAfterProbeFailure(onBackoff = {}, onWaiting = {})
+                // A full progress-connection pool answers 429 with a delay;
+                // reconnecting sooner would only be refused again.
+                recovery.recoverAfterProbeFailure(
+                    minimumDelayMilliseconds = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(error),
+                    onBackoff = {},
+                    onWaiting = {}
+                )
             }
         }
     }
@@ -1220,6 +1257,50 @@ class AidenChatViewModel(
     }
 
     /**
+     * The Mac announced `chat-browser-recordings-v1` (revision 46), so a browser
+     * recording's Play reads the video from it. Without it the card says to watch
+     * the recording on the Mac.
+     */
+    val canPlayBrowserRecordings: Boolean
+        get() = instanceId.isNotEmpty() && AidenBrowserRecordingGate.isAvailable(
+            coordinator.serverInfo.value?.features,
+            coordinator.installationStore.activeInstallation
+                ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId }
+                ?.serverFeatures
+        )
+
+    /**
+     * Reads [recording] from the bound Mac into the cache for the player. Any
+     * recording saved for an earlier Play is dropped first, so at most one video
+     * waits on disk. A 404 means the Mac no longer has it.
+     */
+    suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
+        val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
+        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
+        return try {
+            val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
+            if (activeClient() === client) {
+                AidenBrowserRecordingLoad.Ready(saved)
+            } else {
+                // The pairing changed while the video downloaded: it is not this chat's to show.
+                withContext(ioDispatcher) { saved.file.delete() }
+                AidenBrowserRecordingLoad.Failed
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: AidenRemoteClientException.Server) {
+            if (error.statusCode == 404) AidenBrowserRecordingLoad.Missing else AidenBrowserRecordingLoad.Failed
+        } catch (_: Exception) {
+            AidenBrowserRecordingLoad.Failed
+        }
+    }
+
+    /** The player closed: its video leaves the cache. */
+    fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
+        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+    }
+
+    /**
      * Appends a follow-up a visual asked for, after the user confirmed it, to the
      * composer draft. It is never sent from here. Returns false when the chat is
      * read-only or the text is blank.
@@ -1286,27 +1367,32 @@ class AidenChatViewModel(
     }
 
     /**
-     * An explicit composer choice becomes this paired Mac's remembered
-     * default for later Workspace chats and launches, and it stops this chat
-     * from being re-seeded by the remembered value on catalog refreshes.
+     * An explicit composer choice stays with this chat and stops it from being
+     * re-seeded by the remembered value on catalog refreshes. It always joins
+     * the picker's Recent list. In a new chat (no messages yet) it becomes this
+     * paired Mac's remembered default for later Workspace chats; in an existing
+     * chat it is kept for that chat alone until its next send, so reopening the
+     * chat still shows it and the model other chats start with never changes.
      */
     private fun rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         if (instanceId.isEmpty()) return
-        modelPreferenceStore.remember(
-            instanceId,
-            AidenChatModelSelection(
-                providerId = _selectedProviderId.value,
-                modelId = _selectedModelId.value,
-                thinkingLevel = _selectedThinkingLevel.value
-            )
+        val currentChat = _chat.value
+        val selection = AidenChatModelSelection(
+            providerId = _selectedProviderId.value,
+            modelId = _selectedModelId.value,
+            thinkingLevel = _selectedThinkingLevel.value
         )
+        val newChat = currentChat == null || currentChat.messages.isEmpty()
+        modelPreferenceStore.remember(instanceId, selection, asDefault = newChat)
+        if (!newChat) modelPreferenceStore.rememberChat(instanceId, chatId, selection)
     }
 
     fun loadChat() {
         if (_isStarting.value) return
         val generation = transcriptGeneration
         val client = activeClient() ?: return
+        transcriptClient = client
         // Published before the launch so a chat with nothing saved shows its transcript
         // placeholders on the first frame rather than a blank screen.
         _isLoading.value = true
@@ -1341,6 +1427,18 @@ class AidenChatViewModel(
 
     private fun resolveModelSelection() {
         val currentChat = _chat.value ?: return
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if (!hasExplicitModelSelection && instanceId.isNotEmpty() && !currentChat.isBotChat &&
+            currentChat.messages.isNotEmpty()
+        ) {
+            modelPreferenceStore.chatSelection(instanceId, chatId)?.let { pick ->
+                _selectedProviderId.value = pick.providerId
+                _selectedModelId.value = pick.modelId
+                _selectedThinkingLevel.value = pick.thinkingLevel
+                hasExplicitModelSelection = true
+            }
+        }
         val selection = AidenChatModelAuthority.resolvedSelection(
             chat = currentChat,
             catalog = _catalog.value,
@@ -1368,7 +1466,65 @@ class AidenChatViewModel(
         startStreaming(activeStream.copy(lastSequence = 0))
     }
 
-    fun send(retry: Boolean = false) {
+    private fun cancelRateLimitedSendRetry() {
+        rateLimitedSendRetryJob?.cancel()
+        rateLimitedSendRetryJob = null
+        _isWaitingToRetryRateLimitedSend.value = false
+        _isPendingSendRefusedBecauseBusy.value = false
+    }
+
+    /**
+     * The Mac refused [attempt] with a retryable 429 before running it, and settled its
+     * Idempotency-Key as rejected, so that key cannot be sent again. The same request is
+     * saved again under a fresh key and sent once the server's delay has passed. Returns `false`
+     * when the fresh attempt could not be saved, leaving the failure terminal.
+     */
+    private suspend fun scheduleRateLimitedSendRetry(
+        attempt: AidenChatDraftStore.PendingSend,
+        error: AidenRemoteClientException.Server,
+        session: AidenChatDraftStore.Session
+    ): Boolean {
+        turnAttempts.reset()
+        val fresh = attempt.copy(key = turnAttempts.key(attempt.request).toString(), createdAtMillis = System.currentTimeMillis())
+        try {
+            withContext(ioDispatcher) {
+                draftStore.settlePendingSend(attempt.key, session)
+                draftStore.savePendingSend(fresh, session)
+            }
+        } catch (saveError: Exception) {
+            if (saveError is CancellationException) throw saveError
+            turnAttempts.reset()
+            return false
+        }
+        _pendingSend.value = fresh
+        if (rateLimitedSendRetries >= MAX_RATE_LIMITED_SEND_RETRIES) {
+            _isPendingSendRefusedBecauseBusy.value = true
+            return true
+        }
+        val delayMillis = error.retryAfterSeconds?.let { it * 1_000L }
+            ?: AidenTerminalReconciliation.retryDelayMilliseconds(rateLimitedSendRetries)
+        rateLimitedSendRetries++
+        rateLimitedSendRetryJob?.cancel()
+        _isWaitingToRetryRateLimitedSend.value = true
+        val wait = rateLimitedSendRetryDelay
+        rateLimitedSendRetryJob = viewModelScope.launch {
+            wait(delayMillis)
+            if (_pendingSend.value?.key != fresh.key) return@launch
+            rateLimitedSendRetryJob = null
+            _isWaitingToRetryRateLimitedSend.value = false
+            startSend(retry = true, automatic = true)
+        }
+        return true
+    }
+
+    fun send(retry: Boolean = false) = startSend(retry, automatic = false)
+
+    private fun startSend(retry: Boolean, automatic: Boolean) {
+        if (!automatic) {
+            // A person's own send or Retry replaces a scheduled resend.
+            cancelRateLimitedSendRetry()
+            rateLimitedSendRetries = 0
+        }
         if (retry && _pendingSend.value?.inputMode != null) { submitRunInput(_pendingSend.value!!.inputMode!!, retry = true); return }
         if (if (retry) !canRetrySend else !canSend) return
         val retryAttempt = if (retry) _pendingSend.value else null
@@ -1383,7 +1539,6 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value
         )
-
         val request = retryAttempt?.request ?: AidenTurnRequestBuilder.make(
             text = text,
             providerId = turnModel.providerId,
@@ -1437,10 +1592,19 @@ class AidenChatViewModel(
                 val session = draftSession ?: error("The chat draft is not ready.")
                 withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
                 _pendingSend.value = attempt
+                _isPendingSendRefusedBecauseBusy.value = false
                 // Clear the stored draft before the turn can reach the server.
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                // The Mac now holds this pick as the chat's own model.
+                if (!currentChat.isBotChat && instanceId.isNotEmpty()) {
+                    modelPreferenceStore.forgetChat(
+                        instanceId,
+                        chatId,
+                        matching = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+                    )
+                }
                 lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
@@ -1471,7 +1635,9 @@ class AidenChatViewModel(
                     return@launch
                 }
                 _pendingSend.value = null
+                _isPendingSendRefusedBecauseBusy.value = false
                 turnAttempts.reset()
+                rateLimitedSendRetries = 0
                 if (retryAttempt == null) _selectedSkill.value = null
                 if (retryAttempt != null && (_draft.value == text || _draft.value.startsWith(text + "\n\n"))) consumeRunInputDraft(text)
                 _chat.value = accepted.chat
@@ -1492,12 +1658,20 @@ class AidenChatViewModel(
                     draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
-                    if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
-                        draftSession?.let { session -> withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) } }
-                        _pendingSend.value = null
-                        turnAttempts.reset()
+                    val session = draftSession
+                    if (e is AidenRemoteClientException.Server && e.isRetryableRateLimit && session != null &&
+                        scheduleRateLimitedSendRetry(attempt, e, session)) {
+                        // The Mac was only busy: keep the send and try it again.
+                    } else {
+                        if (e is AidenRemoteClientException.Server && AidenDraftSendReconciliation.refusalSettlesSend(e.statusCode, e.body.code)) {
+                            session?.let { withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, it) } }
+                            _pendingSend.value = null
+                            _isPendingSendRefusedBecauseBusy.value = false
+                            turnAttempts.reset()
+                            rateLimitedSendRetries = 0
+                        }
+                        if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
                     }
-                    if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
                 }
             } finally {
                 _isStarting.value = false
@@ -1737,6 +1911,7 @@ class AidenChatViewModel(
                             if (reconcileMissingStream(stream)) return@launch
                         }
                         recovery.recoverAfterProbeFailure(
+                            minimumDelayMilliseconds = AidenStreamNetworkRecovery.serverRequestedDelayMilliseconds(inner),
                             onBackoff = { showRecoveryWarning(inner.localizedMessage) },
                             onWaiting = onWaiting
                         )
@@ -2085,12 +2260,22 @@ class AidenChatViewModel(
         lastRunInputAttempt = attempt
         val pairingCreatedAt = pairingCreatedAt()
         _isSubmittingRunInput.value = true
+        // The draft clears the moment the input leaves, like a sent message; it comes back if the
+        // Mac rejects or never confirms it and nothing new was typed meanwhile. Only the screen
+        // clears now: the saved draft is the text's durable copy until the Mac admits it, so a
+        // rejection that lands after this screen or pairing changed still leaves it on disk.
+        // A retry resends the saved text, not the draft.
+        val draftBeforeSend = _draft.value
+        val draftAfterSend = if (retry) draftBeforeSend else AidenRunInputPresentation.consumedDraft(text, draftBeforeSend)
+        if (!retry) consumeRunInputDraft(text, persist = false)
+        fun restoreDraft() { if (!retry) restoreRunInputDraft(text, draftBeforeSend, draftAfterSend) }
         viewModelScope.launch {
             try {
                 val session = draftSession ?: error("The chat draft is not ready.")
                 val pending = saved ?: AidenChatDraftStore.PendingSend(deviceId, AidenTurnStart(text), key.toString(), System.currentTimeMillis(), emptyList(), streamId, mode)
                 withContext(ioDispatcher) { draftStore.savePendingSend(pending, session) }
                 _pendingSend.value = pending
+                _isPendingSendRefusedBecauseBusy.value = false
                 check(pending.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val result = client.submitStreamInput(
                     id = streamId,
@@ -2101,30 +2286,40 @@ class AidenChatViewModel(
                 // the submission left; a mismatched receipt is never trusted.
                 if (result.streamId != streamId || result.chatId != chatId || result.mode != mode) {
                     if (activeClient() !== client) return@launch
+                    restoreDraft()
                     _presentedError.value =
-                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                        "The run input was not confirmed. Your draft is back — check the chat before trying again."
                     return@launch
                 }
                 if (pairingCreatedAt?.let(::isPairingRetained) != true) return@launch
-                withContext(ioDispatcher) { draftStore.settlePendingSend(key.toString(), session) }
+                withContext(ioDispatcher) {
+                    draftStore.settlePendingSend(key.toString(), session)
+                    // The admitted text leaves the saved draft under the same ownership, so a
+                    // screen or client change before this answer cannot offer it again. A draft
+                    // typed and saved since is left alone.
+                    if (!retry && AidenRunInputPresentation.consumesDraft(result)) draftStore.consumeDraft(text, draftBeforeSend, session)
+                }
                 if (activeClient() !== client) return@launch
                 _pendingSend.value = null
+                _isPendingSendRefusedBecauseBusy.value = false
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {
-                    consumeRunInputDraft(text)
+                    if (retry) consumeRunInputDraft(text) else draftWriter?.writeSoon(_draft.value)
                     AidenRunInputPresentation.receipt(result)?.let { showRunInputReceipt(it) }
                     // The Mac persisted the message before queue admission;
                     // pull it into the transcript without waiting for the
                     // next turn.
                     reconcileChat()
                 } else {
+                    restoreDraft()
                     _presentedError.value = AidenRunInputPresentation.rejectionMessage(result.reason)
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 if (activeClient() === client) {
+                    restoreDraft()
                     _presentedError.value =
-                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                        "The run input was not confirmed. Your draft is back — check the chat before trying again."
                 }
             } finally {
                 _isSubmittingRunInput.value = false
@@ -2364,12 +2559,26 @@ class AidenChatViewModel(
         }
     }
 
-    private fun consumeRunInputDraft(text: String) {
+    /** Removes the submitted text from the composer; with [persist] false the saved draft keeps it. */
+    private fun consumeRunInputDraft(text: String, persist: Boolean = true) {
         val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
         if (remaining != _draft.value) {
             _draft.value = remaining
-            draftWriter?.writeSoon(remaining)
+            if (persist) draftWriter?.writeSoon(remaining)
         }
+    }
+
+    /**
+     * Puts a draft back after a run input the Mac rejected or never confirmed. Text typed since
+     * it was cleared is kept under the rejected text, as a failed send keeps it.
+     */
+    private fun restoreRunInputDraft(submitted: String, previous: String, remaining: String) {
+        if (previous == remaining) return
+        val current = _draft.value
+        val restored = if (current == remaining) previous else AidenDraftSendReconciliation.failedDraft(submitted, current)
+        if (restored == current) return
+        _draft.value = restored
+        draftWriter?.writeSoon(restored)
     }
 
     private fun showRunInputReceipt(text: String) {
@@ -2671,7 +2880,8 @@ class AidenChatViewModel(
                 hasRequiredWriteCapability = hasWrite,
                 hostCanAllow = approval.canAllow,
                 canAllow = canControl && approval.canAllow && hasWrite,
-                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE)
+                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
+                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->
@@ -3415,6 +3625,11 @@ class AidenChatViewModel(
 
     companion object {
         private const val MAX_AGENT_ROSTER_HISTORY = 8
+        /**
+         * A send the Mac refused with a retryable 429 is sent again on its own after the server's
+         * delay, this many times in a row before Retry is left to the person.
+         */
+        const val MAX_RATE_LIMITED_SEND_RETRIES = 3
         /** A foreign run feed is resumed at most this many times in a row. */
         private const val MAX_FOREIGN_RUN_RECONNECTS = 3
         /** Quiet period that ends the attach replay before a run is shown live. */
@@ -3451,4 +3666,18 @@ class AidenChatViewModel(
             }
         }
     }
+}
+
+/** The notice under a send the phone could not settle on its own, as the chat screen shows it. */
+internal fun aidenSendRecoveryMessage(
+    sendRecoveryError: String?,
+    pendingSend: AidenChatDraftStore.PendingSend?,
+    isWaitingToRetryRateLimitedSend: Boolean,
+    isPendingSendRefusedBecauseBusy: Boolean
+): String = sendRecoveryError ?: when {
+    isWaitingToRetryRateLimitedSend -> "Aiden Agent is busy. Your message will be sent again in a moment."
+    isPendingSendRefusedBecauseBusy && pendingSend?.canRetry() == true ->
+        "Aiden Agent is still busy. Your message wasn’t sent; try again in a moment."
+    pendingSend?.canRetry() == true -> "Couldn’t confirm delivery. Retry uses the same saved request within its safe retry window."
+    else -> "Couldn’t confirm delivery. The retry window has ended. Check the conversation on your desktop before sending another message."
 }

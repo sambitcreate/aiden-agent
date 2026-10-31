@@ -143,7 +143,7 @@ test("chat removal deletes private child history before the chat can disappear",
     completeDeletion,
   );
   assert.match(applicationService.slice(releaseAdmission),
-    /if \(releaseAdmission\) \{\s*finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
+    /if \(releaseAdmission\) \{[\s\S]{0,240}?finishAttachmentDeletion\?\.\(\);\s*finishDeletion\(\);\s*\}/u);
   assert.ok(beginDeletion >= 0);
   assert.ok(cancel > beginDeletion);
   assert.ok(deleteRuns > cancel);
@@ -674,7 +674,7 @@ test("managed worktree identity gates generation, terminal, scheduled, and works
   ]);
   assert.match(
     llm,
-    /if \(workspace && !botBound\) await assertManagedWorktreeAdmission\(workspace\)/u,
+    /if \(workspace && !botBound\) \{[\s\S]{0,240}?await assertManagedWorktreeAdmission\(workspace\)/u,
   );
   assert.match(llm, /botContext\?\.prepared\.workspace/u);
   assert.match(terminal, /workspaceFolder[\s\S]+assertManagedWorktreeAdmission\(workspace\)/u);
@@ -921,12 +921,12 @@ test("child tool telemetry stops before crossing its execution cap", async () =>
 });
 
 test("foreground child egress reaches the owner-bound approval UI and consumes at effect time", async () => {
-  const [llm, persistence, runner, runtime, chatPane] = await Promise.all([
+  // The owner's card itself is rendered in renderer/components/chat-approval-card.test.tsx.
+  const [llm, persistence, runner, runtime] = await Promise.all([
     source("main/services/llm-client.ts"),
     source("main/services/subagents/subagent-foreground-persistence-v2.ts"),
     source("main/services/subagents/subagent-child-runner.ts"),
     source("main/services/subagents/child-agent-runtime.ts"),
-    source("renderer/components/chat-approval-card.tsx"),
   ]);
   const requestApproval = llm.indexOf(
     "requestApproval: (descriptor, approvalSignal, approvalOwnerDocumentId)",
@@ -944,8 +944,6 @@ test("foreground child egress reaches the owner-bound approval UI and consumes a
   assert.ok(consume >= 0);
   assert.ok(execute > consume);
   assert.match(runtime, /beforeToolCall: spec\.beforeToolCall/u);
-  assert.match(chatPane, /needs approval/u);
-  assert.match(chatPane, /"Allow once"/u);
 });
 
 test("independent child egress rollbacks are evaluated before Web Search readiness or MCP inventory", async () => {

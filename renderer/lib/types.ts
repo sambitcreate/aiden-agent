@@ -1,5 +1,5 @@
 import type { McpExposure } from "../shared/mcp-exposure";
-import type { ConnectorCatalogEntry } from "../shared/connector-catalog";
+import type { McpPreset } from "../shared/connector-catalog";
 import type { CustomModelOptions } from "../shared/custom-model-options";
 import type { CompactionEngine, CompactionModelOverrides } from "../shared/compaction";
 import type { TtsSettingsV1 } from "../shared/tts";
@@ -20,6 +20,7 @@ import type { SkillProvenanceV1 } from "../shared/slash-commands";
 import type { ProviderFailureV1 } from "../shared/provider-failure";
 import type { ChatForkLineageV1 } from "../shared/chat-copy-contract";
 import type { ProviderArtwork } from "../shared/provider-artwork";
+import type { WebFetchSettingsV1 } from "../shared/web-fetch-settings";
 import type {
   BoundedNonSecretProviderConfig,
   WebSearchProviderId,
@@ -252,12 +253,22 @@ export interface Workspace {
   permission: WorkspacePermission;
   /** Omitted in older configs; memory is enabled unless explicitly disabled. */
   memoryEnabled?: boolean;
+  /** Skills (by canonical name) switched off for this workspace's chats. */
+  disabledSkills?: string[];
+  /** Connector (MCP server) ids this workspace's chats can't use. */
+  disabledMcpServerIds?: string[];
   managedWorktree?: ManagedWorktree;
   /**
    * Set when the workspace was created by Scratch chat (a generated
    * `~/aiden/<slug>` folder). Device-local; Remote projections leave it out.
    */
   scratch?: true;
+  /**
+   * Set on the hidden workspace behind a "No workspace" chat: one per chat, in
+   * Aiden's app-data `chats/` folder, using global settings. Never listed as a
+   * workspace row or choice. Device-local; Remote projections leave it out.
+   */
+  noWorkspace?: true;
   createdAt: number;
   updatedAt: number;
 }
@@ -646,6 +657,7 @@ export interface ChatMessage {
   uiVisuals?: import("../shared/aiden-ui/types").ChatUiVisualV1[];
   visualSnapshots?: import("../shared/visual-snapshots").VisualSnapshotRefV1[];
   skill?: SkillProvenanceV1;
+  notice?: import("../shared/agent-notices").AgentNoticeV1;
   timeline?: GenerationTimeline;
   turnStats?: AssistantTurnStatsV1;
   subagents?: SubagentMessageReferenceV1;
@@ -813,12 +825,8 @@ export interface McpServer {
   hiddenTools?: string[];
 }
 
-export type { McpPresetAuth } from "../shared/connector-catalog";
-
 /** A built-in connector definition from the main-process catalog. */
-export interface McpPreset extends ConnectorCatalogEntry {
-  transport: "http";
-}
+export type { McpPreset, McpPresetAuth } from "../shared/connector-catalog";
 
 /** Catalog entry plus the user's connection state for it. */
 export interface McpPresetState {
@@ -919,6 +927,16 @@ export interface AppSettings {
   compactionModelOverrides?: CompactionModelOverrides;
   /** Explicit opt-in to paid cache refreshes during active foreground runs. */
   cacheWarmingEnabled?: boolean;
+  /** Longest wait, in hours, for a usage limit to clear before a reply fails; 0 turns waiting off. Absent means 6. */
+  usageLimitWaitHours?: import("../shared/usage-limits").UsageLimitWaitHours;
+  /**
+   * Settings → Bots: routine runs go ahead with Ask first steps and connected-app
+   * changes instead of waiting for the person. Never lowers Hand off to me rules,
+   * the password and money rules, or chat turns. Absent means off.
+   */
+  botRoutinesGoAhead?: boolean;
+  /** Settings → Limits & spending: dollar limits per chat, Bot month and routine run. Absent amounts: no limit. */
+  spendingLimits?: import("../shared/spending").SpendingLimitsSettings;
   lastProviderId?: string;
   lastModel?: string;
   hiddenModelsByProvider?: HiddenModelsByProvider;
@@ -936,6 +954,8 @@ export interface AppSettings {
   exaEnabled?: boolean;
   /** Versioned Web Search routing/preferences; credentials stay main-owned. */
   webSearch?: WebSearchSettingsV2;
+  /** Versioned web page reading (`web_fetch`) and extract mode; keys stay main-owned. */
+  webFetch?: WebFetchSettingsV1;
   /** Versioned Text to Speech (Read aloud) preferences; credentials stay encrypted. */
   tts?: TtsSettingsV1;
   voiceProvider?: VoiceProvider;
@@ -945,6 +965,8 @@ export interface AppSettings {
   voiceLanguage?: string;
   voiceTranslateToEnglish?: boolean;
   voiceTrimSilence?: boolean;
+  /** Load the on-device model at launch and when one is chosen, before the first dictation (default on). */
+  localVoicePreload?: boolean;
   shortcutEnabled?: boolean;
   shortcutAccelerator?: string;
   dictationEnabled?: boolean;
@@ -1158,6 +1180,7 @@ export type {
   McpDependent,
   McpLiveState,
   McpLiveStatus,
+  McpMacAppStatus,
   McpServerDependents,
   McpStatus,
   McpToolSummary,

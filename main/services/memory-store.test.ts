@@ -28,6 +28,9 @@ test("memory facts normalize, deduplicate, stay private, and search with scoped 
     provenance: { kind: "user_edit", sourceId: "settings-memory" },
     alwaysOn: true,
   });
+  const raw = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+  raw.close();
   const duplicate = await store.put({
     id: "fact-duplicate",
     scope: workspace,
@@ -591,4 +594,61 @@ test("legacy Bot-scope rows are purged when the store opens; workspace rows stay
   } finally {
     reader.close();
   }
+});
+
+test("metadata admits a sixth chat at capacity without evicting facts or another scope", async (t) => {
+  let now = 1_000;
+  const { store, root } = await fixture(t, () => now);
+  const documents = (chatId: string, createdAt: number) => Array.from({ length: 1000 }, (_, i) => ({
+    id: `${chatId}-${i}`, kind: "transcript" as const, text: `Unique${chatId} release note ${i}`,
+    chatId, sourceId: `message-${i}`, createdAt,
+  }));
+  await store.put({ id: "approved", scope: workspace, text: "Approved durable preference", provenance: { kind: "user_edit", sourceId: "settings" } });
+  await store.replaceChatMetadata(otherWorkspace, "foreign", documents("foreign", 1));
+  for (let i = 0; i < 5; i++) await store.replaceChatMetadata(workspace, `chat${i}`, documents(`chat${i}`, i + 1));
+  now = 2_000;
+  // Refresh must preserve source age: chat0 is still the oldest eviction target.
+  await store.replaceChatMetadata(workspace, "chat0", documents("chat0", 1));
+  assert.deepEqual(await store.replaceChatMetadata(workspace, "chat5", documents("chat5", now)), {
+    accepted: 1000, rejected: 0, evicted: 1000, atCapacity: true,
+  });
+  assert.equal((await store.recall(workspace, "Uniquechat5")).length, 8);
+  assert.deepEqual(await store.recall(workspace, "Uniquechat0"), []);
+  assert.equal((await store.recall(otherWorkspace, "Uniqueforeign")).length, 8);
+  assert.equal((await store.list(workspace))[0]?.id, "approved");
+  const db = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  t.after(() => db.close());
+  assert.equal(db.prepare("SELECT count(*) AS n FROM memory_documents WHERE scope_id = ?").get(workspace.id)?.n, 5000);
+  await store.deleteSourceChat("chat5");
+  assert.deepEqual(await store.recall(workspace, "Uniquechat5"), []);
+});
+
+test("metadata admission rollback restores evicted documents and replaced chat", async (t) => {
+  const { store, root } = await fixture(t);
+  for (let c = 0; c < 5; c++) await store.replaceChatMetadata(workspace, `c${c}`, Array.from({ length: 1000 }, (_, i) => ({
+    id: `d${c}-${i}`, kind: "transcript" as const, text: `Rollback${c} note ${i}`, chatId: `c${c}`, sourceId: `m${i}`,
+  })));
+  await assert.rejects(store.replaceChatMetadata(workspace, "new", [
+    { id: "duplicate", kind: "transcript", text: "First valid note", chatId: "new", sourceId: "one" },
+    { id: "duplicate", kind: "transcript", text: "Second valid note", chatId: "new", sourceId: "two" },
+  ]), /UNIQUE/);
+  const db = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  t.after(() => db.close());
+  assert.equal(db.prepare("SELECT count(*) AS n FROM memory_documents").get()?.n, 5000);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM memory_documents WHERE id IN ('d0-0','d0-1')").get()?.n, 2);
+  assert.deepEqual(await store.replaceChatMetadata(workspace, "new", [
+    { id: "rejected", kind: "transcript", text: "api_key = hidden", chatId: "new", sourceId: "bad" },
+  ]), { accepted: 0, rejected: 1, evicted: 0, atCapacity: true });
+});
+
+ test("passive refresh preserves first admission age for clock-skewed sources", async (t) => {
+  let now = 1000;
+  const { store, root } = await fixture(t, () => now);
+  const document = { id: "skew", kind: "transcript" as const, text: "Imported source", chatId: "chat", sourceId: "message", createdAt: 5000 };
+  await store.replaceChatMetadata(workspace, "chat", [document]);
+  now = 2000;
+  await store.replaceChatMetadata(workspace, "chat", [document]);
+  const db = new DatabaseSync(path.join(root, "memory-v1.sqlite"));
+  t.after(() => db.close());
+  assert.equal(db.prepare("SELECT updated_at FROM memory_documents WHERE id = 'skew'").get()?.updated_at, 1000);
 });

@@ -1,6 +1,7 @@
 import * as React from "react";
 import { act, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { AppCapabilitiesProvider, type AppCapabilities } from "../../lib/app-capabilities";
 import { CommandSystemProvider } from "../../lib/command-system";
 import { BotChatRoute } from "../bot-chat-route";
 import { RoutedBotPanelProvider } from "./bot-panel-context";
@@ -39,6 +40,14 @@ export const BOT_TEST_PATHS = [
   "/settings",
 ] as const;
 
+interface BotRouterOptions {
+  initialPath?: string;
+  queryClient?: QueryClient;
+  sidebar?: React.ReactNode;
+  /** What this Mac offers, as main reports it; the app's disabled defaults when left out. */
+  capabilities?: AppCapabilities;
+}
+
 /**
  * Mounts `children` at `initialPath` inside a memory router whose routes match
  * Aiden's Bot paths, so `useNavigate` works and tests can read the current
@@ -46,7 +55,7 @@ export const BOT_TEST_PATHS = [
  */
 export async function mountWithBotRouter(
   children: React.ReactNode,
-  options: { initialPath?: string; queryClient?: QueryClient; sidebar?: React.ReactNode } = {},
+  options: BotRouterOptions = {},
 ) {
   const harness = createBotRouterHarness(children, options);
   await harness.router.load();
@@ -59,7 +68,7 @@ export async function mountWithBotRouter(
 
 function createBotRouterHarness(
   children: React.ReactNode,
-  options: { initialPath?: string; queryClient?: QueryClient; sidebar?: React.ReactNode } = {},
+  options: BotRouterOptions = {},
 ) {
   const queryClient = options.queryClient ?? createBotTestQueryClient();
   // As in the app: the Bot panel's state outlives route changes, and a sidebar
@@ -84,15 +93,20 @@ function createBotRouterHarness(
     routeTree: rootRoute.addChildren(routes),
     history: createMemoryHistory({ initialEntries: [options.initialPath ?? "/bots"] }),
   });
+  const routed = (
+    <QueryClientProvider client={queryClient}>
+      <CommandSystemProvider>
+        <RouterProvider router={router} />
+      </CommandSystemProvider>
+    </QueryClientProvider>
+  );
   return {
     queryClient,
     router,
-    element: (
-      <QueryClientProvider client={queryClient}>
-        <CommandSystemProvider>
-          <RouterProvider router={router} />
-        </CommandSystemProvider>
-      </QueryClientProvider>
+    element: options.capabilities ? (
+      <AppCapabilitiesProvider capabilities={options.capabilities}>{routed}</AppCapabilitiesProvider>
+    ) : (
+      routed
     ),
   };
 }

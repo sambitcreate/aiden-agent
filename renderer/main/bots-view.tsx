@@ -8,6 +8,8 @@ import { useBot } from "../lib/queries";
 import type { BotDefinition } from "../shared/bots";
 import { BotAdvanced } from "./bots/bot-advanced";
 import { BotChatActivityPage } from "./bots/bot-chat-activity-page";
+import { BotInterruptionsPage } from "./bots/bot-interruptions-page";
+import { BotLearningPage } from "./bots/bot-learning-page";
 import { BotCreateFlow } from "./bots/bot-create-flow";
 import { BotDeleteDialog } from "./bots/bot-delete-dialog";
 import { BotInstructionsEditor } from "./bots/bot-instructions-editor";
@@ -21,6 +23,8 @@ import { useBotSidebarPreferences } from "./bots/use-bot-sidebar-preferences";
 
 /** How long /bots waits for chat-activity summaries before ordering Bots by their own updatedAt. */
 const SUMMARIES_GRACE_MS = 800;
+/** How recent a cached Bots list must be for /bots to open the last viewed Bot from it while it refreshes. */
+const CACHED_LIST_TRUST_MS = 5 * 60 * 1000;
 
 /**
  * `/bots` with no Bot selected (spec §9): the Bot list lives in the sidebar, so
@@ -34,17 +38,22 @@ function BotsIndex() {
   const [creating, setCreating] = React.useState(false);
   const [summariesGraceOver, setSummariesGraceOver] = React.useState(false);
   const openChat = (bot: BotDefinition) => void navigate(botChatPath(bot.id));
-  // Only a settled, successful load names a Bot to open: never a stale or failed list.
+  // A settled, successful load names a Bot to open. A list read recently enough
+  // (this launch's own read, refreshing in the background) may name the Bot the
+  // person last looked at without waiting: that Bot's chat shows at once from
+  // the cache, and a Bot deleted elsewhere since would say so on its page.
   const settled = bots.isSuccess && !bots.isFetching;
+  const freshEnough = bots.isSuccess && Date.now() - bots.dataUpdatedAt < CACHED_LIST_TRUST_MS;
   const hasBots = bots.isSuccess && bots.data.length > 0;
   const target = React.useMemo(() => {
-    if (!settled || bots.data === undefined || bots.data.length === 0) return null;
+    if (bots.data === undefined || bots.data.length === 0) return null;
     const viewed = lastViewedBotId(preferences, new Set(bots.data.map((bot) => bot.id)));
-    if (viewed) return viewed;
+    if (viewed && (settled || freshEnough)) return viewed;
+    if (!settled) return null;
     // Rows are ordered by chat activity once the summaries are in, else by the Bot's own
     // updatedAt; a summary that never answers must not keep /bots blank.
     return summariesSettled || summariesGraceOver ? (rows[0]?.bot.id ?? null) : null;
-  }, [bots.data, preferences, rows, settled, summariesGraceOver, summariesSettled]);
+  }, [bots.data, freshEnough, preferences, rows, settled, summariesGraceOver, summariesSettled]);
 
   React.useEffect(() => {
     if (!settled || summariesSettled) return;
@@ -146,9 +155,14 @@ function BotPage({ botId }: { botId: string }) {
           bot={current}
           onClose={back}
           onOpenChatActivity={() => openPage("chat-activity")}
+          onOpenInterruptions={() => openPage("interruptions")}
         />
+      ) : page === "interruptions" ? (
+        <BotInterruptionsPage key={`${current.id}:interruptions`} bot={current} onClose={() => openPage("advanced")} />
       ) : page === "chat-activity" ? (
         <BotChatActivityPage key={`${current.id}:chat-activity`} bot={current} onClose={() => openPage("advanced")} />
+      ) : page === "learning" ? (
+        <BotLearningPage key={`${current.id}:learning`} bot={current} onClose={back} />
       ) : page === "memory" ? (
         <BotMemoryPage key={`${current.id}:memory`} bot={current} onClose={back} />
       ) : (
@@ -159,6 +173,7 @@ function BotPage({ botId }: { botId: string }) {
           onOpenInstructions={() => openPage("instructions")}
           onOpenAdvanced={() => openPage("advanced")}
           onOpenMemory={() => openPage("memory")}
+          onOpenLearning={() => openPage("learning")}
           onDelete={() => setDeleting(true)}
         />
       )}

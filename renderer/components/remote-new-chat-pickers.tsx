@@ -23,6 +23,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 
 /**
  * Pickers for a new chat that can run on another Mac: which machine, which of
@@ -229,6 +230,8 @@ export function RemoteModelPicker({
   selected,
   disabled,
   onSelect,
+  open,
+  onOpenChange,
 }: {
   hostLabel: string;
   catalog: HostModelCatalog | undefined;
@@ -236,11 +239,19 @@ export function RemoteModelPicker({
   selected: HostModelChoice | undefined;
   disabled?: boolean;
   onSelect(choice: HostModelChoice): void;
+  /** Lets another control (a failure card's Switch model) open the menu. */
+  open?: boolean;
+  onOpenChange?(open: boolean): void;
 }) {
-  const providers = catalog?.providers ?? [];
-  const model = selected
-    ? providers.find((provider) => provider.id === selected.providerId)?.models.find((entry) => entry.id === selected.modelId)
-    : undefined;
+  // A hidden model is listed only for the chat already on it.
+  const providers = (catalog?.providers ?? []).flatMap((provider) => {
+    const models = provider.models.filter(
+      (entry) => !entry.hidden || (selected?.providerId === provider.id && selected.modelId === entry.id),
+    );
+    return models.length > 0 ? [{ ...provider, models }] : [];
+  });
+  const selectedProvider = selected ? providers.find((provider) => provider.id === selected.providerId) : undefined;
+  const model = selected ? selectedProvider?.models.find((entry) => entry.id === selected.modelId) : undefined;
   const label = model?.label ?? (loading ? "Loading models…" : "Host default");
   const byValue = new Map(
     providers.flatMap((provider) =>
@@ -248,7 +259,7 @@ export function RemoteModelPicker({
     ),
   );
   return (
-    <DropdownMenu>
+    <DropdownMenu {...(open !== undefined ? { open } : {})} {...(onOpenChange ? { onOpenChange } : {})}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="transparent"
@@ -257,7 +268,16 @@ export function RemoteModelPicker({
           disabled={disabled || providers.length === 0}
           aria-label={`Model on ${hostLabel}: ${label}`}
         >
-          {loading ? <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" /> : null}
+          {loading ? (
+            <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+          ) : selectedProvider && model && selected ? (
+            <ProviderIcon
+              providerId={selectedProvider.id}
+              providerLabel={selectedProvider.label}
+              modelId={selected.modelId}
+              className="size-3.5"
+            />
+          ) : null}
           <span className="truncate">{label}</span>
           <ChevronDown className="size-3.5 shrink-0 text-tertiary" aria-hidden="true" />
         </Button>
@@ -276,6 +296,12 @@ export function RemoteModelPicker({
               <DropdownMenuLabel>{provider.label}</DropdownMenuLabel>
               {provider.models.map((entry) => (
                 <DropdownMenuRadioItem key={entry.id} value={choiceValue({ providerId: provider.id, modelId: entry.id })}>
+                  <ProviderIcon
+                    providerId={provider.id}
+                    providerLabel={provider.label}
+                    modelId={entry.id}
+                    className="size-4 text-secondary"
+                  />
                   <span className="truncate">{entry.label}</span>
                 </DropdownMenuRadioItem>
               ))}

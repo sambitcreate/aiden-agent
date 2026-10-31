@@ -5,6 +5,7 @@ import {
   ipcMain,
   logger,
   powerMonitor,
+  registerBroadcastReceiver,
   registerNativeHandlers,
   screen,
   shell,
@@ -17,7 +18,7 @@ import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
-import { shutdownDevices } from "./handlers/devices.js";
+import { shutdownDevices, terminateDeviceHelperCommands } from "./handlers/devices.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
@@ -30,13 +31,17 @@ import {
   applyShortcutFromSettings,
   disposeShortcut,
   initShortcutBindingsChanged,
+  isDictationShortcutActive,
 } from "./services/shortcut.js";
 import { mcpManager, prewarmMcpServers } from "./services/mcp.js";
 import { sealPlaintextMcpServerFields } from "./services/mcp-server-save.js";
 import {
   disposeFoundationModelsConnection,
+  settleFoundationModelsHelperStops,
   foundationModelsConnection,
 } from "./services/foundation-models-connection.js";
+import { formFillRuntime } from "./services/form-fill/artifacts.js";
+import { shutdownAntigravity } from "./services/antigravity/index.js";
 import { configStore } from "./services/config-store.js";
 import { skillRegistry } from "./services/skill-registry-main.js";
 import { reloadPortableConfig } from "./services/portable-config.js";
@@ -53,10 +58,12 @@ import {
 import { shutdownProviderAuthFlow } from "./services/provider-auth-flow.js";
 import { llmClient } from "./services/llm-client.js";
 import { modelPaceRecorder } from "./services/model-pace-runtime.js";
+import { spending } from "./services/spending-main.js";
+import { usageLimits } from "./services/usage-limit-main.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
-import { closeRendererBeforeShutdown } from "./services/quit-barrier.js";
-import { disposeDictation, toggleDictation } from "./services/dictation.js";
+import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, requireWithinDeadline, withDeadline } from "./services/quit-barrier.js";
+import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
 import { currentRuntimeProfile } from "./runtime-profile.js";
@@ -72,13 +79,14 @@ import { projectDiagnosticError } from "./services/diagnostics-contract.js";
 import { flushDiagnosticHealth } from "./services/diagnostic-health.js";
 import { pruneExpiredDiagnosticCrashDumps } from "./services/diagnostic-support.js";
 import { scheduleService } from "./services/schedule-service.js";
+import { analyticsService } from "./services/analytics/analytics-main.js";
 import { telegramService } from "./services/telegram/telegram-service.js";
 import { registerAppPathOpener } from "./services/app-navigation.js";
 import {
   effectiveBindings,
   migrateLegacyKeybindings,
 } from "../renderer/shared/keybindings.js";
-import { applicationMenuTemplate } from "./services/application-menu-core.js";
+import { applicationMenuTemplate, parseMenuCommandIds } from "./services/application-menu-core.js";
 import type { NotificationChannel } from "../renderer/preload-channels.js";
 import type { AppSettings, Chat } from "./services/types.js";
 import { ONBOARDING_COMPLETE_STORAGE_KEY } from "../renderer/shared/onboarding.js";
@@ -90,6 +98,7 @@ import {
   loadSubagentPackagedSoakSession,
   SUBAGENT_PACKAGED_SOAK_CHAT_ID,
   SUBAGENT_PACKAGED_SOAK_CHAT_PATH,
+  SUBAGENT_PACKAGED_SOAK_QUIT_FINALIZATION_GRACE_MS,
   requiresSubagentPackagedSoakFailureExit,
   subagentPackagedSoakAction,
   tryFinalizeSubagentPackagedSoakQuitReceipt,
@@ -124,6 +133,7 @@ import {
 } from "./services/git.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
+import { workspaceApplicationService } from "./services/workspace-application-service-main.js";
 import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
@@ -161,9 +171,15 @@ import { botSkillContentWatcher } from "./services/bot-capability-services-main.
 import { geminiLiveTranscription } from "./services/gemini-live-transcription.js";
 import { mainWindowState } from "./services/main-window-state.js";
 import { desktopVersionRequested } from "./desktop-cli-core.js";
-import { shouldQuitAfterAllWindowsClose, shouldReleaseAuxiliaryWindows } from "./application-lifecycle-core.js";
+import {
+  createLifecycleCheck,
+  shouldQuitAfterAllWindowsClose,
+  shouldReleaseAuxiliaryWindows,
+} from "./application-lifecycle-core.js";
 import { isAuxiliaryWindow } from "./windows/auxiliary-windows.js";
+import { destroyPill } from "./windows/pill-window.js";
 import { hostPlatformCapabilities } from "./services/host-platform-capabilities.js";
+import { shutdownFollowThrough, startFollowThrough } from "./services/follow-through/follow-through-main.js";
 import { reconcileChatScopedStores } from "./services/startup-chat-reconciliation.js";
 import { removeWorkspaceArtifacts } from "./services/workspace-artifacts/main.js";
 
@@ -199,7 +215,9 @@ let protectedAction: "close" | "quit" | "reload" | "onboarding-reset" | null =
   null;
 let forceAppQuit = false;
 let cleanupStarted = false;
-let lifecycleCheckInFlight = false;
+const lifecycleCheck = createLifecycleCheck((error) =>
+  logger.error("main", "A window action queued after a lifecycle check failed.", error),
+);
 let shutdownStarted = false;
 /** In-flight image requests a last-window close already got a "quit" answer for; the quit it triggers asks only about more. */
 const imageQuitCoverage = new ImageQuitCoverage();
@@ -318,6 +336,14 @@ function confirmProtectedAction(
   return response === 1;
 }
 
+/**
+ * Startup steps that run after a quit began would restart services the
+ * shutdown already stopped, so each late step checks this first.
+ */
+function shutdownHasBegun(): boolean {
+  return shutdownStarted || cleanupStarted;
+}
+
 function cleanupApplication(): void {
   if (cleanupStarted) return;
   cleanupStarted = true;
@@ -327,6 +353,7 @@ function cleanupApplication(): void {
   disposeDictation();
   disposeLocalSpeech();
   disposeFoundationModelsConnection();
+  formFillRuntime.dispose();
   computerUseStatus.invalidate();
   scheduleService.stop();
   llmClient.abortAll();
@@ -338,31 +365,145 @@ function cleanupApplication(): void {
   void mcpManager.closeAll({ final: true });
 }
 
-/** Close the durable Bot runtime, bounded so a wedged harness cannot hold quit. */
-async function shutdownBotRuntimeWithin(budgetMs: number): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  const closed = (async () => {
-    const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
-    await shutdownBotSessionRuntime();
-    return true;
-  })();
-  const settled = await Promise.race([
-    closed,
-    new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), budgetMs);
-    }),
-  ]).finally(() => clearTimeout(timer));
-  if (!settled) logger.warn("bots", "The Bot runtime did not close within the shutdown budget.");
+/**
+ * Per-step quit budgets. Each one is at least the service's own internal
+ * grace, so the outer deadline never cuts a step short of the bound the
+ * service already enforces on itself.
+ */
+const SHUTDOWN_BUDGET_MS = {
+  geminiLive: 3_000,
+  // Generation grace (6 s) plus the Gemini context-cache deletes that
+  // llmClient.shutdown() runs after it. A delete still in flight at the
+  // deadline reports the step as unsettled; the cache entries expire on
+  // their own TTL server-side.
+  parentGenerations: 8_000,
+  backgroundJobs: 6_000,
+  modelPace: 1_000,
+  subagentRuntime: 7_000,
+  spending: 1_000,
+  // analyticsService().shutdown() caps its own send at 1.5 s.
+  analytics: 2_000,
+  soakReceipt: SUBAGENT_PACKAGED_SOAK_QUIT_FINALIZATION_GRACE_MS,
+  remoteAccess: 5_000,
+  providerSignIn: 2_000,
+  // computerUseStatus.shutdown() waits up to its own 5 s grace.
+  computerUseStatus: 5_500,
+  // scheduleService.stopAndSettle() waits up to 5 s for running tasks.
+  botIngress: 5_500,
+  botRuntime: 5_000,
+  subagentRunStore: 3_000,
+  terminalHistory: 2_000,
+  designWork: 2_000,
+  imageRuns: 2_000,
+  studioAssets: 2_000,
+  browser: 3_000,
+  botComputers: 5_000,
+  // Recordings get 2 s, SSH hosts 5 s and the local `daemon stop` helper 10 s.
+  // This deadline caps the total; helper commands still running when it
+  // expires get their timeout's SIGTERM at once, and later ones are refused
+  // (terminateDeviceHelperCommands); a refused `daemon stop` falls back to an
+  // identity-checked SIGTERM of the daemon from main.
+  devices: 8_000,
+  mcpServers: 3_000,
+  // settleFoundationModelsHelperStops() waits up to its own 1.5 s.
+  foundationModelsHelper: 2_000,
+  // Agent harness processes get TERM, then KILL after their grace.
+  agentHarness: 4_000,
+  // flushSubagentRuntimeDiagnostics + flushDiagnosticJournal + flushDiagnosticHealth.
+  diagnostics: 3_000,
+} as const;
+
+/**
+ * Budgets for the writes that run before the shutdown ceiling is armed. They
+ * are bounded on their own: a stuck window-state write is skipped, and a stuck
+ * Computer Use write cancels the quit like a failed one.
+ */
+const PRE_SHUTDOWN_BUDGET_MS = {
+  windowState: 2_000,
+  computerUseSettings: 5_000,
+} as const;
+
+/**
+ * Last-resort bound on the whole quit: the serial steps, the slowest branch
+ * of the parallel teardown, the diagnostic flushes, and 5 s of slack. It only
+ * catches work that escapes the step budgets, so Aiden never stays half-shut
+ * with its window gone. Exit code 1 marks the shutdown as incomplete.
+ */
+const SHUTDOWN_HARD_CEILING_MS = (() => {
+  const b = SHUTDOWN_BUDGET_MS;
+  const serial =
+    b.geminiLive + b.parentGenerations + b.backgroundJobs + b.modelPace +
+    b.subagentRuntime + b.spending + b.analytics + b.soakReceipt + b.remoteAccess;
+  const parallel = Math.max(
+    b.providerSignIn,
+    b.computerUseStatus,
+    b.botIngress + b.botRuntime,
+    b.subagentRunStore,
+    b.terminalHistory,
+    b.designWork,
+    b.imageRuns + b.studioAssets,
+    b.browser,
+    b.botComputers,
+    b.devices,
+    b.mcpServers,
+    b.foundationModelsHelper,
+    b.agentHarness,
+  );
+  return serial + parallel + b.diagnostics + 5_000;
+})();
+const pendingShutdownSteps = new Set<string>();
+
+/** Run one shutdown step within its budget; a miss or failure is logged, never fatal. */
+async function settleShutdownStep<T>(
+  scope: string,
+  label: string,
+  budgetMs: number,
+  step: () => PromiseLike<T> | T,
+): Promise<DeadlineOutcome<T>> {
+  pendingShutdownSteps.add(label);
+  const outcome = await withDeadline(step, budgetMs);
+  pendingShutdownSteps.delete(label);
+  if (outcome.status === "timed-out") {
+    logger.warn(scope, `${label} did not finish within the shutdown budget.`);
+  } else if (outcome.status === "rejected") {
+    logger.warn(scope, `${label} did not finish cleanly.`, outcome.error);
+  }
+  return outcome;
 }
 
-async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
+function armShutdownCeiling(): () => void {
+  const timer = setTimeout(() => {
+    logger.error(
+      "main",
+      `Shutdown exceeded ${SHUTDOWN_HARD_CEILING_MS / 1000}s; exiting without waiting for: ${
+        [...pendingShutdownSteps].join(", ") || "unknown work"
+      }.`,
+    );
+    forceAppQuit = true;
+    app.exit(1);
+  }, SHUTDOWN_HARD_CEILING_MS);
+  timer.unref();
+  return () => clearTimeout(timer);
+}
+
+/**
+ * Start the application shutdown, or join the one already running. A caller
+ * that arrives while another path (for example `before-quit` after the last
+ * window was destroyed) is shutting down waits for that shutdown, so it sees
+ * whether Aiden actually quit or stayed open.
+ */
+const shutdownAndQuit = joinInFlight((settingsPrepared: boolean = false) => runShutdownAndQuit(settingsPrepared));
+
+async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
+  llmClient.setQuitInProgress(true);
   if (!settingsPrepared) {
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
     } catch (error) {
       shutdownStarted = false;
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       logger.error(
         "main",
@@ -372,40 +513,44 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
       return;
     }
   }
-  await geminiLiveService.shutdown();
+  const disarmShutdownCeiling = armShutdownCeiling();
+  await settleShutdownStep("voice", "Gemini Live", SHUTDOWN_BUDGET_MS.geminiLive, () => geminiLiveService.shutdown());
   // Settle parent generations before registry teardown. A child can still be
   // constructing tools before it is registered, and its bounded drain must
   // record any cleanup miss before a packaged-soak receipt is written.
   llmClient.abortAll();
-  let parentSettled = false;
-  try {
-    parentSettled = await llmClient.shutdown();
-    if (!parentSettled) {
-      logger.warn(
-        "main",
-        "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
-      );
-    }
-  } catch (error) {
-    logger.error(
+  const parentShutdown = await settleShutdownStep("main", "Parent generations", SHUTDOWN_BUDGET_MS.parentGenerations, () =>
+    llmClient.shutdown(),
+  );
+  const parentSettled = parentShutdown.status === "fulfilled" && parentShutdown.value;
+  if (parentShutdown.status === "fulfilled" && !parentSettled) {
+    logger.warn(
       "main",
-      "Parent generation shutdown did not complete cleanly.",
-      error,
+      "Parent generation did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
+  // Background jobs and done-when checks stop with the app; follows and
+  // checks are saved for the next launch. Bounded so a stuck job never holds quit.
+  await settleShutdownStep("follow-through", "Background jobs", SHUTDOWN_BUDGET_MS.backgroundJobs, () => shutdownFollowThrough());
   // Settled generations have recorded their last pace samples; persist the
   // debounced remainder. Never fatal: it is a regenerable measurement cache.
-  await Promise.race([
-    modelPaceRecorder.flush().catch(() => undefined),
-    new Promise<void>((resolve) => setTimeout(resolve, 1_000).unref()),
-  ]);
-  const subagentsSettled = await subagentRuntimeRegistry.shutdown();
+  await settleShutdownStep("main", "Model pace samples", SHUTDOWN_BUDGET_MS.modelPace, () => modelPaceRecorder.flush());
+  const subagentShutdown = await settleShutdownStep("main", "Subagent runtime", SHUTDOWN_BUDGET_MS.subagentRuntime, () =>
+    subagentRuntimeRegistry.shutdown(),
+  );
+  const subagentsSettled = subagentShutdown.status === "fulfilled" && subagentShutdown.value;
   if (!subagentsSettled) {
     logger.warn(
       "main",
       "Subagent work did not settle before the shutdown deadline; forcing application shutdown.",
     );
   }
+  // Every reply has settled: save the last spending and usage-limit changes.
+  await settleShutdownStep("main", "Spending and usage limits", SHUTDOWN_BUDGET_MS.spending, () =>
+    Promise.all([spending.flush(), usageLimits.flush()]),
+  );
+  // Send queued usage data, bounded (the service caps itself at 1.5 s).
+  await settleShutdownStep("main", "Usage data", SHUTDOWN_BUDGET_MS.analytics, () => analyticsService().shutdown());
   const session = pendingPackagedSubagentSoakReceipt;
   pendingPackagedSubagentSoakReceipt = undefined;
   const quitReceiptFinalization =
@@ -446,91 +591,87 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
     // Do not let later asynchronous cleanup give a timed-out receipt writer
     // time to publish evidence after its lifecycle has already failed closed.
     await flushSubagentRuntimeDiagnostics(1_000);
+    disarmShutdownCeiling();
     app.exit(1);
     return;
   }
-  try {
-    await stopAidenRemoteServiceAndSettle();
-  } catch (error) {
-    logger.error("aiden-remote", "Remote Access did not stop cleanly.", error);
-  }
+  await settleShutdownStep("aiden-remote", "Remote Access", SHUTDOWN_BUDGET_MS.remoteAccess, () =>
+    stopAidenRemoteServiceAndSettle(),
+  );
   cleanupApplication();
-  try {
-    await Promise.all([
-      shutdownProviderAuthFlow(),
-      computerUseStatus.shutdown(),
-      (async () => {
-        // Stop Bot ingress first so nothing reopens the runtime, then close
-        // every Bot harness: a running turn is left interrupted (Resume on
-        // next start) and the profile lock is released.
-        await Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]);
-        await shutdownBotRuntimeWithin(5_000);
-      })(),
-      (async () => {
-        await subagentRunStore.flush();
-        await subagentRunStore.close();
-      })(),
-      terminalService.flushHistory(),
-      // Bounded so a wedged queue cannot hold quit; a store that was never
-      // opened (flags off) resolves at once.
-      // Run settlements record their end through the project store, so they drain
-      // first and in-flight store writes after them. Bounded so a wedged write
-      // cannot hold quit; with the flag off both have nothing to drain.
-      Promise.race([
-        designRunService
-          .drain()
-          .then(() => designProjectStore.drain())
-          .then(() => true),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
-      ])
-        .then((drained) => {
-          if (!drained) logger.warn("design", "Design work did not settle within the shutdown budget.");
-        })
-        .catch((error) => logger.warn("design", "Design work did not settle cleanly.", error)),
-      (async () => {
-        // Image runs record their end (and close the run ledger) before the asset store closes.
-        // Bounded like the other stores; a ledger that was never opened (flag off) resolves at once.
-        await Promise.race([
-          createImagesRuntime.shutdown("app-quit").then(() => true),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
-        ])
-          .then((stopped) => {
-            if (!stopped) logger.warn("create-images", "Image runs did not stop within the shutdown budget.");
-          })
-          .catch((error) => logger.warn("create-images", "Image runs did not stop cleanly.", error));
-        await Promise.race([
-          studioAssetStore.close().then(() => true),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000).unref()),
-        ])
-          .then((closed) => {
-            if (!closed) logger.warn("studio", "Studio asset store did not close within the shutdown budget.");
-          })
-          .catch((error) =>
-            logger.warn("studio", "Studio asset store did not close cleanly.", error),
-          );
-      })(),
-      browserService.shutdown(),
-      shutdownDevices(),
-      // Bounded so a wedged server cannot hold quit; stdio children that miss
-      // the budget are still signalled by their transports' close.
+  await Promise.all([
+    settleShutdownStep("main", "Provider sign-in", SHUTDOWN_BUDGET_MS.providerSignIn, () => shutdownProviderAuthFlow()),
+    settleShutdownStep("computer-use", "Computer Use status", SHUTDOWN_BUDGET_MS.computerUseStatus, () => computerUseStatus.shutdown()),
+    (async () => {
+      // Stop Bot ingress first so nothing reopens the runtime, then close
+      // every Bot harness: a running turn is left interrupted (Resume on
+      // next start) and the profile lock is released.
+      await settleShutdownStep("bots", "Bot schedules and Telegram", SHUTDOWN_BUDGET_MS.botIngress, () =>
+        Promise.all([scheduleService.stopAndSettle(), telegramService.stopAndSettle()]),
+      );
+      await settleShutdownStep("bots", "The Bot runtime", SHUTDOWN_BUDGET_MS.botRuntime, async () => {
+        const { shutdownBotSessionRuntime } = await import("./services/bot-runtime/bot-session-main.js");
+        await shutdownBotSessionRuntime();
+      });
+    })(),
+    settleShutdownStep("subagents", "Subagent run store", SHUTDOWN_BUDGET_MS.subagentRunStore, async () => {
+      await subagentRunStore.flush();
+      await subagentRunStore.close();
+    }),
+    settleShutdownStep("terminal", "Terminal history", SHUTDOWN_BUDGET_MS.terminalHistory, () => terminalService.flushHistory()),
+    // Run settlements record their end through the project store, so they drain
+    // first and in-flight store writes after them. A store that was never
+    // opened (flags off) resolves at once.
+    settleShutdownStep("design", "Design work", SHUTDOWN_BUDGET_MS.designWork, async () => {
+      await designRunService.drain();
+      await designProjectStore.drain();
+    }),
+    (async () => {
+      // Image runs record their end (and close the run ledger) before the asset store closes.
+      // A ledger that was never opened (flag off) resolves at once.
+      await settleShutdownStep("create-images", "Image runs", SHUTDOWN_BUDGET_MS.imageRuns, () =>
+        createImagesRuntime.shutdown("app-quit"),
+      );
+      await settleShutdownStep("studio", "Studio asset store", SHUTDOWN_BUDGET_MS.studioAssets, () => studioAssetStore.close());
+    })(),
+    settleShutdownStep("browser", "The browser", SHUTDOWN_BUDGET_MS.browser, () => browserService.shutdown()),
+    // Every running Bot computer is asked to stop, then forced, inside the budget;
+    // a computer that never started (or no Apple silicon) resolves at once.
+    settleShutdownStep("bot-computers", "Bot computers", SHUTDOWN_BUDGET_MS.botComputers, async () => {
+      const { shutdownBotComputers } = await import("./services/bot-computers/bot-computers-main.js");
+      await shutdownBotComputers(4_000);
+    }),
+    settleShutdownStep("devices", "Devices", SHUTDOWN_BUDGET_MS.devices, () => shutdownDevices()).then((outcome) => {
+      // The helpers' own stop timeouts can outlast this budget; end any still running before quit.
+      if (outcome.status === "timed-out") terminateDeviceHelperCommands();
+    }),
+    // cleanupApplication() asked any running Foundation Models helper to stop; its
+    // PID is checked asynchronously first, so wait (bounded) for the signal.
+    settleShutdownStep("main", "Foundation Models helper", SHUTDOWN_BUDGET_MS.foundationModelsHelper, () =>
+      settleFoundationModelsHelperStops(1_500).then((settled) => {
+        if (!settled) logger.warn("main", "Foundation Models helper stop did not settle within the shutdown budget.");
+      }),
+    ),
+    // Stdio children that miss the budget are still signalled by their transports' close.
+    settleShutdownStep("main", "MCP servers", SHUTDOWN_BUDGET_MS.mcpServers, () =>
       mcpManager.closeAllWithin(2_000).then((closed) => {
         if (!closed) logger.warn("main", "MCP servers did not close within the shutdown budget.");
       }),
-    ]);
-  } catch (error) {
-    logger.error(
-      "main",
-      "Application service shutdown did not complete cleanly.",
-      error,
-    );
-  }
+    ),
+    // Agent processes TERM, then KILL after their grace; anything left at exit is killed synchronously.
+    settleShutdownStep("acp", "Agent harness processes", SHUTDOWN_BUDGET_MS.agentHarness, () => shutdownAntigravity()),
+  ]);
   await flushSubagentRuntimeDiagnostics(1_000);
   await flushDiagnosticJournal(1_000);
   await flushDiagnosticHealth(1_000);
   forceAppQuit = true;
   if (installUpdateOnQuit) {
     installUpdateOnQuit = false;
-    if (appUpdateService.installDownloadedUpdateAndRestart()) return;
+    if (appUpdateService.installDownloadedUpdateAndRestart()) {
+      // The installer owns the exit from here; never cut it off mid-install.
+      disarmShutdownCeiling();
+      return;
+    }
     logger.error(
       "updater",
       "The update installer did not start after shutdown; falling back to a normal quit.",
@@ -539,13 +680,67 @@ async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
   app.quit();
 }
 
+/**
+ * How long main waits for the renderer to answer a close-guard query. The
+ * query itself spends up to 3 s flushing pending saves, so this leaves room
+ * for that before treating the renderer as hung.
+ */
+const RENDERER_RESPONSE_DEADLINE_MS = 6_000;
+
+class RendererUnresponsiveError extends Error {
+  constructor() {
+    super("The renderer did not answer within the lifecycle deadline.");
+  }
+}
+
+/** executeJavaScript has no main-side timeout; a hung renderer never answers it. */
+async function executeRendererScript(window: BrowserWindow, script: string): Promise<unknown> {
+  const outcome = await withDeadline(
+    () => window.webContents.executeJavaScript(script, true),
+    RENDERER_RESPONSE_DEADLINE_MS,
+  );
+  if (outcome.status === "fulfilled") return outcome.value;
+  if (outcome.status === "rejected") throw outcome.error;
+  throw new RendererUnresponsiveError();
+}
+
+/**
+ * Close and quit can go ahead without the renderer's answer when the person
+ * chooses to; reload and onboarding reset never do.
+ */
+type ForceableProtectedAction = "close" | "quit";
+
+function confirmForceUnresponsiveRenderer(
+  window: BrowserWindow,
+  force: ForceableProtectedAction,
+): boolean {
+  if (window.isDestroyed()) return true;
+  const response = dialog.showMessageBoxSync(window, {
+    type: "warning",
+    title: "Aiden isn't responding",
+    message:
+      "This window didn't answer while Aiden checked for unsaved edits and running Git work.",
+    detail:
+      force === "quit"
+        ? "Quit anyway to close it now. Edits that were not saved may be lost."
+        : "Close anyway to close it now. Edits that were not saved may be lost.",
+    buttons: ["Keep Aiden Open", force === "quit" ? "Quit Anyway" : "Close Anyway"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  return response === 1;
+}
+
 async function refreshCloseGuardFromRenderer(
   window: BrowserWindow,
-): Promise<number | null> {
+  force: ForceableProtectedAction | null = null,
+): Promise<number | null | "unresponsive"> {
   try {
     // Pending debounced saves (Create Images autosave) run first, bounded, so a quit right after an
     // edit saves it rather than stopping on the unsaved-changes prompt. A failed save stays dirty.
-    const latest = (await window.webContents.executeJavaScript(
+    const latest = (await executeRendererScript(
+      window,
       `(async () => {
         const flush = window.__aidenFlushPendingSaves;
         if (typeof flush === "function") {
@@ -561,7 +756,6 @@ async function refreshCloseGuardFromRenderer(
           saving: document.documentElement.dataset.aidenSaving === "1"
         };
       })()`,
-      true,
     )) as {
       dirty?: unknown;
       gitBusy?: unknown;
@@ -580,6 +774,9 @@ async function refreshCloseGuardFromRenderer(
       : 0;
   } catch (error) {
     logger.warn("main", "Could not confirm the renderer close guard", error);
+    if (error instanceof RendererUnresponsiveError && force) {
+      return confirmForceUnresponsiveRenderer(window, force) ? "unresponsive" : null;
+    }
     if (!window.isDestroyed()) {
       dialog.showMessageBoxSync(window, {
         type: "info",
@@ -596,26 +793,66 @@ async function refreshCloseGuardFromRenderer(
   }
 }
 
+/**
+ * How long an armed unload approval stays valid after main stops waiting for
+ * the arm call. The unload main starts right after arming lands well inside it.
+ */
+const RENDERER_UNLOAD_APPROVAL_GRACE_MS = 2_000;
+
+/**
+ * Close, quit and onboarding reset each run bounded steps between arming the
+ * unload approval and closing the renderer. The approval stays valid for those
+ * budgets too, so a confirmed action never finds it expired and re-vetoed. It
+ * stays bound to the approved revision, and every cancel path withdraws it.
+ */
+const RENDERER_UNLOAD_HOLD_MS = {
+  close: PRE_SHUTDOWN_BUDGET_MS.windowState,
+  quit: PRE_SHUTDOWN_BUDGET_MS.windowState + PRE_SHUTDOWN_BUDGET_MS.computerUseSettings,
+  onboardingReset:
+    PRE_SHUTDOWN_BUDGET_MS.computerUseSettings +
+    RENDERER_RESPONSE_DEADLINE_MS +
+    PRE_SHUTDOWN_BUDGET_MS.windowState,
+} as const;
+
 async function armRendererUnload(
   window: BrowserWindow,
   revision: number,
+  holdMs: number,
 ): Promise<boolean> {
+  // The hook and the beforeunload guard both live in the app chunk. A page
+  // without the hook (app chunk not loaded yet, or a failed load) has no guard
+  // to arm, so the unload is approved rather than refused.
+  // executeJavaScript cannot be cancelled, so the renderer refuses an arm call
+  // that runs after main has given up on it (a second short of the deadline,
+  // leaving room for the answer to arrive) and lets any approval expire.
+  const startedAt = Date.now();
+  const armBy = startedAt + RENDERER_RESPONSE_DEADLINE_MS - 1_000;
+  const expiresAt = startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS + holdMs;
   try {
     return (
-      (await window.webContents.executeJavaScript(
+      (await executeRendererScript(
+        window,
         `(() => {
-        const root = document.documentElement;
-        if (Number(root.dataset.aidenGuardRevision || "0") !== ${revision}) return false;
-        root.dataset.aidenApprovedGuardRevision = String(${revision});
-        return true;
+        const arm = window.__aidenArmUnloadApproval;
+        return typeof arm === "function" ? arm(${revision}, ${armBy}, ${expiresAt}) === true : true;
       })()`,
-        true,
       )) === true
     );
   } catch (error) {
     logger.warn("main", "Could not arm the renderer unload guard", error);
     return false;
   }
+}
+
+/**
+ * Withdraws any approval an earlier arm call of this action installed. Scripts
+ * run in the order they were sent, so this lands after a late arm call too.
+ */
+function clearRendererUnloadApproval(window: BrowserWindow): void {
+  if (window.isDestroyed()) return;
+  window.webContents
+    .executeJavaScript(`window.__aidenClearUnloadApproval?.()`, true)
+    .catch(() => undefined);
 }
 
 /**
@@ -641,13 +878,40 @@ function confirmImageRequestsBeforeQuit(
 async function authorizeProtectedAction(
   window: BrowserWindow,
   action: "close" | "reload",
+  holdMs: number = 0,
 ): Promise<boolean> {
+  return (await authorizeProtectedActionOrForce(window, action, null, holdMs)) === "authorized";
+}
+
+/**
+ * "unresponsive" means the renderer never answered and the person chose to
+ * close or quit anyway: the caller must destroy the window, because a hung
+ * renderer would never answer beforeunload either.
+ */
+async function authorizeProtectedActionOrForce(
+  window: BrowserWindow,
+  action: "close" | "reload",
+  force: ForceableProtectedAction | null,
+  holdMs: number = 0,
+): Promise<"authorized" | "declined" | "unresponsive"> {
+  const outcome = await authorizeProtectedActionAttempts(window, action, force, holdMs);
+  if (outcome !== "authorized") clearRendererUnloadApproval(window);
+  return outcome;
+}
+
+async function authorizeProtectedActionAttempts(
+  window: BrowserWindow,
+  action: "close" | "reload",
+  force: ForceableProtectedAction | null,
+  holdMs: number,
+): Promise<"authorized" | "declined" | "unresponsive"> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const revision = await refreshCloseGuardFromRenderer(window);
-    if (revision === null) return false;
+    const revision = await refreshCloseGuardFromRenderer(window, force);
+    if (revision === "unresponsive") return "unresponsive";
+    if (revision === null) return "declined";
     if (hasCloseGuard() && !confirmProtectedAction(window, action))
-      return false;
-    if (await armRendererUnload(window, revision)) return true;
+      return "declined";
+    if (await armRendererUnload(window, revision, holdMs)) return "authorized";
   }
   if (!window.isDestroyed()) {
     dialog.showMessageBoxSync(window, {
@@ -661,22 +925,35 @@ async function authorizeProtectedAction(
       noLink: true,
     });
   }
-  return false;
+  return "declined";
 }
 
 async function persistMainWindowState(window: BrowserWindow): Promise<void> {
-  try {
-    await mainWindowState.save(window);
-  } catch (error) {
-    // Window placement is a convenience preference. A transient persistence
-    // failure must never trap the user in the app during Close or Quit.
-    logger.warn("main-window", "Could not save the main window state", error);
+  // Window placement is a convenience preference. A failed or stuck write
+  // must never trap the user in the app during Close or Quit.
+  const outcome = await withDeadline(() => mainWindowState.save(window), PRE_SHUTDOWN_BUDGET_MS.windowState);
+  if (outcome.status === "rejected") {
+    logger.warn("main-window", "Could not save the main window state", outcome.error);
+  } else if (outcome.status === "timed-out") {
+    logger.warn("main-window", "The main window state did not save within the close budget.");
   }
 }
 
+/**
+ * Seal Computer Use and make its disabled state durable before quit. A write
+ * that fails or never settles cancels the quit (Aiden stays open, as for any
+ * failed write) instead of hanging it before the shutdown ceiling is armed.
+ */
+async function prepareComputerUseForQuit(): Promise<void> {
+  await requireWithinDeadline(
+    () => computerUseSettings.shutdown(),
+    PRE_SHUTDOWN_BUDGET_MS.computerUseSettings,
+    "Computer Use settings did not finish saving within the quit budget.",
+  );
+}
+
 async function requestWindowClose(window: BrowserWindow): Promise<void> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     // Closing the last window quits on Linux and Windows. On macOS it does not, and runs continue.
     // Asked before the renderer unload is armed, so "Keep Aiden Open" leaves no approved revision behind.
@@ -685,15 +962,24 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
     imageQuitCoverage.clear();
     if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
     imageQuitCoverage.recordWindowCloseConfirmation(closeQuitsApp, createImagesRuntime.inFlightRequests());
-    if (!(await authorizeProtectedAction(window, "close"))) {
+    const authorization = await authorizeProtectedActionOrForce(window, "close", "close", RENDERER_UNLOAD_HOLD_MS.close);
+    if (authorization === "declined") {
       imageQuitCoverage.clear();
       return;
     }
     await persistMainWindowState(window);
     protectedAction = "close";
-    window.close();
+    if (authorization === "unresponsive") {
+      // destroy() fires window-all-closed and before-quit synchronously; run it
+      // after the check is released so a last-window close still quits.
+      lifecycleCheck.afterRelease(() => {
+        if (!window.isDestroyed()) window.destroy();
+      });
+    } else {
+      window.close();
+    }
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
@@ -701,8 +987,7 @@ async function requestWindowReload(
   window: BrowserWindow,
   options: { ignoreCache?: boolean } = {},
 ): Promise<void> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return;
   try {
     if (!(await authorizeProtectedAction(window, "reload"))) return;
     closeGuard = {
@@ -715,21 +1000,22 @@ async function requestWindowReload(
     if (options.ignoreCache) window.webContents.reloadIgnoringCache();
     else window.webContents.reload();
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
 async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
-  if (lifecycleCheckInFlight || window.isDestroyed()) return false;
-  lifecycleCheckInFlight = true;
+  if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return false;
   try {
     if (!confirmImageRequestsBeforeQuit(window)) return false;
-    if (!(await authorizeProtectedAction(window, "close"))) return false;
+    const authorization = await authorizeProtectedActionOrForce(window, "close", "quit", RENDERER_UNLOAD_HOLD_MS.quit);
+    if (authorization === "declined") return false;
     await persistMainWindowState(window);
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
+      clearRendererUnloadApproval(window);
       logger.error(
         "main",
         "Computer Use state was not durable; quit was cancelled.",
@@ -751,15 +1037,22 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       return false;
     }
     protectedAction = "quit";
-    if (!(await closeRendererBeforeShutdown(window))) {
+    // Set before the window closes, so a question or approval it withdraws stays saved for the next launch.
+    llmClient.setQuitInProgress(true);
+    if (authorization === "unresponsive") {
+      // A hung renderer never answers beforeunload; destroy skips it.
+      window.destroy();
+    } else if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      clearRendererUnloadApproval(window);
+      llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
     }
     await shutdownAndQuit(true);
     return shutdownStarted;
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
     if (!shutdownStarted && installUpdateOnQuit) {
       installUpdateOnQuit = false;
       appUpdateService.announceSnapshot();
@@ -772,14 +1065,14 @@ async function clearRendererOnboardingCompletion(
 ): Promise<boolean> {
   try {
     return (
-      (await window.webContents.executeJavaScript(
+      (await executeRendererScript(
+        window,
         `(() => {
           const key = ${JSON.stringify(ONBOARDING_COMPLETE_STORAGE_KEY)};
           const wasComplete = localStorage.getItem(key) === "true";
           localStorage.removeItem(key);
           return wasComplete;
         })()`,
-        true,
       )) === true
     );
   } catch (error) {
@@ -800,9 +1093,9 @@ async function restoreRendererOnboardingCompletion(
 ): Promise<void> {
   if (!wasComplete || window.isDestroyed()) return;
   try {
-    await window.webContents.executeJavaScript(
+    await executeRendererScript(
+      window,
       `localStorage.setItem(${JSON.stringify(ONBOARDING_COMPLETE_STORAGE_KEY)}, "true")`,
-      true,
     );
   } catch (error) {
     logger.error(
@@ -815,22 +1108,22 @@ async function restoreRendererOnboardingCompletion(
 
 async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   if (
-    lifecycleCheckInFlight ||
     shutdownStarted ||
     installUpdateOnQuit ||
-    window.isDestroyed()
+    window.isDestroyed() ||
+    !lifecycleCheck.tryBegin()
   ) {
     return false;
   }
-  lifecycleCheckInFlight = true;
   let settingsPrepared = false;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return false;
+    if (!(await authorizeProtectedAction(window, "close", RENDERER_UNLOAD_HOLD_MS.onboardingReset))) return false;
     try {
-      await computerUseSettings.shutdown();
+      await prepareComputerUseForQuit();
       settingsPrepared = true;
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
+      clearRendererUnloadApproval(window);
       logger.error(
         "main",
         "Computer Use state was not durable; onboarding reset was cancelled.",
@@ -857,6 +1150,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      clearRendererUnloadApproval(window);
       await restoreRendererOnboardingCompletion(window, onboardingWasComplete);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
@@ -908,9 +1202,10 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
     return shutdownStarted;
   } catch (error) {
     if (settingsPrepared) computerUseSettings.resumeAfterCancelledShutdown();
+    clearRendererUnloadApproval(window);
     throw error;
   } finally {
-    lifecycleCheckInFlight = false;
+    lifecycleCheck.release();
   }
 }
 
@@ -987,7 +1282,9 @@ ipcMain.handle(
       event,
       () => new Error("Onboarding can only be changed from the active application document."),
     );
-    return setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    const result = await setOnboardingOutcome(outcome, selectedProviderId, () => !owner.isDestroyed());
+    void analyticsService().onboardingFinished(outcome, selectedProviderId);
+    return result;
   },
 );
 
@@ -1059,7 +1356,7 @@ ipcMain.handle("app:restartToUpdate", (event): AppUpdateRestartResult => {
       reason: "unavailable",
     };
   }
-  if (lifecycleCheckInFlight || shutdownStarted) {
+  if (lifecycleCheck.inFlight || shutdownStarted) {
     return {
       accepted: false,
       reason: "busy",
@@ -1151,9 +1448,29 @@ function openExternalUrl(value: string): void {
   }
 }
 
-function refreshFoundationModelsStatus(force = false): void {
+/**
+ * Warm the Foundation Models status cache. Never forced: the cache's own
+ * lifetime (shorter while the model prepares) limits how often a Dock click
+ * or app switch spawns the native helper.
+ */
+function refreshFoundationModelsStatus(): void {
   if (!hostPlatformCapabilities().appleFoundationModels) return;
-  void foundationModelsConnection.status(force ? { force: true } : undefined);
+  void foundationModelsConnection.status();
+}
+
+/**
+ * Show the existing main window once its load settles. A load that failed
+ * (for example while the dev server restarted) is retried first; otherwise
+ * the failure would reject every later Dock click and leave a blank window.
+ */
+async function revealExistingMainWindow(existingWindow: BrowserWindow): Promise<void> {
+  if (!shutdownStarted && !cleanupStarted) {
+    mainWindowLoads.retryFailed(() => existingWindow.loadURL(getWindowUrl("main-window.html")));
+  }
+  await mainWindowLoads.wait();
+  if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
+  existingWindow.show();
+  existingWindow.focus();
 }
 
 async function createMainWindow(
@@ -1167,11 +1484,7 @@ async function createMainWindow(
   // renderer's invokes until shortcuts and reconciliation have finished.
   if (!options.startupAdmissionHeld) await shortcutInitializationPromise;
   if (mainWindow && !mainWindow.isDestroyed()) {
-    const existingWindow = mainWindow;
-    await mainWindowLoads.wait();
-    if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
-    existingWindow.show();
-    existingWindow.focus();
+    await revealExistingMainWindow(mainWindow);
     return;
   }
 
@@ -1184,11 +1497,7 @@ async function createMainWindow(
     displays.map((display) => display.workArea),
   );
   if (mainWindow && !mainWindow.isDestroyed()) {
-    const existingWindow = mainWindow;
-    await mainWindowLoads.wait();
-    if (existingWindow.isDestroyed() || mainWindow !== existingWindow) return;
-    existingWindow.show();
-    existingWindow.focus();
+    await revealExistingMainWindow(mainWindow);
     return;
   }
 
@@ -1207,6 +1516,7 @@ async function createMainWindow(
   resetRendererReadiness();
 
   const createdWindow = mainWindow;
+  registerBroadcastReceiver(createdWindow);
   imageQuitCoverage.clear();
   mainWindowState.track(createdWindow);
   writeDiagnosticEvent({
@@ -1439,8 +1749,14 @@ async function createMainWindow(
       setImmediate(() => void requestApplicationQuit(createdWindow));
     } else if (interruptedAction === "close") {
       setImmediate(() => void requestWindowClose(createdWindow));
-    } else {
+    } else if (interruptedAction === "reload") {
       setImmediate(() => void requestWindowReload(createdWindow));
+    } else {
+      // No Aiden action was interrupted (for example a crash-recovery load or
+      // a close outside the app's own paths). Keeping the window as it is
+      // matches what the renderer asked for; turning it into a reload prompt
+      // would ask about an action the person never took.
+      logger.info("main", "The renderer kept the window open during an unload Aiden did not start.");
     }
   });
   createdWindow.webContents.on("did-finish-load", () => {
@@ -1478,12 +1794,31 @@ async function createMainWindow(
     createdWindow.webContents.openDevTools({ mode: "detach" });
 }
 
+/**
+ * Upper bound on how long a shortcut or notification waits for the renderer
+ * to report ready. Concurrent deliveries share one bounded wait, so a renderer
+ * that never becomes ready cannot collect a waiter per keypress.
+ */
+const RENDERER_READY_DEADLINE_MS = 30_000;
+let sharedRendererReadyWait: Promise<boolean> | null = null;
+
+function waitForRendererReady(): Promise<boolean> {
+  sharedRendererReadyWait ??= withDeadline(() => rendererReadiness.wait(), RENDERER_READY_DEADLINE_MS)
+    .then((outcome) => outcome.status === "fulfilled")
+    .finally(() => {
+      sharedRendererReadyWait = null;
+    });
+  return sharedRendererReadyWait;
+}
+
 async function deliverMainWindowNotification(
   channel: NotificationChannel,
   payload: Record<string, unknown>,
 ): Promise<void> {
   await createMainWindow();
-  await rendererReadiness.wait();
+  if (!(await waitForRendererReady())) {
+    throw new Error("The main window did not become ready in time.");
+  }
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
@@ -1656,10 +1991,27 @@ registerAppPathOpener(async (path) => {
   await deliverMainWindowNotification("app:navigate", { path });
 });
 
+// The last settings the menu was built from, and the commands the renderer
+// reports it can run now, so the menu can be rebuilt when either changes.
+let applicationMenuInputs: { settings: AppSettings; acceleratorsEnabled: boolean } | null = null;
+let applicationMenuAvailable: ReadonlySet<string> | null = null;
+
+ipcMain.handle("app:setMenuCommands", (event, commandIds: unknown) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender.id !== mainWindow.webContents.id) return false;
+  const next = parseMenuCommandIds(commandIds);
+  if (!next) return false;
+  const current = applicationMenuAvailable;
+  if (current && current.size === next.size && [...next].every((id) => current.has(id))) return true;
+  applicationMenuAvailable = next;
+  if (applicationMenuInputs) setupApplicationMenu(applicationMenuInputs.settings, applicationMenuInputs.acceleratorsEnabled);
+  return true;
+});
+
 function setupApplicationMenu(
   settings: AppSettings,
   acceleratorsEnabled = true,
 ): void {
+  applicationMenuInputs = { settings, acceleratorsEnabled };
   if (!acceleratorsEnabled) {
     Menu.setApplicationMenu(null);
     return;
@@ -1672,6 +2024,7 @@ function setupApplicationMenu(
       platform: process.platform,
       appName: app.getName(),
       bindings,
+      available: applicationMenuAvailable,
       actions: {
         checkForUpdates: () => void appUpdateService.checkNow(true),
         deliverCommand: (commandId) =>
@@ -1722,6 +2075,7 @@ if (!ownsSingleInstanceLock) {
         .map((window) => ({ auxiliary: isAuxiliaryWindow(window) }));
       if (shouldReleaseAuxiliaryWindows(process.platform, aidenRemoteServiceKeepsApplicationAlive(), remaining)) {
         disposeVisualSnapshots();
+        destroyPill();
       }
     });
   });
@@ -1743,7 +2097,7 @@ if (!ownsSingleInstanceLock) {
   });
 
   app.on("activate", () => {
-    refreshFoundationModelsStatus(true);
+    refreshFoundationModelsStatus();
     showMainWindow();
   });
 
@@ -1751,12 +2105,12 @@ if (!ownsSingleInstanceLock) {
     logger.info("electron-lifecycle", "Application before-quit", {
       forceAppQuit,
       shutdownStarted,
-      lifecycleCheckInFlight,
+      lifecycleCheckInFlight: lifecycleCheck.inFlight,
       hasMainWindow: Boolean(mainWindow && !mainWindow.isDestroyed()),
     });
     if (forceAppQuit) return;
     event.preventDefault();
-    if (shutdownStarted || lifecycleCheckInFlight) return;
+    if (shutdownStarted || lifecycleCheck.inFlight) return;
     // The quit a last-window close confirmed takes its coverage here, once.
     const confirmedByWindowClose = imageQuitCoverage.consume();
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1775,6 +2129,9 @@ if (!ownsSingleInstanceLock) {
   });
   app.on("quit", (_event, exitCode) => {
     logger.info("electron-lifecycle", "Application quit", { exitCode });
+    // Last, once the process is really exiting: a death during the awaited
+    // shutdown work still counts as an unclean exit next launch.
+    analyticsService().markCleanExit();
   });
 
   // Only a real content change reaches the renderer, and concurrent triggers
@@ -1991,6 +2348,10 @@ if (!ownsSingleInstanceLock) {
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
       });
+      // After deletions settle and before any renderer draft exists.
+      await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
+        logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
+      });
       await startDesignStudio({
         enabled: designStudioEnabled(),
         store: designProjectStore,
@@ -2077,6 +2438,13 @@ if (!ownsSingleInstanceLock) {
         trackConnectionSetupFocus,
         logError: (message, error) => logger.error("bots", message, error),
       });
+      // Bot computers left running by an earlier launch stop, and interrupted ones are
+      // marked for Reset. Apple silicon only; a Mac that never chose Set up runs no Lume.
+      if (hostPlatformCapabilities().botComputers) {
+        void import("./services/bot-computers/bot-computers-main.js")
+          .then(({ reconcileBotComputers }) => reconcileBotComputers())
+          .catch((error) => logger.warn("bot-computers", "Bot computer startup check did not finish.", error));
+      }
       // One-time legacy cleanup runs after recoverable artifacts and Bot identity
       // restoration, but before renderers, schedules, or remote clients can write.
       try {
@@ -2224,6 +2592,13 @@ if (!ownsSingleInstanceLock) {
         );
       }
       refreshFoundationModelsStatus();
+      // Voice warm-up, a few seconds after launch so it never competes with the
+      // first window: the hidden dictation pill and the on-device voice model.
+      setTimeout(() => {
+        if (shutdownHasBegun()) return;
+        if (isDictationShortcutActive()) void prepareDictationPill();
+        void import("./services/local-voice-preload.js").then(({ preloadLocalVoice }) => preloadLocalVoice());
+      }, 3_000).unref();
       resolveShortcutInitialization?.();
       resolveShortcutInitialization = null;
 
@@ -2240,7 +2615,7 @@ if (!ownsSingleInstanceLock) {
       powerMonitor.on("resume", () => void portableConfigWatcher.refresh());
 
       try {
-        await initializeAidenRemoteService();
+        if (!shutdownHasBegun()) await initializeAidenRemoteService();
       } catch (error) {
         logger.error(
           "aiden-remote",
@@ -2251,6 +2626,7 @@ if (!ownsSingleInstanceLock) {
 
       openProcessStartupIpcAdmission();
       startupIpcAdmitted = true;
+      void analyticsService().start();
       writeDiagnosticEvent({
         level: "info",
         area: "app",
@@ -2258,6 +2634,7 @@ if (!ownsSingleInstanceLock) {
         outcome: "completed",
       });
       await initialMainWindow;
+      if (shutdownHasBegun()) return;
       if (packagedSubagentSoak) {
         await runPackagedSubagentSoak(packagedSubagentSoak);
         return;
@@ -2272,7 +2649,7 @@ if (!ownsSingleInstanceLock) {
         powerMonitor.on("unlock-screen", () =>
           scheduleService.reevaluateCatchUp(),
         );
-        await scheduleService.start();
+        if (!shutdownHasBegun()) await scheduleService.start();
       } catch (error) {
         logger.error(
           "scheduled-tasks",
@@ -2280,11 +2657,16 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
+      if (shutdownHasBegun()) return;
+      // Followed pull requests and done-when checks resume; jobs a crash left behind stop.
+      await startFollowThrough().catch((error: unknown) =>
+        logger.error("follow-through", "Follow-through state could not be restored.", error),
+      );
       // Telegram restoration is optional to desktop availability. Bot-bound
       // routes independently revalidate their exact managed home and access
       // policy before queue admission whenever the binding store is healthy.
       try {
-        await telegramService.start();
+        if (!shutdownHasBegun()) await telegramService.start();
       } catch (error) {
         logger.error(
           "telegram",
@@ -2292,7 +2674,7 @@ if (!ownsSingleInstanceLock) {
           error,
         );
       }
-      appUpdateService.start();
+      if (!shutdownHasBegun()) appUpdateService.start();
     })
     .catch((error: unknown) => {
       logger.error("main", "Failed to start Aiden Agent", error);
@@ -2300,6 +2682,12 @@ if (!ownsSingleInstanceLock) {
       // state, and its held invokes could never answer a close handshake.
       if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed())
         mainWindow.destroy();
-      void shutdownAndQuit();
+      void shutdownAndQuit().then(() => {
+        // Destroying the last window may already have started the shutdown
+        // from before-quit; this joins it. It returns without quitting when
+        // Computer Use state cannot be saved. Startup already failed and no
+        // window is left, so exit rather than idle with nothing to show.
+        if (!shutdownStarted && (!mainWindow || mainWindow.isDestroyed())) app.exit(1);
+      });
     });
 }

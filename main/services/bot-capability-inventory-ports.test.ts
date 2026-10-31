@@ -6,6 +6,7 @@ import { createBotCapabilityInventoryPorts } from "./bot-capability-inventory-po
 const HASH = "a".repeat(64);
 
 test("inventory ports project safe exact facts and conservative unavailable connections", async () => {
+  let scheduledTasksEnabled = true;
   const ports = createBotCapabilityInventoryPorts({
     loadOpaqueSelectionKey: async () => new Uint8Array(32),
     loadNoticeStatus: async () => ({
@@ -68,7 +69,7 @@ test("inventory ports project safe exact facts and conservative unavailable conn
     },
     // Simulate a stale preference copied from a supported host. Host policy
     // must still keep Computer Use out of the effective Bot inventory.
-    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: true }),
+    getSettings: async () => ({ exaEnabled: true, computerUseEnabled: true, scheduledTasksEnabled }),
     webSearchAvailability: async () => ({ ready: true }),
     subagentsAvailable: () => true,
     computerUseSupported: () => false,
@@ -97,13 +98,19 @@ test("inventory ports project safe exact facts and conservative unavailable conn
   assert.equal(other.find(({ kind }) => kind === "web")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "browser")?.available, false);
   assert.equal(other.find(({ kind }) => kind === "computer_use")?.available, false);
-  assert.equal(other.find(({ kind }) => kind === "schedules")?.available, false);
+  assert.equal(other.find(({ kind }) => kind === "computer")?.available, false, "no Bot computers without the host's readiness");
+  const schedules = other.find(({ kind }) => kind === "schedules");
+  assert.equal(schedules?.available, true, "the Bot's own routine runtime supports scheduled turns");
   assert.equal(other.find(({ kind }) => kind === "tasks")?.available, true);
   assert.equal(other.find(({ kind }) => kind === "tasks")?.label, "Task tracking");
   assert.match(
     other.find(({ kind }) => kind === "schedules")?.description ?? "",
-    /re-check this Bot's access/u,
+    /post into this chat after you approve/u,
   );
+  scheduledTasksEnabled = false;
+  const disabled = (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "schedules");
+  assert.equal(disabled?.available, false, "the global scheduler switch must withhold wake-ups");
+  assert.notEqual(disabled?.capabilityFingerprint, schedules?.capabilityFingerprint);
   const serialized = JSON.stringify({ providers, files, shell, connections, skills, other });
   assert.doesNotMatch(serialized, /secret-command|Private|https:\/\//u);
 });
@@ -342,4 +349,130 @@ test("a server switched off for the model is listed for Bots as unavailable, wit
   assert.deepEqual(connection?.tools, []);
   assert.equal(connection?.description, "Turned off for the model in Aiden");
   assert.notEqual(connection?.connectionFingerprint, HASH);
+});
+
+test("a model's Bot identity survives catalog metadata updates but not an image-capability change", async () => {
+  const fingerprintFor = async (metadata: Record<string, unknown>) => {
+    const ports = createBotCapabilityInventoryPorts({
+      loadOpaqueSelectionKey: async () => new Uint8Array(32),
+      loadNoticeStatus: async () => ({ version: BOT_FULL_ACCESS_NOTICE_VERSION, requiresAcknowledgement: true }),
+      listProviders: async () => [{
+        id: "openai-codex",
+        kind: "openai",
+        label: "ChatGPT / Codex",
+        baseUrl: "https://chatgpt.invalid/backend-api",
+        models: ["gpt-sol"],
+        modelMetadata: { "gpt-sol": { source: "provider", type: "llm", ...metadata } },
+        needsKey: true,
+        hasKey: true,
+      }],
+      providerCredentialSignature: async () => HASH,
+      listMcpServers: async () => [],
+      inspectMcpScopes: async () => [],
+      listSkills: async () => [],
+      listApprovedLocations: async () => [],
+      incarnations: {
+        reconcileNamespace: async (_namespace, resources) =>
+          resources.map(({ sourceId }) => ({ sourceId, resourceIncarnation: "a".repeat(43), credentialIncarnation: "b".repeat(43) })),
+      },
+      getSettings: async () => ({}),
+      webSearchAvailability: async () => ({ ready: false }),
+      subagentsAvailable: () => false,
+    });
+    const [provider] = await ports.listProviders(new AbortController().signal);
+    return provider!.models[0]!.modelFingerprint;
+  };
+  const bound = await fingerprintFor({
+    name: "GPT Sol",
+    vision: true,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high"],
+    contextLength: 272_000,
+  });
+  // A Pi release that widens the context window, renames the model, or adds a
+  // thinking level must not invalidate Bots that already chose this model.
+  assert.equal(await fingerprintFor({
+    name: "GPT Sol (renamed)",
+    vision: true,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high", "xhigh", "max"],
+    contextLength: 500_000,
+  }), bound);
+  assert.notEqual(await fingerprintFor({
+    name: "GPT Sol",
+    vision: false,
+    reasoning: true,
+    thinkingLevels: ["low", "medium", "high"],
+    contextLength: 272_000,
+  }), bound);
+});
+
+test("the Browser capability is available exactly while Browser settings let agents browse", async () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("not read by inspectOtherCapabilities");
+  };
+  let access = true;
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused,
+    loadNoticeStatus: unused,
+    listProviders: unused,
+    providerCredentialSignature: unused,
+    listMcpServers: unused,
+    inspectMcpScopes: unused,
+    listSkills: unused,
+    listApprovedLocations: unused,
+    incarnations: { reconcileNamespace: unused },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    browserAgentAccess: async () => access,
+  });
+  const signal = new AbortController().signal;
+  const browserOf = async () => (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "browser")!;
+  const allowed = await browserOf();
+  assert.equal(allowed.available, true);
+  assert.match(allowed.description ?? "", /its own browser/u);
+  access = false;
+  const off = await browserOf();
+  assert.equal(off.available, false);
+  // Bots holding the capability re-check it: its fingerprint moves with access.
+  assert.notEqual(off.capabilityFingerprint, allowed.capabilityFingerprint);
+});
+
+test("the Bot computer capability is available exactly while Bot computers are set up", async () => {
+  const unused = async (): Promise<never> => {
+    throw new Error("not read by inspectOtherCapabilities");
+  };
+  let ready: boolean | Error = false;
+  const ports = createBotCapabilityInventoryPorts({
+    loadOpaqueSelectionKey: unused,
+    loadNoticeStatus: unused,
+    listProviders: unused,
+    providerCredentialSignature: unused,
+    listMcpServers: unused,
+    inspectMcpScopes: unused,
+    listSkills: unused,
+    listApprovedLocations: unused,
+    incarnations: { reconcileNamespace: unused },
+    getSettings: async () => ({}),
+    webSearchAvailability: async () => ({ ready: false }),
+    subagentsAvailable: () => false,
+    botComputersReady: async () => {
+      if (ready instanceof Error) throw ready;
+      return ready;
+    },
+  });
+  const signal = new AbortController().signal;
+  const computerOf = async () => (await ports.inspectOtherCapabilities(signal)).find(({ kind }) => kind === "computer")!;
+  const before = await computerOf();
+  assert.equal(before.available, false);
+  assert.equal(before.label, "Bot computer");
+  ready = true;
+  const after = await computerOf();
+  assert.equal(after.available, true);
+  // Bots holding the capability re-check it: its fingerprint moves with readiness.
+  assert.notEqual(after.capabilityFingerprint, before.capabilityFingerprint);
+  ready = new Error("state unreadable");
+  const unreadable = await computerOf();
+  assert.equal(unreadable.available, false, "an unreadable state offers nothing and the catalog still loads");
 });

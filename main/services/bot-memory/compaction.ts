@@ -8,8 +8,11 @@
 //    the summary. Routine and self-intro inputs, and what the Bot produced for
 //    them, are left out by each entry's own provenance (`personTurns`), not by
 //    whoever is running now. Any add is recorded as an
-//    `aiden.memory-review { source: "compaction" }` entry. A replay after a
-//    crash re-runs it harmlessly: duplicate adds are no-ops.
+//    `aiden.memory-review { source: "compaction" }` entry, appended to the
+//    compacted conversation itself: never submitted (that would restart a
+//    paused Bot's closed turn) and never through the harness host, whose
+//    per-Bot lock a pause, quit or delete holds while it waits for this hook.
+//    A replay after a crash re-runs it harmlessly: duplicate adds are no-ops.
 // 2. Steered summary: Pi Durable's own summarization prompt plus a focus on
 //    what the person shared and what the Bot promised, through the Bot's own
 //    model. Any failure or timeout returns `undefined`, so Pi summarizes as it
@@ -22,6 +25,7 @@
 // revalidated before every provider request and memory write.
 
 import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Message, TextContent } from "@earendil-works/pi-ai";
 import type { Conversation } from "@earendil-works/pi-durable";
 import { BOT_MEMORY_REVIEW_ENTRY_KIND, type BotMemoryReviewEntryData } from "../../../renderer/shared/bot-memory.js";
@@ -131,8 +135,6 @@ export interface BotCompactionSteeringDeps {
   memory: Pick<BotMemoryRuntime, "apply" | "view" | "markStale">;
   /** Admit the Bot's authority and resolve its own model under it; released when steering ends. */
   admit(botId: string): Promise<BotMemoryAdmission>;
-  /** Append a bookkeeping entry to the Bot's conversation. */
-  appendEntry(botId: string, kind: string, data: BotMemoryReviewEntryData): Promise<void>;
   /** The harness's `reserveTokens` (Pi Durable's default when absent). */
   reserveTokens?: number;
   onError?(botId: string, error: unknown): void;
@@ -153,6 +155,14 @@ export type BotCompactionSteering = (
   offer: BotCompactionOffer,
   context: Context,
 ) => Promise<{ summary: string } | undefined>;
+
+/** The flush's "Memory updated" marker, appended to the compacted conversation. */
+async function recordFlush(conversation: Conversation, data: BotMemoryReviewEntryData): Promise<void> {
+  await conversation.commit(
+    (tx) => tx.appendEntry(conversation.id, { kind: BOT_MEMORY_REVIEW_ENTRY_KIND, data: { ...data } }),
+    BACKGROUND_CONTEXT,
+  );
+}
 
 export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): BotCompactionSteering {
   return async (botId, compaction, offer, context) => {
@@ -180,20 +190,16 @@ export function createBotCompactionSteering(deps: BotCompactionSteeringDeps): Bo
               ...callerSignal,
             });
             if (flushed.added > 0) {
-              await deps.appendEntry(botId, BOT_MEMORY_REVIEW_ENTRY_KIND, {
-                source: "compaction",
-                added: flushed.added,
-                targets: flushed.targets,
-              });
+              await recordFlush(offer.conversation, { source: "compaction", added: flushed.added, targets: flushed.targets });
             }
           }
         } catch (error) {
           if (context.abortSignal?.aborted) throw error;
           // Access changed mid-flush: record only what was already saved.
           if (error instanceof BotMemoryAuthorityLostError && error.added > 0) {
-            await deps
-              .appendEntry(botId, BOT_MEMORY_REVIEW_ENTRY_KIND, { source: "compaction", added: error.added, targets: error.targets })
-              .catch((appendError: unknown) => deps.onError?.(botId, appendError));
+            await recordFlush(offer.conversation, { source: "compaction", added: error.added, targets: error.targets }).catch(
+              (appendError: unknown) => deps.onError?.(botId, appendError),
+            );
           }
           deps.onError?.(botId, error);
         }

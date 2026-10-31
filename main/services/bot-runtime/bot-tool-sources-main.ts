@@ -7,20 +7,24 @@
 // - the Bot file router, the pinned shell, the Bot routine tool and
 //   `suggest_connection`;
 // - `share_image` and companion vision `inspect_image` through the durable
-//   bindings in `bot-tool-candidates.ts`.
+//   bindings in `bot-tool-candidates.ts`;
+// - the Bot's own browser (`bot-browser-tools.ts`): the `browser` gateway and
+//   the browser tools without page scripts or recording;
+// - the Bot's own computer (`bot-computers/computer-tool.ts`): `computer` and
+//   `computer_shell`, when the Bot has the capability and a computer;
+// - the cards a person answers: `ask_user_question`, `hand_off` and `sign_in`.
 //
 // Policy is applied afterwards by `bot-tool-assembly.ts`. This module only
 // builds; it never decides what a Bot may use.
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { BotHandoffTarget } from "../../../renderer/shared/bot-handoffs.js";
 import { compactionEngineFrom } from "../../../renderer/shared/compaction.js";
-import type { ConnectCardEntry } from "../../../renderer/shared/bot-connections.js";
 import { resolveBotRuntimeSkills } from "../bot-capability-services-main.js";
 import type { BotConnectionDismissalStore } from "../bot-connection-dismissals.js";
-import { buildBotFileTools, type BotFileToolLocation } from "../bot-file-tool-router.js";
+import type { BotFileToolLocation } from "../bot-file-tool-router.js";
 import { resolveBotRuntimeApprovedRoots, resolveBotRuntimeCatalogSnapshot } from "../bot-runtime-authority-main.js";
-import { createSuggestConnectionTool, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
+import { connectionSourceIdFor, isBotConnectionReady } from "../bot-runtime-tools/suggest-connection.js";
 import { buildPinnedCodingTools } from "../coding-tools.js";
 import { createComputerUseController } from "../computer-use/runtime.js";
 import { computerUseSupported } from "../computer-use/platform.js";
@@ -50,17 +54,32 @@ import type { BotTurnContext } from "./bot-extension.js";
 import type { BotAdmission, BotCandidateSet, BotToolCandidate, BotToolSources } from "./bot-tool-assembly.js";
 import {
   routineNotesCandidate,
+  eventRoutinesToolSource,
   routinesCandidate,
-  routineTaskIdOfRun,
+  proposeSkillCandidate,
+  routineTaskIdOfCall,
   shareImageCandidate,
+  suggestConnectionCandidate,
   visionCandidate,
 } from "./bot-tool-candidates.js";
-import type { BotToolCall } from "./tool-adapter.js";
 import { botComputerUseApproval } from "./bot-computer-use-approval.js";
 import { botQuestionCandidate } from "./bot-question-tool.js";
 import { botQuestions } from "./bot-questions-main.js";
+import { botHandoffCandidate } from "./bot-handoff-tool.js";
+import { botHandoffs } from "./bot-handoffs-main.js";
+import { signInCandidate } from "./bot-sign-in-tool.js";
+import { wakeUpCandidate } from "../bot-wake-ups/wake-up-candidate.js";
 import { createBotToolFacts, type BotToolFactsWithSkills } from "./bot-tool-facts.js";
 import { SUBAGENT_TOOL } from "./bot-tool-policy.js";
+import { isBrowserToolName } from "../browser-tools.js";
+import { botBrowser } from "./bot-browser-main.js";
+import { BOT_BROWSER_GATEWAY_TOOL } from "./bot-tool-disclosure.js";
+import { botComputerAction } from "./bot-computer-approval.js";
+import { botComputerCandidates, botHasComputer as hasOwnComputer } from "./bot-computer-candidates.js";
+import { createBotComputerToolState, type BotComputerToolState } from "../bot-computers/computer-tool.js";
+import { BOT_COMPUTER_SHELL_TOOL_NAME, BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
+import { botOwnWrites } from "../bot-routine-events/own-writes.js";
+import { botFileCandidates } from "./bot-file-candidates.js";
 
 const BOT_HOME_LOCATION_ID = "builtin.bot_home.v1";
 
@@ -72,8 +91,13 @@ export interface BotToolSourceDeps {
   /** A fresh admission, used by tools that revalidate during their own effect. */
   admit(botId: string): Promise<BotAdmission>;
   dismissals: Pick<BotConnectionDismissalStore, "isDismissed">;
-  appendConnectCard(botId: string, card: ConnectCardEntry): Promise<void>;
-  connectCards(botId: string): Promise<ConnectCardEntry[]>;
+  /**
+   * The Bot's own Custom access leaves this connection out: the same check its
+   * connect card uses, so the tool and the card agree on "Add to this Bot".
+   */
+  botLacksConnection?(botId: string, sourceId: string): Promise<boolean>;
+  /** The Bot's name, for what its browser tells the person. */
+  botName?(botId: string): Promise<string | undefined>;
 }
 
 type ProductionFacts = BotToolFactsWithSkills;
@@ -110,22 +134,40 @@ export function isConnected(pluginId: string): Promise<boolean> {
         ),
       ),
     hasOAuthTokens: (server, preset) =>
-      hasOAuthTokens({ ...server, url: server.url ?? preset.url }),
+      hasOAuthTokens({ ...server, url: server.url ?? (preset.transport === "http" ? preset.url : undefined) }),
   });
+}
+
+/** Where a call a rule handed to the person would have acted: the Bot's own browser or computer, else nowhere. */
+export function ruleHandoffTarget(toolName: string): BotHandoffTarget | undefined {
+  if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) return "browser";
+  if (toolName === BOT_COMPUTER_TOOL_NAME || toolName === BOT_COMPUTER_SHELL_TOOL_NAME) return "computer";
+  return undefined;
 }
 
 // Routine services load lazily: they import the scheduler, which must not
 // load while the Bot runtime module graph is still initializing.
 const routineServices = () => import("../scheduled-bot-routines-main.js");
 const proposalServices = () => import("../bot-routine-proposals-main.js");
+const eventRoutineServices = () => import("../bot-routine-events/sources-main.js");
 
 const botRoutineToolDependencies: Parameters<typeof routinesCandidate>[1] = {
   list: async (botId) => (await routineServices()).botRoutineService.list(botId),
   pause: async (botId, routineId) => (await routineServices()).botRoutineService.pause(botId, routineId),
-  propose: async (botId, input, append) => {
-    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append);
+  propose: async (botId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.propose(botId, input, append, entries);
     return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId } : outcome;
   },
+  revise: async (botId, proposalId, input, append, entries) => {
+    const outcome = await (await proposalServices()).botRoutineProposals.revise(botId, proposalId, input, append, entries);
+    return outcome.ok ? { ok: true, proposalId: outcome.proposal.proposalId, replaced: outcome.replaced } : outcome;
+  },
+  pending: async (botId) => (await proposalServices()).botRoutineProposals.pending(botId),
+  eventRoutines: eventRoutinesToolSource(async () => {
+    const services = await eventRoutineServices();
+    return { store: services.botEventRoutines, changed: services.botEventRoutinesChanged };
+  }),
+  recentDecisions: async (botId) => (await proposalServices()).botRoutineProposals.recentDecisions(botId),
 };
 
 const lazyRoutineNotes = {
@@ -135,36 +177,37 @@ const lazyRoutineNotes = {
     (await routineServices()).botRoutineNotes.delete(botId, taskId, key),
 };
 
-/** The routine task id of the run making `call`, from the Bot's live session. */
-async function routineTaskIdOfCall(botId: string, call: BotToolCall): Promise<string | undefined> {
-  const { botSessionRuntime } = await import("./bot-session-main.js");
-  const runtime = await botSessionRuntime();
-  const conversation = await runtime.conversation(botId);
-  return routineTaskIdOfRun(await call.entries(), {
-    runningSubmissionId: async () => {
-      const state = await runtime.state(botId);
-      return state.kind === "running" ? state.submissionId : undefined;
-    },
-    submissionIdOf: async (requestId) => {
-      const submission = await conversation.commit(
-        (tx) => tx.submissionByRequest(conversation.id, requestId),
-        BACKGROUND_CONTEXT,
-      );
-      return submission === undefined ? undefined : String(submission.id);
-    },
-  });
-}
+// Wake-ups reach the scheduler too, so they load lazily as well.
+const wakeUpServices = () => import("../bot-wake-ups/wake-ups-main.js");
+const lazyWakeUps = {
+  set: async (...args: Parameters<import("../bot-wake-ups/wake-ups.js").BotWakeUps["set"]>) =>
+    (await wakeUpServices()).botWakeUps.set(...args),
+  pending: async (botId: string) => (await wakeUpServices()).botWakeUps.pending(botId),
+  cancel: async (botId: string, id: string) => (await wakeUpServices()).botWakeUps.cancel(botId, id),
+};
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
   let value: Promise<T> | undefined;
   return () => (value ??= load());
 }
 
+// Bot computers load lazily, and only where the platform has them.
+const botComputerServices = () => import("../bot-computers/bot-computers-main.js");
+let botComputerToolState: BotComputerToolState | undefined;
+
+/** Whether the Bot has its own computer. Never on Linux or Intel Macs; an unreadable state counts as none. */
+async function botHasComputer(botId: string): Promise<boolean> {
+  const { botComputers, botComputersEnabled } = await botComputerServices();
+  return hasOwnComputer(botId, { enabled: botComputersEnabled, computers: botComputers });
+}
+
 export interface BotToolSourcesMain extends BotToolSources {
-  /** Close every Bot's Computer Use controller (app quit). */
+  /** Close every Bot's Computer Use controller and browser state (app quit). */
   shutdown(): Promise<void>;
-  /** Close one Bot's Computer Use controller (Bot deleted). */
+  /** Close one Bot's Computer Use controller and browser tabs (Bot deleted). */
   forgetBot(botId: string): Promise<void>;
+  /** The Bot's connected-service (MCP) tool names from its newest tool build. */
+  mcpToolNames(botId: string): ReadonlySet<string>;
 }
 
 export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMain {
@@ -258,10 +301,12 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
     async facts(botId, admission): Promise<ProductionFacts> {
       const authority = admission.authority;
       const catalog = once(() => resolveBotRuntimeCatalogSnapshot(authority));
+      const computerGranted = authority.otherCapabilities.some((grant) => grant.kind === "computer");
       return createBotToolFacts({
         admission,
         supportsImages: await deps.imageInput(botId),
         fileLocations: (await botFileLocations(admission)).length,
+        hasComputer: computerGranted && (await botHasComputer(botId)),
         catalog: async () => (await catalog()).resources,
         mcpTools: async () => builtMcpTools.get(botId) ?? [],
         liveMcpTools: async () => {
@@ -341,13 +386,41 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
         // The built tool itself must be the granted tool, not only a same-named one.
         return botMcpLiveToolMatchesGrant(grant, mcpAgentToolDescriptor(tool)) ? [{ tool, mcp: true }] : [];
       });
-
-      const locations = await botFileLocations(admission);
-      if (locations.length > 0) {
-        for (const tool of buildBotFileTools({ defaultLocation: locations[0]!, additionalLocations: locations.slice(1) })) {
-          tools.push({ tool });
-        }
+      // The Bot's own computer. Routines may use it unattended (§8.7); the
+      // screen is vision only, so a model without image input gets the shell alone.
+      tools.push(
+        ...(await botComputerCandidates(botId, {
+          granted: has("computer"),
+          hasComputer: facts.hasComputer,
+          supportsImages: facts.supportsImages,
+          routine: routineRun,
+          telegram,
+          computers: async () => (await botComputerServices()).botComputers(),
+          state: (control) => (botComputerToolState ??= createBotComputerToolState(control)),
+          botName: async (id) => (await deps.botName?.(id).catch(() => undefined)) ?? "The Bot",
+        })),
+      );
+      // The Bot's own browser. Never on routine or Telegram turns: nobody is
+      // there to approve a click or use a held tab (blueprint G12).
+      if (has("browser") && !routineRun && !telegram) {
+        tools.push(
+          ...(await botBrowser.candidates(botId, {
+            workspaceId: workspace.id,
+            chatId: await deps.canonicalChatId(botId),
+            generationId: `bot:${botId}:${turn.requestId ?? "turn"}`,
+            supportsImages: facts.supportsImages,
+            botName: (await deps.botName?.(botId).catch(() => undefined)) ?? "this Bot",
+          })),
+        );
       }
+
+      // A routine's own files must not fire its folder trigger again.
+      tools.push(
+        ...botFileCandidates(await botFileLocations(admission), {
+          routine: routineRun,
+          recordOwnWrite: (written) => botOwnWrites.record(botId, written),
+        }),
+      );
       if (authority.files.botHome) tools.push(shareImageCandidate(authority));
       if (authority.shell.enabled) {
         const shell = buildPinnedCodingTools(authority.workingDirectory).find(({ name }) => name === "run_command");
@@ -376,42 +449,100 @@ export function createBotToolSources(deps: BotToolSourceDeps): BotToolSourcesMai
       // Both are always installed; ingress (`botIngressAllowsTool`) keeps
       // `routines` off routine and Telegram runs and `routine_notes` on routine runs only.
       tools.push(routinesCandidate(botId, botRoutineToolDependencies));
-      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: (call) => routineTaskIdOfCall(botId, call) }));
-      tools.push({
-        tool: createSuggestConnectionTool(botId, {
+      tools.push(proposeSkillCandidate(botId, async (id, input, append) =>
+        (await import("../bot-skills/skill-proposals-main.js")).botSkillProposals.propose(id, input, append)));
+      tools.push(routineNotesCandidate(botId, { notes: lazyRoutineNotes, taskIdOf: routineTaskIdOfCall }));
+      // This turn's own authority: Custom access (and any chat reduction) that leaves the app out.
+      const turnLacksConnection = (sourceId: string) =>
+        authority.accessMode === "custom" &&
+        !authority.connections.some((connection) => connection.sourceId === sourceId);
+      // Only the Bot's own access can be widened from a card; a chat reduction stays as it is.
+      const botLacksConnection = async (id: string, sourceId: string) =>
+        deps.botLacksConnection ? deps.botLacksConnection(id, sourceId) : turnLacksConnection(sourceId);
+      tools.push(
+        suggestConnectionCandidate(botId, {
           isConnected,
           isDismissed: (id, pluginId) => deps.dismissals.isDismissed(id, pluginId),
-          appendConnectCard: (id, card) => deps.appendConnectCard(id, card),
-          hasPendingCard: async (id, pluginId) => {
-            const matching = (await deps.connectCards(id)).filter((card) => card.pluginId === pluginId);
-            return matching[matching.length - 1]?.status === "pending";
+          botLacksConnection: async (id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return sourceId !== undefined && (await botLacksConnection(id, sourceId));
+          },
+          chatLacksConnection: async (id, pluginId) => {
+            const sourceId = connectionSourceIdFor(pluginId);
+            return sourceId !== undefined && turnLacksConnection(sourceId) && !(await botLacksConnection(id, sourceId));
           },
         }),
-        replay: "unsafe",
-      });
+      );
       // Routine and Telegram turns are filtered out by the offer-time verdict (bot-tool-policy.ts).
       tools.push(botQuestionCandidate(botId, botQuestions));
+      // Only in turns a person started (ingress also withholds it on routine,
+      // catch-up, wake-up and intro runs), and only while the person's per-Bot
+      // switch is on.
+      if (!routineRun && (await (await wakeUpServices()).botSelfWakeUpsEnabled(botId))) {
+        tools.push(wakeUpCandidate(botId, lazyWakeUps));
+      }
+      const signInOnComputer = has("computer") && facts.hasComputer;
+      // A step in the Bot's own browser or on its computer: Open brings that forward, and phones finish it on the Mac.
+      tools.push(botHandoffCandidate(botId, botHandoffs, { targets: { browser: has("browser"), computer: signInOnComputer } }));
+      // Needs the Browser or a computer in the Bot's access; the verdict keeps it off otherwise.
+      tools.push(
+        signInCandidate(botId, botHandoffs, {
+          ...(deps.botName ? { botName: deps.botName } : {}),
+          targets: { browser: has("browser"), computer: signInOnComputer },
+          hasBrowser: async () => has("browser"),
+          hasComputer: async () => signInOnComputer,
+        }),
+      );
       return {
         tools,
         ...(skillSnapshot === undefined ? {} : { skillSnapshot }),
       };
     },
 
+    // A tool whose approval depends on live state, and what the call does for
+    // the Bot rules classifier. Other tools defer to the policy (`undefined`).
     async approvalFor(botId, toolName, call) {
-      if (toolName !== COMPUTER_USE_TOOL_NAME) return undefined;
-      const controller = controllers.get(botId);
-      if (!controller) throw new Error("Computer Use is not enabled for this response.");
-      return botComputerUseApproval(controller, call, {
-        granted: () => computerUseGranted(botId),
-        revoke: () => closeController(botId),
-      });
+      switch (toolName) {
+        case COMPUTER_USE_TOOL_NAME: {
+          const controller = controllers.get(botId);
+          if (!controller) throw new Error("Computer Use is not enabled for this response.");
+          return botComputerUseApproval(controller, call, {
+            granted: () => computerUseGranted(botId),
+            revoke: () => closeController(botId),
+          });
+        }
+        // Allowed inside the Bot's own computer; the rules read the stated intent.
+        case BOT_COMPUTER_TOOL_NAME:
+          return botComputerAction(call, botComputerToolState?.driverFacts(botId));
+        // A guest shell command: allowed, and not something the rules can read.
+        case BOT_COMPUTER_SHELL_TOOL_NAME:
+          return undefined;
+        default:
+          // The browser gateway and tools: the live tab, page and targeted field.
+          if (toolName === BOT_BROWSER_GATEWAY_TOOL || isBrowserToolName(toolName)) {
+            return botBrowser.approvalFor(botId, toolName, call);
+          }
+          return undefined;
+      }
+    },
+
+    mcpToolNames(botId) {
+      return new Set((builtMcpTools.get(botId) ?? []).map((tool) => tool.name));
     },
 
     async shutdown() {
+      botBrowser.shutdown();
       await Promise.all([...controllers.keys()].map(closeController));
+      await botComputerToolState?.shutdown();
     },
 
-    forgetBot: closeController,
+    async forgetBot(botId) {
+      await closeController(botId);
+      // The host deletes the Bot's computer on its own Delete Bot step.
+      botComputerToolState?.forget(botId);
+      // Bot delete clears the browser profile, closing any tab left, on its own step.
+      await botBrowser.forget(botId).catch((error: unknown) => logger.warn("bots", `Could not close Bot ${botId}'s browser tabs.`, error));
+    },
   };
   return sources;
 }

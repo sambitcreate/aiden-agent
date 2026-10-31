@@ -22,7 +22,12 @@ export interface BotConnectionSuggestion {
   setupEntry: BotConnectionSetupEntry;
 }
 
-export type ConnectCardStatus = "pending" | "connected" | "dismissed";
+/**
+ * `needs_access` is derived for the desktop only, never stored or sent to
+ * phones: the app is connected in Aiden, but this Bot's Custom access leaves
+ * it out, so the card offers "Add to this Bot".
+ */
+export type ConnectCardStatus = "pending" | "connected" | "dismissed" | "needs_access";
 
 /** Typed Bot transcript entry appended by `suggest_connection`. */
 export interface ConnectCardEntry {
@@ -43,9 +48,13 @@ const CHIP_LABELS: Readonly<Record<string, string>> = {
 
 type SuggestionTarget = { name: string; setupEntry: BotConnectionSetupEntry };
 
-/** Connectors that can be set up now, plus the apps Composio covers, by id. */
+/**
+ * Connectors that can be set up now, plus the apps Composio covers, by id.
+ * A connector served by a Mac app (iMCP) is set up in Settings only: Bots run
+ * on Linux too, and phones have no card for it.
+ */
 const SUGGESTIONS_BY_ID: ReadonlyMap<string, SuggestionTarget> = new Map<string, SuggestionTarget>([
-  ...CONNECTOR_CATALOG.filter(isConnectorAvailable).map((entry): [string, SuggestionTarget] => [
+  ...CONNECTOR_CATALOG.filter((entry) => isConnectorAvailable(entry) && !entry.macApp).map((entry): [string, SuggestionTarget] => [
     entry.id,
     { name: entry.name, setupEntry: { kind: "mcp-preset", presetId: entry.id } },
   ]),

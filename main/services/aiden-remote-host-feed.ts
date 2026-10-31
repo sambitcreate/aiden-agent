@@ -38,16 +38,30 @@ export interface AidenRemoteHostFeedState {
   /** Bot-owned chats; their run states reach `bot:read` desktops only. */
   botChatIds: ReadonlySet<string>;
   workspaces: readonly AidenRemoteHostFeedWorkspace[];
+  /** Bot rows as a desktop without `bot:handoffs` reads them (revision 35: no `paused`). */
   bots: readonly AidenRemoteHostFeedBot[];
+  /**
+   * The same Bots as a `bot:handoffs` desktop reads them (revision 37: a
+   * paused Bot is `sessionState: "paused"` with `paused: true`). Absent means
+   * every device reads `bots`.
+   */
+  handoffBots?: readonly AidenRemoteHostFeedBot[];
 }
 
 export interface AidenRemoteHostFeedSource {
+  /**
+   * Every item is a new object or one returned unchanged by an earlier read:
+   * the feed serializes each item object once, so mutating a returned item in
+   * place would hide that change.
+   */
   read(): Promise<AidenRemoteHostFeedState>;
 }
 
 export interface AidenRemoteHostFeedDevice {
   id: string;
   capabilities: ReadonlySet<AidenRemoteCapability>;
+  /** The device is sent revision-37 Bot rows: it holds `bot:handoffs` and the host serves it. */
+  botHandoffs?: boolean;
 }
 
 export interface AidenRemoteHostFeedOptions {
@@ -76,11 +90,15 @@ export interface AidenRemoteHostFeedEvent {
   payload: Record<string, unknown>;
 }
 
+/** Which desktops read an entry: every one, or only those with or without `bot:handoffs`. */
+type Audience = "all" | "legacy" | "handoffs";
+
 interface JournalEntry {
   sequence: number;
   frame: string;
   bytes: number;
   botOnly: boolean;
+  audience: Audience;
 }
 
 interface RunStateChange {
@@ -115,7 +133,13 @@ export class AidenRemoteHostFeedService {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pendingRuns = new Map<string, RunStateChange>();
   private readonly subscriptions = new Map<string, Set<CursorSseHandle>>();
+  /**
+   * The Bot rows each device last opened the feed with, and the head when it
+   * switched to them: a cursor older than that belongs to the other rows.
+   */
+  private readonly audiences = new Map<string, { audience: Audience; since: number }>();
   private closed = false;
+  private readonly serializedItems = new WeakMap<object, string>();
 
   constructor(private readonly options: AidenRemoteHostFeedOptions) {
     this.epoch = options.epoch ?? randomBytes(9).toString("base64url");
@@ -172,14 +196,28 @@ export class AidenRemoteHostFeedService {
     await this.refresh();
     admit();
     const botVisible = device.capabilities.has("bot:read");
+    const audience: Audience = device.botHandoffs === true ? "handoffs" : "legacy";
+    // A device that gained or lost `bot:handoffs` since its cursor read other
+    // Bot rows: replaying from it would keep a paused Bot as it read before.
+    // The switch advances the head, so every cursor from before it, including
+    // one kept through a snapshot that never finished arriving, gets a snapshot.
+    let record = this.audiences.get(device.id);
+    if (record === undefined) {
+      record = { audience, since: 0 };
+    } else if (record.audience !== audience) {
+      this.appendMarker();
+      record = { audience, since: this.head };
+    }
+    this.audiences.set(device.id, record);
     let position = this.resumePosition(cursor);
+    if (position !== undefined && position < record.since) position = undefined;
     /** Remaining frames of a snapshot being delivered one frame per pull. */
     let snapshot: string[] = [];
     const pull = (): CursorSsePull => {
       if (snapshot.length > 0) return { frames: [snapshot.shift()!] };
       if (position === undefined || position < this.floor) {
         position = this.head;
-        snapshot = this.snapshotFrames(botVisible);
+        snapshot = this.snapshotFrames(botVisible, audience);
         return { frames: [snapshot.shift()!] };
       }
       const frames: string[] = [];
@@ -190,7 +228,9 @@ export class AidenRemoteHostFeedService {
       ) {
         const entry = this.journal[index]!;
         position = entry.sequence;
+        if (entry.frame === "") continue;
         if (entry.botOnly && !botVisible) continue;
+        if (entry.audience !== "all" && entry.audience !== audience) continue;
         frames.push(entry.frame);
       }
       return { frames };
@@ -218,6 +258,7 @@ export class AidenRemoteHostFeedService {
 
   /** Close every feed a revoked device holds. */
   revokeDevice(deviceId: string): void {
+    this.audiences.delete(deviceId);
     const owned = this.subscriptions.get(deviceId);
     if (!owned) return;
     this.subscriptions.delete(deviceId);
@@ -265,7 +306,7 @@ export class AidenRemoteHostFeedService {
     if (previous) {
       this.diff("chat", previous.summaries, next.summaries, false);
       this.diff("workspace", previous.workspaces, next.workspaces, false);
-      this.diff("bot", previous.bots, next.bots, true);
+      this.diffBots(previous, next);
     }
     const runs = [...this.pendingRuns.values()];
     this.pendingRuns.clear();
@@ -288,16 +329,16 @@ export class AidenRemoteHostFeedService {
   }
 
   private diff(
-    kind: "chat" | "workspace" | "bot",
+    kind: "chat" | "workspace",
     previous: readonly { id: string }[],
     next: readonly { id: string }[],
     botOnly: boolean,
   ): void {
-    const before = new Map(previous.map((item) => [item.id, JSON.stringify(item)]));
+    const before = new Map(previous.map((item) => [item.id, this.serialized(item)]));
     const seen = new Set<string>();
     for (const item of next) {
       seen.add(item.id);
-      if (before.get(item.id) !== JSON.stringify(item)) {
+      if (before.get(item.id) !== this.serialized(item)) {
         this.append(`${kind}.upsert`, item as unknown as Record<string, unknown>, botOnly);
       }
     }
@@ -306,16 +347,68 @@ export class AidenRemoteHostFeedService {
     }
   }
 
+  /**
+   * Bot rows differ by audience only while a Bot is paused, so a change both
+   * audiences read alike is one entry; otherwise each audience whose row
+   * changed gets its own.
+   */
+  private diffBots(previous: AidenRemoteHostFeedState, next: AidenRemoteHostFeedState): void {
+    const rows = (bots: readonly AidenRemoteHostFeedBot[]) =>
+      new Map(bots.map((bot) => [bot.id, { bot, json: this.serialized(bot) }]));
+    const before = { legacy: rows(previous.bots), handoffs: rows(previous.handoffBots ?? previous.bots) };
+    const after = { legacy: rows(next.bots), handoffs: rows(next.handoffBots ?? next.bots) };
+    const ids = new Set([...after.legacy.keys(), ...after.handoffs.keys(), ...before.legacy.keys(), ...before.handoffs.keys()]);
+    for (const id of ids) {
+      const changes = (["legacy", "handoffs"] as const).flatMap((audience) => {
+        const was = before[audience].get(id);
+        const now = after[audience].get(id);
+        if (was?.json === now?.json) return [];
+        return [{ audience, row: now }];
+      });
+      const [first, second] = changes;
+      if (!first) continue;
+      if (second && first.row?.json === second.row?.json) {
+        this.appendBot(id, first.row?.bot, "all");
+        continue;
+      }
+      for (const change of changes) this.appendBot(id, change.row?.bot, change.audience);
+    }
+  }
+
+  /**
+   * An item's JSON, computed once per object. The previous read's items were
+   * serialized when they were the newest, and both Bot audiences usually
+   * share row objects, so a refresh serializes each new item only once.
+   */
+  private serialized(item: object): string {
+    let json = this.serializedItems.get(item);
+    if (json === undefined) {
+      json = JSON.stringify(item);
+      this.serializedItems.set(item, json);
+    }
+    return json;
+  }
+
+  private appendBot(id: string, bot: AidenRemoteHostFeedBot | undefined, audience: Audience): void {
+    if (bot) this.append("bot.upsert", bot as unknown as Record<string, unknown>, true, audience);
+    else this.append("bot.remove", { id }, true, audience);
+  }
+
   private append(
     type: Exclude<AidenRemoteHostFeedEventType, "snapshot">,
     payload: Record<string, unknown>,
     botOnly: boolean,
+    audience: Audience = "all",
   ): void {
     this.head += 1;
     const frame = this.frame(this.head, type, payload);
     const bytes = Buffer.byteLength(frame);
-    this.journal.push({ sequence: this.head, frame, bytes, botOnly });
+    this.journal.push({ sequence: this.head, frame, bytes, botOnly, audience });
     this.journalBytes += bytes;
+    this.trimJournal();
+  }
+
+  private trimJournal(): void {
     while (
       this.journal.length > this.maxEvents ||
       (this.journalBytes > this.maxBytes && this.journal.length > 0)
@@ -324,6 +417,13 @@ export class AidenRemoteHostFeedService {
       this.journalBytes -= dropped.bytes;
       this.floor = dropped.sequence;
     }
+  }
+
+  /** An entry no device is sent: it only moves the head past every earlier cursor. */
+  private appendMarker(): void {
+    this.head += 1;
+    this.journal.push({ sequence: this.head, frame: "", bytes: 0, botOnly: false, audience: "all" });
+    this.trimJournal();
   }
 
   private truncateJournal(): void {
@@ -339,13 +439,14 @@ export class AidenRemoteHostFeedService {
    * carries the `<epoch>:<sequence>` id. A host that fits in one chunk sends
    * exactly one frame without `partial`.
    */
-  private snapshotFrames(botVisible: boolean): string[] {
+  private snapshotFrames(botVisible: boolean, audience: Audience): string[] {
     const state = this.state!;
+    const bots = audience === "handoffs" ? (state.handoffBots ?? state.bots) : state.bots;
     const budget = this.options.snapshotChunkBytes ?? AIDEN_REMOTE_HOST_FEED_SNAPSHOT_CHUNK_BYTES;
     const sections = {
       summaries: state.summaries,
       workspaces: state.workspaces,
-      bots: botVisible ? state.bots : [],
+      bots: botVisible ? bots : [],
     } as const;
     type Section = keyof typeof sections;
     const empty = (): Record<Section, unknown[]> => ({ summaries: [], workspaces: [], bots: [] });

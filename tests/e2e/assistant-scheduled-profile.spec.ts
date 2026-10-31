@@ -134,7 +134,7 @@ test.describe("conversational scheduling", () => {
     await expect(page.getByRole("heading", { name: "When should the workspace brief run?" })).toBeVisible();
     await page.getByRole("button", { name: /Weekdays Every weekday/u }).click();
     await page.getByRole("button", { name: "Submit", exact: true }).click();
-    const approval = page.getByRole("region", { name: "schedule task needs approval" });
+    const approval = page.getByRole("region", { name: "Save this scheduled task?" });
     await expect(approval).toContainText("Summarize important workspace changes without modifying files.");
     await approval.getByRole("button", { name: "Allow once" }).click();
     await expect(page.getByText("Your workspace brief has been saved.", { exact: true }).first()).toBeVisible();
@@ -203,6 +203,80 @@ test.describe("conversational scheduling", () => {
     expect(JSON.stringify(scenario.results)).toContain("Every Tuesday at noon");
     expect(JSON.stringify(scenario.results)).toContain("Brief");
     await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  });
+
+  test("a long scheduled-task review keeps its question, every fact and the buttons on screen in a short window", async ({ aiden }, testInfo) => {
+    const { page, lmStudio, app } = aiden;
+    await finishLmStudioOnboarding(page);
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find((item) => item.isVisible())!;
+      window.setMinimumSize(640, 480);
+      window.setSize(740, 520);
+    });
+    const prompt = "Schedule audit: propose a long nightly review.";
+    const steps = Array.from({ length: 24 }, (_, index) => `${index + 1}. Review the changes in area ${index + 1} and note anything that needs a person.`);
+    lmStudio.enqueueToolScenario!({
+      prompt,
+      calls: [{ name: "schedule_task", arguments: {
+        action: "create", name: "Long nightly review", cron: "0 22 * * *", timezone: "America/New_York", prompt: steps.join("\n"),
+      } }],
+      finalText: "The nightly review has been saved.",
+    });
+    await page.locator("textarea").fill(prompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    const approval = page.getByRole("region", { name: "Save this scheduled task?" });
+    await expect(approval).toBeVisible();
+    // The card sits in the chat's fixed footer, which nothing scrolls, so the whole card has to fit between the
+    // toolbar and the bottom of the window.
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    const toolbarBottom = await approval.evaluate((element) => {
+      const pane = element.closest(":has(> div > header[data-toolbar])");
+      return pane?.querySelector("header[data-toolbar]")?.getBoundingClientRect().bottom ?? Number.NaN;
+    });
+    expect(toolbarBottom).toBeGreaterThan(0);
+    await expect.poll(async () => (await approval.boundingBox())?.y ?? -Infinity).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    const card = (await approval.boundingBox())!;
+    expect(card.y + card.height).toBeLessThanOrEqual(viewportHeight);
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByText("Long nightly review", { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(approval.getByRole("button", { name: "Allow once" })).toBeInViewport({ ratio: 1 });
+    // The rest of a tall review scrolls inside the card, down to the instructions' last line.
+    const review = approval.getByRole("group", { name: "Task details" });
+    await review.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    const instructions = (await approval.getByLabel("Instructions").boundingBox())!;
+    expect(instructions.y + instructions.height).toBeLessThanOrEqual(viewportHeight);
+    await expect(approval.getByText("Save this scheduled task?", { exact: true })).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: testInfo.outputPath("long-schedule-review.png") });
+
+    // A long follow-up typed while the review waits grows the composer. The card gives up room but never slides
+    // under the toolbar, and what no longer fits stays reachable by scrolling.
+    const composer = page.locator("textarea");
+    await composer.fill(Array.from({ length: 10 }, (_, index) => `Follow-up line ${index + 1}`).join("\n"));
+    await expect.poll(async () => (await composer.boundingBox())?.height ?? 0).toBeGreaterThan(150);
+    await expect.poll(async () => (await approval.boundingBox())?.y ?? -Infinity).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    const composerTop = (await composer.boundingBox())!.y;
+    const cramped = (await approval.boundingBox())!;
+    expect(cramped.y + cramped.height).toBeLessThanOrEqual(composerTop);
+    const question = approval.getByText("Save this scheduled task?", { exact: true });
+    expect((await question.boundingBox())!.y).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    await page.screenshot({ path: testInfo.outputPath("long-schedule-review-with-draft.png") });
+    await review.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await review.scrollIntoViewIfNeeded();
+    const reviewBox = (await review.boundingBox())!;
+    expect(reviewBox.height).toBeGreaterThan(48);
+    expect(reviewBox.y).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    expect(reviewBox.y + reviewBox.height).toBeLessThanOrEqual(composerTop);
+    const lastLine = (await approval.getByLabel("Instructions").boundingBox())!;
+    expect(lastLine.y + lastLine.height).toBeLessThanOrEqual(reviewBox.y + reviewBox.height + 0.5);
+    const allow = approval.getByRole("button", { name: "Allow once" });
+    await allow.scrollIntoViewIfNeeded();
+    const allowBox = (await allow.boundingBox())!;
+    expect(allowBox.y).toBeGreaterThanOrEqual(toolbarBottom - 0.5);
+    expect(allowBox.y + allowBox.height).toBeLessThanOrEqual(composerTop);
+
+    await composer.fill("");
+    await allow.click();
+    await expect(page.getByText("The nightly review has been saved.", { exact: true }).first()).toBeVisible();
   });
 
   test("desktop displays a phone-owned question and sends the answer through host authority", async ({ aiden }) => {
