@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { RemoteNetwork } from "./remote.ts";
@@ -144,6 +144,8 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
   mkdirSync(dirname(file), { recursive: true });
   // launchd opens serve.log in the agent directory before Node starts, so it must exist.
   mkdirSync(launch.agentDir, { recursive: true, mode: 0o700 });
+  // A failed reinstall puts back the service that was there, instead of leaving none.
+  const previous = existsSync(file) ? readFileSync(file, "utf8") : undefined;
   if (kind === "systemd") {
     writeFileSync(file, systemdUnit(launch), { mode: 0o644 });
     try {
@@ -151,6 +153,12 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
       must(host, "systemctl", ["--user", "enable", SYSTEMD_UNIT], "Could not enable the Aiden service");
       must(host, "systemctl", ["--user", "restart", SYSTEMD_UNIT], "Could not start the Aiden service");
     } catch (error) {
+      if (previous !== undefined) {
+        writeFileSync(file, previous, { mode: 0o644 });
+        host.run("systemctl", ["--user", "daemon-reload"]);
+        host.run("systemctl", ["--user", "restart", SYSTEMD_UNIT]);
+        throw error;
+      }
       // Leave nothing half-installed: a later status or boot must not find this unit.
       host.run("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT]);
       rmSync(file, { force: true });
@@ -172,7 +180,11 @@ export function installService(host: ServiceHost, launch: ServiceLaunch): Instal
     must(host, "launchctl", ["enable", `${target}/${LAUNCHD_LABEL}`], "Could not enable the Aiden service");
     must(host, "launchctl", ["bootstrap", target, file], "Could not load the Aiden service. Run `aiden service install` from a session logged in to this Mac's desktop");
   } catch (error) {
-    rmSync(file, { force: true });
+    if (previous === undefined) rmSync(file, { force: true });
+    else {
+      writeFileSync(file, previous, { mode: 0o644 });
+      host.run("launchctl", ["bootstrap", target, file]);
+    }
     throw error;
   }
   return { manager: kind, file, warning: "On a Mac the server runs while you are logged in. For a Mac without a screen, turn on automatic login in System Settings → Users & Groups." };
@@ -317,14 +329,24 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
 
   // The service takes over the server's lease, so stop a server started by hand.
   const { daemonStatus, stopDaemon } = await import("./serve-lifecycle.ts");
-  if (daemonStatus(agentDir).running) {
+  const stopped = daemonStatus(agentDir).running;
+  if (stopped) {
     await stopDaemon(agentDir);
     out("Stopped the server that was already running; the service runs it from now on.");
   }
-  const installed = installService(host, { node: process.execPath, entry, agentDir: resolve(agentDir), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" });
-  out(`Installed ${installed.file}.`);
+  let installed: InstallResult;
+  try {
+    installed = installService(host, { node: process.execPath, entry, agentDir: resolve(agentDir), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin" });
+    out(`Installed ${installed.file}.`);
+    const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
+    if (!await waitForServer(agentDir)) throw new Error(`The service did not start the server within 30s. See ${logs}.`);
+  } catch (error) {
+    // Say how to get back the server this install stopped, unless something is already serving again.
+    if (!stopped || daemonStatus(agentDir).running) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message.replace(/\.*$/u, ".")} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`, { cause: error });
+  }
   const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
-  if (!await waitForServer(agentDir)) throw new Error(`The service did not start the server within 30s. See ${logs}.`);
 
   const { remoteDaemonCommand } = await import("./daemon-control.ts");
   let reachable: RemoteNetwork = network;
@@ -336,7 +358,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
     out(`For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`);
   }
-  out(`The Aiden server is running as a service and reachable over ${NETWORK_LABEL[reachable]}. It starts again after a reboot.`);
+  // Without lingering a Linux user service does not start at boot; the warning says so instead.
+  const boot = installed.manager === "systemd" && installed.warning ? "" : installed.manager === "systemd" ? " It starts again after a reboot." : " It starts again when you log in.";
+  out(`The Aiden server is running as a service and reachable over ${NETWORK_LABEL[reachable]}.${boot}`);
   if (installed.warning) out(installed.warning);
   out(`Logs: ${logs}. Stop it for good with \`aiden service uninstall\`.`);
 
