@@ -69,7 +69,7 @@ The answer must stay true to Aiden's privacy posture: no content ever leaves the
 
 **Errors.** Every exception is rebuilt as a new sanitized error before it reaches the SDK (see [Crashes and errors](#crashes-and-errors)). We build PostHog's `$exception` payload ourselves and send it with a plain `capture()`; we never call the SDK's `captureException`, because its Node stack parser reads source files from disk to attach context lines, and exception autocapture stays off.
 
-**Super properties** (attached to every event): `app_version`, `platform` (`darwin`/`linux`), `arch` (`arm64`/`x64`), `os_major` (e.g. `26`), `surface` (`desktop`/`cli`), `channel` (`release`/`beta` if applicable). No locale, timezone, hostname or username.
+**Super properties** (attached to every event): `app_version`, `platform` (`darwin`/`linux`), `arch` (`arm64`/`x64`), `os_major` (e.g. `26`; the kernel major on Linux), `surface` (`desktop`/`cli`), `channel` (`release`/`beta` if applicable). No locale, timezone, hostname or username.
 
 ## Consent and lifecycle
 
@@ -221,7 +221,7 @@ All UI follows `docs/settings-design-system.md`, `docs/design-guide.md`, `GUI.md
 - Switch: "Share anonymous usage and crash data".
 - Subtitle explains what it is and is not.
 - Row: "What's sent" → a sheet listing every event and property, rendered from the same registry the code uses (so the list can never drift from reality).
-- When disabled by environment: switch disabled, caption "Turned off by your environment (DO_NOT_TRACK)".
+- When disabled by environment: switch disabled, caption "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)".
 
 **Docs.** A new `docs/analytics.md` describing the posture, the full event list and how to turn it off. The README "Privacy and trust" section and `PRODUCT.md` are updated in the same PR that first enables sending.
 

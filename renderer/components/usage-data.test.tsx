@@ -64,7 +64,7 @@ test("a failed save puts the switch back and says so once", async () => {
   assert.equal((await screen.findAllByText("Aiden could not save the usage data setting.")).length, 1);
 });
 
-test("DO_NOT_TRACK shows the switch off and locked, with the reason", async () => {
+test("an environment opt-out shows the switch off and locked, naming both variables", async () => {
   const calls = installBotTestIpc({
     "analytics:status": () => status({ enabled: true, envDisabled: true }),
   });
@@ -74,7 +74,7 @@ test("DO_NOT_TRACK shows the switch off and locked, with the reason", async () =
   const control = screen.getByRole("switch", SWITCH);
   assert.equal(control.getAttribute("aria-checked"), "false");
   assert.equal((control as HTMLButtonElement).disabled, true);
-  assert.ok(screen.getByText("Turned off by your environment (DO_NOT_TRACK)"));
+  assert.ok(screen.getByText("Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)"));
   fireEvent.click(control);
   await flush();
   assert.deepEqual(channelCalls(calls, "analytics:setEnabled"), []);

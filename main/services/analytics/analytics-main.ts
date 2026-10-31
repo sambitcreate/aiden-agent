@@ -10,6 +10,8 @@ import type { PostHogTransport } from "./analytics-client.js";
 import type { AnalyticsSuperProperties } from "./analytics-events.js";
 import { createAnalyticsService, createLoggingTransport, type AnalyticsService } from "./analytics-service.js";
 
+// macOS reports its own major (26); elsewhere this is the kernel major, which
+// docs/analytics.md says for Linux.
 function osMajor(): number {
   const version = process.platform === "darwin" ? process.getSystemVersion() : release();
   const major = Number.parseInt(version, 10);

@@ -17,7 +17,7 @@ import { Button, Dialog, type DialogLayer, Field, FieldSet, Switch, Text, toast 
 export const USAGE_DATA_LABEL = "Share anonymous usage and crash data";
 export const USAGE_DATA_SUMMARY = "Helps improve Aiden. Never includes your chats, files or keys.";
 const NOTICE_ANSWERED_EVENT = "aiden:usage-notice-answered";
-export const USAGE_DATA_ENV_DISABLED = "Turned off by your environment (DO_NOT_TRACK)";
+export const USAGE_DATA_ENV_DISABLED = "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)";
 const SAVE_FAILED = "Aiden could not save the usage data setting.";
 
 export interface UsageDataSetting {

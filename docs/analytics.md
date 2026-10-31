@@ -9,7 +9,7 @@ Only the events and fields in `main/services/analytics/analytics-events.ts`. Set
 Every event carries:
 
 - a random install ID, created on this device and deleted when you turn usage data off;
-- the app version, platform, CPU architecture, OS major version, surface (`desktop`) and build channel.
+- the app version, platform, CPU architecture, OS major version (on Linux, the kernel major version), surface (`desktop`) and build channel.
 
 Lifecycle events in this release:
 
@@ -34,7 +34,7 @@ PostHog's US cloud, project "aiden", at the fixed host `https://us.i.posthog.com
 ## Turning it off
 
 - **Settings → About → Usage data**: turn off **Share anonymous usage and crash data**. Aiden sends one `analytics_disabled` event, drops anything queued, and deletes the install ID. Turning it back on starts a new ID.
-- **Environment**: `DO_NOT_TRACK=1` or `AIDEN_ANALYTICS=0` turns it off regardless of the setting; the switch shows "Turned off by your environment (DO_NOT_TRACK)".
+- **Environment**: `DO_NOT_TRACK=1` or `AIDEN_ANALYTICS=0` turns it off regardless of the setting; the switch shows "Turned off by your environment (DO_NOT_TRACK or AIDEN_ANALYTICS)".
 - **First run**: the last onboarding step has the same switch, on by default, with a **What's sent** link.
 - **Existing installs**: the first launch after updating shows a one-time notice with **OK** and **Turn off**. Nothing is sent until the notice or the onboarding row has been shown; switching usage data on in Settings also answers the notice.
 
