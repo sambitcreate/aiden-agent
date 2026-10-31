@@ -1,3 +1,4 @@
+import { initializeSqliteReclamation, reclaimSqlitePages } from "../sqlite-reclamation.js";
 // Append-friendly run history for Create Images. One row per node attempt; every
 // write is a single keyed statement. The ledger is history, not a work queue: a
 // restart marks unfinished work interrupted and nothing is ever resubmitted.
@@ -283,7 +284,9 @@ export class ImageRunLedger {
     assertPrivate(file, false);
     const db = new DatabaseSync(file);
     try {
-      db.exec("PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+      db.exec("PRAGMA busy_timeout=100;");
+      initializeSqliteReclamation(db);
+      db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
       const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
       if (version === 0) {
         if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").get()) {
@@ -300,6 +303,7 @@ export class ImageRunLedger {
       db.close();
       throw error;
     }
+    reclaimSqlitePages(db);
     return new ImageRunLedger(db, options.now ?? Date.now);
   }
 
@@ -456,6 +460,7 @@ export class ImageRunLedger {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    reclaimSqlitePages(this.db);
     this.db.close();
   }
 

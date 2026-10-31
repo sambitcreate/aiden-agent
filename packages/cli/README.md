@@ -45,6 +45,8 @@ The CLI bundles Aiden's own extension cores (imported from `main/services/` — 
 | Usage | `/usage` | Session totals plus a source-attributed durable usage ledger |
 | Voice | `/voice`, `/dictate` | Transcription provider settings (`gemini`/`openai`/`off`, persisted to `aiden.json`); dictation records via `sox`/`ffmpeg` and inserts the transcript into the editor. On-device transcription models are available through `aiden speech` and Remote; desktop global-hotkey dictation remains desktop-only |
 
+New Memory databases support bounded incremental space reclamation on open and close. Existing databases keep their format. See [SQLite storage maintenance](../../docs/sqlite-storage.md).
+
 Settings for these live in `~/.aiden/agent/aiden.json` (device-local; shapes mirror the desktop's `AppSettings` subsets).
 
 ## Pi 1.0 capabilities
@@ -62,6 +64,8 @@ Daemon and delegated worker sessions retain Aiden's bounded extension inventorie
 ## No telemetry
 
 The CLI ships without pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and pi's attribution headers, and overrides settings), the settings default is flipped off, and the build patches the ping's call sites and endpoint out of the bundle — asserted by `tests/bundle.test.mjs`. Since Pi 1.4 the shared desktop runtime and durable Bots, which don't read that switch, set their own request identity with no attribution (`main/services/pi-client-identity.ts`).
+
+The CLI also sends no Aiden usage data. The desktop app's opt-out usage data ([`docs/analytics.md`](../../docs/analytics.md)) does not apply here yet; when the CLI adopts it, it will follow the same event list, `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0`.
 
 ## Where state lives
 
@@ -173,6 +177,6 @@ fetched into the image.
 
 Ask what Aiden can do or how its agent works: `aiden_help` reads bundled help offline. `/help-aiden memory` works without workspace file access. `/aiden-app` loads the immutable product skill; `--no-skills` disables that command and its `skill_aiden_app` tool. The pinned Pi public main API does not inject a built-in skill resource, so this owned command is the supported entry point.
 
-`/aiden-settings appearance|memory|web-search|skills` opens Pi's native settings selector inside the conversation. Theme changes use Pi's real theme API and verify the saved terminal default. Memory and Web Search switches persist in this CLI's actual agent directory; restart the CLI to rebuild feature tools after enablement. Desktop chat width, workspace memory and the desktop Skills gate are shown as unsupported. Nothing changes just by displaying a card, and no app operation controls an open Electron window.
+`/aiden-settings appearance|memory|web-search|skills` opens Pi's native settings selector inside the conversation. Theme changes use Pi's real theme API and verify the saved terminal default. Memory and Web Search switches persist in this CLI's actual agent directory; restart the CLI to rebuild feature tools after enablement. Desktop chat width, workspace memory and the desktop Skills gate are shown as unsupported. The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the CLI yet; the CLI uses every skill and connector it has. Nothing changes just by displaying a card, and no app operation controls an open Electron window.
 
 For explicit headless administration, use `aiden app help [query]`, `aiden app status`, `aiden app get memory`, then `aiden app set memory.enabled false <revision> [operation-id]`. Supply the revision returned by the read; retry an uncertain request with the same operation ID. Headless agent tool calls cannot mutate app preferences. Set `appControlPolicy` in device-local `aiden.json` to `disabled`, `ask`, or `safe`; interactive enablement always requires a foreground choice.
