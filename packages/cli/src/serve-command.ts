@@ -83,7 +83,10 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * over Tailscale and every other server pairs over LAN.
  */
 export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<void> {
-  const transport = requested ?? ((await daemonRemoteSummary(agentDir)).connectionMode === "tailscale" ? "tailscale" : "lan");
+  const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
+  // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
+  const guessed = !requested && mode === undefined;
+  const transport = requested ?? (mode === "tailscale" ? "tailscale" : "lan");
   if (signal.aborted) return;
   let pairing: AidenRemoteDesktopPairing;
   try {
@@ -91,7 +94,8 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   } catch (error) {
     // Tailscale failures already name the setup step and the command to retry with.
     const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
-    if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${transport === "lan" ? " Run `aiden remote pair lan` to try again." : ""}\n`);
+    const retry = guessed ? " Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again." : transport === "lan" ? " Run `aiden remote pair lan` to try again." : "";
+    if (!signal.aborted) err.write(`aiden: Could not open a ${transport === "lan" ? "LAN" : "Tailscale"} pairing window. ${message}${retry}\n`);
     return;
   }
   if (signal.aborted) return;

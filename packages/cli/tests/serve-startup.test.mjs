@@ -245,7 +245,8 @@ async function fakeDaemon(answer) {
       if (!buffer.includes("\n")) return;
       const { command, args } = JSON.parse(buffer);
       asked.push([command, ...args].join(" "));
-      socket.end(JSON.stringify({ result: answer(command, args) }) + "\n");
+      const result = answer(command, args);
+      socket.end(JSON.stringify(result instanceof Error ? { error: result.message } : { result }) + "\n");
     });
   });
   server.listen(join(dir, "serve.sock"));
@@ -275,6 +276,23 @@ test("startup pairing on a Tailscale-only server pairs over Tailscale and report
     assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
     assert.doesNotMatch(out.text, /expired/);
     assert.ok(Date.now() - started < 10_000, "a failed window ends the wait instead of running out the clock");
+  } finally {
+    daemon.close();
+  }
+});
+
+test("startup pairing names both pair commands when the server's network is unknown and LAN fails", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const daemon = await fakeDaemon((command, args) => {
+    if (command === "serve") return new Error("status unavailable");
+    if (args[0] === "pair") return new Error("Local-network access is not enabled.");
+    return { state: "none" };
+  });
+  const out = sink(), err = sink();
+  try {
+    await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
+    assert.deepEqual(daemon.asked, ["serve status", "remote pair lan"]);
+    assert.match(err.text, /Could not open a LAN pairing window\. Local-network access is not enabled\. Run `aiden remote pair lan` or `aiden remote pair tailscale` to try again\./);
   } finally {
     daemon.close();
   }
