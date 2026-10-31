@@ -11,6 +11,9 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { homedir, userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { RemoteNetwork } from "./remote.ts";
+import type { TailscaleFacts } from "./reachability.ts";
+import type { AidenTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
+import type { AidenTailscaleOwnership } from "../../../main/services/aiden-remote-tailscale-route.js";
 
 export const LAUNCHD_LABEL = "com.sambitcreate.aiden-agent.serve";
 export const SYSTEMD_UNIT = "aiden.service";
@@ -257,26 +260,97 @@ export function parseInstallFlags(args: readonly string[]): { network?: RemoteNe
   return { ...(network ? { network } : {}), pair };
 }
 
-async function askNetwork(): Promise<RemoteNetwork> {
+const CHOICE: Record<RemoteNetwork, string> = { local: "1", tailscale: "2", both: "3" };
+
+async function askNetwork(question: { text: string; recommended: RemoteNetwork }): Promise<RemoteNetwork> {
   const { createInterface } = await import("node:readline/promises");
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    process.stdout.write([
-      "Who should be able to reach this server?",
-      "  1) Local network only: phones on the same Wi-Fi or LAN",
-      "  2) Tailscale only: your devices from anywhere (needs Tailscale on this server)",
-      "  3) Both",
-      "",
-    ].join("\n"));
+    process.stdout.write(question.text);
     for (;;) {
-      const answer = (await prompt.question("Choose 1, 2 or 3 [1]: ")).trim();
-      if (answer === "" || answer === "1") return "local";
+      const answer = (await prompt.question(`Choose 1, 2 or 3 [${CHOICE[question.recommended]}]: `)).trim() || CHOICE[question.recommended];
+      if (answer === "1") return "local";
       if (answer === "2") return "tailscale";
       if (answer === "3") return "both";
     }
   } finally {
     prompt.close();
   }
+}
+
+/** Ask what is ready on this machine, then the person (or, without a terminal, use Tailscale only when it is ready). */
+export interface NetworkChoiceSources {
+  facts?: () => Promise<TailscaleFacts>;
+  cloud?: () => Promise<boolean>;
+  ask?: (question: { text: string; recommended: RemoteNetwork }) => Promise<RemoteNetwork>;
+}
+
+/**
+ * The install's network: asked in a terminal with the suggestion as the
+ * default; without one, the suggestion only when Tailscale is ready, so an
+ * unattended install never picks a network that cannot work yet.
+ */
+export async function chooseNetwork(host: ServiceHost, interactive: boolean, sources: NetworkChoiceSources = {}): Promise<RemoteNetwork> {
+  const { looksLikeCloudServer, networkQuestion, readSystemTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
+  const readFacts = sources.facts ?? (() => readSystemTailscaleFacts({ platform: host.platform, uid: host.uid, user: host.user }));
+  const [facts, cloud] = await Promise.all([readFacts(), (sources.cloud ?? (() => looksLikeCloudServer()))()]);
+  const question = networkQuestion(facts, cloud, host.platform);
+  if (interactive) return (sources.ask ?? askNetwork)(question);
+  return tailscaleReady(facts) ? question.recommended : "local";
+}
+
+export interface OfflineRouteRelease {
+  runner?: AidenTailscaleCommandRunner | null;
+  withRouteLock?: <T>(action: () => Promise<T>) => Promise<T>;
+}
+
+const ROUTE_REMOVED = "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
+const ROUTE_BY_HAND = "Remove it by hand with `tailscale serve --https=443 --set-path=/api/aiden/v1 off`.";
+const UNFINISHED_CHANGE = `Aiden's Tailscale route may have an unfinished change, so it was left alone. ${ROUTE_BY_HAND}`;
+
+/**
+ * Before the service goes away, take Aiden's Tailscale Serve route down with
+ * it, so the tailnet name does not keep pointing at a server that no longer
+ * runs. A running server removes its own route; for a stopped one, the route
+ * it saved as its own is removed through Tailscale directly. Returns the line
+ * to print, if any.
+ */
+export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRouteRelease = {}): Promise<string | undefined> {
+  const { remoteServerStatus } = await import("./reachability.ts");
+  const status = await remoteServerStatus(agentDir);
+  // A server that does not answer is handled like a stopped one: the controller takes the same route lock.
+  if (status && !status.remoteOff && !status.unanswered) {
+    if (status.tailscaleRouteState === "reconciliation_required") return UNFINISHED_CHANGE;
+    if (!status.tailscaleConnected) return undefined;
+    const { remoteDaemonCommand } = await import("./daemon-control.ts");
+    try {
+      await remoteDaemonCommand(agentDir, "remote", ["tailscale-disconnect"]);
+      return ROUTE_REMOVED;
+    } catch (error) {
+      return `Could not remove Aiden's Tailscale route (${error instanceof Error ? error.message : String(error)}). ${ROUTE_BY_HAND}`;
+    }
+  }
+  const { JsonStore } = await import("./state.ts");
+  const store = new JsonStore<{ tailscaleOwnership?: AidenTailscaleOwnership; tailscalePendingOutcome?: unknown }>(join(agentDir, "remote.json"), {});
+  const saved = await store.load().catch(() => undefined);
+  // A first connect or takeover that did not report back leaves a pending outcome before any saved ownership.
+  if (saved?.tailscalePendingOutcome) return UNFINISHED_CHANGE;
+  const ownership = saved?.tailscaleOwnership;
+  if (!ownership?.target) return undefined;
+  try {
+    const { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
+    const runner = offline.runner === undefined ? await createSystemTailscaleCommandRunner() : offline.runner;
+    const controller = new AidenRemoteTailscaleController(runner, offline.withRouteLock ? { withRouteLock: offline.withRouteLock } : {});
+    await controller.disconnect(ownership.target, ownership, () => store.update((draft) => { delete draft.tailscaleOwnership; }));
+    return ROUTE_REMOVED;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return `Could not remove Aiden's Tailscale route (${tailscaleReason(reason)}). ${ROUTE_BY_HAND}`;
+  }
+}
+
+function tailscaleReason(code: string): string {
+  return code === "tailscale_route_conflict" ? "the route there is no longer Aiden's" : code === "tailscale_not_installed" ? "Tailscale is not installed" : code;
 }
 
 /** The Tailscale network a server already uses, read from its saved Remote settings; a reinstall keeps it instead of falling back to local. */
@@ -302,8 +376,10 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
 }
 
 /** Which networks really reach the server: none while Remote is off or not listening, the local network in LAN modes, Tailscale only while its route is connected. */
-export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean } | undefined): RemoteNetwork | undefined {
+export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean; tailscaleRouteState?: string } | undefined): RemoteNetwork | undefined {
   if (status?.enabled === false || status?.running === false) return undefined;
+  // An unfinished route change may have left Aiden's old Serve route live, so the server's reach is unknown.
+  if (status?.tailscaleRouteState === "reconciliation_required") return undefined;
   const lan = status?.connectionMode === "lan" || status?.connectionMode === "both";
   const tailscale = (status?.connectionMode === "tailscale" || status?.connectionMode === "both") && status.tailscaleConnected === true;
   return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
@@ -332,7 +408,14 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     return;
   }
   if (action === "uninstall" && rest.length === 0) {
-    out(uninstallService(host) ? "Removed the Aiden service. The server no longer starts on its own." : "The Aiden service was not installed.");
+    // Stop the service first: if the manager refuses, the running server keeps its route and a retry can still remove it.
+    if (!uninstallService(host)) {
+      out("The Aiden service was not installed.");
+      return;
+    }
+    out("Removed the Aiden service. The server no longer starts on its own.");
+    const released = await releaseTailscaleRoute(agentDir);
+    if (released) out(released);
     return;
   }
   if (action !== "install") throw new Error(SERVICE_USAGE);
@@ -342,7 +425,7 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   if (!entry.endsWith(".js")) throw new Error("Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.");
   const kept = flags.network ? undefined : savedNetwork(agentDir);
   if (kept) out(`Keeping the server's network: ${NETWORK_LABEL[kept]}. Choose another with \`--network\` or \`aiden remote network\`.`);
-  const network = flags.network ?? kept ?? (process.stdin.isTTY && process.stdout.isTTY ? await askNetwork() : "local");
+  const network = flags.network ?? kept ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
 
   // The service takes over the server's lease, so stop a server started by hand.
   const { daemonStatus, stopDaemon } = await import("./serve-lifecycle.ts");
@@ -391,7 +474,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
     out(reachable
       ? `For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`
-      : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
+      : status?.tailscaleRouteState === "reconciliation_required"
+        ? "Aiden's Tailscale route may have an unfinished change, so it is unclear which networks reach the server. Run `aiden remote tailscale-reconcile`, then `aiden remote network local|tailscale|both`."
+        : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
   }
   // Without lingering a Linux user service does not start at boot; the warning says so instead.
   const boot = installed.manager === "systemd" && installed.warning ? "" : installed.manager === "systemd" ? " It starts again after a reboot." : " It starts again when you log in.";
@@ -407,7 +492,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   out("Scan this code with Aiden on your phone. Press Ctrl+C to skip; the server keeps running.");
   const controller = new AbortController();
   const stop = () => controller.abort();
-  process.once("SIGINT", stop);
+  // Ctrl+C, a dropped SSH session (SIGHUP) or a kill all close the code, since the server keeps running.
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.once(signal, stop);
   try {
     const pair = options.pair ?? (async (transport: "lan" | "tailscale", signal: AbortSignal) => (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
     const session = await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
@@ -416,6 +503,6 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
       await remote(["pair-cancel", session]).then(() => out("Closed the pairing code."), () => undefined);
     }
   } finally {
-    process.removeListener("SIGINT", stop);
+    for (const signal of signals) process.removeListener(signal, stop);
   }
 }

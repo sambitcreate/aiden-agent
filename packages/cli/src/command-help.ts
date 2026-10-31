@@ -7,6 +7,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
                                             Run the server at login and boot (systemd or launchd)
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
   remote network local|tailscale|both        Who can reach the server; Tailscale is set up for you
+  remote check                               Check each step a phone needs to reach the server, with fixes
   auth list|login|logout                     Provider credentials (OAuth or API key)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers

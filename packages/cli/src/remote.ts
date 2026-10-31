@@ -28,6 +28,7 @@ import type { createDaemonChats } from "./daemon-chats.ts";
 import type { createCliScheduler } from "./schedules.ts";
 import { createCliSpeech } from "./speech.ts";
 import { createCliRemoteChats } from "./remote-chats.ts";
+import { tailscaleSetupMessage, withTailscaleSetupMessage } from "./tailscale-setup-message.ts";
 import { revokeAidenRemoteRuntimeDevice } from "../../../main/services/aiden-remote-revocation.js";
 import { AidenRemoteScheduleService } from "../../../main/services/aiden-remote-schedules.js";
 import { createScheduledTaskApplicationService } from "../../../main/services/scheduled-task-application-service.js";
@@ -99,29 +100,7 @@ export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Pl
   };
 }
 
-const PAIR_TAILSCALE_AGAIN = "then run `aiden remote pair tailscale`.";
-
-/** What to do next for each Tailscale setup failure, naming the exact commands. */
-export function tailscaleSetupMessage(code: string): string | undefined {
-  switch (code) {
-    case "tailscale_not_installed": return `Tailscale is not installed on this server. Install it (https://tailscale.com/download), sign in with \`sudo tailscale up\`, ${PAIR_TAILSCALE_AGAIN}`;
-    case "tailscale_not_connected":
-    case "tailscale_status_unavailable": return `Tailscale is not signed in or not running on this server. Run \`sudo tailscale up\`, ${PAIR_TAILSCALE_AGAIN}`;
-    case "tailscale_https_unavailable": return `HTTPS certificates are off for this tailnet. Turn on HTTPS in the Tailscale admin console (DNS, HTTPS Certificates), ${PAIR_TAILSCALE_AGAIN}`;
-    case "tailscale_permission_denied": return `Tailscale refused to change Serve settings for this user. Run \`sudo tailscale set --operator=$USER\` once, ${PAIR_TAILSCALE_AGAIN}`;
-    case "tailscale_funnel_conflict": return `Tailscale Funnel is on for HTTPS port 443 on this machine, and Aiden will not put its private route behind a public Funnel. Turn that Funnel off, ${PAIR_TAILSCALE_AGAIN}`;
-    case "tailscale_route_conflict": return "The Tailscale Serve path /api/aiden/v1 on this machine already points somewhere else, so Aiden left it unchanged. If it belongs to another Aiden install that is no longer running, run `aiden remote mode both`, then `aiden remote tailscale-review`, then `aiden remote tailscale-takeover <token>` with the token it prints; otherwise remove that route yourself (`tailscale serve status` shows it). Then run `aiden remote pair tailscale`.";
-    case "tailscale_route_live": return "Another running Aiden install owns the Tailscale Serve path /api/aiden/v1 on this machine. Stop it (or pair through it) before pairing this server over Tailscale.";
-    case "tailscale_reconciliation_required": return `A previous Tailscale route change did not report its outcome. Run \`aiden remote tailscale-reconcile\`, ${PAIR_TAILSCALE_AGAIN}`;
-    default: return undefined;
-  }
-}
-
-function withTailscaleSetupMessage(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  const setup = tailscaleSetupMessage(message);
-  return setup ? new Error(setup, { cause: error }) : error instanceof Error ? error : new Error(message);
-}
+export { tailscaleSetupMessage };
 
 type TailscaleTransportService = Pick<AidenRemoteService, "status" | "setConnectionMode" | "connectTailscale">;
 type TailscalePairingService = TailscaleTransportService & Pick<AidenRemoteService, "beginPairing">;
@@ -166,7 +145,8 @@ export const REMOTE_NETWORKS: readonly RemoteNetwork[] = ["local", "tailscale", 
 
 /** Switch the server to `network`. Local only also removes Aiden's own Tailscale Serve route. */
 export async function setRemoteNetwork(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, network: RemoteNetwork) {
-  if (network === "local") await service.setConnectionMode("lan");
+  // Leaving Tailscale can stop on a route change that never reported back; name the fix rather than the bare code.
+  if (network === "local") await service.setConnectionMode("lan").catch((error: unknown) => { throw withTailscaleSetupMessage(error); });
   else await connectTailscaleTransport(service, tailscale, network);
   return service.status();
 }
@@ -259,11 +239,12 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         case "network": { if (!REMOTE_NETWORKS.includes(value as RemoteNetwork)) throw new Error("Usage: remote network local|tailscale|both"); return setRemoteNetwork(service, tailscale, value as RemoteNetwork); }
         case "mode": { if (!["lan", "tailscale", "both"].includes(value)) throw new Error("Usage: remote mode lan|tailscale|both"); await service.setConnectionMode(value as "lan" | "tailscale" | "both"); return service.status(); }
         case "tailscale-connect": await service.connectTailscale(); return service.status();
+        case "tailscale-prepare": await connectTailscaleTransport(service, tailscale); return service.status();
         case "tailscale-disconnect": await service.disconnectTailscale(); return service.status();
         case "tailscale-review": return service.reviewTailscaleTakeover();
         case "tailscale-takeover": await service.takeOverTailscale(value); return service.status();
         case "tailscale-reconcile": await service.reconcileTailscale(); return service.status();
-        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
+        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-prepare|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
       }
     },
   };

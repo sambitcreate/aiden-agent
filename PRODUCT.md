@@ -25,6 +25,7 @@ The primary application is an Electron desktop app for macOS and Linux. People w
 ## Capabilities and Constraints
 
 - Supports local and hosted model providers without making one provider the product authority.
+- Reuses local skill folders and explicitly enabled installed plugin skills under the active workspace permission.
 - Keeps workspace, Bot, permission, model, and local-versus-network scope explicit at the point of action.
 - Treats the desktop host as the authority for workspace files, credentials, agent execution, durable memory, and paired-client operations.
 - Requires deliberate user actions for external connections, sensitive permissions, and destructive or durable mutations.
