@@ -234,6 +234,26 @@ test("a delete that fails after the chat file is gone still leaves its images to
   assert.deepEqual(await imageFiles(directory), []);
 });
 
+test("a sweep that overlaps a delete does not use up the deleted chat's cleanup", async (t) => {
+  const directory = await tempDir(t);
+  const store = createChatStore(async () => directory);
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+  await ageImageFiles(directory, 2 * DAY);
+
+  // The sweep runs while the delete has started but the chat still names its image.
+  let overlapping: Promise<unknown> | undefined;
+  await store.remove(chat.id, async () => {
+    overlapping = createChatStore(async () => directory).sweepUnusedImages({ onlyWhenNeeded: true });
+    assert.equal(((await overlapping) as { removed: number }).removed, 0);
+  });
+  assert.deepEqual(await imageFiles(directory), [imageSha256(PNG_BYTES)]);
+
+  const restarted = createChatStore(async () => directory);
+  assert.equal((await restarted.sweepUnusedImages({ onlyWhenNeeded: true })).removed, 1);
+  assert.deepEqual(await imageFiles(directory), []);
+});
+
 test("storing bytes that are already on disk renews them, so a sweep keeps them", async (t) => {
   const directory = await tempDir(t);
   const images = createChatImageStore(async () => directory);
