@@ -3118,6 +3118,86 @@ test("run_command hands what a command leaves running to the chat, whether or no
   }
 });
 
+test("run_command tells the agent how to stop leftovers no job could take over", async () => {
+  if (process.platform === "win32") return;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-untracked-"));
+  const groups: number[] = [];
+  try {
+    await fs.writeFile(path.join(root, "server.cjs"), 'console.log("server up"); setInterval(() => {}, 1000);');
+    // An adopter that cannot confirm the marker answers with nothing; a failed look throws.
+    for (const outcome of ["unverified", "lookup failed"] as const) {
+      const runCommand = buildCodingTools(root, undefined, {
+        leftovers: {
+          begin() {
+            return {
+              env: { AIDEN_BACKGROUND_JOB: "job_untrack0" },
+              adopt: async (group) => {
+                groups.push(group);
+                if (outcome === "lookup failed") throw new Error("ps timed out");
+                return undefined;
+              },
+            };
+          },
+        },
+      }).find((tool) => tool.name === "run_command")!;
+      const result = await runCommand.execute(outcome, { command: "node server.cjs > server.log 2>&1 &" });
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      const group = groups[groups.length - 1]!;
+      assert.equal(result.isError, undefined, outcome);
+      assert.match(text, /not tracked/u, outcome);
+      const stop = text.match(/kill -- -(\d+)/u);
+      assert.equal(Number(stop?.[1]), group, `${outcome}: the note names the command's own group`);
+      // The command the note gives really does stop them.
+      process.kill(-group, "SIGTERM");
+      for (let tries = 0; tries < 50; tries += 1) {
+        try {
+          process.kill(-group, 0);
+        } catch {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      assert.throws(() => process.kill(-group, 0), outcome);
+    }
+
+    // Leftovers that are already gone by the time the handoff answers need no note.
+    const quick = buildCodingTools(root, undefined, {
+      leftovers: {
+        begin() {
+          return {
+            env: { AIDEN_BACKGROUND_JOB: "job_untrack1" },
+            adopt: async (group) => {
+              groups.push(group);
+              process.kill(-group, "SIGKILL");
+              for (let tries = 0; tries < 100; tries += 1) {
+                try {
+                  process.kill(-group, 0);
+                } catch {
+                  break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 50));
+              }
+              return undefined;
+            },
+          };
+        },
+      },
+    }).find((tool) => tool.name === "run_command")!;
+    const gone = await quick.execute("gone", { command: "node server.cjs > server.log 2>&1 &" });
+    const goneText = gone.content[0]?.type === "text" ? gone.content[0].text : "";
+    assert.doesNotMatch(goneText, /not tracked/u);
+  } finally {
+    for (const group of groups) {
+      try {
+        process.kill(-group, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("run_command keeps a refused handoff's output flowing and still shows the refusal", async () => {
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-refused-"));

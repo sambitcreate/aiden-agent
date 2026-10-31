@@ -1999,6 +1999,25 @@ export function runCommandEnv(
 /** How long after the shell exits a command whose leftovers hold its output returns. */
 const LEFTOVER_RELEASE_MS = 1_500;
 
+function processGroupAlive(group: number): boolean {
+  try {
+    process.kill(-group, 0);
+    return true;
+  } catch {
+    // Gone, or (EPERM) a reused id that is not ours: nothing of this command's to stop.
+    return false;
+  }
+}
+
+/**
+ * Leftovers no job took (Aiden could not confirm they carry this command's
+ * marker, or the look failed): they keep running, so the agent is told how
+ * to stop them rather than hearing nothing.
+ */
+function untrackedLeftoversNote(group: number): string {
+  return `[Aiden: this command left processes running that Aiden could not take over, so they are not tracked or shown to the person and keep running after this chat. If they should not keep running, stop them yourself with: kill -- -${group}]`;
+}
+
 function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOptions = {}): AgentTool {
   const root = workspace.lexical;
   return {
@@ -2047,7 +2066,11 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         result.leftoverOutput.stdout.resume();
         result.leftoverOutput.stderr.resume();
       }
-      const combined = [result.stdout, result.stderr, handoff?.note].filter(Boolean).join("\n").trim();
+      const untracked =
+        !handoff && result.leftoverProcessGroup !== undefined && processGroupAlive(result.leftoverProcessGroup)
+          ? untrackedLeftoversNote(result.leftoverProcessGroup)
+          : undefined;
+      const combined = [result.stdout, result.stderr, handoff?.note ?? untracked].filter(Boolean).join("\n").trim();
       if (result.exitCode === 0 && !result.timedOut && !result.outputLimitExceeded) {
         return markHostCommandObservation(textResult(await boundedToolOutput(combined || "[no output]", MAX_OUTPUT_CHARS)), result);
       }
