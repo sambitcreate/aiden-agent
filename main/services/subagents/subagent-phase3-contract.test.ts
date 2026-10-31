@@ -771,7 +771,7 @@ test("terminal writes pause across workspace mutations and documents lose PTYs o
   const removeHandler = ipcHandlerStart(workspaces, "workspaces:remove");
   assert.match(
     workspaces.slice(removeHandler),
-    /const workspaceId = asString\(id, "id"\);[\s\S]{0,80}workspaceApplicationService\.remove\(workspaceId\)/u,
+    /workspaceApplicationService\.remove\(asString\(id, "id"\)\)/u,
   );
   const removeMethod = workspaceApplicationService.indexOf("async remove(");
   const removeTerminalClose = workspaceApplicationService.indexOf(
