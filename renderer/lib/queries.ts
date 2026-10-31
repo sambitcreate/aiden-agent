@@ -73,6 +73,7 @@ export const queryKeys = {
   botTelegramTargets: ["bot-telegram-targets"] as const,
   chatsIn: (workspaceId: string | undefined) => ["chats", workspaceId ?? "all"] as const,
   chat: (id: string) => ["chat", id] as const,
+  workspaceFolderPresence: (workspaceId: string) => ["workspace-folder-presence", workspaceId] as const,
   settings: ["settings"] as const,
   shortcuts: ["shortcuts"] as const,
   assistantConfig: ["assistantConfig"] as const,
@@ -136,6 +137,8 @@ export const queryKeys = {
     ["gitWorktrees", workspaceId ?? "none"] as const,
   skillCatalog: (workspaceId: string | undefined) =>
     ["skillCatalog", workspaceId ?? "none"] as const,
+  workspaceSkillChoices: (workspaceId: string | undefined) =>
+    ["workspaceSkillChoices", workspaceId ?? "none"] as const,
   modelInfo: (providerId: string | undefined) => ["modelInfo", providerId ?? "none"] as const,
 };
 
@@ -638,6 +641,15 @@ export function useDiscoveredSkills(workspaceId: string | undefined) {
     enabled: Boolean(workspaceId),
     staleTime: 30_000,
     refetchOnWindowFocus: true,
+  });
+}
+
+export function useWorkspaceSkillChoices(workspaceId: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.workspaceSkillChoices(workspaceId),
+    queryFn: () => skillsApi.workspaceChoices(workspaceId as string),
+    enabled: Boolean(workspaceId),
+    staleTime: 30_000,
   });
 }
 

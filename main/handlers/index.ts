@@ -37,6 +37,8 @@ import { registerImageGenerationHandlers } from "./image-generation.js";
 import { registerModelPaceHandlers } from "./model-pace.js";
 import { registerUsageLimitHandlers } from "./usage-limits.js";
 import { registerSpendingHandlers } from "./spending.js";
+import { registerAnalyticsHandlers } from "./analytics.js";
+import { analyticsService } from "../services/analytics/analytics-main.js";
 import { registerDictationHandlers } from "./dictation.js";
 import { registerScheduledTaskHandlers } from "./scheduled-tasks.js";
 import { registerAssistantHandlers } from "./assistant.js";
@@ -123,6 +125,10 @@ export function registerHandlers(): void {
   registerSpendingHandlers({
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     spending,
+  });
+  registerAnalyticsHandlers({
+    handle: (channel, handler) => ipcMain.handle(channel, handler),
+    analytics: analyticsService(),
   });
   registerDictationHandlers();
   registerScheduledTaskHandlers();

@@ -117,6 +117,7 @@ export async function startPeerTestHost(
   let lanEndpoint = "";
   let tailscaleEndpoint = "";
   const requests = new AidenRemotePairingRequestService({
+    admission: () => ({ id: "test-host-window", expiresAt: Number.MAX_SAFE_INTEGER }),
     instanceId,
     devices,
     accepting: () => accepting,

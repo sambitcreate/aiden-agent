@@ -10,6 +10,7 @@ import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
@@ -54,6 +55,7 @@ import {
   createSystemTailscaleCommandRunner,
 } from "./aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
+import { aidenRemoteLanHostnames } from "./aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
@@ -70,12 +72,10 @@ import {
 import { AidenRemoteModelService } from "./aiden-remote-models.js";
 import {
   AidenRemoteStreamService,
-  aidenRemoteStreamStoreOptions,
-  normalizeAidenRemoteStreamSnapshot,
   removeRevokedDeviceStreams,
   type AidenRemotePendingApproval,
-  type AidenRemoteStreamSnapshot,
 } from "./aiden-remote-streams.js";
+import { AidenRemoteStreamJournal } from "./aiden-remote-stream-journal.js";
 import { revokeAidenRemoteRuntimeDevice } from "./aiden-remote-revocation.js";
 import { chatApplicationService } from "./chat-application-service-main.js";
 import { remoteAttachmentStore } from "./aiden-remote-attachments-main.js";
@@ -310,7 +310,7 @@ let activeRuntime: AidenRemoteRuntime | null = null;
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const runtimeProfile = currentRuntimeProfile();
   const userData = app.getPath("userData");
-  const hostname = os.hostname();
+  const lanHostnames = await aidenRemoteLanHostnames();
   const defaultDisplayName = defaultAidenRemoteDisplayName(await computerDisplayName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
@@ -372,12 +372,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     () => userData,
     aidenRemoteOperationStoreOptions(),
   );
-  const streamStore = new DataStore<AidenRemoteStreamSnapshot>(
-    STREAMS_FILE,
-    { version: 1, streams: [] },
-    () => userData,
-    aidenRemoteStreamStoreOptions(),
-  );
+  const streamJournal = new AidenRemoteStreamJournal(STREAMS_FILE, () => userData);
   const tailscale = new AidenRemoteTailscaleController(
     await createSystemTailscaleCommandRunner(),
     {
@@ -460,7 +455,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     appVersion: app.getVersion(),
     botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
-    hostname,
+    hostname: lanHostnames.endpoint,
     tailscale,
     portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
       runtimeProfile.id,
@@ -489,7 +484,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             listProviders: listConfiguredProviders,
             getSettings: () => configStore.getSettings(),
           });
-          const loadedStreamSnapshot = normalizeAidenRemoteStreamSnapshot(await streamStore.load());
+          const loadedStreamSnapshot = await streamJournal.load();
           const revokedDeviceIds = new Set(
             (await state.snapshot()).devices
               .filter(({ revokedAt }) => revokedAt !== undefined)
@@ -500,7 +495,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             revokedDeviceIds,
           );
           if (streamSnapshot.streams.length !== loadedStreamSnapshot.streams.length) {
-            await streamStore.save(streamSnapshot);
+            await streamJournal.replace(streamSnapshot);
           }
           const streams = new AidenRemoteStreamService({
             now: Date.now,
@@ -520,7 +515,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             notifyApprovalChanged: (chatId) =>
               ipcMain.broadcast("remote:approval-changed", { chatId }),
             snapshot: streamSnapshot,
-            persist: (snapshot) => streamStore.save(snapshot),
+            persist: (write) => streamJournal.save(write),
             idempotency,
             persistIdempotency: (snapshot) => operationStore.save(snapshot),
             onPersistenceError: (error) =>
@@ -608,6 +603,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.acceptsProgressCapabilities === true &&
                 device.capabilities.includes("questions:respond")
               );
+            },
+            workspaceFolderMissing: async (workspaceId) => {
+              const workspace = await configStore.getWorkspace(workspaceId);
+              return workspace !== undefined && (await workspaceFolderMissing(workspace));
             },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
@@ -1146,7 +1145,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
-      hostnames: [hostname],
+      hostnames: lanHostnames.certificate,
     }),
     log: writeRemoteLog,
   });
@@ -1168,7 +1167,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
         chats: activeChats,
         workspaceOwners,
       }, deviceId);
-      // A relay admitted between the first close and the revocation fence is closed here.
+      // A stream or relay admitted between the first close and the revocation
+      // fence is closed here.
+      activeReadAloud?.revokeDevice(deviceId);
+      activeProgress?.revokeDevice(deviceId);
       simulatorShareRelay.revokeDevice(deviceId);
       activeHostFeed?.revokeDevice(deviceId);
       activeHostRuns?.revokeDevice(deviceId);

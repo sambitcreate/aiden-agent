@@ -32,6 +32,52 @@ final class AidenRemoteClientTests: XCTestCase {
         await fulfillment(of: [opened], timeout: 1)
     }
 
+    func testRateLimitedProgressStreamCarriesTheServerDelayFromBodyOrHeader() async throws {
+        func respondRateLimited(details: String?, retryAfter: String?, retryable: Bool = true) {
+            AidenRemoteMockURLProtocol.handler = { request in
+                var headers = ["Content-Type": "application/json"]
+                if let retryAfter { headers["Retry-After"] = retryAfter }
+                let detailsJSON = details.map { #","details":\#($0)"# } ?? ""
+                let body = #"{"error":{"code":"rate_limited","message":"Too many progress connections","requestId":"request-1","retryable":\#(retryable)\#(detailsJSON)}}"#
+                return (HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil, headerFields: headers)!, Data(body.utf8))
+            }
+        }
+        func failure() async -> AidenRemoteClientError? {
+            do {
+                for try await _ in makeClient().progressEvents(chatId: "chat-1", after: 0, epoch: nil, onOpen: { _ in }) {}
+                XCTFail("A 429 must end the progress stream with an error")
+                return nil
+            } catch {
+                return error as? AidenRemoteClientError
+            }
+        }
+
+        respondRateLimited(details: #"{"retryAfterSeconds":5}"#, retryAfter: "9")
+        var error = await failure()
+        XCTAssertEqual(error?.isRetryableRateLimit, true)
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 5, "The envelope's delay wins over the header")
+
+        respondRateLimited(details: nil, retryAfter: " 7 ")
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 7, "Without an envelope delay the header is used")
+
+        respondRateLimited(details: #"{"retryAfterSeconds":3600}"#, retryAfter: nil)
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 60, "A long delay is clamped to a minute")
+
+        respondRateLimited(details: nil, retryAfter: "0")
+        error = await failure()
+        XCTAssertEqual(error?.serverRetryAfterSeconds, 1, "A zero delay still waits a second")
+
+        respondRateLimited(details: nil, retryAfter: "Wed, 21 Oct 2026 07:28:00 GMT")
+        error = await failure()
+        XCTAssertNil(error?.serverRetryAfterSeconds, "An HTTP-date Retry-After is ignored")
+
+        respondRateLimited(details: #"{"retryAfterSeconds":5}"#, retryAfter: "5", retryable: false)
+        error = await failure()
+        XCTAssertEqual(error?.isRetryableRateLimit, false, "The server's retryable flag is kept as sent")
+    }
+
     func testConditionalReadReusesValidatedBytesAndRejectsUnsolicited304() async throws {
         let client = makeClient()
         AidenRemoteMockURLProtocol.handler = { request in
@@ -309,6 +355,30 @@ final class AidenRemoteClientTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AidenManualPairingError, .endpointMismatch)
         }
+
+        // Nearby discovery reports the Bonjour name with its case; the
+        // desktop's payload carries it lowercased. Both name the same Mac.
+        let discoveredEndpoint = try XCTUnwrap(URL(string: "https://Aiden-Fixture.Example.Test/api/aiden/v1"))
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/aiden/v1/pairing/manual-bootstrap")
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: try XCTUnwrap(request.url),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: [
+                    "Content-Type": "application/json",
+                    "Aiden-Protocol-Version": "1",
+                ]
+            ))
+            return (response, bootstrapData)
+        }
+        let discoveredPayload = try await AidenRemoteClient.manualPairingPayload(
+            code: code,
+            endpoint: discoveredEndpoint,
+            session: session,
+            now: Date(timeIntervalSince1970: 1_787_331_600)
+        )
+        XCTAssertEqual(discoveredPayload.bootstrap.endpoint, endpoint)
     }
 
     func testManualPairingCodeRejectsAmbiguousUnicodeAndInvalidLength() throws {

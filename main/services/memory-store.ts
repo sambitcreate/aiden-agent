@@ -1,3 +1,4 @@
+import { initializeSqliteReclamation, reclaimSqlitePages } from "./sqlite-reclamation.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { chmod, mkdir, open, stat } from "node:fs/promises";
@@ -257,8 +258,10 @@ export class MemoryStore {
     await handle.close();
     await chmod(file, 0o600);
     const database = new DatabaseSync(file);
+    // Wait for a concurrent opener before the first write (auto_vacuum on a new file).
+    database.exec("PRAGMA busy_timeout = 5000;");
+    initializeSqliteReclamation(database);
     database.exec(`
-      PRAGMA busy_timeout = 5000;
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS memory_facts (
@@ -347,6 +350,7 @@ export class MemoryStore {
     try {
       await this.applyMigrations(database);
       purgeLegacyBotRows(database);
+      reclaimSqlitePages(database);
     } catch (error) {
       // Don't cache an unmigrated handle — the next db() call must retry.
       database.close();
@@ -961,6 +965,7 @@ export class MemoryStore {
 
   async close(): Promise<void> {
     this.openGeneration += 1;
+    if (this.database) reclaimSqlitePages(this.database);
     this.database?.close();
     this.database = undefined;
     await this.repairPrivateModes();
