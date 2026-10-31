@@ -140,6 +140,18 @@ test("the server is called reachable over Tailscale only while its route is conn
   assert.equal(api.reachableNetwork(undefined), undefined, "a server that does not answer is not called reachable");
 });
 
+test("a reinstall keeps the Tailscale network the server already uses", (t) => {
+  const agentDir = mkdtempSync(join(tmpdir(), "aiden-service-saved-"));
+  t.after(() => rmSync(agentDir, { recursive: true, force: true }));
+  assert.equal(api.savedNetwork(agentDir), undefined, "a fresh profile has nothing to keep");
+  for (const [mode, kept] of [["tailscale", "tailscale"], ["both", "both"], ["lan", undefined]]) {
+    writeFileSync(join(agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: mode }));
+    assert.equal(api.savedNetwork(agentDir), kept, mode);
+  }
+  writeFileSync(join(agentDir, "remote.json"), "{ not json");
+  assert.equal(api.savedNetwork(agentDir), undefined, "unreadable settings fall back to the usual choice");
+});
+
 test("Linux uninstall stops the service and removes the unit; a second uninstall reports nothing to remove", (t) => {
   const { host, calls, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
   const { file } = api.installService(host, local);

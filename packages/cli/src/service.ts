@@ -319,6 +319,16 @@ export async function releaseTailscaleRoute(agentDir: string): Promise<string | 
   }
 }
 
+/** The Tailscale network a server already uses, read from its saved Remote settings; a reinstall keeps it instead of falling back to local. */
+export function savedNetwork(agentDir: string): RemoteNetwork | undefined {
+  try {
+    const mode: unknown = JSON.parse(readFileSync(join(agentDir, "remote.json"), "utf8"))?.connectionMode;
+    return mode === "tailscale" || mode === "both" ? mode : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const NETWORK_LABEL: Record<RemoteNetwork, string> = { local: "the local network only", tailscale: "Tailscale only", both: "the local network and Tailscale" };
 
 async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<boolean> {
@@ -360,7 +370,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   manager(host);
   const entry = realpathSync(process.env.AIDEN_CLI_ENTRY || process.argv[1] || "");
   if (!entry.endsWith(".js")) throw new Error("Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.");
-  const network = flags.network ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
+  const kept = flags.network ? undefined : savedNetwork(agentDir);
+  if (kept) out(`Keeping the server's network: ${NETWORK_LABEL[kept]}. Choose another with \`--network\` or \`aiden remote network\`.`);
+  const network = flags.network ?? kept ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
 
   // The service takes over the server's lease, so stop a server started by hand.
   const { daemonStatus, stopDaemon } = await import("./serve-lifecycle.ts");
