@@ -472,35 +472,10 @@ jobs:
       - name: Verify the runtime image
         run: docker run --rm aiden-cli:ci --version
 
-  cli-playground:
-    name: CLI appearance playground
-    needs: changes
-    if: ${{ needs.changes.outputs.cli == 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-      - name: Use Node.js 22
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
-        with:
-          node-version: 22.23.4
-          cache: npm
-          cache-dependency-path: packages/cli-playground/package-lock.json
-      - name: Install playground dependencies
-        run: npm ci
-        working-directory: packages/cli-playground
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
-        working-directory: packages/cli-playground
-      - name: Build and test the playground
-        run: npm run build && npm test
-        working-directory: packages/cli-playground
-
   required:
     name: CI required
     if: ${{ always() }}
-    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux, cli-playground]
+    needs: [changes, policy, static, build, verify, catalog, unit, e2e, apple, ios, android, cli-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

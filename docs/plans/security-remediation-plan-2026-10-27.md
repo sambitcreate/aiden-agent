@@ -256,7 +256,7 @@ Primary files: .github/workflows/pullfrog.yml, .github/workflows/release.yml and
 
 - Re-query official advisories and the current root/CLI lockfiles. Treat the original version/fix list as dated.
 - For Zod, trace the actual SDK/schema collection path, including response limits and whether the vulnerable API is used. Its presence is enough to justify maintenance, not to claim a reproduced Aiden DoS.
-- For CLI undici, trace TUI and daemon initialization through the actual installed Pi package to the selected fetch/dispatcher. Evaluate content-encoding, EventSource and integrity APIs separately.
+- For CLI undici, trace TUI and daemon initialization through (2026-10-30: the TUI was removed when the CLI became [serve-only](aiden-serve-only-cli.md); only the daemon path remains) the actual installed Pi package to the selected fetch/dispatcher. Evaluate content-encoding, EventSource and integrity APIs separately.
 - Prefer an exact evaluated fixed-version override where compatible. Do not use a broad npm audit fix that downgrades Pi, changes electron-builder outside its supported patch contract or silently updates unrelated packages.
 - Run desktop/CLI replay, provider streaming, cancellation, proxy/custom TLS, MCP transport and bundle checks appropriate to the dependency changed. Inspect every resolved copy, not only the hoisted package.
 - Recheck Electron releases for the tracked Node security fixes. The previously reviewed 43.8.3, 44.9.3 and 45.0.0 tags all declared Node 24.22.0; refresh this fact before selecting a release.

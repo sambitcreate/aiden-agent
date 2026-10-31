@@ -1,6 +1,8 @@
 # Built-in Aiden knowledge and app actions
 
 Status: **Implemented MVP merged in [PR #312](https://github.com/sambitcreate/aiden-agent/pull/312) (2026-10-15) and shipped in 0.57.0. Release hardware acceptance remains open.**
+
+2026-10-30: the CLI TUI surfaces in this plan (`/help-aiden`, `/aiden-app`, `/aiden-settings` and terminal panels) were removed when the CLI became a [serve-only headless server](aiden-serve-only-cli.md); `aiden app help|status|get|set` remains for Memory, Web Search and Skills.
 Date: 2026-10-03.
 Baseline: Aiden main `3f86d41af16ea653e907606fb2952d3f67b2dd6e` (0.52.0); desktop and CLI Pi pins remain 0.87.1.
 Pi reference: `/Users/sambitbiswas/projects/opp/pi`, `a276dabe57911253350bffb93cb7d7aff6a73261`; stable published target **1.0.0**, tag `a13d35a742`.

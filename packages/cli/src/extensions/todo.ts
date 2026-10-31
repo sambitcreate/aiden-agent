@@ -1,8 +1,7 @@
 /**
- * Todo in the terminal: reuses Aiden's journal-replayed todo core
- * (main/services/rpiv-todo) and mirrors the desktop's floating progress chip
- * with a pi widget above the editor, refreshed after every todo tool result.
- * Widget rendering lives in todo-widget.ts (pure, unit-testable).
+ * Todo for daemon chats: reuses Aiden's journal-replayed todo core
+ * (main/services/rpiv-todo) and restores its state from the session branch on
+ * every session start or tree change.
  */
 
 import type { ExtensionContext, ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -11,7 +10,6 @@ import { createTodoExtensionRuntime } from "../../../../main/services/rpiv-todo/
 import type { TodoState } from "../../../../main/services/rpiv-todo/contract.js";
 import { replayTodoState } from "../../../../main/services/rpiv-todo/replay.js";
 import { aidenExtensionToInlineFactory, type AidenExtensionShape, type CapturedContext } from "../pi-bridge/adapt-aiden-extension.ts";
-import { renderTodoWidget } from "./todo-widget.ts";
 
 export function createTodoInlineExtension(_context: {
 	latestContext(): CapturedContext | undefined;
@@ -32,15 +30,9 @@ export function createTodoInlineExtension(_context: {
 	} as AidenExtensionShape);
 	const wrapped: ExtensionFactory = (pi) => {
 		factory(pi);
-		const refreshWidget = (ctx: ExtensionContext) => {
-			if (ctx.hasUI && ctx.mode === "tui") {
-				ctx.ui.setWidget("aiden-todo", runtime ? renderTodoWidget(runtime.snapshot()) : undefined);
-			}
-		};
 		const restore = async (_event: unknown, ctx: ExtensionContext) => {
 			const epoch = ++restoreEpoch;
 			runtime = undefined;
-			refreshWidget(ctx);
 			try {
 				const state = await replayTodoState({ getBranch: async () => ctx.sessionManager.getBranch() });
 				if (epoch !== restoreEpoch) return;
@@ -49,16 +41,12 @@ export function createTodoInlineExtension(_context: {
 				// Never replace an unreadable checkpoint with empty or older tasks.
 				if (epoch !== restoreEpoch) return;
 			}
-			refreshWidget(ctx);
 		};
 		pi.on("session_start", restore);
 		pi.on("session_tree", restore);
 		pi.on("session_shutdown", () => {
 			++restoreEpoch;
 			runtime = undefined;
-		});
-		pi.on("tool_execution_end", (event, ctx) => {
-			if (event.toolName === "todo") refreshWidget(ctx);
 		});
 	};
 	return { name: "aiden-todo", factory: wrapped, snapshot: () => current().snapshot() };

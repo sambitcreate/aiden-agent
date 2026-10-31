@@ -11,12 +11,10 @@ export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
+export { daemonRemoteSummary, showStartupPairing } from "./serve-command.ts";
+export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
 export * from "./usage-ledger.ts";
-export * from "./extensions/session-parity.ts";
-export { createScheduleExtension } from "./extensions/schedule-tool.ts";
-export { scheduleApprovalSnapshot } from "./schedule-tool-approval.ts";
-export * from "./extensions/subagents.ts";
 export * from "./extensions/artifacts.ts";
 export { SessionManager, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 export { liveMessages, resolveRuntimeFromContext } from "./pi-bridge/model-runtime.ts";
@@ -32,8 +30,6 @@ export * from "./bots.ts";
 
 export { runCliSubagent } from "./subagent-process.ts";
 export { createCliAuthCoordinator } from "./auth.ts";
-export { createOnboardingExtension } from "./extensions/onboarding.ts";
-export { createDisplayImageInlineExtension } from "./extensions/display-image.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";
 export { createCliMcpPool } from "./mcp.ts";
@@ -45,16 +41,12 @@ export { runScheduledInference } from "./scheduled-inference.ts";
 export { createBotSubagentTool } from "./bot-subagents.ts";
 
 export * from "./app-controls.ts";
-export * from "./extensions/app.ts";
 export { readAidenHelp } from "../../../main/services/aiden-app-knowledge.js";
 export { migrateAidenMcpConfig } from "./mcp-config-migration.ts";
-
-export { createCliMcpRevision } from "./subagent-hosts.ts";
 
 export { migrateCliAzureConfig } from "./azure-config-migration.ts";
 export { createTodoInlineExtension } from "./extensions/todo.ts";
 export { createAgentSession, DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
-export { buildOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
 
 export * from "./bot-durable-migration.ts";
 export { createCliRemoteBots } from "./remote-bots.ts";

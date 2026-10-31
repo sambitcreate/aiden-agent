@@ -3,9 +3,9 @@ import { join, resolve } from "node:path";
 import type { AidenRemoteDesktopPairing } from "../../../main/services/aiden-remote-pairing.js";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 
-// Each command loads its own module on demand: the interactive session path
-// calls dispatchCommand first and should not evaluate the daemon, Telegram,
-// speech, or pairing code it is not going to run.
+// Each command loads its own module on demand, so an administration command
+// does not evaluate the daemon, Telegram, speech, or pairing code it is not
+// going to run.
 export async function dispatchCommand(agentDir: string, cwd: string, args: string[]): Promise<boolean> {
   const [command, ...rest] = args;
   let result: unknown;
@@ -13,14 +13,15 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     case "app": {
       const [action = "help", subject = "overview", rawValue, revision, operationId] = rest;
       if (action === "help") { result = (await import("../../../main/services/aiden-app-knowledge.js")).readAidenHelp(rest.slice(1).join(" ") || "overview"); break; }
-      const { isAppControlId, isAppControlTopic } = await import("../../../renderer/shared/app-controls.js");
-      const controls = (await import("./app-controls.ts")).createCliAppControls(agentDir, () => undefined);
-      if (action === "status") { result = await Promise.all(["appearance", "memory", "web-search", "skills"].map((topic) => controls.snapshot(topic as "appearance", false))); break; }
-      if (action === "get" && isAppControlTopic(subject)) { result = await controls.snapshot(subject, false); break; }
+      const { isAppControlId } = await import("../../../renderer/shared/app-controls.js");
+      const { CLI_APP_TOPICS, createCliAppControls, isCliAppTopic } = await import("./app-controls.ts");
+      const controls = createCliAppControls(agentDir);
+      if (action === "status") { result = await Promise.all(CLI_APP_TOPICS.map((topic) => controls.snapshot(topic))); break; }
+      if (action === "get" && isCliAppTopic(subject)) { result = await controls.snapshot(subject); break; }
       if (action === "set" && isAppControlId(subject) && rawValue !== undefined && revision && rest.length <= 5) {
         const value = rawValue === "true" ? true : rawValue === "false" ? false : rawValue;
         const { randomUUID } = await import("node:crypto");
-        result = await controls.apply({ control: subject, value, expectedRevision: revision, operationId: operationId ?? randomUUID() }, false, true, true); break;
+        result = await controls.apply({ control: subject, value, expectedRevision: revision, operationId: operationId ?? randomUUID() }); break;
       }
       throw new Error("Usage: aiden app help [query] | status | get <topic> | set <control> <value> <revision> [operation-id]");
     }
@@ -54,22 +55,7 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       }
       break;
     }
-    case "serve": {
-      const { daemonStatus, startDaemon, stopDaemon } = await import("./serve-lifecycle.ts");
-      if (rest[0] === "stop" || rest[0] === "status") {
-        if (rest.length !== 1) throw new Error(`Usage: aiden serve ${rest[0]}`);
-        result = rest[0] === "stop" ? await stopDaemon(agentDir) : daemonStatus(agentDir);
-        break;
-      }
-      const unknown = rest.filter((arg) => arg !== "--remote" && arg !== "--daemon");
-      if (unknown.length) throw new Error("Usage: aiden serve [--remote] [--daemon] | serve stop | serve status");
-      const remote = rest.includes("--remote");
-      if (rest.includes("--daemon")) { result = await startDaemon(agentDir, { remote }); break; }
-      const controller = new AbortController(); const stop = () => controller.abort();
-      process.once("SIGINT", stop); process.once("SIGTERM", stop);
-      try { await (await import("./serve.ts")).serve(agentDir, controller.signal, { remote }); } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
-      return true;
-    }
+    case "serve": await (await import("./serve-command.ts")).serveCommand(agentDir, rest); return true;
     case "provider": {
       if ((rest[0] ?? "list") === "list") { result = (await (await import("./providers.ts")).createCliModelRuntime(agentDir)).getProviders().map(({ id, name }) => ({ id, name })); break; }
       if (rest[0] !== "import" || !rest[1]) throw new Error("Usage: provider list | import <models.json>");
@@ -85,32 +71,6 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
       else if (rest[0] === "import" && rest[1]) { result = normalizeWebSearchSettings(JSON.parse(readFileSync(rest[1], "utf8"))); atomicJson(file, result); }
       else throw new Error("Usage: web-search show | import <settings.json>");
       break;
-    }
-    case "theme": {
-      const { parseThemeVariantJson } = await import("../../../renderer/shared/appearance.ts");
-      const { buildTheme } = await import("./theme.ts");
-      const { atomicJson, readJson } = await import("./state.ts");
-      const [action, source, scheme, name] = rest;
-      if (action === "import") {
-        if (!source || !["light", "dark"].includes(scheme) || !name || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) throw new Error("Usage: theme import <variant.json> <light|dark> <name>");
-        const variant = parseThemeVariantJson(readFileSync(source, "utf8"), scheme as "light" | "dark");
-        const theme = buildTheme(name, scheme as "light" | "dark", variant); theme.name = name;
-        atomicJson(join(agentDir, "themes", `${name}.json`), theme);
-        atomicJson(join(agentDir, "theme-variants", `${name}.json`), { version: 1, scheme, theme: variant });
-        result = { imported: name }; break;
-      }
-      if (action === "export" && source && scheme && /^[a-z0-9][a-z0-9-]{0,63}$/.test(source)) {
-        const value = readJson(join(agentDir, "theme-variants", `${source}.json`), null);
-        if (!value) throw new Error("Imported theme not found.");
-        atomicJson(resolve(scheme), value); result = { exported: resolve(scheme) }; break;
-      }
-      throw new Error("Usage: theme import <variant.json> <light|dark> <name> | export <name> <file>");
-    }
-    case "reset": {
-      const { onboardingProgressState } = await import("../../../main/services/onboarding-state-core.js");
-      const { atomicJson } = await import("./state.ts");
-      atomicJson(join(agentDir, "onboarding.json"), onboardingProgressState("incomplete", { profileReady: false, providerReady: false }));
-      result = { onboardingReset: true }; break;
     }
     case "help": process.stdout.write(CLI_COMMAND_HELP); return true;
     default: return false;
