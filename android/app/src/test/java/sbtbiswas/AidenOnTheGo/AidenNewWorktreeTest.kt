@@ -1,6 +1,20 @@
 package sbtbiswas.AidenOnTheGo
 
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -10,28 +24,40 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.auth.InMemoryAidenSecureStore
+import sbtbiswas.AidenOnTheGo.features.chat.AidenChatViewModel
+import sbtbiswas.AidenOnTheGo.features.remote.AidenRemoteCoordinator
 import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
 import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestChatNewWorktree
 import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestChatNewWorktree
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatCache
+import sbtbiswas.AidenOnTheGo.persistence.AidenChatDraftStore
+import sbtbiswas.AidenOnTheGo.persistence.AidenInstallationStore
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** Contract revision 48 (`chat:new-worktree`), read from the fixture every client shares. */
 class AidenNewWorktreeTest {
@@ -266,5 +292,190 @@ class AidenNewWorktreeTest {
         assertEquals("feature/mobile", review.review?.branch)
         assertNull(review.result)
         assertNull(AidenNewWorktreeAvailability.hasCommits(review))
+    }
+
+    // --- Sending the first message into a new worktree, through the chat screen's model ---
+
+    private val wire = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
+    private val emptyChat = AidenChat(
+        id = "chat-new", workspaceId = site.id, title = "New chat", messages = emptyList(),
+        createdAt = Instant.EPOCH, updatedAt = Instant.EPOCH, revision = "chat-r1"
+    )
+    private val worktreeWorkspace = site.copy(
+        id = "workspace-worktree", name = "Site", isManagedWorktree = true,
+        branchName = "aiden/fix-the-header", revision = "workspace_revision_2"
+    )
+    private val movedChat = emptyChat.copy(workspaceId = worktreeWorkspace.id, revision = "chat-r2")
+    private val question = AidenChatMessage(id = "question-1", role = AidenChatRole.USER, text = "Fix the header", createdAt = Instant.EPOCH)
+
+    /** What the Mac was sent, and the chat as the Mac holds it. */
+    private class Mac(initial: AidenChat) {
+        val chat = AtomicReference(initial)
+        private val posts: MutableList<RecordedRequest> = java.util.Collections.synchronizedList(mutableListOf())
+        fun record(request: RecordedRequest) { if (request.method == "POST") posts.add(request) }
+        fun posted(): List<String> = synchronized(posts) { posts.map { it.requestUrl!!.encodedPath.removePrefix("/api/aiden/v1") } }
+        fun worktreeKeys(): List<String?> = synchronized(posts) {
+            posts.filter { it.requestUrl!!.encodedPath.endsWith("/worktree") }.map { it.getHeader("Idempotency-Key") }
+        }
+    }
+
+    /**
+     * A phone paired with a Mac that offers New worktree, on the empty chat in [site]. [route]
+     * answers what it knows and returns null for the rest.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun withEmptyWorkspaceChat(
+        mac: Mac,
+        route: (String) -> MockResponse?,
+        body: suspend CoroutineScope.(AidenChatViewModel, AidenChatCache) -> Unit
+    ) {
+        val directory = kotlin.io.path.createTempDirectory("aiden-new-worktree-").toFile()
+        val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val macServer = MockWebServer()
+        val viewModels = ViewModelStore()
+        val scopeJob = Job()
+        val grants = listOf(
+            AidenRemoteCapability.SERVER_READ, AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE,
+            AidenRemoteCapability.GIT_WRITE, AidenRemoteCapability.CHAT_NEW_WORKTREE
+        )
+        val grantsJson = wire.encodeToString(grants)
+        macServer.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                mac.record(request)
+                val path = request.requestUrl!!.encodedPath.removePrefix("/api/aiden/v1")
+                route(path)?.let { return it }
+                return when (path) {
+                    "/server" -> MockResponse().setBody(
+                        """{"protocolVersion":1,"instanceId":"instance-worktree","name":"Mac","appVersion":"1.0","capabilities":$grantsJson,"serverCapabilities":$grantsJson,"features":[],"connectionMode":"lan","serverTime":"2026-10-31T09:00:00Z"}"""
+                    )
+                    "/workspaces" -> MockResponse().setBody("""{"workspaces":${wire.encodeToString(listOf(site, worktreeWorkspace))}}""")
+                    "/chats/${emptyChat.id}" -> MockResponse().setBody(wire.encodeToString(mac.chat.get()))
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+        }
+        macServer.start()
+        Dispatchers.setMain(dispatcher)
+        try {
+            runBlocking(dispatcher) {
+                val installations = AidenInstallationStore(directory, InMemoryAidenSecureStore())
+                installations.addInstallation(AidenPairingExchange(
+                    instanceId = "instance-worktree", deviceId = "device-worktree", endpoint = macServer.url("/api/aiden/v1").toString(),
+                    serverSpkiSha256 = "sha256/test", credential = "synthetic", capabilities = grants
+                ), null)
+                val cache = AidenChatCache(directory)
+                val drafts = AidenChatDraftStore(directory)
+                val coordinator = AidenRemoteCoordinator(installations, directory, cache, drafts, scope = CoroutineScope(dispatcher + scopeJob))
+                coordinator.refreshClient()
+                withTimeout(5_000) { coordinator.serverInfo.first { it != null } }
+                withTimeout(5_000) { coordinator.workspaces.first { list -> list.any { it.id == site.id } } }
+                val model = AidenChatViewModel(emptyChat.id, coordinator, cache, drafts, emptyChat)
+                viewModels.put("chat", model)
+                try {
+                    withTimeout(5_000) { model.isLoading.first { !it } }
+                    body(model, cache)
+                } finally {
+                    withContext(NonCancellable) {
+                        val jobs = viewModels.keys().mapNotNull { viewModels.get(it)?.viewModelScope?.coroutineContext?.get(Job) }
+                        viewModels.clear()
+                        jobs.forEach { it.join() }
+                    }
+                }
+            }
+        } finally {
+            scopeJob.cancel()
+            Dispatchers.resetMain()
+            dispatcher.close()
+            macServer.shutdown()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun theFirstMessageMovesTheChatIntoItsWorktreeThenSendsThere() {
+        val mac = Mac(emptyChat)
+        val answer = AidenChatMessage(id = "reply-1", role = AidenChatRole.ASSISTANT, text = "Done", createdAt = Instant.EPOCH)
+        withEmptyWorkspaceChat(mac, route = { path ->
+            when (path) {
+                "/chats/chat-new/worktree" -> {
+                    mac.chat.set(movedChat)
+                    MockResponse().setBody("""{"chat":${wire.encodeToString(movedChat)},"branch":"aiden/fix-the-header"}""")
+                }
+                "/chats/chat-new/turns" -> {
+                    mac.chat.set(movedChat.copy(messages = listOf(question, answer), revision = "chat-r3"))
+                    MockResponse().setResponseCode(202).setBody(
+                        """{"turnId":"turn-1","streamId":"stream-1","status":"queued","message":${wire.encodeToString(question)}}"""
+                    )
+                }
+                "/streams/stream-1/events" -> MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                    "id: 1\nevent: done\ndata: {\"protocolVersion\":1,\"streamId\":\"stream-1\",\"sequence\":1," +
+                        "\"timestamp\":\"2026-10-31T09:00:00Z\",\"type\":\"done\",\"terminal\":true,\"payload\":{\"messageId\":\"reply-1\"}}\n\n"
+                )
+                "/streams/stream-1" -> MockResponse().setBody(
+                    """{"streamId":"stream-1","chatId":"chat-new","turnId":"turn-1","state":"done","lastSequence":1,"updatedAt":"2026-10-31T09:00:00Z"}"""
+                )
+                else -> null
+            }
+        }) { model, cache ->
+            assertTrue(model.offersNewWorktree)
+            model.updateDraft("Fix the header")
+            model.setStartsInNewWorktree(true)
+            model.send()
+            withTimeout(10_000) { while (model.isStarting.value || model.hasActiveStream.value) delay(10) }
+
+            assertNull(model.presentedError.value)
+            assertEquals("the worktree first, then the turn", listOf("/chats/chat-new/worktree", "/chats/chat-new/turns"), mac.posted())
+            assertEquals(worktreeWorkspace.id, model.chat.value?.workspaceId)
+            assertEquals("the saved chat stays in the worktree too", worktreeWorkspace.id, cache.loadChat("instance-worktree", emptyChat.id)?.workspaceId)
+            assertFalse("the next message is an ordinary one", model.startsInNewWorktree.value)
+            assertEquals("", model.draft.value)
+        }
+    }
+
+    @Test
+    fun aRefusalShowsTheMacsSentenceAndCancelPutsTheMessageBackUnsent() {
+        val mac = Mac(emptyChat)
+        val refusal = "Aiden couldn't fetch main from origin."
+        val holdsSetup = AtomicReference(false)
+        withEmptyWorkspaceChat(mac, route = { path ->
+            when (path) {
+                "/chats/chat-new/worktree" ->
+                    if (holdsSetup.get()) MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+                    else MockResponse().setResponseCode(409).setBody(
+                        """{"error":{"code":"git_capability_denied","message":"$refusal","requestId":"worktree-1","retryable":false}}"""
+                    )
+                "/chats/chat-new/turns" -> MockResponse().setResponseCode(500)
+                else -> null
+            }
+        }) { model, _ ->
+            model.updateDraft("Fix the header")
+            model.setStartsInNewWorktree(true)
+            model.send()
+            withTimeout(5_000) { model.isStarting.first { !it } }
+            assertEquals(refusal, model.presentedError.value)
+            assertEquals("the message is back in the composer", "Fix the header", model.draft.value)
+            assertTrue(model.chat.value!!.messages.isEmpty())
+            assertEquals(site.id, model.chat.value?.workspaceId)
+            assertTrue("sending again tries the worktree again", model.startsInNewWorktree.value)
+
+            // Twice: the Mac never answers, and the person cancels the wait.
+            holdsSetup.set(true)
+            for (attempt in 2..3) {
+                model.send()
+                withTimeout(5_000) { model.isSettingUpWorktree.first { it } }
+                withTimeout(5_000) { while (mac.worktreeKeys().size < attempt) delay(10) }
+                model.cancelWorktreeSetup()
+                withTimeout(5_000) { model.isStarting.first { !it } }
+                assertFalse(model.isSettingUpWorktree.value)
+                assertNull("Cancel is not an error", model.presentedError.value)
+                assertEquals("Fix the header", model.draft.value)
+                assertTrue(model.chat.value!!.messages.isEmpty())
+            }
+
+            val keys = mac.worktreeKeys()
+            assertNotEquals("the Mac answered the refusal, so the next request has a new key", keys[0], keys[1])
+            assertEquals("a canceled wait got no answer, so the retry keeps its key", keys[1], keys[2])
+            assertEquals("no message was sent", List(3) { "/chats/chat-new/worktree" }, mac.posted())
+        }
     }
 }
