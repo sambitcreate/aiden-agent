@@ -45,7 +45,7 @@ Questions about privacy or support for Aiden Agent and Aiden On The Go can be se
 - Update the policy's “Last updated” date when this copy is published.
 - Preserve the existing disclosure that third-party AI providers process requests under their own policies.
 - Keep the direct statement that Aiden does not collect chats, prompts, selected files, provider keys, model responses, device identifiers, precise location, or payment information unless the shipped product or operational services change.
-- The phone apps send no analytics events. Since 2026-10-30 the desktop app sends opt-out anonymous usage data and crash reports to PostHog ([`docs/analytics.md`](../../docs/analytics.md)); the published policy must describe that before the first release that sends, scoped to the desktop app.
+- The phone apps send no analytics events. The desktop app sends opt-out anonymous usage data to PostHog ([`docs/analytics.md`](../../docs/analytics.md)) and will add sanitized crash reports in a later release; the published policy must describe what that release sends, before the first release that sends, scoped to the desktop app.
 - Describe Image Playground as Apple-controlled processing that may use Private Cloud Compute; do not promise universal on-device generation. Preserve the accepted-image-only direct-to-paired-desktop boundary.
 - Make the support email visibly reachable from `https://chatwithaiden.com/`, which is the App Store support URL.
 - Recheck this copy against the final distribution candidate and App Privacy answers before every submission.

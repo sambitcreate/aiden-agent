@@ -176,6 +176,7 @@ test("a launch after an unclean exit or an update is labelled, and the update is
     runDirectory: updated.runDirectory,
     isBuiltinProvider: () => false,
     setInterval: () => ({}),
+    now: () => new Date(2026, 9, 30, 9, 0, 0),
     clearInterval: () => {},
   });
   await again.start();
