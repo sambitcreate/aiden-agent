@@ -1,7 +1,9 @@
 # Hybrid new chat: workspace choice and progressive composer context
 
 Status: Phases 1–4 merged in PR #491 (2026-10-15) and shipped in 0.57.0. Phase 5
-(paired Macs and phones) is still open. The owner approved the Hybrid direction
+(paired Macs and phones): New worktree on the phone's new-chat screen is in review
+(Remote revision 48, `chat:new-worktree`); desktop drafts on a paired Mac are
+still open. The owner approved the Hybrid direction
 after comparing it with T3 Code and the ChatGPT Codex app.
 
 Interactive prototype:
@@ -321,6 +323,12 @@ Each phase is its own PR off `main` and runs its narrow suites before review.
     requires.
   - It needs updates to the iOS and Android new-chat flows.
   - Until then, phones keep the explicit worktree creation they use today.
+  - In review (2026-10-29): `POST /chats/{chatId}/worktree` (revision 48,
+    `chat:new-worktree`) makes the worktree from the first message's text with
+    the desktop draft's default base and moves the still-empty chat into it.
+    iPhone and Android show a **New worktree** chip on an empty Workspace chat,
+    then a **Setting up worktree…** row with **Cancel** before the message sends.
+    The phone has no branch menu: the base is always the default.
 - Mobile UI parity (the summary strip and the PR chip rules) is tracked here and
   planned when Phase 1 lands.
 

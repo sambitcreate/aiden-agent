@@ -58,6 +58,9 @@ import java.time.Instant
 import java.util.Base64
 import java.util.UUID
 
+/** Cancel on the Setting up worktree row: the message goes back to the composer, unsent. */
+private class AidenNewWorktreeCanceled : Exception("Worktree setup canceled.")
+
 @OptIn(FlowPreview::class)
 class AidenChatViewModel(
     val chatId: String,
@@ -169,6 +172,28 @@ class AidenChatViewModel(
 
     private val _presentedError = MutableStateFlow<String?>(null)
     val presentedError: StateFlow<String?> = _presentedError.asStateFlow()
+
+    // --- New worktree (contract revision 48) ---
+
+    /** The first message starts this chat in a new worktree on the Mac. */
+    private val _startsInNewWorktree = MutableStateFlow(false)
+    val startsInNewWorktree: StateFlow<Boolean> = _startsInNewWorktree.asStateFlow()
+
+    /** The Mac is making the worktree; the message waits above a Cancel. */
+    private val _isSettingUpWorktree = MutableStateFlow(false)
+    val isSettingUpWorktree: StateFlow<Boolean> = _isSettingUpWorktree.asStateFlow()
+
+    /** What a `git:read` branch list showed for this chat's workspace, if read. */
+    private val _workspaceHasCommits = MutableStateFlow<Boolean?>(null)
+    val workspaceHasCommits: StateFlow<Boolean?> = _workspaceHasCommits.asStateFlow()
+
+    private var worktreeSetup: Deferred<AidenChatNewWorktree>? = null
+
+    /**
+     * One key per chat and message, so a retry after a lost reply finds the worktree the Mac
+     * already made instead of failing on the moved chat.
+     */
+    private var worktreeAttempt: Pair<String, UUID>? = null
 
     /** The Mac holds visible messages older than the transcript on screen (`chat-messages-window-v1`). */
     private val _hasOlderMessages = MutableStateFlow(false)
@@ -378,6 +403,50 @@ class AidenChatViewModel(
                 (_streamState.value == null || _streamState.value!!.isTerminal) &&
                 !isHeldByForkSummary &&
                 (_draft.value.trim().isNotEmpty() || _pendingAttachments.value.isNotEmpty())
+
+    fun setStartsInNewWorktree(on: Boolean) {
+        _startsInNewWorktree.value = on
+    }
+
+    val offersNewWorktree: Boolean
+        get() = !isReadOnlyPresentation && AidenNewWorktreeAvailability.isOffered(
+            chat = _chat.value,
+            workspace = coordinator.workspaces.value.firstOrNull { it.id == _chat.value?.workspaceId },
+            server = coordinator.serverInfo.value,
+            hasCommits = _workspaceHasCommits.value
+        )
+
+    /**
+     * Reads the workspace's branches when this phone holds `git:read`, so New worktree is hidden
+     * for a folder that is not a repository or has no commits. Without the grant, or when the
+     * read fails, the Mac decides.
+     */
+    suspend fun refreshNewWorktreeRepository() {
+        val currentChat = _chat.value ?: return
+        val server = coordinator.serverInfo.value ?: return
+        if (isReadOnlyPresentation || currentChat.isBotChat || currentChat.messages.isNotEmpty() ||
+            !server.supportsNewWorktrees || !server.capabilities.contains(AidenRemoteCapability.GIT_READ)
+        ) return
+        val client = activeClient() ?: return
+        val workspaceId = currentChat.workspaceId
+        val result = try {
+            client.gitBranches(workspaceId)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return
+        }
+        if (activeClient() !== client || _chat.value?.workspaceId != workspaceId) return
+        _workspaceHasCommits.value = AidenNewWorktreeAvailability.hasCommits(result)
+    }
+
+    /**
+     * Stops waiting for the worktree. The message goes back to the composer. If the Mac finishes
+     * anyway, the chat is in the worktree next time it loads, still empty.
+     */
+    fun cancelWorktreeSetup() {
+        worktreeSetup?.cancel()
+    }
 
     // --- Fork (contract revision 21) ---
 
@@ -1452,6 +1521,14 @@ class AidenChatViewModel(
         val client = activeClient() ?: return
         val currentChat = _chat.value ?: return
 
+        // The chat stopped qualifying while the chip was on: keep the message rather than send it
+        // to the main checkout.
+        if (retryAttempt == null && _startsInNewWorktree.value && !offersNewWorktree) {
+            _startsInNewWorktree.value = false
+            _presentedError.value = AidenNewWorktreeCopy.NO_LONGER_OFFERED
+            return
+        }
+
         val text = retryAttempt?.request?.text ?: _draft.value.trim()
         val submittedAttachments = retryAttempt?.attachments ?: _pendingAttachments.value
         val turnModel = AidenChatModelAuthority.turnSelection(
@@ -1469,6 +1546,7 @@ class AidenChatViewModel(
             skill = _selectedSkill.value
         )
 
+        val makesWorktree = retryAttempt == null && _startsInNewWorktree.value && offersNewWorktree
         val previousUpdatedAt = currentChat.updatedAt
         val optimisticId = "local-${UUID.randomUUID().toString().lowercase()}"
         val now = Instant.now()
@@ -1508,8 +1586,39 @@ class AidenChatViewModel(
         val requestToken = chatCache.reserveChatWrite()
         val pairingCreatedAt = pairingCreatedAt()
 
+        // The chat as sent: in the new worktree's workspace once the Mac has moved it.
+        var sentChat = updatedChat
         viewModelScope.launch {
             try {
+                if (makesWorktree) {
+                    // Revision 48: the Mac makes the worktree and moves this empty chat into it
+                    // before the message is sent there.
+                    val key = worktreeAttempt?.takeIf { it.first == text }?.second ?: UUID.randomUUID()
+                    worktreeAttempt = text to key
+                    // Its own job, so Cancel stops only the wait and a refusal stays this send's.
+                    val setup = viewModelScope.async {
+                        client.moveChatToNewWorktree(chatId, currentChat.revision, text, key)
+                    }
+                    worktreeSetup = setup
+                    _isSettingUpWorktree.value = true
+                    val moved = try {
+                        setup.await()
+                    } catch (cancelled: CancellationException) {
+                        if (setup.isCancelled && isActive) throw AidenNewWorktreeCanceled() else throw cancelled
+                    } catch (e: Exception) {
+                        if (AidenNewWorktreeRetry.spendsKey(e)) worktreeAttempt = null
+                        throw e
+                    } finally {
+                        _isSettingUpWorktree.value = false
+                        worktreeSetup = null
+                    }
+                    if (activeClient() !== client) throw AidenNewWorktreeCanceled()
+                    _chat.value = _chat.value?.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
+                    sentChat = sentChat.copy(workspaceId = moved.chat.workspaceId, revision = moved.chat.revision)
+                    _startsInNewWorktree.value = false
+                    worktreeAttempt = null
+                    coordinator.refreshWorkspaces()
+                }
                 val session = draftSession ?: error("The chat draft is not ready.")
                 withContext(ioDispatcher) { draftStore.savePendingSend(attempt, session) }
                 _pendingSend.value = attempt
@@ -1540,7 +1649,7 @@ class AidenChatViewModel(
                     return@launch
                 }
                 withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) }
-                val candidate = updatedChat.copy(messages = updatedChat.messages.filter { it.id != optimisticId })
+                val candidate = sentChat.copy(messages = sentChat.messages.filter { it.id != optimisticId })
                 val accepted = withContext(ioDispatcher) {
                     chatCache.acceptTurnReceipt(candidate, response.message, stream, instanceId, requestToken)
                 }
@@ -1581,7 +1690,7 @@ class AidenChatViewModel(
                         _pendingSend.value = null
                         turnAttempts.reset()
                     }
-                    if (_pendingSend.value == null) _presentedError.value = e.localizedMessage
+                    if (_pendingSend.value == null && e !is AidenNewWorktreeCanceled) _presentedError.value = e.localizedMessage
                 }
             } finally {
                 _isStarting.value = false

@@ -20,6 +20,7 @@ import {
   AIDEN_REMOTE_CONTRACT_REVISION,
   AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES,
   parseAidenRemoteSpendingStatus,
+  parseAidenRemoteChatNewWorktreeResponse,
   type AidenRemoteCapability,
   type AidenRemoteStreamInputResult,
 } from "./aiden-remote-protocol.js";
@@ -115,6 +116,8 @@ async function fixture(options: {
   contextPressure?: { chatId: string; pressure: Record<string, unknown> | null };
   /** The host's spending ledger (contract revision 47). */
   spending?: import("./aiden-remote-router.js").AidenRemoteRouterDependencies["spending"];
+  /** The host makes worktrees for phones' first messages (contract revision 48). */
+  newWorktrees?: boolean;
 } = {}) {
   const logs: unknown[] = [];
   const calls: string[] = [];
@@ -272,7 +275,8 @@ async function fixture(options: {
               capability !== "bot:handoff-notes" &&
               capability !== "bot:images" &&
               capability !== "bot:issues" &&
-              capability !== "schedule:cards",
+              capability !== "schedule:cards" &&
+              capability !== "chat:new-worktree",
           )
         ) {
           return null;
@@ -330,6 +334,15 @@ async function fixture(options: {
       },
     },
     chats: {
+      ...(options.newWorktrees
+        ? {
+            supportsNewWorktrees: true,
+            moveToNewWorktree: async (deviceId: string, id: string, revision: string, key: string, body: unknown) => {
+              calls.push(`chat-new-worktree:${deviceId}:${id}:${revision}:${key}:${JSON.stringify(body)}`);
+              return { chat: { ...chat, id, workspaceId: "workspace-worktree" }, branch: "aiden/fix-the-login-bug" };
+            },
+          }
+        : {}),
       list: async (workspaceId) => {
         calls.push(`chat-list:${workspaceId ?? ""}`);
         return { chats: [chat] };
@@ -1263,6 +1276,62 @@ test("browser recordings are served to chat readers as no-store video", async ()
     assert.equal((await fetch(`${cli.base}/chats/chat-1/recordings/${recording}`, { headers })).status, 404);
   } finally {
     await cli.close();
+  }
+});
+
+test("chat:new-worktree is offered while the host makes worktrees, and a holder with Git write moves an empty chat into one", async () => {
+  const headers = { authorization: `Bearer ${"a".repeat(43)}`, "aiden-protocol-version": "1" };
+  const negotiate = {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json" },
+    body: JSON.stringify({ accepts: ["chat:new-worktree"] }),
+  };
+  const send = (base: string, extra: Record<string, string> = {}, body = JSON.stringify({ text: "Fix the login bug" })) =>
+    fetch(`${base}/chats/chat-1/worktree`, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "content-type": "application/json",
+        "if-match": "rev-1",
+        "idempotency-key": "new-worktree-key-0001",
+        ...extra,
+      },
+      body,
+    });
+  for (const wired of [true, false]) {
+    const app = await fixture({
+      capabilities: ["server:read", "chat:read", "chat:write", "git:write"],
+      acceptsProgressCapabilities: true,
+      deviceType: "iphone",
+      newWorktrees: wired,
+    });
+    try {
+      const server = await (await fetch(`${app.base}/server`, { headers })).json();
+      assert.equal(server.serverCapabilities.includes("chat:new-worktree"), wired);
+      assert.equal(server.features.some((feature: string) => feature.includes("worktree")), false, "no feature token is spent on it");
+      // Unwired hosts have no route; a wired host refuses a device that has not opted in.
+      assert.equal((await send(app.base)).status, wired ? 403 : 404);
+      assert.equal((await fetch(`${app.base}/device/capabilities`, negotiate)).status, wired ? 200 : 404);
+      assert.ok(!app.calls.some((call) => call.startsWith("chat-new-worktree")));
+    } finally {
+      await app.close();
+    }
+  }
+
+  const noGit = await fixture({ capabilities: ["server:read", "chat:read", "chat:write", "chat:new-worktree"], deviceType: "android", newWorktrees: true });
+  const holder = await fixture({ capabilities: ["server:read", "chat:read", "chat:write", "git:write", "chat:new-worktree"], deviceType: "iphone", newWorktrees: true });
+  try {
+    assert.equal((await send(noGit.base)).status, 403, "making a worktree is a Git write");
+    assert.equal((await send(holder.base, { "if-match": "" })).status, 400, "the chat's revision is required");
+    const moved = await send(holder.base);
+    assert.equal(moved.status, 200);
+    const body = parseAidenRemoteChatNewWorktreeResponse(await moved.json());
+    assert.equal(body.chat.workspaceId, "workspace-worktree");
+    assert.equal(body.branch, "aiden/fix-the-login-bug");
+    assert.ok(holder.calls.includes(`chat-new-worktree:device-authorized-12345678:chat-1:rev-1:new-worktree-key-0001:{"text":"Fix the login bug"}`));
+  } finally {
+    await noGit.close();
+    await holder.close();
   }
 });
 

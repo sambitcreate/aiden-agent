@@ -442,6 +442,7 @@
         "main/services/aiden-remote-chat-progress.test.ts",
         "main/services/aiden-remote-chat-summaries.test.ts",
         "main/services/aiden-remote-chats.test.ts",
+        "main/services/aiden-remote-new-worktree.test.ts",
         "main/services/visual-viewer-document.test.ts",
         "main/services/aiden-remote-files.test.ts",
         "main/services/aiden-remote-git.test.ts",

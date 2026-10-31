@@ -89,6 +89,7 @@ function fixture(
     visualViewer?: ConstructorParameters<typeof AidenRemoteChatService>[0]["visualViewer"];
     browserRecordings?: ConstructorParameters<typeof AidenRemoteChatService>[0]["browserRecordings"];
     contextPressure?: ConstructorParameters<typeof AidenRemoteChatService>[0]["contextPressure"];
+    newWorktrees?: ConstructorParameters<typeof AidenRemoteChatService>[0]["newWorktrees"];
     /** The host's configured models; anything else is refused as `resolve` refuses it. */
     configuredModels?: readonly string[];
   } = {},
@@ -310,6 +311,7 @@ function fixture(
     ...(fixtureOptions.visualViewer ? { visualViewer: fixtureOptions.visualViewer } : {}),
     ...(fixtureOptions.browserRecordings ? { browserRecordings: fixtureOptions.browserRecordings } : {}),
     ...(fixtureOptions.contextPressure ? { contextPressure: fixtureOptions.contextPressure } : {}),
+    ...(fixtureOptions.newWorktrees ? { newWorktrees: fixtureOptions.newWorktrees } : {}),
   });
   return {
     service,
@@ -911,6 +913,95 @@ test("ordinary workspace moves always reject Bot chats and preserve managed-home
   );
   assert.equal(app.current()?.workspaceId, "bot-home-1");
   assert.equal(app.notifications(), 0);
+});
+
+test("New worktree moves an empty chat into the worktree made for it, once per chat, and leaves a chat with messages alone", async () => {
+  const made: string[] = [];
+  let failure: Error | undefined;
+  const newWorktrees = {
+    create: async (deviceId: string, sourceWorkspaceId: string, text: string, chatId: string) => {
+      if (failure) throw failure;
+      made.push(`${deviceId}:${sourceWorkspaceId}:${text}:${chatId}`);
+      return { workspaceId: "workspace-worktree", branch: "aiden/fix-the-login-bug" };
+    },
+    // Only the worktree made for this chat counts as its finished setup.
+    worktreeBranch: async (chatId: string, workspaceId: string) =>
+      workspaceId === "workspace-worktree" && made.some((entry) => entry.endsWith(`:${chatId}`))
+        ? "aiden/fix-the-login-bug"
+        : undefined,
+  };
+  const app = fixture(chat({ messages: [] }), { newWorktrees });
+  assert.equal(app.service.supportsNewWorktrees, true);
+  assert.equal(fixture(chat({ messages: [] })).service.supportsNewWorktrees, false);
+  const revision = projectAidenRemoteChat(app.current()!).revision;
+
+  await assert.rejects(
+    app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0001", { text: "Fix", branch: "mine" }),
+    (error: unknown) => (error as { code?: string }).code === "invalid_request",
+  );
+  await assert.rejects(
+    app.service.moveToNewWorktree("device-1", "chat-1", "rev-stale", "new-worktree-0002", { text: "Fix the login bug" }),
+    (error: unknown) => (error as { code?: string }).code === "revision_conflict",
+  );
+  assert.deepEqual(made, [], "nothing is made for a refused request");
+
+  const moved = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0003", { text: "Fix the login bug" });
+  assert.equal(moved.chat.workspaceId, "workspace-worktree");
+  assert.equal(moved.branch, "aiden/fix-the-login-bug");
+  assert.equal(app.current()?.workspaceId, "workspace-worktree");
+  assert.deepEqual(made, ["device-1:workspace-1:Fix the login bug:chat-1"], "made from the chat's workspace, keyed by the chat");
+  const replay = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0003", { text: "Fix the login bug" });
+  assert.deepEqual(replay, moved, "the same key answers again without making another");
+  assert.equal(made.length, 1);
+  // The phone stopped waiting before that answer, so it still holds the old
+  // revision, and its retry carries a new key and the message as edited.
+  const late = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0006", { text: "Fix the login bug on Safari" });
+  assert.deepEqual(late, moved, "an empty chat already in a worktree answers with it");
+  assert.equal(made.length, 1, "and nothing more is made");
+
+  const busy = fixture(chat({ messages: [{ id: "user-1", role: "user", content: "Hello", createdAt: 1_000 }] }), { newWorktrees });
+  await assert.rejects(
+    busy.service.moveToNewWorktree("device-1", "chat-1", projectAidenRemoteChat(busy.current()!).revision, "new-worktree-0004", { text: "Fix" }),
+    (error: unknown) => (error as { code?: string; status?: number }).code === "operation_stale" && (error as { status?: number }).status === 409,
+  );
+  assert.equal(made.length, 1, "a chat with messages stays where it is");
+
+  // Git's own words (with a path) never reach the phone.
+  failure = new Error("fatal: '/Users/sam/.aiden/worktrees/site-1' already exists");
+  const failing = fixture(chat({ messages: [] }), { newWorktrees });
+  await assert.rejects(
+    failing.service.moveToNewWorktree("device-1", "chat-1", projectAidenRemoteChat(failing.current()!).revision, "new-worktree-0005", { text: "Fix" }),
+    (error: unknown) =>
+      (error as { code?: string }).code === "git_capability_denied" && !(error as Error).message.includes("/Users/"),
+  );
+  assert.equal(failing.current()?.workspaceId, "workspace-1");
+
+  // Someone moves the empty chat while its worktree is still being made: that
+  // move stands and the late worktree request is refused.
+  failure = undefined;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const racing = fixture(chat({ messages: [] }), {
+    newWorktrees: { ...newWorktrees, create: async (...args: Parameters<typeof newWorktrees.create>) => { await held; return newWorktrees.create(...args); } },
+  });
+  const before = projectAidenRemoteChat(racing.current()!).revision;
+  const pending = racing.service.moveToNewWorktree("device-1", "chat-1", before, "new-worktree-0007", { text: "Fix" });
+  await racing.service.move("device-2", "chat-1", before, "move-other-device-0001", { workspaceId: "workspace-2", confirmedForeground: true });
+  release();
+  await assert.rejects(pending, (error: unknown) => (error as { code?: string }).code === "revision_conflict");
+  assert.equal(racing.current()?.workspaceId, "workspace-2");
+
+  // Moved by someone else into a worktree this chat never made: a stale
+  // request is refused rather than answered with that worktree.
+  const elsewhere = fixture(chat({ messages: [] }), { newWorktrees });
+  const stale = projectAidenRemoteChat(elsewhere.current()!).revision;
+  made.length = 0;
+  await elsewhere.service.move("device-2", "chat-1", stale, "move-other-device-0002", { workspaceId: "workspace-worktree", confirmedForeground: true });
+  await assert.rejects(
+    elsewhere.service.moveToNewWorktree("device-1", "chat-1", stale, "new-worktree-0008", { text: "Fix" }),
+    (error: unknown) => (error as { code?: string }).code === "revision_conflict",
+  );
+  assert.equal(made.length, 0);
 });
 
 test("ordinary chat deletion cannot remove a Bot's persistent chat", async () => {

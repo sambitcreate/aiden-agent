@@ -993,8 +993,8 @@ test("bot:activity is an opt-in any paired device may negotiate and keep", async
   assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
 });
 
-test("bot:handoffs and schedule:cards are opt-ins pairing never issues and any paired device may negotiate and keep", async () => {
-  for (const optIn of ["bot:handoffs", "schedule:cards"] as const) {
+test("bot:handoffs, schedule:cards and chat:new-worktree are opt-ins pairing never issues and any paired device may negotiate and keep", async () => {
+  for (const optIn of ["bot:handoffs", "schedule:cards", "chat:new-worktree"] as const) {
     const state = fixture();
     const devices = [];
     for (const type of ["iphone", "android", "mac"] as const) {
