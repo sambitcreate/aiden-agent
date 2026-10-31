@@ -789,6 +789,33 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
 }
 
 /**
+ * Moves the new chat into a workspace with no folder. A fresh install starts
+ * in No workspace, which has a hidden folder, so folder-free states need a
+ * folderless workspace of their own.
+ */
+export async function chooseFolderlessWorkspace(page: Page, name = "Notes"): Promise<void> {
+  await page.evaluate(async (workspaceName) => {
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
+    await bridge.invoke("workspaces:create", { name: workspaceName, permission: "ask" });
+  }, name);
+  await page.reload();
+  const picker = page.getByRole("button", { name: "Choose a workspace" });
+  await picker.click();
+  const option = page.getByRole("option", { name: new RegExp(`^${name}`, "u") });
+  await option.click();
+  await expect(picker).toHaveText(name);
+  // Let the menu finish closing and the composer settle before the caller moves on.
+  await expect(option).toHaveCount(0);
+  await expect(page.getByText(`What should we build in ${name}?`)).toBeVisible();
+  await page.locator("textarea").focus();
+  await expect(page.locator("textarea")).toBeFocused();
+}
+
+/**
  * Lets the onboarding "provider added" toast leave, as a user who moves on
  * would. Sonner pins a toast for as long as the pointer rests on it, and the
  * top-center toast overlaps the floating Environment panel's browser and tab

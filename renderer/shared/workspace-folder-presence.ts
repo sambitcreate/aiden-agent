@@ -26,12 +26,19 @@ export const WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL =
 
 /**
  * Which workspaces the check covers. An Aiden-managed worktree has its own
- * restore flow, and a No Access workspace never touches its folder.
+ * restore flow, a No workspace chat's hidden folder is made again when the
+ * chat next runs, and a No Access workspace never touches its folder.
  */
 export function workspaceFolderCheckApplies(workspace: {
   folderPath?: string;
   permission?: string;
   managedWorktree?: unknown;
+  noWorkspace?: true;
 }): boolean {
-  return Boolean(workspace.folderPath) && !workspace.managedWorktree && workspace.permission !== "none";
+  return (
+    Boolean(workspace.folderPath) &&
+    !workspace.managedWorktree &&
+    !workspace.noWorkspace &&
+    workspace.permission !== "none"
+  );
 }

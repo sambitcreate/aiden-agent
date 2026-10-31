@@ -1219,6 +1219,7 @@
         "renderer/shared/google-thinking.test.ts",
         "renderer/shared/keybindings.test.ts",
         "renderer/components/workspace-picker.test.tsx",
+        "renderer/lib/no-workspace-send.test.ts",
         "renderer/lib/workspace-menu.test.ts",
         "renderer/lib/draft-workspace-menu.test.ts",
         "renderer/shared/workspace-artifacts.test.ts",
