@@ -8,15 +8,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
-import { AIDEN_CONFIG_DIR_ENV, AIDEN_DIR_NAME, aidenConfigDir } from "../aiden-config-dir.js";
 import { writeFileAtomic } from "../durable-fs.js";
 
 interface OwnershipRecord {
@@ -24,15 +21,6 @@ interface OwnershipRecord {
   generation: string;
   acquiredAt: number;
   heartbeatAt: number;
-  /** When the computer started, so a lease left before a restart is never kept by a reused pid. */
-  bootAt?: number;
-}
-
-/** Boot times read through uptime drift by a few seconds; a restart moves them by far more. */
-const BOOT_TOLERANCE_MS = 2 * 60_000;
-
-function currentBootAt(): number {
-  return Date.now() - os.uptime() * 1_000;
 }
 
 function readRecord(file: string): OwnershipRecord | undefined {
@@ -59,11 +47,8 @@ export function createTelegramOwnershipLease(options: {
   profile: string;
   now?: () => number;
   staleMs?: number;
-  /** When this computer booted (ms); injectable for tests. */
-  bootAt?: () => number;
 }) {
   const now = options.now ?? Date.now;
-  const bootAt = options.bootAt ?? currentBootAt;
   const generation = randomUUID();
   const directory = path.join(options.root(), "telegram-owners");
   const file = path.join(directory, `${options.profile}.json`);
@@ -120,16 +105,13 @@ export function createTelegramOwnershipLease(options: {
       let recovered = false;
       if (existsSync(file)) {
         const current = readRecord(file);
-        // A lease from before the computer restarted is stale even when its
-        // pid now belongs to some other live process.
-        const otherBoot = current?.bootAt !== undefined && Math.abs(current.bootAt - bootAt()) > BOOT_TOLERANCE_MS;
-        const stale = !current || (now() - current.heartbeatAt > staleMs && (otherBoot || !processAlive(current.pid)));
+        const stale = !current || (now() - current.heartbeatAt > staleMs && !processAlive(current.pid));
         if (!stale) return { acquired: false, recovered: false, ownerPid: current?.pid };
         renameSync(file, path.join(directory, `${options.profile}.recovered-${now()}-${randomUUID()}.json`));
         recovered = true;
       }
       const timestamp = now();
-      claim({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp, bootAt: bootAt() });
+      claim({ pid: process.pid, generation, acquiredAt: timestamp, heartbeatAt: timestamp });
       epoch += 1;
       heartbeat = setInterval(() => void refresh(), Math.max(1_000, Math.floor(staleMs / 4)));
       heartbeat.unref?.();
@@ -149,92 +131,5 @@ export function createTelegramOwnershipLease(options: {
       }
     },
     owns,
-  };
-}
-
-/** The public numeric bot id that prefixes a Bot API token (`<botId>:<secret>`). */
-export function telegramBotIdFromToken(token: string | null | undefined): number | undefined {
-  const match = /^(\d{1,15}):\S+$/u.exec(token?.trim() ?? "");
-  const id = match ? Number(match[1]) : Number.NaN;
-  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
-}
-
-/**
- * Where bot-keyed transport leases live, shared by the desktop app and the CLI
- * so both cannot long-poll the same bot at once.
- *
- * - Desktop: `<aidenConfigDir>` (defaults to `~/.aiden`).
- * - CLI: the same when the agent dir is the default `~/.aiden/agent` or when
- *   `AIDEN_CONFIG_DIR` is set; otherwise the agent dir itself, so sandboxed
- *   and test agent dirs never claim the real shared root.
- */
-export function telegramSharedOwnershipRoot(agentDir?: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (env[AIDEN_CONFIG_DIR_ENV]?.trim() || agentDir === undefined) return aidenConfigDir(env);
-  const home = path.join(os.homedir(), AIDEN_DIR_NAME);
-  const canonical = (file: string): string => {
-    try {
-      return realpathSync.native(file);
-    } catch {
-      return path.resolve(file);
-    }
-  };
-  const defaultAgent = path.join(home, "agent");
-  return path.resolve(agentDir) === defaultAgent || canonical(agentDir) === canonical(defaultAgent)
-    ? home
-    : path.resolve(agentDir);
-}
-
-export interface TelegramTransportClaim {
-  acquired: boolean;
-  recovered: boolean;
-  ownerPid?: number;
-  /** Which lease refused: this profile's, or the bot token's shared one. */
-  scope?: "profile" | "bot";
-}
-
-/**
- * The transport claim a poller holds: its profile lease plus a lease keyed by
- * the token's bot id under the shared root, so a desktop profile and
- * `aiden serve` (or two desktop profiles) never poll the same bot together.
- */
-export function createTelegramTransportOwnership(options: {
-  profileRoot(): string;
-  profile: string;
-  sharedRoot(): string;
-  getToken(): Promise<string | null>;
-  now?: () => number;
-  staleMs?: number;
-}) {
-  const timing = { ...(options.now ? { now: options.now } : {}), ...(options.staleMs ? { staleMs: options.staleMs } : {}) };
-  const profileLease = createTelegramOwnershipLease({ root: options.profileRoot, profile: options.profile, ...timing });
-  let botLease: ReturnType<typeof createTelegramOwnershipLease> | undefined;
-
-  function release(): void {
-    botLease?.release();
-    botLease = undefined;
-    profileLease.release();
-  }
-
-  return {
-    async acquire(): Promise<TelegramTransportClaim> {
-      const botId = telegramBotIdFromToken(await options.getToken());
-      const profile = profileLease.acquire();
-      if (!profile.acquired) return { ...profile, scope: "profile" };
-      if (botId === undefined) return profile;
-      try {
-        const lease = createTelegramOwnershipLease({ root: options.sharedRoot, profile: `bot-${botId}`, ...timing });
-        const bot = lease.acquire();
-        if (!bot.acquired) {
-          profileLease.release();
-          return { ...bot, scope: "bot" };
-        }
-        botLease = lease;
-        return { acquired: true, recovered: profile.recovered || bot.recovered };
-      } catch (cause) {
-        profileLease.release();
-        throw cause;
-      }
-    },
-    release,
   };
 }

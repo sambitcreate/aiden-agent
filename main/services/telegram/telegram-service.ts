@@ -60,7 +60,7 @@ import {
   telegramBotNoticeAudienceId,
 } from "./telegram-profile-config.js";
 import { createTelegramThreadStore } from "./telegram-thread-store.js";
-import { createTelegramTransportOwnership, telegramSharedOwnershipRoot } from "./telegram-ownership.js";
+import { createTelegramOwnershipLease } from "./telegram-ownership.js";
 import {
   chunkForTelegram,
   chunkRichMarkdown,
@@ -351,13 +351,9 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
     root: () => app.getPath("userData"),
     profile,
   });
-  // The bot-keyed lease lives in the shared Aiden root so `aiden serve` and
-  // this app (or two profiles holding one token) never poll one bot together.
-  const ownership = createTelegramTransportOwnership({
-    profileRoot: () => app.getPath("userData"),
+  const ownership = createTelegramOwnershipLease({
+    root: () => app.getPath("userData"),
     profile,
-    sharedRoot: () => telegramSharedOwnershipRoot(),
-    getToken: resolveToken,
   });
   let threadProvisioning = Promise.resolve();
   // Bot-bound messages go to the Bot's durable session; replies leave through
@@ -487,15 +483,6 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
           });
         }
       });
-      threadProvisioning = operation.then(
-        () => undefined,
-        () => undefined,
-      );
-      return operation;
-    },
-    forgetThreadTargets: () => {
-      // Serialized with provisioning, so a provision in flight can't re-add old ids.
-      const operation = threadProvisioning.then(() => threadStore.clear());
       threadProvisioning = operation.then(
         () => undefined,
         () => undefined,
@@ -1030,28 +1017,9 @@ export function createTelegramProfileManager() {
       return secrets.hasKey(telegramProfileTokenKey(activeProfile));
     },
     async setActiveToken(token: string): Promise<void> {
-      const profile = activeProfile;
-      const key = telegramProfileTokenKey(profile);
-      if (!token) {
-        await secrets.deleteKey(key);
-        return;
-      }
-      const previous = await secrets.getKey(key);
-      if (previous === token) {
-        await secrets.setKey(key, token);
-        return;
-      }
-      // A running transport keeps the old bot's identity and offset until it
-      // re-runs getMe, so a new token must restart it (or revive one stopped
-      // by a revoked token). It stops before the key changes, so no poll of
-      // the old bot runs on the new token, and starts again either way.
-      const service = services.get(profile);
-      service?.stop();
-      try {
-        await secrets.setKey(key, token);
-      } finally {
-        await service?.restart();
-      }
+      const key = telegramProfileTokenKey(activeProfile);
+      if (token) await secrets.setKey(key, token);
+      else await secrets.deleteKey(key);
     },
     async setEnabled(enabled: boolean): Promise<void> {
       await setProfileSettings(activeProfile, { telegramEnabled: enabled });

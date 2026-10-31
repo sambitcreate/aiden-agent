@@ -14,25 +14,6 @@ import type { AppSettings } from "../types.js";
 export interface TelegramRuntimeState {
   /** Monotonically increasing offset for getUpdates. Undefined on first run. */
   lastUpdateId?: number;
-  /**
-   * Telegram id of the bot whose update stream `lastUpdateId` belongs to.
-   * Update ids are per bot, so a different bot's offset would skip every update.
-   */
-  botId?: number;
-}
-
-/**
- * The runtime state to keep once the polling transport learns which bot its
- * token belongs to. A different bot resets the offset; a legacy offset without
- * a recorded bot is kept and stamped, since it was written by this token.
- */
-export function adoptTelegramBotRuntimeState(
-  state: TelegramRuntimeState,
-  botId: number,
-): { state: TelegramRuntimeState; reset: boolean } {
-  if (state.botId === botId) return { state, reset: false };
-  if (state.botId === undefined) return { state: { ...state, botId }, reset: false };
-  return { state: { botId }, reset: true };
 }
 
 export interface TelegramConfigSnapshot {
@@ -79,20 +60,8 @@ export function createTelegramConfig(deps: TelegramConfigDeps) {
   async function persistOffset(updateId: number): Promise<void> {
     const current = await getRuntimeState();
     if (current.lastUpdateId === undefined || updateId > current.lastUpdateId) {
-      await saveRuntimeState({ ...current, lastUpdateId: updateId });
+      await saveRuntimeState({ lastUpdateId: updateId });
     }
-  }
-
-  /**
-   * Record which bot the stored offset belongs to. Returns true when a
-   * different bot's offset was dropped, so polling starts from Telegram's
-   * oldest pending update for the new bot.
-   */
-  async function adoptBot(botId: number): Promise<boolean> {
-    const current = await getRuntimeState();
-    const next = adoptTelegramBotRuntimeState(current, botId);
-    if (next.state !== current) await saveRuntimeState(next.state);
-    return next.reset;
   }
 
   async function getOffset(): Promise<number | undefined> {
@@ -129,7 +98,6 @@ export function createTelegramConfig(deps: TelegramConfigDeps) {
     persistOffset,
     getOffset,
     clearOffset,
-    adoptBot,
     getSettings,
     setSettings,
     hasToken,

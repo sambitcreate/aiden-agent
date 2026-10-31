@@ -871,47 +871,6 @@ test("Telegram is disabled without an explicit owner even when a token exists", 
   assert.equal(calls, 0); assert.equal(telegram.getStatus().status, "disabled");
 });
 
-test("Telegram resets a stale offset for a new bot and shares one bot lease across CLI homes", async (t) => {
-  const shared = temporary(t), first = temporary(t), second = temporary(t);
-  const env = { AIDEN_CONFIG_DIR: process.env.AIDEN_CONFIG_DIR, AIDEN_TELEGRAM_TOKEN: process.env.AIDEN_TELEGRAM_TOKEN };
-  process.env.AIDEN_CONFIG_DIR = shared; process.env.AIDEN_TELEGRAM_TOKEN = "4242:test-only";
-  t.after(() => { for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  for (const dir of [first, second]) api.atomicJson(join(dir, "telegram.json"), { telegramEnabled: true, telegramAllowedUserId: 7 });
-  // Left behind by a different bot (id 1) before the token was replaced.
-  api.atomicJson(join(first, "telegram-runtime.json"), { lastUpdateId: 900, botId: 1 });
-  const fakeApi = (record) => ({
-    async getMe() { record.getMe++; return { id: 4242, is_bot: true, first_name: "Aiden", username: "aiden_test_bot" }; },
-    async setMyCommands() { return true; },
-    async getUpdates(offset, _timeout, signal) {
-      record.offsets.push(offset);
-      if (signal && !signal.aborted) await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-      return [];
-    },
-  });
-  const waitFor = async (check) => { for (let i = 0; i < 400 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5)); assert.ok(check()); };
-  const firstChats = api.createDaemonChats(first), secondChats = api.createDaemonChats(second);
-  const a = { getMe: 0, offsets: [] }, b = { getMe: 0, offsets: [] };
-  const firstTelegram = api.createCliTelegram(first, firstChats, fakeApi(a));
-  const secondTelegram = api.createCliTelegram(second, secondChats, fakeApi(b));
-  try {
-    await firstTelegram.start();
-    await waitFor(() => a.offsets.length === 1);
-    assert.deepEqual(a.offsets, [undefined], "the new bot does not inherit the old bot's offset");
-
-    await secondTelegram.start();
-    assert.equal(b.getMe, 0, "a second home never polls a bot another process holds");
-    assert.match(secondTelegram.getStatus().lastError ?? "", /already in use by another Aiden process/);
-
-    await firstTelegram.stopAndSettle();
-    await secondTelegram.start();
-    await waitFor(() => b.offsets.length === 1);
-    assert.equal(secondTelegram.getStatus().status, "polling");
-  } finally {
-    await firstTelegram.stopAndSettle(); await secondTelegram.stopAndSettle();
-    await firstChats.stop(); await secondChats.stop();
-  }
-});
-
 test("CLI speech uses an isolated worker and rejects uninstalled models without downloading", async (t) => {
   const dir = temporary(t), original = process.env.AIDEN_CLI_ENTRY;
   process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");

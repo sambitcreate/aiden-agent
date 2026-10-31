@@ -2,10 +2,10 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import type { AppSettings } from "../../../main/services/types.js";
-import { adoptTelegramBotRuntimeState, type TelegramConfig, type TelegramRuntimeState } from "../../../main/services/telegram/telegram-config.js";
+import type { TelegramConfig } from "../../../main/services/telegram/telegram-config.js";
 import { createTelegramServiceCore } from "../../../main/services/telegram/telegram-service-core.js";
 import { TelegramBotApi, createFetchTransport, createFetchFileDownloader, createFetchUploadTransport } from "../../../main/services/telegram/telegram-bot-api.js";
-import { createTelegramTransportOwnership, telegramSharedOwnershipRoot } from "../../../main/services/telegram/telegram-ownership.js";
+import { createTelegramOwnershipLease } from "../../../main/services/telegram/telegram-ownership.js";
 import { JsonStore, acquireLease } from "./state.ts";
 import { insightCredentials } from "./credentials.ts";
 import { createCliModelRuntime } from "./providers.ts";
@@ -16,7 +16,7 @@ const settingsStore = (root: string) => new JsonStore<AppSettings>(join(root, "t
 const tokenFor = (root: string) => async () => process.env.AIDEN_TELEGRAM_TOKEN?.trim() || await insightCredentials(root).read("telegram") || null;
 
 export function createCliTelegram(agentDir: string, chats: ReturnType<typeof createDaemonChats>, apiOverride?: TelegramBotApi) {
-  const settings = settingsStore(agentDir), offsets = new JsonStore<TelegramRuntimeState>(join(agentDir, "telegram-runtime.json"), {});
+  const settings = settingsStore(agentDir), offsets = new JsonStore<{ lastUpdateId?: number }>(join(agentDir, "telegram-runtime.json"), {});
   const getToken = tokenFor(agentDir);
   const config: TelegramConfig = {
     getSettings: () => settings.load(),
@@ -25,15 +25,6 @@ export function createCliTelegram(agentDir: string, chats: ReturnType<typeof cre
     getOffset: async () => (await offsets.load()).lastUpdateId,
     clearOffset: async () => { await offsets.save({}); },
     persistOffset: async (id) => { await offsets.update((value) => { value.lastUpdateId = Math.max(id, value.lastUpdateId ?? -1); }); },
-    adoptBot: async (botId) => {
-      let reset = false;
-      await offsets.update((value) => {
-        const next = adoptTelegramBotRuntimeState(value, botId);
-        reset = next.reset;
-        return next.state;
-      }, undefined, true);
-      return reset;
-    },
     snapshot: async () => {
       const value = await settings.load();
       // Owner identity is chosen on the local terminal; never auto-pair the first stranger.
@@ -42,8 +33,7 @@ export function createCliTelegram(agentDir: string, chats: ReturnType<typeof cre
     },
   };
   const api = apiOverride ?? new TelegramBotApi(createFetchTransport(getToken), createFetchFileDownloader(getToken), createFetchUploadTransport(getToken));
-  // The bot-keyed lease shares the desktop app's root, so `aiden serve` and the app never poll one bot together.
-  const ownership = createTelegramTransportOwnership({ profileRoot: () => agentDir, profile: "default", sharedRoot: () => telegramSharedOwnershipRoot(agentDir), getToken });
+  const ownership = createTelegramOwnershipLease({ root: () => agentDir, profile: "default" });
   return createTelegramServiceCore({ api, config, getToken, now: Date.now,
     sleep: async (ms, signal) => { await delay(ms, undefined, { signal }); },
     warn: (message) => process.stderr.write(`aiden: ${message}\n`), error: (message) => process.stderr.write(`aiden: ${message}\n`), info: () => {},

@@ -30,7 +30,7 @@ import type {
   TelegramUpdate,
   TelegramUser,
 } from "./telegram-bot-api.js";
-import { createTelegramConfig, type TelegramConfig } from "./telegram-config.js";
+import type { TelegramConfig } from "./telegram-config.js";
 import type { TelegramTurnDeps } from "./telegram-turn.js";
 import type { AppSettings } from "../types.js";
 import { createTelegramLifecycleAdapter } from "../context-lifecycle-adapters.js";
@@ -190,7 +190,7 @@ function createMockApi(opts: MockApiOptions) {
       voiceMessages.push(p);
       return { message_id: voiceMessages.length, chat: { id: p.chatId, type: "private" }, date: 0 };
     },
-    async sendChatAction(_chatId: number, _action: string, _threadId?: number): Promise<void> {
+    async sendChatAction(_chatId: number, _action: string): Promise<void> {
       sendChatActionCalls += 1;
     },
     async downloadFile(fileId: string) {
@@ -265,9 +265,6 @@ function createMockConfig(state: MockConfigState) {
     },
     async clearOffset(): Promise<void> {
       clearOffsetCalls += 1;
-    },
-    async adoptBot(_botId: number): Promise<boolean> {
-      return false;
     },
     async getSettings(): Promise<AppSettings> {
       return baseSettings();
@@ -533,8 +530,6 @@ interface HarnessOptions {
   assertBotBindingStoreHealthy?: import("./telegram-service-core.js").TelegramServiceDeps["assertBotBindingStoreHealthy"];
   resolveThreadWorkspace?: (threadId: number) => Promise<string | undefined>;
   clearThreadTargets?: () => Promise<void>;
-  ensureThreadTargets?: (chatId: number) => Promise<void>;
-  forgetThreadTargets?: () => Promise<void>;
   listModels?: () => Promise<readonly import("./telegram-controls.js").TelegramModelChoice[]>;
   applyModelSelection?: (
     choice: import("./telegram-controls.js").TelegramModelChoice,
@@ -549,9 +544,6 @@ interface HarnessOptions {
   existingChats?: MockTurnOptions["existingChats"];
   storeInboundFile?: import("./telegram-service-core.js").TelegramServiceDeps["storeInboundFile"];
   botIngress?: import("./telegram-service-core.js").TelegramServiceDeps["botIngress"];
-  acquireOwnership?: import("./telegram-service-core.js").TelegramServiceDeps["acquireOwnership"];
-  releaseOwnership?: () => void;
-  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 function harness(o: HarnessOptions = {}) {
@@ -616,8 +608,6 @@ function harness(o: HarnessOptions = {}) {
     admitRunInput: o.admitRunInput,
     resolveThreadWorkspace: o.resolveThreadWorkspace,
     clearThreadTargets: o.clearThreadTargets,
-    ensureThreadTargets: o.ensureThreadTargets,
-    forgetThreadTargets: o.forgetThreadTargets,
     mediaGroupDebounceMs: o.mediaGroupDebounceMs,
     handleExtensionUpdate: o.handleExtensionUpdate,
     synthesizeVoice: o.synthesizeVoice,
@@ -625,9 +615,7 @@ function harness(o: HarnessOptions = {}) {
     botIngress: o.botIngress,
     getToken: () => Promise.resolve("mock-token"),
     now: () => 0,
-    sleep: o.sleep ?? sleepMock.sleep,
-    acquireOwnership: o.acquireOwnership,
-    releaseOwnership: o.releaseOwnership,
+    sleep: sleepMock.sleep,
     info: logs.infoFn,
     warn: logs.warnFn,
     error: logs.errorFn,
@@ -741,291 +729,6 @@ test("disconnect() clears polling and resets the persisted offset", async () => 
 
   assert.equal(config.clearOffsetCalls(), 1, "offset cleared on disconnect");
   assert.equal(service.getStatus().status, "disabled");
-});
-
-// ---------------------------------------------------------------------------
-// Transport resilience
-// ---------------------------------------------------------------------------
-
-/** A getUpdates that records the offset of every poll and parks until the loop stops. */
-function recordingGetUpdates(offsets: Array<number | undefined>) {
-  return async (offset?: number, _timeout?: number, signal?: AbortSignal): Promise<TelegramUpdate[]> => {
-    offsets.push(offset);
-    if (signal && !signal.aborted) await once(signal, "abort");
-    return [];
-  };
-}
-
-/** The real runtime config (offset + bot id) in a throwaway directory. */
-async function runtimeConfig(t: import("node:test").TestContext) {
-  const root = await mkdtemp(join(tmpdir(), "aiden-telegram-runtime-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  return createTelegramConfig({
-    getSettings: async () => ({}),
-    setSettings: async (patch) => patch,
-    hasToken: async () => true,
-    resolveRootDir: () => root,
-  });
-}
-
-test("a new bot token polls from the new bot's updates, not the old bot's offset", async (t) => {
-  const runtime = await runtimeConfig(t);
-  await runtime.adoptBot(1);
-  await runtime.persistOffset(900);
-  const { service, api, config } = harness({ enabled: true, autoStop: false });
-  config.getOffset = runtime.getOffset;
-  config.adoptBot = runtime.adoptBot;
-  const offsets: Array<number | undefined> = [];
-  let me: TelegramUser = BOT;
-  api.getMe = async () => me;
-  api.getUpdates = recordingGetUpdates(offsets);
-
-  await service.start();
-  await waitFor(() => offsets.length === 1);
-  assert.equal(offsets[0], 900, "the same bot resumes from its stored offset");
-
-  // The person pastes a token for a different bot while the bridge runs.
-  me = { ...BOT, id: 2, username: "other_bot" };
-  await service.restart();
-  await waitFor(() => offsets.length === 2);
-
-  assert.equal(offsets[1], undefined, "the new bot starts from its own oldest pending update");
-  assert.equal(await runtime.getOffset(), undefined);
-  assert.equal(service.getStatus().botUsername, "other_bot");
-  assert.equal(service.getStatus().status, "polling");
-  service.stop();
-});
-
-test("a bot switch forgets the old bot's threads and provisions new ones, keeping the pairing", async (t) => {
-  const runtime = await runtimeConfig(t);
-  await runtime.adoptBot(BOT.id);
-  // The thread map as the old bot left it: topic 5 routes to the workspace.
-  const threads = new Map<number, string>([[5, "w1"]]);
-  let nextTopic = 100;
-  const { service, api, config } = harness({
-    enabled: true,
-    autoStop: false,
-    allowedUserId: 42,
-    telegramThreadedMode: true,
-    me: { ...BOT, has_topics_enabled: true },
-    workspaces: [{ id: "w1", name: "Work", folderPath: "/work" }],
-    ensureThreadTargets: async () => {
-      if (![...threads.values()].includes("w1")) threads.set(nextTopic++, "w1");
-    },
-    forgetThreadTargets: async () => threads.clear(),
-  });
-  config.adoptBot = runtime.adoptBot;
-  const offsets: Array<number | undefined> = [];
-  let me: TelegramUser = { ...BOT, has_topics_enabled: true };
-  api.getMe = async () => me;
-  api.getUpdates = recordingGetUpdates(offsets);
-
-  await service.start();
-  await waitFor(() => offsets.length === 1);
-  assert.deepEqual([...threads], [[5, "w1"]], "the same bot keeps its threads");
-
-  me = { ...BOT, id: 2, username: "other_bot", has_topics_enabled: true };
-  await service.restart();
-  await waitFor(() => offsets.length === 2);
-  assert.deepEqual([...threads], [[100, "w1"]], "the old topic no longer routes; a new one does");
-  assert.equal((await config.snapshot()).allowedUserId, 42, "the pairing stays");
-  service.stop();
-});
-
-test("an offset saved before bot ids were recorded is kept for the same token", async (t) => {
-  const runtime = await runtimeConfig(t);
-  await runtime.persistOffset(41);
-  const { service, api, config } = harness({ enabled: true, autoStop: false });
-  config.getOffset = runtime.getOffset;
-  config.adoptBot = runtime.adoptBot;
-  const offsets: Array<number | undefined> = [];
-  api.getUpdates = recordingGetUpdates(offsets);
-
-  await service.start();
-  await waitFor(() => offsets.length === 1);
-  service.stop();
-
-  assert.equal(offsets[0], 41);
-  // Advancing the offset keeps the bot it belongs to.
-  await runtime.persistOffset(42);
-  assert.equal(await runtime.adoptBot(BOT.id), false);
-  assert.equal(await runtime.getOffset(), 42);
-});
-
-test("a revoked token stops polling with a clear error instead of retrying forever", async () => {
-  let releases = 0;
-  const { service, api, sleepMock } = harness({
-    enabled: true,
-    autoStop: false,
-    acquireOwnership: () => ({ acquired: true, recovered: false }),
-    releaseOwnership: () => {
-      releases += 1;
-    },
-  });
-  let polls = 0;
-  let revoked = true;
-  api.getUpdates = async (_offset?: number, _timeout?: number, signal?: AbortSignal) => {
-    polls += 1;
-    if (revoked) throw new TelegramApiError("Unauthorized", 401);
-    if (signal && !signal.aborted) await once(signal, "abort");
-    return [];
-  };
-
-  await service.start();
-  await waitFor(() => service.getStatus().status === "disabled");
-
-  assert.equal(polls, 1, "a rejected token is not retried");
-  assert.equal(sleepMock.calls(), 0);
-  assert.match(service.getStatus().lastError ?? "", /BotFather/);
-  assert.equal(releases, 1, "the transport lease is handed back");
-
-  // Pasting a new token revives the bridge.
-  revoked = false;
-  await service.restart();
-  await waitFor(() => polls === 2);
-  assert.equal(service.getStatus().status, "polling");
-  assert.equal(service.getStatus().lastError, undefined);
-  service.stop();
-});
-
-test("getUpdates failures back off exponentially, honor retry_after, and reset after a success", async () => {
-  const { service, api, sleepMock } = harness({ enabled: true, autoStop: false });
-  const outcomes: Array<Error | TelegramUpdate[]> = [
-    new Error("network down"),
-    new Error("network down"),
-    new Error("network down"),
-    new TelegramApiError("Too Many Requests: retry after 120", 429, 120),
-    [],
-    new Error("network down"),
-  ];
-  api.getUpdates = async (_offset?: number, _timeout?: number, signal?: AbortSignal) => {
-    const next = outcomes.shift();
-    if (next instanceof Error) throw next;
-    if (next) return next;
-    if (signal && !signal.aborted) await once(signal, "abort");
-    return [];
-  };
-
-  await service.start();
-  await waitFor(() => outcomes.length === 0 && sleepMock.calls() === 5);
-  const errors = service.getStatus().recentDiagnostics.filter((event) => event.level === "error");
-  service.stop();
-
-  assert.deepEqual(sleepMock.lastArgs(), [3_000, 6_000, 12_000, 120_000, 3_000]);
-  assert.equal(errors.length, 3, "a repeated failure is recorded once per streak, not once per retry");
-});
-
-test("a 409 conflict explains that another poller or webhook holds the bot and keeps retrying", async () => {
-  const { service, api, sleepMock } = harness({ enabled: true, autoStop: false });
-  let polls = 0;
-  api.getUpdates = async (_offset?: number, _timeout?: number, signal?: AbortSignal) => {
-    polls += 1;
-    if (polls <= 2) throw new TelegramApiError("Conflict: terminated by other getUpdates request", 409);
-    if (polls === 3) return [];
-    if (signal && !signal.aborted) await once(signal, "abort");
-    return [];
-  };
-
-  await service.start();
-  await waitFor(() => sleepMock.calls() === 1);
-  const during = service.getStatus();
-  await waitFor(() => polls === 4);
-
-  assert.equal(during.status, "error");
-  assert.match(during.lastError ?? "", /Another app is reading this Telegram bot's messages/);
-  assert.equal(service.getStatus().status, "polling", "polling resumes once the other poller is gone");
-  service.stop();
-});
-
-test("a transient getMe failure at startup is retried instead of stopping the bridge", async () => {
-  const { service, api } = harness({ enabled: true, autoStop: false });
-  let attempts = 0;
-  api.getMe = async () => {
-    attempts += 1;
-    if (attempts === 1) throw new Error("getaddrinfo ENOTFOUND api.telegram.org");
-    return BOT;
-  };
-  const offsets: Array<number | undefined> = [];
-  api.getUpdates = recordingGetUpdates(offsets);
-
-  await service.start();
-  await waitFor(() => offsets.length === 1);
-
-  assert.equal(attempts, 2);
-  assert.equal(service.getStatus().status, "polling");
-  service.stop();
-});
-
-test("a getMe that fails after its loop was replaced cannot stop the new loop or drop its lease", async () => {
-  let releases = 0;
-  let held = false;
-  const { service, api } = harness({
-    enabled: true,
-    autoStop: false,
-    acquireOwnership: () => {
-      held = true;
-      return { acquired: true, recovered: false };
-    },
-    releaseOwnership: () => {
-      releases += 1;
-      held = false;
-    },
-  });
-  let failStale!: (cause: unknown) => void;
-  let getMeCalls = 0;
-  // The first getMe ignores cancellation, like a request already on the wire.
-  api.getMe = () => {
-    getMeCalls += 1;
-    if (getMeCalls === 1) return new Promise<TelegramUser>((_resolve, reject) => { failStale = reject; });
-    return Promise.resolve(BOT);
-  };
-  const offsets: Array<number | undefined> = [];
-  api.getUpdates = recordingGetUpdates(offsets);
-
-  await service.start();
-  await waitFor(() => getMeCalls === 1);
-  service.stop(); // the person turns the bridge off…
-  await service.start(); // …and straight back on
-  await waitFor(() => offsets.length === 1);
-
-  failStale(new TelegramApiError("Unauthorized", 401));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  assert.equal(service.getStatus().status, "polling");
-  assert.equal(service.getStatus().lastError, undefined);
-  assert.equal(held, true, "the running loop keeps its transport lease");
-  assert.equal(releases, 1, "only the explicit stop released a lease");
-  service.stop();
-});
-
-test("the typing indicator stops waiting as soon as the transport stops", async () => {
-  const owner = person(42, "owner");
-  let waiting = 0;
-  const { service, api } = harness({
-    enabled: true,
-    allowedUserId: 42,
-    batches: [[makeUpdate(1, makeMessage(10, owner, "think hard"))]],
-    autoStop: false,
-    pendingTurn: true,
-    // A real interval: only cancellation ends it early.
-    sleep: async (_ms, signal) => {
-      waiting += 1;
-      try {
-        if (signal && !signal.aborted) await once(signal, "abort");
-        else if (!signal) await new Promise(() => undefined);
-      } finally {
-        waiting -= 1;
-      }
-    },
-  });
-
-  await service.start();
-  await waitFor(() => api.sendChatActionCalls() >= 1 && waiting >= 1);
-  service.stop();
-  await waitFor(() => waiting === 0);
-
-  assert.equal(api.sendChatActionCalls(), 1, "no typing action after the transport stopped");
 });
 
 // ---------------------------------------------------------------------------
