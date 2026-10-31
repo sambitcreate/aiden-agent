@@ -799,9 +799,25 @@ async function refreshCloseGuardFromRenderer(
  */
 const RENDERER_UNLOAD_APPROVAL_GRACE_MS = 2_000;
 
+/**
+ * Close, quit and onboarding reset each run bounded steps between arming the
+ * unload approval and closing the renderer. The approval stays valid for those
+ * budgets too, so a confirmed action never finds it expired and re-vetoed. It
+ * stays bound to the approved revision, and every cancel path withdraws it.
+ */
+const RENDERER_UNLOAD_HOLD_MS = {
+  close: PRE_SHUTDOWN_BUDGET_MS.windowState,
+  quit: PRE_SHUTDOWN_BUDGET_MS.windowState + PRE_SHUTDOWN_BUDGET_MS.computerUseSettings,
+  onboardingReset:
+    PRE_SHUTDOWN_BUDGET_MS.computerUseSettings +
+    RENDERER_RESPONSE_DEADLINE_MS +
+    PRE_SHUTDOWN_BUDGET_MS.windowState,
+} as const;
+
 async function armRendererUnload(
   window: BrowserWindow,
   revision: number,
+  holdMs: number,
 ): Promise<boolean> {
   // The hook and the beforeunload guard both live in the app chunk. A page
   // without the hook (app chunk not loaded yet, or a failed load) has no guard
@@ -811,7 +827,7 @@ async function armRendererUnload(
   // leaving room for the answer to arrive) and lets any approval expire.
   const startedAt = Date.now();
   const armBy = startedAt + RENDERER_RESPONSE_DEADLINE_MS - 1_000;
-  const expiresAt = startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS;
+  const expiresAt = startedAt + RENDERER_RESPONSE_DEADLINE_MS + RENDERER_UNLOAD_APPROVAL_GRACE_MS + holdMs;
   try {
     return (
       (await executeRendererScript(
@@ -862,8 +878,9 @@ function confirmImageRequestsBeforeQuit(
 async function authorizeProtectedAction(
   window: BrowserWindow,
   action: "close" | "reload",
+  holdMs: number = 0,
 ): Promise<boolean> {
-  return (await authorizeProtectedActionOrForce(window, action, null)) === "authorized";
+  return (await authorizeProtectedActionOrForce(window, action, null, holdMs)) === "authorized";
 }
 
 /**
@@ -875,8 +892,9 @@ async function authorizeProtectedActionOrForce(
   window: BrowserWindow,
   action: "close" | "reload",
   force: ForceableProtectedAction | null,
+  holdMs: number = 0,
 ): Promise<"authorized" | "declined" | "unresponsive"> {
-  const outcome = await authorizeProtectedActionAttempts(window, action, force);
+  const outcome = await authorizeProtectedActionAttempts(window, action, force, holdMs);
   if (outcome !== "authorized") clearRendererUnloadApproval(window);
   return outcome;
 }
@@ -885,6 +903,7 @@ async function authorizeProtectedActionAttempts(
   window: BrowserWindow,
   action: "close" | "reload",
   force: ForceableProtectedAction | null,
+  holdMs: number,
 ): Promise<"authorized" | "declined" | "unresponsive"> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const revision = await refreshCloseGuardFromRenderer(window, force);
@@ -892,7 +911,7 @@ async function authorizeProtectedActionAttempts(
     if (revision === null) return "declined";
     if (hasCloseGuard() && !confirmProtectedAction(window, action))
       return "declined";
-    if (await armRendererUnload(window, revision)) return "authorized";
+    if (await armRendererUnload(window, revision, holdMs)) return "authorized";
   }
   if (!window.isDestroyed()) {
     dialog.showMessageBoxSync(window, {
@@ -943,7 +962,7 @@ async function requestWindowClose(window: BrowserWindow): Promise<void> {
     imageQuitCoverage.clear();
     if (closeQuitsApp && !confirmImageRequestsBeforeQuit(window)) return;
     imageQuitCoverage.recordWindowCloseConfirmation(closeQuitsApp, createImagesRuntime.inFlightRequests());
-    const authorization = await authorizeProtectedActionOrForce(window, "close", "close");
+    const authorization = await authorizeProtectedActionOrForce(window, "close", "close", RENDERER_UNLOAD_HOLD_MS.close);
     if (authorization === "declined") {
       imageQuitCoverage.clear();
       return;
@@ -989,13 +1008,14 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
   if (window.isDestroyed() || !lifecycleCheck.tryBegin()) return false;
   try {
     if (!confirmImageRequestsBeforeQuit(window)) return false;
-    const authorization = await authorizeProtectedActionOrForce(window, "close", "quit");
+    const authorization = await authorizeProtectedActionOrForce(window, "close", "quit", RENDERER_UNLOAD_HOLD_MS.quit);
     if (authorization === "declined") return false;
     await persistMainWindowState(window);
     try {
       await prepareComputerUseForQuit();
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
+      clearRendererUnloadApproval(window);
       logger.error(
         "main",
         "Computer Use state was not durable; quit was cancelled.",
@@ -1024,6 +1044,7 @@ async function requestApplicationQuit(window: BrowserWindow): Promise<boolean> {
       window.destroy();
     } else if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      clearRendererUnloadApproval(window);
       llmClient.setQuitInProgress(false);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
@@ -1096,12 +1117,13 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
   }
   let settingsPrepared = false;
   try {
-    if (!(await authorizeProtectedAction(window, "close"))) return false;
+    if (!(await authorizeProtectedAction(window, "close", RENDERER_UNLOAD_HOLD_MS.onboardingReset))) return false;
     try {
       await prepareComputerUseForQuit();
       settingsPrepared = true;
     } catch (error) {
       computerUseSettings.resumeAfterCancelledShutdown();
+      clearRendererUnloadApproval(window);
       logger.error(
         "main",
         "Computer Use state was not durable; onboarding reset was cancelled.",
@@ -1128,6 +1150,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
     protectedAction = "onboarding-reset";
     if (!(await closeRendererBeforeShutdown(window))) {
       protectedAction = null;
+      clearRendererUnloadApproval(window);
       await restoreRendererOnboardingCompletion(window, onboardingWasComplete);
       computerUseSettings.resumeAfterCancelledShutdown();
       return false;
@@ -1179,6 +1202,7 @@ async function requestOnboardingReset(window: BrowserWindow): Promise<boolean> {
     return shutdownStarted;
   } catch (error) {
     if (settingsPrepared) computerUseSettings.resumeAfterCancelledShutdown();
+    clearRendererUnloadApproval(window);
     throw error;
   } finally {
     lifecycleCheck.release();
