@@ -131,6 +131,66 @@ test("a first install whose server never becomes ready is removed instead of lef
   }
 });
 
+test("an install that starts its server applies the chosen network and pairs over a network that reaches it", async (t) => {
+  const entry = join(mkdtempSync(join(tmpdir(), "aiden-service-entry-")), "cli.js");
+  writeFileSync(entry, "");
+  t.after(() => rmSync(dirname(entry), { recursive: true, force: true }));
+  const saved = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
+  /** Installs on a fake Linux host whose server is ready at once, and records what reaches the server. */
+  const install = async (flags, { failNetwork, status, tty = true } = {}) => {
+    const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
+    const sent = [];
+    const paired = [];
+    const remote = async (args) => {
+      sent.push(args.join(" "));
+      if (args[0] === "network" && failNetwork) throw new Error("Tailscale is not signed in.");
+      return args[0] === "status" ? status : {};
+    };
+    const pair = async (transport) => { paired.push(transport); };
+    let output = "";
+    const write = process.stdout.write;
+    const writeErr = process.stderr.write;
+    process.stdout.write = (chunk) => { output += chunk; return true; };
+    process.stderr.write = (chunk) => { output += chunk; return true; };
+    try {
+      await api.serviceCommand(local.agentDir, ["install", ...flags], host, { ready: async () => true, remote, pair, tty });
+    } finally {
+      process.stdout.write = write;
+      process.stderr.write = writeErr;
+    }
+    return { sent, paired, output };
+  };
+
+  for (const [network, transport, label] of [["local", "lan", "the local network only"], ["tailscale", "tailscale", "Tailscale only"], ["both", "tailscale", "the local network and Tailscale"]]) {
+    const { sent, paired, output } = await install(["--network", network]);
+    assert.deepEqual(sent, [`network ${network}`], network);
+    assert.deepEqual(paired, [transport], `${network}: the code is for a network the server is on`);
+    assert.match(output, new RegExp(`running as a service and reachable over ${label}\\.`), network);
+  }
+
+  // Tailscale could not be set up, but the server still serves the local network: say so and pair there.
+  const fellBack = await install(["--network", "tailscale"], { failNetwork: true, status: { connectionMode: "lan" } });
+  assert.deepEqual(fellBack.sent, ["network tailscale", "status"]);
+  assert.deepEqual(fellBack.paired, ["lan"]);
+  assert.match(fellBack.output, /Could not set up Tailscale only\. Tailscale is not signed in\./);
+  assert.match(fellBack.output, /For now the server is reachable over the local network only\./);
+
+  // Nothing reaches the server: no pairing code and no reachable claim.
+  const unreachable = await install(["--network", "tailscale"], { failNetwork: true, status: { connectionMode: "tailscale", tailscaleConnected: false } });
+  assert.deepEqual(unreachable.paired, []);
+  assert.match(unreachable.output, /For now no phone can reach the server\./);
+  assert.doesNotMatch(unreachable.output, /reachable over/);
+
+  // --no-pair, or no terminal to show a code in, names the pair command instead.
+  for (const [flags, tty] of [[["--network", "both", "--no-pair"], true], [["--network", "both"], false]]) {
+    const { paired, output } = await install(flags, { tty });
+    assert.deepEqual(paired, [], flags.join(" "));
+    assert.match(output, /Pair a phone with `aiden remote pair tailscale`\./, flags.join(" "));
+  }
+});
+
 test("the server is called reachable over Tailscale only while its route is connected", () => {
   assert.equal(api.reachableNetwork({ connectionMode: "lan" }), "local");
   assert.equal(api.reachableNetwork({ connectionMode: "both", tailscaleConnected: true }), "both");
