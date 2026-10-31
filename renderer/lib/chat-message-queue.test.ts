@@ -117,6 +117,55 @@ test("discarding a deleted chat clears queued work", () => {
   assert.equal(queue.claim(), undefined);
 });
 
+test("a chat's queue survives remounts and keeps queued work, but an empty one is not retained after its view leaves", async () => {
+  const nextTask = () => new Promise((resolve) => setTimeout(resolve, 1));
+  const queue = chatMessageQueue("chat-retention");
+  let heard = 0;
+  // A remount unsubscribes and resubscribes at once; the view must keep
+  // hearing commands issued for this chat.
+  queue.subscribe(() => undefined)();
+  const unsubscribe = queue.subscribe(() => { heard += 1; });
+  await nextTask();
+  chatMessageQueue("chat-retention").pause();
+  assert.equal(heard, 1);
+  chatMessageQueue("chat-retention").resume();
+  unsubscribe();
+  await nextTask();
+  assert.notEqual(chatMessageQueue("chat-retention"), queue);
+
+  const held = chatMessageQueue("chat-retention-held");
+  held.subscribe(() => undefined)();
+  held.add(message("q1"));
+  const leave = held.subscribe(() => undefined);
+  leave();
+  await nextTask();
+  assert.deepEqual(chatMessageQueue("chat-retention-held").getSnapshot().messages.map((item) => item.id), ["q1"]);
+});
+
+test("a send or compaction hold that settles after its view left releases the emptied queue", async () => {
+  const nextTask = () => new Promise((resolve) => setTimeout(resolve, 1));
+  const sending = chatMessageQueue("chat-release-after-send");
+  const leave = sending.subscribe(() => undefined);
+  sending.add(message("q1"));
+  const claimed = sending.claim();
+  leave();
+  await nextTask();
+  // The send is still in flight, so the chat keeps its queue.
+  assert.equal(chatMessageQueue("chat-release-after-send"), sending);
+  sending.settle(claimed!.id, "sent");
+  await nextTask();
+  assert.notEqual(chatMessageQueue("chat-release-after-send"), sending);
+
+  const compacting = chatMessageQueue("chat-release-after-compaction");
+  compacting.holdForCompaction();
+  compacting.subscribe(() => undefined)();
+  await nextTask();
+  assert.equal(chatMessageQueue("chat-release-after-compaction"), compacting);
+  compacting.releaseCompactionHold({ compacted: true });
+  await nextTask();
+  assert.notEqual(chatMessageQueue("chat-release-after-compaction"), compacting);
+});
+
 test("editing pauses dispatch; cancel preserves the original and save preserves queue position", () => {
   const queue = new ChatMessageQueue();
   queue.add(message("one"));

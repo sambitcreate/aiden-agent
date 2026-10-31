@@ -152,8 +152,23 @@ function harness(
   const spawned: FakeWorker[] = [];
   const signals: Array<{ pid: number; signal: string }> = [];
   let unloads = 0;
+  // A test can hold the next fork mid-flight to retire the host while it runs.
+  let forkGate: Promise<void> | null = null;
+  let forkEntered: () => void = () => {};
+  const holdNextFork = () => {
+    let release!: () => void;
+    forkGate = new Promise<void>((resolve) => (release = resolve));
+    const entered = new Promise<void>((resolve) => (forkEntered = resolve));
+    return { entered, release };
+  };
   const host = new LocalSpeechWorkerHost({
     fork: async () => {
+      if (forkGate) {
+        const gate = forkGate;
+        forkGate = null;
+        forkEntered();
+        await gate;
+      }
       const worker = fakeWorker(
         `w${spawned.length + 1}`,
         log,
@@ -178,7 +193,7 @@ function harness(
       worker.crash();
     },
   });
-  return { host, log, spawned, signals, unloads: () => unloads };
+  return { host, log, spawned, signals, unloads: () => unloads, holdNextFork };
 }
 
 test("switching models kills the old worker and waits for its exit before the new one loads", async () => {
@@ -264,6 +279,7 @@ test("a load that fails still leaves the worker holding its model, so the next m
   const { host, spawned } = harness({ failingWorkers: [1] });
   const worker = await host.prepare(target(parakeet));
   await assert.rejects(worker.load(parakeet.id, "/models/parakeet", parakeet), /model rejected/);
+  assert.equal(host.heldModelId(), parakeet.id, "a model delete must still retire this worker");
 
   await host.prepare(target(canary));
   assert.equal(spawned.length, 2);
@@ -279,4 +295,45 @@ test("a worker that dies on its own drops the model so the next request reloads 
   assert.equal(unloads(), 1);
   await host.prepare(target(parakeet));
   assert.equal(spawned.length, 2);
+});
+
+test("a worker disposed after a hang or cancel must exit, or be SIGKILLed, before the replacement forks", async () => {
+  // A decode stuck in native code ignores the ordinary kill. The retry (or the
+  // next dictation) must not fork a second model-holding worker beside it.
+  const { host, log, signals } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+  const hung = await host.prepare(target(parakeet));
+
+  host.disposeIfCurrent(hung);
+  assert.equal(host.current(), null);
+  await host.prepare(target(parakeet));
+
+  assert.deepEqual(signals, [{ pid: 50_001, signal: "SIGKILL" }]);
+  assert.ok(log.indexOf("w1 exit") >= 0, "the hung worker is gone");
+  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"), "the replacement forks only after the old worker exited");
+});
+
+test("a worker that finishes forking after the host was retired still exits before the next fork", async () => {
+  const { host, log, holdNextFork } = harness();
+  const fork = holdNextFork();
+  const launching = host.acquire();
+  await fork.entered;
+  host.shutDown();
+  fork.release();
+  await assert.rejects(launching, /replaced/);
+
+  await host.prepare(target(parakeet));
+  assert.ok(log.includes("w1 kill"), "the orphaned worker is killed");
+  assert.ok(log.indexOf("w1 exit") < log.indexOf("w2 spawn"));
+});
+
+test("a launch retired while an old worker is still exiting never forks", async () => {
+  const { host, spawned } = harness({ stubbornWorkers: [1], exitWaitMs: 20 });
+  const stuck = await host.prepare(target(parakeet));
+  host.disposeIfCurrent(stuck);
+  // This launch waits for the stubborn worker; shutdown retires it before that wait ends.
+  const waiting = host.acquire();
+  host.shutDown();
+  await assert.rejects(waiting, /replaced/);
+  assert.equal(spawned.length, 1, "no worker is forked only to be killed");
+  assert.equal(host.current(), null);
 });

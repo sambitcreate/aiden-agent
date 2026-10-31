@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { once } from "node:events";
-import { createConnection, createServer, type Socket } from "node:net";
+import { createConnection, createServer, Server as NetServer, type Socket } from "node:net";
 import * as fs from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -154,6 +154,9 @@ interface FixtureOptions {
   /** Wire the persisted "Accept connection requests" setting (in memory). */
   pairingRequests?: { accept?: boolean };
   workspaceApi?: AidenRemoteServiceOptions["workspaceApi"];
+  /** Clock the TLS identity loader renews against. */
+  identityNow?: () => Date;
+  tlsRefreshIntervalMs?: number;
 }
 
 async function fixture(
@@ -309,8 +312,12 @@ async function fixture(
       return loadOrCreateAidenRemoteTlsIdentity({
         directory: path.join(directory, "identity"),
         hostnames: ["aiden-test", "aiden-test.local"],
+        ...(options.identityNow ? { now: options.identityNow() } : {}),
       });
     },
+    ...(options.tlsRefreshIntervalMs === undefined
+      ? {}
+      : { tlsRefreshIntervalMs: options.tlsRefreshIntervalMs }),
     ...(options.portCandidates === undefined
       ? {}
       : { portCandidates: () => options.portCandidates ?? [] }),
@@ -509,6 +516,38 @@ test("a fresh profile skips a LAN candidate occupied only on IPv4 loopback", asy
   } finally {
     await app.cleanup();
     await closeReservedPort(blocker);
+  }
+});
+
+test("a host without IPv6 serves LAN on the IPv4 wildcard", async () => {
+  // A kernel without IPv6 refuses the "::" socket; one with IPv6 turned off by sysctl refuses the bind.
+  for (const code of ["EAFNOSUPPORT", "EADDRNOTAVAIL"]) {
+    const lanPort = await availablePortPair();
+    const original = NetServer.prototype.listen;
+    const lanHosts: unknown[] = [];
+    NetServer.prototype.listen = function (this: NetServer, ...args: unknown[]) {
+      if (args[0] === lanPort) lanHosts.push(args[1]);
+      if (args[1] === "::") {
+        process.nextTick(() => this.emit("error", Object.assign(new Error(`listen ${code}`), { code })));
+        return this;
+      }
+      return (original as (...rest: unknown[]) => NetServer).apply(this, args);
+    } as typeof original;
+    const app = await fixture({ mode: "lan", lanPort, portCandidates: [lanPort] });
+    try {
+      await app.service.setEnabled(true);
+      // The port probe binds IPv4 loopback first; the listener itself tries "::" and then falls back.
+      assert.deepEqual(lanHosts.filter((host) => host !== "127.0.0.1"), ["::", "0.0.0.0"], code);
+      assert.equal(app.persisted().lanPort, lanPort, "the IPv4 fallback keeps the chosen port instead of moving on");
+      assert.equal((await app.service.status()).running, true);
+      assert.deepEqual(await insecureHealth(lanPort), {
+        status: 200,
+        body: { ok: true, protocolVersion: 1 },
+      });
+    } finally {
+      NetServer.prototype.listen = original;
+      await app.cleanup();
+    }
   }
 });
 
@@ -1181,6 +1220,52 @@ test("explicit enable serves authenticated API shell over LAN HTTPS and stops cl
     await app.service.setEnabled(false);
     assert.equal((await app.service.status()).running, false);
     assert.equal(app.persisted().enabled, false);
+  } finally {
+    await app.cleanup();
+  }
+});
+
+async function servedCertificate(port: number): Promise<X509Certificate> {
+  return new Promise((resolve, reject) => {
+    const request = https.get(
+      `https://127.0.0.1:${port}/api/aiden/v1/health`,
+      { rejectUnauthorized: false, timeout: 3_000, agent: false },
+      (response) => {
+        const socket = response.socket as import("node:tls").TLSSocket;
+        resolve(new X509Certificate(socket.getPeerCertificate().raw));
+        response.resume();
+      },
+    );
+    request.once("error", reject);
+  });
+}
+
+test("a running LAN listener serves a renewed certificate without a restart or a new key", async () => {
+  let identityClock = new Date();
+  const app = await fixture({ identityNow: () => identityClock, tlsRefreshIntervalMs: 25 });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const port = app.persisted().lanPort;
+    const original = await servedCertificate(port);
+
+    // Advance the identity clock into the renewal window so the next load reissues.
+    identityClock = new Date(Date.parse(original.validTo) - 60 * 60 * 1_000);
+    let renewed = original;
+    const deadline = Date.now() + 5_000;
+    while (renewed.serialNumber === original.serialNumber && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      renewed = await servedCertificate(port);
+    }
+
+    assert.notEqual(renewed.serialNumber, original.serialNumber, "the renewed certificate is served");
+    assert.equal(
+      renewed.publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+      original.publicKey.export({ type: "spki", format: "der" }).toString("base64"),
+      "paired devices' SPKI pin stays valid",
+    );
+    assert.equal(app.persisted().lanPort, port);
+    assert.equal(app.bonjour.starts, 1, "the listener was not restarted");
   } finally {
     await app.cleanup();
   }
@@ -2073,11 +2158,31 @@ async function requestConnection(
   return { created: created.body, keys, requesterNonce, hostNonce: revealed.body.hostNonce, secret };
 }
 
+test("unknown LAN requesters need a current host-opened window and old requests cannot survive renewal", async () => {
+  const app = await fixture({ pairingRequests: {} });
+  try {
+    await app.service.initialize();
+    await app.service.setEnabled(true);
+    const port = app.persisted().lanPort;
+    const body = { deviceName: "Desk Mac", deviceType: "mac", publicKey: generatePairingRequestKeyPair().publicKey };
+    const refused = await insecureJson<{ error: { code: string } }>(port, "/api/aiden/v1/pairing/requests", { method: "POST", body });
+    assert.equal(refused.body.error.code, "pairing_closed");
+    const first = await app.service.beginPairing("lan");
+    const request = await requestConnection(insecureJson, port, "Desk Mac");
+    await app.service.closePairing(first.sessionId);
+    await app.service.beginPairing("lan");
+    assert.equal((await app.service.respondPairingRequest(request.created.requestId, "allow"))?.state, "cancelled");
+    assert.equal((await app.state.listDevices()).length, 0);
+    assert.deepEqual(app.service.listPairingRequests(), []);
+  } finally { await app.cleanup(); }
+});
+
 test("an approved LAN connection request seals a pinned credential that authenticates /server", async () => {
   const app = await fixture({ pairingRequests: {} });
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     assert.equal((await app.service.status()).acceptPairingRequests, true);
     const port = app.persisted().lanPort;
     const identity = await loadOrCreateAidenRemoteTlsIdentity({
@@ -2141,6 +2246,7 @@ test("turning connection requests off persists, cancels open requests and refuse
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     const port = app.persisted().lanPort;
     const open = await requestConnection(insecureJson, port, "Desk Mac");
     assert.equal(app.service.listPairingRequests().length, 1);
@@ -2192,6 +2298,7 @@ test("turning Remote access off revokes an approval nobody collected", async () 
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("lan");
     const request = await requestConnection(insecureJson, app.persisted().lanPort, "Desk Mac");
     await app.service.respondPairingRequest(request.created.requestId, "allow");
     const [issued] = await app.state.listDevices();
@@ -2226,6 +2333,7 @@ test("Tailscale connection requests seal the Serve identity and reuse a recent p
   try {
     await app.service.initialize();
     await app.service.setEnabled(true);
+    await app.service.beginPairing("tailscale");
     const loopback = app.persisted().lanPort + 1;
     const first = await requestConnection(plainJson, loopback, "Travel MacBook");
     await requestConnection(plainJson, loopback, "Travel MacBook");

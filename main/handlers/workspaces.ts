@@ -25,6 +25,11 @@ import {
 import { githubCurrentPullRequest } from "../services/github/github-runtime-main.js";
 import { GitRepoWatcher } from "../services/git-repo-watcher.js";
 import { workspaceApplicationService } from "../services/workspace-application-service-main.js";
+import { displayWorkspaceFolder, workspaceFolderPresence } from "../services/workspace-folder-presence.js";
+import {
+  workspaceFolderCheckApplies,
+  type WorkspaceFolderPresenceResult,
+} from "../../renderer/shared/workspace-folder-presence.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -219,6 +224,10 @@ export function registerWorkspaceHandlers(): void {
 
   ipcMain.handle("workspaces:createScratch", async () =>
     workspaceApplicationService.createScratch(),
+  );
+
+  ipcMain.handle("workspaces:createNoWorkspace", async () =>
+    workspaceApplicationService.createNoWorkspace(),
   );
 
   ipcMain.handle("workspaces:update", async (_event, id: unknown, patch: unknown) =>
@@ -431,6 +440,20 @@ export function registerWorkspaceHandlers(): void {
       return workspaceWorktreeApplicationService.restore(owner, id, snapshot, requestedName);
     },
   );
+
+  // Whether the workspace's folder is still on disk, so the composer can say it
+  // was moved or deleted before a send fails inside a tool.
+  ipcMain.handle("workspaces:folderPresence", async (_event, workspaceId: unknown) => {
+    if (typeof workspaceId !== "string" || !workspaceId) throw new Error("A workspace id is required.");
+    const workspace = await workspaceApplicationService.get(workspaceId);
+    if (!workspace || !workspaceFolderCheckApplies(workspace)) {
+      return { presence: "none" } satisfies WorkspaceFolderPresenceResult;
+    }
+    return {
+      presence: await workspaceFolderPresence(workspace.folderPath!),
+      folder: displayWorkspaceFolder(workspace.folderPath!),
+    } satisfies WorkspaceFolderPresenceResult;
+  });
 
   // Reveal the workspace folder in Finder. shell.openPath opens a directory itself.
   ipcMain.handle("workspaces:openFolder", async (event, workspaceId: unknown) =>

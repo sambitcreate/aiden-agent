@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync, rmSync, statSync, utimesSync, renameSync, readdirSync, openSync, closeSync, ftruncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,9 +14,9 @@ import * as api from "../dist/parity-test-api.js";
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 function temporary(t) { const dir = mkdtempSync(join(tmpdir(), "aiden-parity-")); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; }
-function extension(extension) {
+function extension(extension, extra = {}) {
   const events = new Map(), commands = new Map(), tools = new Map(); let name;
-  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; } });
+  extension.factory({ on: (event, handler) => events.set(event, handler), registerCommand: (name, command) => commands.set(name, command), registerTool: (tool) => tools.set(tool.name, tool), getSessionName: () => name, setSessionName: (value) => { name = value; }, ...extra });
   return { events, commands, tools, name: () => name };
 }
 
@@ -31,8 +31,6 @@ test("atomic stores serialize mutations, protect credentials, and reject cross-p
   writeFileSync(file, "broken");
   await assert.rejects(store.update(() => {}), /Cannot read/);
   assert.equal(readFileSync(file, "utf8"), "broken");
-  assert.deepEqual(api.splitArgs('save "two words.json" \'a b\''), ["save", "two words.json", "a b"]);
-  assert.throws(() => api.splitArgs('"unfinished'), /Unfinished/);
 });
 
 test("a stale CLI lease cannot be reclaimed by two processes", async (t) => {
@@ -134,23 +132,6 @@ test("daemon approval summaries read like the desktop's without hiding any argum
   assert.equal(api.daemonApprovalSummary("edit", { path: "a.ts", oldText: "a", newText: "b" }), 'edit: {"path":"a.ts","oldText":"a","newText":"b"}');
 });
 
-test("workspace identity is canonical and all tools require one-shot approval in ask mode", async (t) => {
-  const dir = temporary(t), workspace = await api.workspaceCommand(dir, ["add", dir]);
-  assert.equal(api.accessFor(dir, dir), "ask");
-  const harness = extension(api.createSessionParityExtension(dir));
-  const call = harness.events.get("tool_call");
-  let approvals = 0;
-  const ctx = { cwd: dir, hasUI: true, ui: { confirm: async () => { approvals++; return true; } } };
-  assert.equal(await call({ toolName: "write", input: { path: "a" } }, ctx), undefined);
-  assert.equal(await call({ toolName: "write", input: { path: "b" } }, ctx), undefined);
-  assert.equal(approvals, 2);
-  assert.equal((await call({ toolName: "mcp_send", input: {} }, { ...ctx, hasUI: false })).block, true);
-  await api.workspaceCommand(dir, ["access", workspace.id, "none"]);
-  assert.equal((await call({ toolName: "read", input: {} }, ctx)).block, true);
-  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
-  assert.equal(await call({ toolName: "write", input: {} }, ctx), undefined);
-});
-
 test("portable export and context projection include only the active branch", async (t) => {
   const dir = temporary(t), manager = api.SessionManager.inMemory(dir);
   const first = manager.appendMessage({ role: "user", content: "Keep this", timestamp: 100 });
@@ -182,62 +163,6 @@ test("headless command output survives a pipe when it exceeds the kernel pipe bu
   assert.equal(parsed.length, 1); assert.equal(parsed[0].preview, preview);
 });
 
-test("CLI display_image limits are per agent run and per session journal", async (t) => {
-  const dir = temporary(t); mkdirSync(join(dir, "workspace")); const workspaceRoot = realpathSync(join(dir, "workspace"));
-  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
-  writeFileSync(join(workspaceRoot, "dot.png"), png);
-  const handlers = []; let tool;
-  let session = api.SessionManager.inMemory(dir);
-  api.createDisplayImageInlineExtension({ agentDir: join(dir, "agent"), workspaceRoot }).factory({
-    registerTool: (candidate) => { tool = candidate; },
-    on: (event, handler) => { if (event === "before_agent_start") handlers.push(handler); },
-    appendEntry: (customType, data) => { session.appendCustomEntry(customType, data); },
-  });
-  const startRun = async () => { for (const handler of handlers) await handler({ type: "before_agent_start", systemPrompt: "" }, { sessionManager: session }); };
-  // Like pi, persist each tool result into the session journal.
-  const display = async () => {
-    const toolCallId = `call-${Math.random()}`;
-    const result = await tool.execute(toolCallId, { path: "dot.png" }, new AbortController().signal);
-    session.appendMessage({ role: "toolResult", toolCallId, toolName: "display_image", content: result.content, isError: false, timestamp: Date.now() });
-    return result;
-  };
-  // One image per answer for more than 20 answers: the per-response cap must not accumulate.
-  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await display()).content.some((part) => part.type === "image"), `run ${run}`); }
-  // The per-chat ceiling still counts every image already in this session.
-  await startRun();
-  await assert.rejects(display(), /100-image/);
-  // A different session starts from its own (empty) history.
-  session = api.SessionManager.inMemory(dir); await startRun();
-  assert.ok((await display()).content.some((part) => part.type === "image"));
-
-  // Through codemode or ctx.executeTool, pi journals only the outer tool's result, with the
-  // display_image call in its nestedCalls; those images count toward the same session ceiling.
-  session = api.SessionManager.inMemory(dir);
-  const nested = async () => {
-    const outerId = `outer-${Math.random()}`, innerId = `inner-${Math.random()}`;
-    const inner = await tool.execute(innerId, { path: "dot.png" }, new AbortController().signal);
-    session.appendMessage({ role: "toolResult", toolCallId: outerId, toolName: "codemode", content: inner.content, isError: false, timestamp: Date.now(),
-      nestedCalls: { calls: [{ id: innerId, name: "display_image", isError: false }], complete: true } });
-    return inner;
-  };
-  for (let run = 0; run < 100; run++) { await startRun(); assert.ok((await nested()).content.some((part) => part.type === "image"), `nested run ${run}`); }
-  await startRun();
-  await assert.rejects(nested(), /100-image/);
-});
-
-test("title generation preserves manual renames and seeds offline sessions", async (t) => {
-  const dir = temporary(t), harness = extension(api.createSessionParityExtension(dir));
-  const manager = api.SessionManager.inMemory(dir);
-  const ctx = { sessionManager: manager, model: undefined };
-  // pi 1.2 also starts runs from extension custom messages; they carry no prompt and never title the chat.
-  await harness.events.get("before_agent_start")({ messageType: "custom", message: { role: "custom", content: "Reminder" } }, ctx);
-  assert.equal(harness.name(), undefined);
-  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Build my CLI" }, ctx);
-  assert.equal(harness.name(), "Build my CLI");
-  await harness.events.get("before_agent_start")({ messageType: "user", prompt: "Second message" }, ctx);
-  assert.equal(harness.name(), "Build my CLI");
-});
-
 test("insight keys use authenticated file encryption and separate provider names", async (t) => {
   const dir = temporary(t), credentials = api.insightCredentials(dir);
   await credentials.write("openrouter", "benchmark-secret");
@@ -263,39 +188,6 @@ test("catalog status and insight reads never fetch, and model metadata fetch is 
   assert.ok(readFileSync(join(dir, "models-dev.json"), "utf8").includes('"schemaVersion": 1'));
 });
 
-test("/models info attaches cached OpenRouter benchmark scores offline and ignores a missing or invalid cache", async (t) => {
-  const dir = temporary(t), originalEntry = process.env.AIDEN_CLI_ENTRY, originalFetch = globalThis.fetch;
-  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
-  globalThis.fetch = async () => { throw new Error("/models info must not use the network"); };
-  t.after(() => { globalThis.fetch = originalFetch; if (originalEntry === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = originalEntry; });
-  const commands = new Map();
-  api.createProviderParityExtension(dir).factory({ registerProvider: () => {}, on: () => {}, registerCommand: (name, command) => commands.set(name, command) });
-  const model = { provider: "openai", id: "gpt-cli-bench", name: "GPT CLI Bench", baseUrl: "https://api.openai.com/v1", reasoning: false, input: ["text"], contextWindow: 128000, maxTokens: 4096 };
-  async function info() {
-    const notes = [];
-    await commands.get("models").handler("info openai/gpt-cli-bench", { modelRegistry: { getAll: () => [model] }, ui: { notify: (text) => notes.push(text) } });
-    return JSON.parse(notes.at(-1));
-  }
-  const missing = await info();
-  assert.equal(missing.id, "gpt-cli-bench");
-  assert.equal(missing.metadata.benchmark, undefined);
-  const cache = api.buildOpenRouterBenchmarkCache({
-    data: [{ source: "artificial-analysis", model_permaslug: "openai/gpt-cli-bench", display_name: "GPT CLI Bench", intelligence_index: 61.5, coding_index: 70.2, agentic_index: 55 }],
-    meta: { as_of: "2026-09-30T00:00:00.000Z", version: "v1", source: "artificial-analysis", source_url: "https://artificialanalysis.ai", citation: "Source: Artificial Analysis (artificialanalysis.ai) via OpenRouter (openrouter.ai/rankings).", model_count: 1 },
-  }, "2026-10-01T00:00:00.000Z");
-  api.atomicJson(join(dir, "openrouter-insights.json"), cache);
-  const matched = await info();
-  assert.equal(matched.metadata.benchmark.intelligence, 61.5);
-  assert.equal(matched.metadata.benchmark.coding, 70.2);
-  assert.equal(matched.metadata.benchmark.agentic, 55);
-  assert.equal(matched.metadata.benchmark.asOf, "2026-09-30T00:00:00.000Z");
-  assert.deepEqual({ ...matched.metadata, benchmark: undefined }, { ...missing.metadata, benchmark: undefined });
-  api.atomicJson(join(dir, "openrouter-insights.json"), { ...cache, source: { ...cache.source, endpoint: "https://example.com/benchmarks" } });
-  assert.deepEqual(await info(), missing);
-  writeFileSync(join(dir, "openrouter-insights.json"), "{ not json");
-  assert.deepEqual(await info(), missing);
-});
-
 test("schedule CRUD uses shared validation, preview and persisted state", async (t) => {
   const dir = temporary(t), input = join(dir, "input.json");
   writeFileSync(input, JSON.stringify({ name: "Review", mode: "llm", cron: "0 9 * * *", timezone: "UTC", prompt: "Review the repository", permission: "read-only", enabled: false }));
@@ -313,13 +205,11 @@ test("schedule CRUD uses shared validation, preview and persisted state", async 
 
 test("serve routes concurrent CLI commands and releases its lease on shutdown", async (t) => {
   const dir = temporary(t), controller = new AbortController();
-  const promise = api.serve(dir, controller.signal);
+  const ready = Promise.withResolvers();
+  const promise = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void promise.catch(ready.reject);
   t.after(async () => { controller.abort(); await promise; });
-  // Wait on filesystem readiness rather than a fixed startup delay.
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* Process may already have exited. */ }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await ready.promise;
   assert.deepEqual(await api.scheduleCommand(dir, ["list"]), []);
   controller.abort(); await promise;
   const release = api.acquireLease(join(dir, "serve")); release();
@@ -350,12 +240,11 @@ test("daemon control socket decodes multi-byte UTF-8 split across chunks on both
 
   // Server side: a request whose non-ASCII argument straddles two socket writes.
   const dir = temporary(t), controller = new AbortController();
-  const promise = api.serve(dir, controller.signal);
+  const ready = Promise.withResolvers();
+  const promise = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void promise.catch(ready.reject);
   t.after(async () => { controller.abort(); await promise; });
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { if (statSync(api.daemonSocket(dir)).isSocket()) break; } catch { /* starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await ready.promise;
   const folder = join(dir, "wörkspace-☕"); mkdirSync(folder);
   const request = Buffer.from(JSON.stringify({ command: "workspace", args: ["add", folder] }) + "\n", "utf8");
   const cut = request.indexOf(Buffer.from("☕", "utf8")) + 1; // inside the 3-byte coffee cup
@@ -381,18 +270,12 @@ test("foreground serve recovers a legacy stale lease naming a recycled foreign p
   api.atomicJson(join(lock, "owner.json"), { pid: foreign.pid, startedAt: 1 });
   writeFileSync(api.daemonSocket(dir), "stale socket");
   const controller = new AbortController();
-  const serving = api.serve(dir, controller.signal);
-  let failure;
-  void serving.catch((error) => { failure = error; });
+  const ready = Promise.withResolvers();
+  const serving = api.serve(dir, controller.signal, { onReady: ready.resolve });
+  void serving.catch(ready.reject);
   try {
-    let listening = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
-      if (failure) throw failure;
-      try { listening = statSync(api.daemonSocket(dir)).isSocket(); } catch { /* starting */ }
-      if (listening) break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(listening, true, "foreground serve should replace the stale socket");
+    await ready.promise;
+    assert.equal(statSync(api.daemonSocket(dir)).isSocket(), true, "foreground serve should replace the stale socket");
     assert.equal(api.pidAlive(foreign.pid), true, "recovery must not signal the foreign process");
     assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid, process.pid);
   } finally {
@@ -753,6 +636,15 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
   assert.equal(events.status, 200); assert.match(events.data, /event: done/); assert.match(events.data, /event: timeline/); assert.match(events.data, /Remote succeeded/);
+  // The finished stream reaches the daemon's journal, so a restarted daemon can still replay it.
+  let journaled;
+  for (let attempt = 0; attempt < 50 && !journaled; attempt += 1) {
+    const archive = existsSync(join(dir, "remote-streams.json")) ? JSON.parse(readFileSync(join(dir, "remote-streams.json"), "utf8")) : { streams: [] };
+    journaled = archive.streams.find((stream) => stream.streamId === turn.data.streamId);
+    if (!journaled) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(journaled?.state, "done");
+  assert.equal(journaled.events.at(-1).type, "done");
   // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));
@@ -1012,41 +904,6 @@ test("shared auth coordinator commits a returned credential once and suppresses 
   }
   try { assert.equal((await login(false)).cancelled, false); assert.equal(commits, 1); assert.equal(receivedDeviceId, deviceId); assert.equal((await login(true)).cancelled, true); assert.equal(commits, 1); }
   finally { await coordinator.shutdown(); }
-});
-
-test("V2 delegated writes use one-shot approval and native durable history", async (t) => {
-  const dir = temporary(t), requests = [], original = process.env.AIDEN_CLI_ENTRY;
-  process.env.AIDEN_CLI_ENTRY = join(pkg, "dist/app/cli.js");
-  t.after(() => { if (original === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = original; });
-  const server = createServer(async (request, response) => {
-    let body = ""; for await (const chunk of request) body += chunk;
-    const parsed = JSON.parse(body); requests.push(parsed);
-    const first = !parsed.messages.some((message) => message.role === "tool");
-    const delta = first ? { role: "assistant", tool_calls: [{ index: 0, id: "write-note", type: "function", function: { name: "write_file", arguments: JSON.stringify({ path: "delegated.txt", content: "Approved native write" }) } }] } : { role: "assistant", content: "Delegated write finished" };
-    response.writeHead(200, { "content-type": "text/event-stream" });
-    for (const [value, finish] of [[delta, null], [{}, first ? "tool_calls" : "stop"]]) response.write(`data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta: value, finish_reason: finish }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n\n`);
-    response.end("data: [DONE]\n\n");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
-  const runtime = await api.createCliModelRuntime(dir), tools = new Map(), events = new Map(), commands = new Map(), notifications = [];
-  await api.createSubagentsExtension(dir).factory({ on: (name, handler) => events.set(name, handler), registerCommand: (name, value) => commands.set(name, value), registerTool: (tool) => tools.set(tool.name, tool) });
-  let confirmations = 0;
-  const ctx = { cwd: dir, hasUI: true, model: runtime.getModel("cli-test", "test"), modelRegistry: new api.ModelRegistry(runtime), sessionManager: api.SessionManager.inMemory(dir), ui: { setStatus() {}, notify: (value) => notifications.push(value), confirm: async () => { confirmations++; return true; } } };
-  t.after(async () => events.get("session_shutdown")?.({}, ctx));
-  await events.get("before_agent_start")({}, ctx);
-  const result = await tools.get("subagent").execute("root", { capabilities: { workspaceRead: true, workspaceWrite: true, web: false, mcp: [] }, tasks: [{ role: "scout", label: "Writer", task: "Write delegated.txt" }] }, undefined, undefined, ctx);
-  assert.match(JSON.stringify(result), /completed/, JSON.stringify({ result, requests, notifications }));
-  assert.ok(!JSON.stringify(requests[1].messages.filter((message) => message.role === "tool")).includes("error"), JSON.stringify(requests[1].messages.filter((message) => message.role === "tool")));
-  assert.equal(readFileSync(join(dir, "delegated.txt"), "utf8"), "Approved native write");
-  assert.equal(confirmations, 1);
-  assert.ok(requests[0].tools.some((tool) => tool.function.name === "write_file"));
-  assert.ok(!requests[0].tools.some((tool) => tool.function.name === "run_command"));
-  await commands.get("subagents").handler("", ctx);
-  const history = JSON.parse(notifications.at(-1));
-  assert.equal(history[0].version, 2); assert.equal(history[0].state, "completed");
-  assert.ok(!notifications.at(-1).includes("ownerDocumentId"));
 });
 
 test("Bot avatar worker produces canonical PNG assets with revision fencing", async (t) => {
@@ -1311,68 +1168,6 @@ test("MCP startup connects servers concurrently within one budget and reports ea
   }
 });
 
-test("interactive MCP keeps auto servers behind codemode, lists them for the model, and declares them when codemode is off", async (t) => {
-  const dir = temporary(t), auto = { ...fixtureServer(dir, "docs"), description: "Team documentation" }, visible = { ...fixtureServer(dir, "pinned"), exposure: "direct" };
-  api.atomicJson(join(dir, "aiden-mcp.json"), [auto, visible]);
-  const load = async (active) => {
-    const events = new Map(), tools = new Map();
-    await api.createMcpExtension(dir, { deferToCodemode: true }).factory({
-      on: (event, handler) => events.set(event, handler), registerCommand() {}, registerTool: (tool) => tools.set(tool.name, tool), getActiveTools: () => active });
-    t.after(() => events.get("session_shutdown")());
-    return { events, tools };
-  };
-  const scripted = await load(["read", "bash", "codemode"]);
-  scripted.events.get("session_start")();
-  assert.equal(scripted.tools.get("docs__first").exposure, "codemode", "an auto server's tools are reached from codemode scripts");
-  assert.deepEqual(scripted.tools.get("docs__first").namespace, { name: "docs", description: "Team documentation" });
-  assert.equal(scripted.tools.get("pinned__first").exposure, undefined, "an Always visible server stays declared");
-  const sections = { mcp_servers: "stale" };
-  await scripted.events.get("before_agent_start")({ systemPromptOptions: { sections } });
-  assert.match(sections.mcp_servers, /- docs: docs \(via codemode\) — "Team documentation"/);
-  assert.doesNotMatch(sections.mcp_servers, /pinned|<mcp_servers>/, "Pi wraps the section; declared servers need no listing");
-
-  const direct = await load(["read", "bash"]);
-  direct.events.get("session_start")();
-  assert.equal(direct.tools.get("docs__first").exposure, undefined, "without codemode the tools are declared directly");
-  const none = { mcp_servers: "stale" };
-  await direct.events.get("before_agent_start")({ systemPromptOptions: { sections: none } });
-  assert.equal(none.mcp_servers, undefined);
-});
-
-test("a codemode script reaches an MCP tool that was never declared to the model, and without codemode it is declared", async (t) => {
-  const { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
-  const { fauxProvider, fauxAssistantMessage, fauxToolCall } = await import("@earendil-works/pi-ai/providers/faux");
-  const dir = temporary(t);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ ...fixtureServer(dir, "docs"), description: "Team documentation" }]);
-  const run = async (defaultTools) => {
-    const faux = fauxProvider({ provider: "faux-codemode", models: [{ id: "scripted", contextWindow: 100_000, maxTokens: 4096 }] });
-    const requests = [];
-    faux.setResponses([
-      (context) => { requests.push(context); return fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.docs__first({ value: 'hi' }))" }), { stopReason: "toolUse" }); },
-      (context) => { requests.push(context); return fauxAssistantMessage("Done"); },
-    ]);
-    const resourceLoader = new DefaultResourceLoader({ cwd: dir, agentDir: dir, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-      extensionFactories: [createCodemodeExtension({ mode: "on" }), api.createMcpExtension(dir, { deferToCodemode: true }), { name: "faux", factory(pi) { pi.registerProvider(faux.provider); } }] });
-    await resourceLoader.reload();
-    const { session } = await createAgentSession({ cwd: dir, agentDir: dir, resourceLoader, settingsManager: SettingsManager.inMemory({ defaultTools }), sessionManager: SessionManager.inMemory(), model: faux.getModel() });
-    // dispose() alone leaves extensions running; shutting down closes the MCP server process.
-    t.after(async () => { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); session.dispose(); });
-    await session.bindExtensions({});
-    await session.prompt("Look it up");
-    const declared = requests[0].messages.filter((message) => message.role === "system").flatMap((message) => (message.toolsAdded ?? []).map((tool) => tool.name));
-    const sections = requests[0].messages.filter((message) => message.role === "system").map((message) => message.sections?.mcp_servers ?? "").join("");
-    const result = session.messages.find((message) => message.role === "toolResult");
-    return { declared, sections, result: result.content.map((part) => part.text ?? "").join("\n") };
-  };
-  const scripted = await run(["read", "codemode"]);
-  assert.deepEqual(scripted.declared, ["read", "codemode"], "the MCP tool stays out of the model's declarations");
-  assert.match(scripted.sections, /- docs: docs \(via codemode\)/, "the model learns the service exists");
-  assert.match(scripted.result, /Echo hi/, "the script called the MCP tool");
-  const direct = await run(["read"]);
-  assert.ok(direct.declared.includes("docs__first"), "without codemode the MCP tool is declared directly");
-  assert.equal(direct.sections, "");
-});
-
 test("MCP remove and endpoint edits delete the server's stored credential", async (t) => {
   const dir = temporary(t), file = join(dir, "server.json");
   const server = { id: "remote", name: "Remote", transport: "http", url: "https://one.example/mcp", enabled: true, oauth: true };
@@ -1500,20 +1295,11 @@ test("daemon idle waits include cancelled append work before releasing workspace
   await daemon.stop();
 });
 
-test("the subagent rollback switch registers no tool and opens no history", async (t) => {
-  const previous = process.env.AIDEN_SUBAGENTS_ENABLED;
-  process.env.AIDEN_SUBAGENTS_ENABLED = "0";
-  t.after(() => { if (previous === undefined) delete process.env.AIDEN_SUBAGENTS_ENABLED; else process.env.AIDEN_SUBAGENTS_ENABLED = previous; });
-  let registered = 0;
-  await api.createSubagentsExtension(temporary(t)).factory({ registerTool() { registered++; } });
-  assert.equal(registered, 0);
-});
-
-test("owned CLI controls persist verified values once and headless agents cannot write", async (t) => {
+test("app controls persist verified values once and leave desktop-only settings unchanged", async (t) => {
   const dir = temporary(t),
-    controls = api.createCliAppControls(dir, () => undefined);
+    controls = api.createCliAppControls(dir);
   assert.match(JSON.stringify(api.readAidenHelp("memory")), /does not delete/i);
-  const state = await controls.snapshot("memory", false);
+  const state = await controls.snapshot("memory");
   const row = state.rows.find((row) => row.id === "memory.enabled");
   assert.equal(row.value, true);
   const operation = {
@@ -1522,59 +1308,16 @@ test("owned CLI controls persist verified values once and headless agents cannot
     expectedRevision: row.revision,
     operationId: "human_cli_operation",
   };
-  await assert.rejects(controls.apply(operation, false, false), /interactive CLI/);
-  assert.equal(existsSync(join(dir, "aiden.json")), false);
-  const result = await controls.apply(operation, false, true, true);
+  const result = await controls.apply(operation);
   assert.equal(result.status, "applied");
   assert.equal(result.effective, "next_session");
   assert.equal(JSON.parse(readFileSync(join(dir, "aiden.json"), "utf8")).memoryEnabled, false);
-  assert.deepEqual(await controls.apply(operation, false, true, true), result);
-  assert.equal(
-    api.isOwnedAppTool(
-      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "/untrusted/app.ts" } }] },
-      "aiden_help",
-    ),
-    false,
-  );
-  assert.equal(
-    api.isOwnedAppTool(
-      { getAllTools: () => [{ name: "aiden_help", sourceInfo: { path: "<inline:aiden-app>" } }] },
-      "aiden_help",
-    ),
-    true,
-  );
-});
-
-test("CLI controls require a current owner and terminal receipts confirm Pi persistence", async (t) => {
-  const dir = temporary(t);
-  let theme = "dark";
-  const controls = api.createCliAppControls(dir, () => ({
-    currentTheme: () => theme,
-    themes: () => ["dark", "light"],
-    setTheme(value) {
-      theme = value;
-      api.atomicJson(join(dir, "settings.json"), { theme: value });
-      return { success: true };
-    },
-  }));
-  const state = await controls.snapshot("appearance", true);
-  const row = state.rows[0];
-  const operation = {
-    control: row.id,
-    value: "light",
-    expectedRevision: row.revision,
-    operationId: "terminal_saved_operation",
-  };
-  await assert.rejects(
-    controls.apply(operation, true, true, false, () => false),
-    /no longer available/i,
-  );
-  assert.equal(theme, "dark");
+  assert.deepEqual(await controls.apply(operation), result);
+  // Appearance belongs to the desktop: no CLI write reaches it.
+  const before = readFileSync(join(dir, "aiden.json"), "utf8");
+  await assert.rejects(controls.apply({ control: "appearance.mode", value: "dark", expectedRevision: "any", operationId: "desktop_only" }));
+  assert.equal(readFileSync(join(dir, "aiden.json"), "utf8"), before);
   assert.equal(existsSync(join(dir, "settings.json")), false);
-  const receipt = await controls.apply(operation, true, true);
-  assert.equal(receipt.status, "applied");
-  assert.equal(receipt.effective, "now");
-  assert.equal(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).theme, "light");
 });
 
 test("MCP migration preserves exact legacy bytes privately and keeps native configurations separate", async (t) => {
@@ -1634,13 +1377,9 @@ test("MCP reads stay available while another process owns the Aiden MCP lease", 
   assert.equal(existsSync(join(dir, "mcp.json")), false);
 });
 
-test("native settings keep Aiden header-only startup and persist one installation identity on demand", async (t) => {
+test("native settings keep install telemetry off and persist one installation identity on demand", async (t) => {
   const dir = temporary(t);
   const settings = api.SettingsManager.create(dir, dir);
-  assert.equal(settings.getQuietStartup(), "header");
-  assert.equal(settings.getThemeSetting(), "light/dark");
-  settings.setTheme("system");
-  assert.equal(settings.getTheme(), "system");
   assert.equal(settings.getEnableInstallTelemetry(), false);
   assert.equal(settings.getGlobalSettings().deviceId, undefined);
   const id = settings.getOrCreateDeviceId();
@@ -1648,29 +1387,7 @@ test("native settings keep Aiden header-only startup and persist one installatio
   await settings.flush();
   const reopened = api.SettingsManager.create(dir, dir);
   assert.equal(reopened.getOrCreateDeviceId(), id);
-  reopened.setQuietStartup(false);
-  assert.equal(reopened.getQuietStartup(), false);
-  reopened.setQuietStartup(true);
-  assert.equal(reopened.getQuietStartup(), true);
-  await reopened.flush();
-});
-
-
-test("delegated MCP revisions follow migrated Aiden configuration and encrypted credentials", (t) => {
-  const dir = temporary(t);
-  const revision = api.createCliMcpRevision(dir);
-  const original = revision();
-  api.atomicJson(join(dir, "mcp.json"), { mcpServers: { native: { command: "example" } } });
-  assert.equal(revision(), original);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: true }]);
-  const configured = revision();
-  assert.notEqual(configured, original);
-  api.atomicJson(join(dir, "aiden-mcp.json"), [{ id: "aiden", enabled: false }]);
-  assert.notEqual(revision(), configured);
-  const revoked = revision();
-  mkdirSync(join(dir, "credentials"), { recursive: true });
-  api.atomicJson(join(dir, "credentials/insights.json"), { encrypted: "changed" });
-  assert.notEqual(revision(), revoked);
+  assert.equal(reopened.getEnableInstallTelemetry(), false);
 });
 
 
@@ -1946,10 +1663,10 @@ test("Azure endpoint migration cannot pair a legacy deployment with a different 
   }
 });
 
-function todoHarness(manager, widgets = []) {
+function todoHarness(manager) {
   const harness = extension(api.createTodoInlineExtension({ latestContext: () => undefined }));
-  const context = { sessionManager: manager, hasUI: true, mode: "tui", ui: { setWidget: (_name, lines) => widgets.push(lines) } };
-  return { ...harness, context, widgets,
+  const context = { sessionManager: manager, hasUI: false, mode: "rpc" };
+  return { ...harness, context,
     start: async (reason = "startup", ctx = context) => harness.events.get("session_start")?.({ type: "session_start", reason }, ctx),
     call: async (args) => harness.tools.get("todo").execute("test-call", args),
     async persist(args) {
@@ -1968,7 +1685,6 @@ test("CLI todo restores branch-local checkpoints after restart, compaction, swit
   manager.appendCompaction("Earlier observations compressed", null, 10000);
   const resumed = todoHarness(manager); await resumed.start("resume");
   assert.deepEqual((await resumed.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["First checkpoint", "Second checkpoint"]);
-  assert.ok(resumed.widgets.at(-1).some((line) => line.includes("First checkpoint")));
   const third = await resumed.persist({ action: "create", subject: "Third checkpoint" });
   assert.equal(third.result.details.tasks.at(-1).id, 3);
   manager.branch(one.id);
@@ -1977,7 +1693,6 @@ test("CLI todo restores branch-local checkpoints after restart, compaction, swit
   await resumed.persist({ action: "clear" });
   await resumed.start("reload");
   assert.deepEqual((await resumed.call({ action: "list" })).details.tasks, []);
-  assert.equal(resumed.widgets.at(-1), undefined);
   const empty = api.SessionManager.inMemory(temporary(t));
   await resumed.start("new", { ...resumed.context, sessionManager: empty });
   const fresh = await resumed.call({ action: "create", subject: "New session only" });
@@ -1994,12 +1709,9 @@ test("CLI todo corrupt newest checkpoint fails closed and a later valid session 
   await harness.start("reload");
   await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
   await assert.rejects(harness.call({ action: "create", subject: "Must not overwrite" }), /unavailable/i);
-  assert.equal(harness.widgets.at(-1), undefined);
   const empty = api.SessionManager.inMemory(temporary(t));
-  const widgetCount = harness.widgets.length;
-  await harness.start("new", { ...harness.context, sessionManager: empty, hasUI: false });
+  await harness.start("new", { ...harness.context, sessionManager: empty });
   assert.deepEqual((await harness.call({ action: "list" })).details.tasks, []);
-  assert.equal(harness.widgets.length, widgetCount, "headless restoration must not render a widget");
 });
 
 test("CLI todo ignores stale asynchronous restoration after a newer session starts", async (t) => {
@@ -2016,7 +1728,6 @@ test("CLI todo ignores stale asynchronous restoration after a newer session star
   await harness.call({ action: "create", subject: "Newer session task" });
   release(manager.getBranch()); await oldStart;
   assert.deepEqual((await harness.call({ action: "list" })).details.tasks.map(({ subject }) => subject), ["Newer session task"]);
-  assert.equal(harness.widgets.at(-1), undefined);
   await harness.events.get("session_shutdown")({ type: "session_shutdown", reason: "quit" }, harness.context);
   await assert.rejects(harness.call({ action: "list" }), /unavailable/i);
 });

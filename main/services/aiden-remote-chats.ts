@@ -10,6 +10,7 @@ import {
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
 import {
   isToolStep,
@@ -1218,6 +1219,11 @@ export class AidenRemoteChatService {
        * excluded from that device's turns so a prompt can never be stranded.
        */
       deviceSupportsQuestionPrompts?: (deviceId: string) => Promise<boolean>;
+      /**
+       * Whether a workspace's folder was moved or deleted, so a paired device
+       * hears why before its message is stored. Absent: never refused here.
+       */
+      workspaceFolderMissing?: (workspaceId: string) => Promise<boolean>;
       /** The Mac's Settings → Appearance inline visuals choice for remote turns. */
       inlineVisuals?: () => Promise<InlineVisualsMode | undefined>;
       /**
@@ -2342,13 +2348,35 @@ export class AidenRemoteChatService {
           const messageId = `message_${randomUUID()}`;
           let appended = false;
           let appendedChat: Chat | undefined;
+          // Held, not spent, until the append runs: every refusal before it
+          // (busy, workspace changing, skill unavailable) gives the uploads
+          // back so the phone's resend under a fresh key can still use them.
+          let taken: ReturnType<AidenRemoteAttachmentStore["reserve"]> | undefined;
+          let appendAttempted = false;
           try {
             turn.onReleased(owner.owner.onInvalidated(turn.release));
             // Again now that this turn holds the chat. A pause recorded after
             // this check is enforced on the generation: it checks again once
             // registered, and the pause stops the chat's running work.
             await this.refuseIfBotPaused(authoritative);
-            const attachments = this.attachments.consume(deviceId, chatId, parsed.attachmentIds);
+            if (
+              workspaceId &&
+              !authoritative.botId &&
+              (await this.options.workspaceFolderMissing?.(workspaceId)) === true
+            ) {
+              // Nothing ran, so the same send runs once the folder is back.
+              throw new AidenOperationNotExecutedError(
+                new AidenRemoteServiceError(
+                  "workspace_unavailable",
+                  WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL,
+                  409,
+                ),
+              );
+            }
+            taken = parsed.attachmentIds === undefined
+              ? undefined
+              : this.attachments.reserve(deviceId, chatId, parsed.attachmentIds);
+            const attachments = taken?.attachments;
             try {
               if (parsed.skill) turn.reserveSkillPreparation();
               turn.reserveAppendPayload(
@@ -2416,6 +2444,7 @@ export class AidenRemoteChatService {
                 throw skillInvocationRemoteError(error);
               }
             }
+            appendAttempted = true;
             const chat = await appendChatMessageWithReconciliation({
               messageId,
               append: () => this.options.chatStore.appendMessage(
@@ -2439,6 +2468,7 @@ export class AidenRemoteChatService {
             });
             appended = true;
             appendedChat = chat;
+            taken?.commit();
             turn.settleAsyncWork();
             const started = await startSurfaceGeneration(
               this.options.generation.start,
@@ -2462,6 +2492,9 @@ export class AidenRemoteChatService {
               message: projectAidenRemoteChat({ ...chat, messages: [message] }).messages[0]!,
             };
           } catch (error) {
+            // Once the append was attempted the message may hold them.
+            if (appendAttempted) taken?.commit();
+            else taken?.restore();
             turn.release();
             turn.settleAsyncWork();
             this.options.streams.markStartError(deviceId, streamId, error);

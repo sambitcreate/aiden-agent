@@ -3,11 +3,13 @@
 // focused while global dictation runs. Recording capture happens in this
 // window's renderer, so dictation works even when the main window is closed.
 
-import { BrowserWindow, logger, screen } from "../platform.js";
+import { BrowserWindow, logger, registerBroadcastReceiver, screen } from "../platform.js";
+import { PILL_NOTIFICATION_CHANNELS } from "../../renderer/pill-preload-channels.js";
 import type { IpcMainInvokeEvent } from "electron";
 import { getPillPreloadPath, getWindowUrl } from "./window-paths.js";
 import { isTrustedPillSender } from "./pill-window-security.js";
 import { shouldPositionDictationPill } from "./pill-window-platform.js";
+import { markAuxiliaryWindow } from "./auxiliary-windows.js";
 
 const PILL_WIDTH = 280;
 const PILL_HEIGHT = 56;
@@ -16,6 +18,8 @@ const PILL_BOTTOM_OFFSET = 15;
 
 let pillWindow: BrowserWindow | null = null;
 let loading: Promise<BrowserWindow> | null = null;
+/** The pill being created, so destroyPill() can reach it before it loads. */
+let loadingWindow: BrowserWindow | null = null;
 let pillUrl = "";
 
 function positionPill(window: BrowserWindow): void {
@@ -55,16 +59,26 @@ async function createPillWindow(): Promise<BrowserWindow> {
     },
   });
 
+  // The pill is never an app window: it must not keep Linux or Windows
+  // running after the last real window closes, and app UI never targets it.
+  markAuxiliaryWindow(window);
+  // The pill hears only the notifications its preload forwards.
+  registerBroadcastReceiver(window, PILL_NOTIFICATION_CHANNELS);
+
   // Float above other apps (including fullscreen spaces) without stealing focus.
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setAlwaysOnTop(true, process.platform === "darwin" ? "status" : "normal");
 
+  loadingWindow = window;
   window.on("closed", () => {
-    pillWindow = null;
+    if (pillWindow === window) pillWindow = null;
+    if (loadingWindow === window) loadingWindow = null;
   });
 
   const loaded = new Promise<BrowserWindow>((resolve, reject) => {
     window.webContents.once("did-finish-load", () => resolve(window));
+    // A pill destroyed mid-load never finishes; settle its waiters instead.
+    window.once("closed", () => reject(new Error("Pill window closed before it loaded")));
     window.webContents.once("did-fail-load", (_event, code, description) =>
       reject(new Error(`Pill window failed to load (${code}): ${description}`)),
     );
@@ -86,6 +100,7 @@ async function ensurePill(): Promise<{ window: BrowserWindow; created: boolean }
   if (!loading) {
     loading = createPillWindow().finally(() => {
       loading = null;
+      loadingWindow = null;
     });
   }
   pillWindow = await loading;
@@ -118,6 +133,8 @@ export function hidePill(): void {
 export function destroyPill(): void {
   if (pillWindow && !pillWindow.isDestroyed()) pillWindow.destroy();
   pillWindow = null;
+  if (loadingWindow && !loadingWindow.isDestroyed()) loadingWindow.destroy();
+  loadingWindow = null;
 }
 
 export function isCurrentPillEvent(event: IpcMainInvokeEvent): boolean {

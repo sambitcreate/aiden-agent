@@ -743,6 +743,19 @@ enum AidenRemoteClientError: Error, LocalizedError {
         return body.code.rawValue == "credential_revoked"
     }
 
+    /// A 429 the server marked `retryable`. The request was refused before it
+    /// ran, so it can be sent again after `serverRetryAfterSeconds`.
+    var isRetryableRateLimit: Bool {
+        guard case .server(429, let body) = self else { return false }
+        return body.retryable
+    }
+
+    /// The server's clamped retry delay for a 429, if it named one.
+    var serverRetryAfterSeconds: Int? {
+        guard case .server(429, let body) = self else { return nil }
+        return body.retryAfterDelaySeconds
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
@@ -1139,11 +1152,22 @@ final class AidenRemoteClient: @unchecked Sendable {
         }
         let payload = try AidenRemoteJSONDecoder.decodePairingPayload(from: plaintext)
         _ = try payload.validated(at: now)
-        guard payload.bootstrap.endpoint.absoluteString == endpoint.absoluteString,
+        guard hostCaseFolded(payload.bootstrap.endpoint) == hostCaseFolded(endpoint),
               payload.bootstrap.expiresAt == sealed.expiresAt else {
             throw AidenManualPairingError.endpointMismatch
         }
         return payload
+    }
+
+    /// Host names are case-insensitive. Nearby discovery reports the Mac's
+    /// Bonjour name with its case ("Office-Mac.local"), while the desktop's
+    /// payload carries it lowercased.
+    private static func hostCaseFolded(_ url: URL) -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        components.host = components.host?.lowercased()
+        return components.string ?? url.absoluteString
     }
 
     static func normalizeManualPairingCode(_ value: String) throws -> String {
@@ -3471,7 +3495,11 @@ final class AidenRemoteClient: @unchecked Sendable {
                 code: response.statusCode == 401 || response.statusCode == 403 ? .unauthorized : .network
             )
             if let envelope = try? AidenRemoteJSONDecoder.decode(AidenRemoteErrorEnvelope.self, from: data) {
-                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: envelope.error)
+                var body = envelope.error
+                body.retryAfterHeaderSeconds = AidenRemoteErrorEnvelope.retryAfterHeaderSeconds(
+                    response.value(forHTTPHeaderField: "Retry-After")
+                )
+                throw AidenRemoteClientError.server(statusCode: response.statusCode, body: body)
             }
             throw AidenRemoteClientError.unexpectedStatus(response.statusCode)
         }

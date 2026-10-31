@@ -73,7 +73,6 @@ test("changed-area classification is conservative and table-driven", () => {
     ["protocol/aiden-appearance-v1.json", select("desktop", "catalog", "cli", "ios", "android")],
     ["packages/cli/src/commands.ts", select("desktop", "catalog", "cli")],
     ["packages/cli/package.json", select("desktop", "catalog", "cli")],
-    ["packages/cli-playground/src/main.tsx", select("cli")],
     ["resources/model-capabilities.json", select("catalog")],
     ["resources/generative-ui/runtime.js", allTrue],
     ["scripts/ci-changes.mjs", allTrue],

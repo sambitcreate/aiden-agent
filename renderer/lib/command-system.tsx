@@ -171,6 +171,21 @@ export function CommandSystemProvider({
     });
   }, [execute]);
 
+  // Grey out the menu bar items that can't run here (no chat open, nothing to stop).
+  const sentMenuCommands = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      const ids = applicationModal ? [] : ["commandPalette.toggle", ...handlers.current.keys()].sort();
+      const key = ids.join(" ");
+      if (key === sentMenuCommands.current) return;
+      sentMenuCommands.current = key;
+      void appApi.setMenuCommands(ids).catch(() => {
+        sentMenuCommands.current = null;
+      });
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [applicationModal, handlerRevision]);
+
   React.useEffect(() => {
     // This effect is deliberately declared after the native-command listener.
     // Main waits for this handshake before delivering queued menu actions.

@@ -1,6 +1,8 @@
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
+import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import {
   parseUsageLimitWaits,
@@ -15,6 +17,7 @@ import {
   type SpendingChangedEvent,
   type SpendingStatusView,
 } from "../shared/spending";
+import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -399,6 +402,9 @@ export const appApi = {
   setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
+  /** The commands that can run now, so the menu bar greys out the rest. */
+  setMenuCommands: (commandIds: readonly string[]) =>
+    invoke<boolean>("app:setMenuCommands", [...commandIds]),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
@@ -579,6 +585,25 @@ function parseBotSpendingLimitChoice(value: unknown): BotSpendingLimitChoice {
   return usd === undefined ? { kind: "default" } : { kind: "amount", usd };
 }
 
+function parseAnalyticsStatus(value: unknown): AnalyticsStatusView {
+  const status = value as Partial<Record<keyof AnalyticsStatusView, unknown>> | null;
+  return {
+    enabled: status?.enabled === true,
+    envDisabled: status?.envDisabled === true,
+    hasKey: status?.hasKey === true,
+    noticePending: status?.noticePending === true,
+  };
+}
+
+/** Usage-data consent (Settings → Diagnostics, onboarding and the one-time notice). */
+export const analyticsApi = {
+  status: async () => parseAnalyticsStatus(await invoke<unknown>("analytics:status")),
+  setEnabled: async (enabled: boolean) => parseAnalyticsStatus(await invoke<unknown>("analytics:setEnabled", enabled)),
+  markNoticeShown: async (choice: AnalyticsNoticeChoice) =>
+    parseAnalyticsStatus(await invoke<unknown>("analytics:markNoticeShown", choice)),
+  registry: () => invoke<AnalyticsRegistryView>("analytics:registry"),
+};
+
 export const spendingApi = {
   status: async (ownerKind: SpendingStatusView["ownerKind"], ownerId: string) =>
     parseSpendingStatusView(await invoke<unknown>("spending:status", ownerKind, ownerId)),
@@ -657,6 +682,12 @@ export const skillsApi = {
   catalog: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:catalog", workspaceId)),
   /** @deprecated Compatibility alias for the renderer-safe catalog. */
+  /** Every skill a workspace could switch off, with whether it is off there. */
+  workspaceChoices: (workspaceId: string) =>
+    invoke<import("../../main/services/skill-registry").WorkspaceSkillChoice[]>(
+      "skills:workspaceChoices",
+      workspaceId,
+    ),
   discovered: async (workspaceId: string): Promise<SkillCatalogEntry[]> =>
     parseSkillCatalog(await invoke<unknown>("skills:discovered", workspaceId)),
 };
@@ -993,6 +1024,8 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /** A hidden workspace for one No workspace chat: its own managed folder, global settings. */
+  createNoWorkspace: () => invoke<Workspace>("workspaces:createNoWorkspace"),
   /**
    * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
    * given workspace's folder). Never creates anything.
@@ -1018,13 +1051,22 @@ export const workspacesApi = {
     onNotification<WorkspaceCloneProgress>("workspaces:clone-progress", handler),
   update: (
     id: string,
-    patch: { name?: string; permission?: WorkspacePermission; memoryEnabled?: boolean },
+    patch: {
+      name?: string;
+      permission?: WorkspacePermission;
+      memoryEnabled?: boolean;
+      disabledSkills?: string[];
+      disabledMcpServerIds?: string[];
+    },
   ) => invoke<Workspace>("workspaces:update", id, patch),
   remove: (id: string) => invoke<void>("workspaces:remove", id),
   gitInfo: (workspaceId: string) => invoke<GitInfo>("workspaces:gitInfo", workspaceId),
   /** Credential-free repository identity, or null outside a repository with a network remote. */
   repositoryIdentity: (workspaceId: string) =>
     invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
+  /** Whether the workspace's folder is still on disk. */
+  folderPresence: (workspaceId: string) =>
+    invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
@@ -1577,6 +1619,9 @@ export const chatsApi = {
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
+  /** The questions and approvals the interrupted reply was waiting on, questions first. */
+  interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
+  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,
@@ -2021,6 +2066,9 @@ export function startGeneration(
         }
         return { ok: true as const };
       }
+      // Main never took the turn, so nothing will ever arrive on this stream.
+      fallbackDetachedLifecycleStream(streamId);
+      dispose();
       return {
         ok: false as const,
         error: new Error("Generation was rejected before it accepted this message."),

@@ -163,6 +163,43 @@ test("global kill switch cancels and settles live runs without deleting or pausi
   testbed.service.stop();
 });
 
+for (const action of ["pause", "remove"] as const) {
+  test(`a rejected ${action} publication rearms the enabled schedule after cancelling a live run`, async (t) => {
+    const testbed = harness();
+    const task = await addTask(testbed.store);
+    await testbed.service.start();
+    t.after(() => testbed.service.stopAndSettle());
+    let signalStart!: () => void;
+    let admitted = new Promise<void>((resolve) => { signalStart = resolve; });
+    const execute = testbed.execution.run;
+    testbed.execution.run = (current) => { const result = execute(current); signalStart(); return result; };
+    const initialRun = testbed.service.runNow(task.id);
+    await admitted;
+    const previousRevision = (await testbed.store.get(task.id))!.updatedAt;
+    let rejected = false;
+    testbed.taskPersistence.beforeCommit = async (draft) => {
+      const next = (draft as Array<{ id: string; enabled: boolean }>).find((entry) => entry.id === task.id);
+      if (!rejected && (!next || !next.enabled)) {
+        rejected = true;
+        throw new Error("Consent revoked before publication.");
+      }
+    };
+    await assert.rejects(testbed.service[action](task.id), /Consent revoked/);
+    assert.equal((await initialRun).result, "blocked");
+    assert.equal((await testbed.store.get(task.id))?.enabled, true);
+    assert.ok((await testbed.store.get(task.id))!.updatedAt > previousRevision,
+      "settling the cancelled run advances the persisted runtime revision");
+    const rearmed = scheduledJobs.find((entry) => entry.name === `scheduled:${task.id}`);
+    assert.ok(rearmed, "the rejected operation must leave a live Cron");
+    admitted = new Promise<void>((resolve) => { signalStart = resolve; });
+    const completion = fireWhenDue(t, rearmed);
+    await admitted;
+    assert.equal(testbed.hasPending(task.id), true, "the rearmed Cron must still execute");
+    await testbed.service.stopAndSettle();
+    await completion;
+  });
+}
+
 test("removing a live task waits for cancellation before deleting its state", async () => {
   const testbed = harness();
   const task = await addTask(testbed.store);

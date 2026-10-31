@@ -5,6 +5,7 @@
 // these at runtime; main/handlers/ipc-contract.test.ts enforces them statically.
 
 export const INVOKE_PREFIXES = [
+  "analytics:",
   "app:",
   "assistant:",
   "assistant-live:",
