@@ -318,9 +318,9 @@ test("New chat in… opens a draft in the chosen workspace from the chevron, the
   await page.getByRole("button", { name: "New Agent", exact: true }).hover();
   await page.getByRole("button", { name: "New chat in…", exact: true }).click();
   await expect(search).toBeFocused();
-  // Most recent first: the new workspace was added after the default one.
+  // Folder workspaces come first; the new chat is in No workspace, which is marked current.
   await expect(options.nth(0)).toHaveText(/^Palette target/u);
-  await expect(options.nth(1)).toHaveText(/current$/u);
+  await expect(options.nth(1)).toHaveText(/^No workspace.*current$/u);
   await expect(page.getByRole("option", { name: /^Open folder…/u })).toBeVisible();
   await expect(options.nth(1)).toHaveAttribute("aria-current", "true");
   // Esc returns to the command list, then closes the palette.
