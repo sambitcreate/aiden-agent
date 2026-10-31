@@ -175,6 +175,22 @@ test("remote check prints both sections and fails when the Tailscale address doe
   } finally {
     remoteOff.close();
   }
+  // Something holds the control socket but never answers: that is a stuck server, not a stopped one.
+  const stuckDir = mkdtempSync(join(tmpdir(), "aiden-reach-stuck-"));
+  const held = [];
+  const stuck = createNetServer((socket) => { held.push(socket); });
+  stuck.listen(join(stuckDir, "serve.sock"));
+  await once(stuck, "listening");
+  try {
+    const out = sink();
+    assert.equal(await api.remoteCheckCommand(stuckDir, { runner: tailscaleRunner(), host: linux, cloud: async () => false, out, statusTimeoutMs: 200 }), false);
+    assert.match(out.text, /✗ The Aiden server did not answer\./);
+    assert.doesNotMatch(out.text, /not running/, "a stuck server is not reported as stopped");
+  } finally {
+    for (const socket of held) socket.destroy();
+    stuck.close();
+    rmSync(stuckDir, { recursive: true, force: true });
+  }
   const localOnly = await fakeDaemon(() => ({ connectionMode: "lan", lanEndpoint: "https://box.local:49320/api/aiden/v1", tailscaleConnected: false }));
   try {
     const out = sink();
@@ -301,6 +317,49 @@ test("uninstall takes down Aiden's Tailscale route only when it is connected", a
     daemon.close();
   }
   assert.equal(await api.releaseTailscaleRoute(mkdtempSync(join(tmpdir(), "aiden-reach-none-"))), undefined, "no running server, nothing to remove");
+});
+
+test("uninstall stops the service before it touches the route, and leaves the route when the stop fails", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "aiden-reach-home-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const timeline = [];
+  let stopFails = true;
+  const host = {
+    platform: "linux", home, uid: 501, user: "sam",
+    run: (command, args) => {
+      const line = [command, ...args].join(" ");
+      timeline.push(line);
+      return line.startsWith("systemctl --user disable") && stopFails ? { status: 1, stdout: "", stderr: "Failed to connect to bus" } : { status: 0, stdout: "", stderr: "" };
+    },
+  };
+  const unit = api.serviceFile(host);
+  mkdirSync(dirname(unit), { recursive: true });
+  writeFileSync(unit, "[Unit]\n");
+  let connected = true;
+  const daemon = await fakeDaemon((command, args) => {
+    timeline.push(`daemon ${args[0]}`);
+    if (args[0] === "status") return { tailscaleConnected: connected };
+    if (args[0] === "tailscale-disconnect") { connected = false; return { tailscaleConnected: false }; }
+    return new Error("unexpected");
+  });
+  const write = process.stdout.write;
+  let output = "";
+  process.stdout.write = (chunk) => { output += chunk; return true; };
+  try {
+    await assert.rejects(api.serviceCommand(daemon.dir, ["uninstall"], host), /Could not stop the Aiden service/);
+    assert.ok(!timeline.some((line) => line.startsWith("daemon")), "a failed stop leaves the running server's route alone");
+    assert.equal(connected, true);
+    stopFails = false;
+    timeline.length = 0;
+    await api.serviceCommand(daemon.dir, ["uninstall"], host);
+    const stop = timeline.findIndex((line) => line.startsWith("systemctl --user disable"));
+    const disconnect = timeline.indexOf("daemon tailscale-disconnect");
+    assert.ok(stop >= 0 && disconnect > stop, `the service is stopped first, then the route is removed (${timeline.join(", ")})`);
+    assert.match(output, /Removed the Aiden service\.[\s\S]*Removed Aiden's Tailscale route/);
+  } finally {
+    process.stdout.write = write;
+    daemon.close();
+  }
 });
 
 test("uninstall removes the route a stopped server saved as its own, through Tailscale directly", async (t) => {

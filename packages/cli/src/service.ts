@@ -320,7 +320,8 @@ const ROUTE_BY_HAND = "Remove it by hand with `tailscale serve --https=443 --set
 export async function releaseTailscaleRoute(agentDir: string, offline: OfflineRouteRelease = {}): Promise<string | undefined> {
   const { remoteServerStatus } = await import("./reachability.ts");
   const status = await remoteServerStatus(agentDir);
-  if (status && !status.remoteOff) {
+  // A server that does not answer is handled like a stopped one: the controller takes the same route lock.
+  if (status && !status.remoteOff && !status.unanswered) {
     if (!status.tailscaleConnected) return undefined;
     const { remoteDaemonCommand } = await import("./daemon-control.ts");
     try {
@@ -405,11 +406,14 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     return;
   }
   if (action === "uninstall" && rest.length === 0) {
-    if (serviceStatus(host).installed) {
-      const released = await releaseTailscaleRoute(agentDir);
-      if (released) out(released);
+    // Stop the service first: if the manager refuses, the running server keeps its route and a retry can still remove it.
+    if (!uninstallService(host)) {
+      out("The Aiden service was not installed.");
+      return;
     }
-    out(uninstallService(host) ? "Removed the Aiden service. The server no longer starts on its own." : "The Aiden service was not installed.");
+    out("Removed the Aiden service. The server no longer starts on its own.");
+    const released = await releaseTailscaleRoute(agentDir);
+    if (released) out(released);
     return;
   }
   if (action !== "install") throw new Error(SERVICE_USAGE);

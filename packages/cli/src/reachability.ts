@@ -155,16 +155,27 @@ export interface ServerReachability {
   tailscaleErrorCode?: string;
   /** The server is running with Remote off (`--no-remote`). */
   remoteOff?: boolean;
+  /** A server holds the control socket but did not answer in time (busy or stuck). */
+  unanswered?: boolean;
 }
 
-/** `remote status` from the running server, `{ remoteOff: true }` when it runs without Remote, or undefined when none answers within `timeoutMs`. */
+/**
+ * `remote status` from the running server: `{ remoteOff: true }` when it runs
+ * without Remote, `{ unanswered: true }` when something holds the control
+ * socket but does not answer within `timeoutMs`, and undefined only when no
+ * server is listening at all.
+ */
 export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): Promise<ServerReachability | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<undefined>((resolveLate) => { timer = setTimeout(() => resolveLate(undefined), timeoutMs); });
+  const late = new Promise<ServerReachability>((resolveLate) => { timer = setTimeout(() => resolveLate({ unanswered: true }), timeoutMs); });
   try {
     const asked = remoteDaemonCommand(agentDir, "remote", ["status"]).then(
       (value) => value as ServerReachability,
-      (error: unknown) => /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : undefined,
+      (error: unknown): ServerReachability | undefined => {
+        const code = (error as NodeJS.ErrnoException | undefined)?.code;
+        if (code === "ENOENT" || code === "ECONNREFUSED") return undefined;
+        return /^Remote is off/u.test(error instanceof Error ? error.message : String(error)) ? { remoteOff: true } : { unanswered: true };
+      },
     );
     return await Promise.race([asked, late]);
   } finally {
@@ -175,6 +186,7 @@ export async function remoteServerStatus(agentDir: string, timeoutMs = 5_000): P
 /** How the running server can be reached. `answered` is the live Tailscale check, when one ran. */
 export function serverChecklist(server: ServerReachability | undefined, facts: TailscaleFacts, cloud: boolean, answered?: boolean): CheckItem[] {
   if (!server) return [{ state: "fail", text: "The Aiden server is not running. Start it with `aiden service install` or `aiden serve`." }];
+  if (server.unanswered) return [{ state: "fail", text: "The Aiden server did not answer. It may be busy or stuck; see its log (`aiden service status` says where it is), or restart it." }];
   if (server.remoteOff) return [{ state: "fail", text: "The server is running with Remote off. Restart it without `--no-remote`, or run it as a service with `aiden service install`." }];
   if (server.running === false) return [{ state: "fail", text: "Remote is on but not listening. See the server log (`aiden service status` says where it is)." }];
   const mode = server.connectionMode;
@@ -294,6 +306,8 @@ export interface RemoteCheckDependencies {
   cloud?: () => Promise<boolean>;
   probe?: (endpoint: string) => Promise<boolean>;
   out?: NodeJS.WritableStream;
+  /** How long to wait for the server's `remote status`, which inspects Tailscale and can take a while. */
+  statusTimeoutMs?: number;
 }
 
 /** `aiden remote check`: every step between a phone and this server, with the fix for each one that fails. */
@@ -303,7 +317,7 @@ export async function remoteCheckCommand(agentDir: string, dependencies: RemoteC
   const [facts, cloud, server] = await Promise.all([
     readTailscaleFacts(runner, host),
     (dependencies.cloud ?? (() => looksLikeCloudServer()))(),
-    remoteServerStatus(agentDir),
+    remoteServerStatus(agentDir, dependencies.statusTimeoutMs ?? 20_000),
   ]);
   const endpoint = server?.tailscaleConnected ? server.tailscaleEndpoint : undefined;
   const answered = endpoint ? await (dependencies.probe ?? ((value) => probeAidenHealth(value, 20_000)))(endpoint) : undefined;
