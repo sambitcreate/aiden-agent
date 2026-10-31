@@ -103,8 +103,9 @@ export class DurableJobStore {
     this.checkFiles();
     this.db = new DatabaseSync(this.file);
     try {
+      this.db.exec("PRAGMA busy_timeout=100;");
       initializeSqliteReclamation(this.db);
-      this.db.exec("PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON;");
+      this.db.exec("PRAGMA foreign_keys=ON;");
       const version = Number(
         (
           this.db.prepare("PRAGMA user_version").get() as {

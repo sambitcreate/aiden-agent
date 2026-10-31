@@ -132,9 +132,10 @@ export class StudioAssetStore {
     await fs.mkdir(path.join(root, "thumbs"), { recursive: true, mode: 0o700 });
     const db = new DatabaseSync(path.join(root, "assets-v1.sqlite"));
     try {
+      db.exec("PRAGMA busy_timeout=100;");
       initializeSqliteReclamation(db);
       db.exec(
-        "PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
+        "PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;",
       );
       const { user_version: version } = db.prepare("PRAGMA user_version").get() as {
         user_version: number;

@@ -284,8 +284,9 @@ export class ImageRunLedger {
     assertPrivate(file, false);
     const db = new DatabaseSync(file);
     try {
+      db.exec("PRAGMA busy_timeout=100;");
       initializeSqliteReclamation(db);
-      db.exec("PRAGMA busy_timeout=100; PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+      db.exec("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
       const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
       if (version === 0) {
         if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").get()) {
