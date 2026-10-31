@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import Observation
 
 struct AidenIntentInstallationRecord: Codable, Equatable, Sendable {
     let id: String
@@ -163,43 +164,67 @@ struct AidenWorkspaceIntentQuery: EntityQuery {
     }
 }
 
+/// In-process delivery survives a cold foreground launch before ContentView mounts.
+/// Nothing in a URL, App Group, saved state, or notification can claim this provenance.
+@MainActor @Observable
+final class AidenForegroundIntentRouter {
+    struct Action: Equatable {
+        let id = UUID()
+        let instanceID: String?
+        let workspaceID: String?
+        let startsVoice: Bool
+        let createdAt: Date
+    }
+    static let shared = AidenForegroundIntentRouter()
+    private(set) var pending: Action?
+
+    func submit(instanceID: String?, workspaceID: String?, startsVoice: Bool, now: Date = Date()) {
+        guard pending == nil else { return }
+        pending = Action(instanceID: instanceID, workspaceID: workspaceID, startsVoice: startsVoice, createdAt: now)
+    }
+
+    func take(now: Date = Date()) -> Action? {
+        defer { pending = nil }
+        guard let pending, (0..<60).contains(now.timeIntervalSince(pending.createdAt)) else { return nil }
+        return pending
+    }
+}
+
 struct NewChatIntent: AppIntent {
     static let title: LocalizedStringResource = "New Chat"
     static let description = IntentDescription("Open Aiden On The Go on a new chat.")
+    static var openAppWhenRun: Bool { true }
 
-    func perform() async throws -> some IntentResult & OpensIntent {
-        guard let url = AidenDeepLink.newChatURL else { throw AidenIntentError.invalidDestination }
-        return .result(opensIntent: OpenURLIntent(url))
+    @MainActor func perform() async throws -> some IntentResult {
+        AidenForegroundIntentRouter.shared.submit(instanceID: AidenIntentCatalogStore.shared.load().activeInstallationId,
+            workspaceID: nil, startsVoice: false)
+        return .result()
     }
 }
 
 struct NewChatVoiceIntent: AppIntent {
     static let title: LocalizedStringResource = "New Chat with Voice"
-    static let description = IntentDescription("Open a new Aiden chat and start on-device dictation.")
+    static let description = IntentDescription("Open a new Aiden chat and start your selected dictation mode.")
+    static var openAppWhenRun: Bool { true }
 
-    func perform() async throws -> some IntentResult & OpensIntent {
-        guard let url = AidenDeepLink.newChatVoiceURL else { throw AidenIntentError.invalidDestination }
-        return .result(opensIntent: OpenURLIntent(url))
+    @MainActor func perform() async throws -> some IntentResult {
+        AidenForegroundIntentRouter.shared.submit(instanceID: AidenIntentCatalogStore.shared.load().activeInstallationId,
+            workspaceID: nil, startsVoice: true)
+        return .result()
     }
 }
 
 struct NewChatInWorkspaceIntent: AppIntent {
     static let title: LocalizedStringResource = "New Chat in Workspace"
     static let description = IntentDescription("Open a new chat in a cached Aiden workspace.")
-
+    static var openAppWhenRun: Bool { true }
     @Parameter(title: "Workspace") var workspace: AidenWorkspaceIntentEntity
+    static var parameterSummary: some ParameterSummary { Summary("New chat in \(\.$workspace)") }
 
-    static var parameterSummary: some ParameterSummary {
-        Summary("New chat in \(\.$workspace)")
-    }
-
-    func perform() async throws -> some IntentResult & OpensIntent {
-        guard let url = AidenDeepLink.newChatURL(
-            instanceId: workspace.instanceId,
-            workspaceId: workspace.workspaceId,
-            startsVoice: false
-        ) else { throw AidenIntentError.invalidDestination }
-        return .result(opensIntent: OpenURLIntent(url))
+    @MainActor func perform() async throws -> some IntentResult {
+        AidenForegroundIntentRouter.shared.submit(instanceID: workspace.instanceId, workspaceID: workspace.workspaceId,
+            startsVoice: false)
+        return .result()
     }
 }
 

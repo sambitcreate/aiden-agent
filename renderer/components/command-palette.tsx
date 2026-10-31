@@ -13,6 +13,7 @@ import {
   FolderDown,
   FolderPlus,
   Keyboard,
+  MessageCircle,
   MessageSquare,
   Moon,
   Palette,
@@ -47,6 +48,7 @@ import {
 import { useActiveWorkspace } from "../lib/workspace-context";
 import { useNewChatActions } from "../lib/new-chat-actions";
 import { newChatWorkspaceChoices } from "../lib/new-chat-workspaces";
+import { NO_WORKSPACE_LABEL, isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
 import { useOpenWorkspacePathRow, useWorkspacePathIntake } from "../lib/use-workspace-path-intake";
 import type { WorkspacePathRow } from "../lib/workspace-menu";
 import { formatWorkspacePath, workspaceDisplayName } from "../lib/workspace-path-display";
@@ -271,6 +273,9 @@ export function AppCommandPalette({
       })),
     [activeId, allChats.data, workspaces],
   );
+  const noWorkspaceHomeId = noWorkspaceHome(workspaces)?.id;
+  const noWorkspaceCurrent = isNoWorkspace(workspaces.find((workspace) => workspace.id === activeId));
+  const noWorkspaceResult = staticPaletteResult("No workspace just chat global settings");
   const openFolderResult = staticPaletteResult("Open folder… add workspace directory");
   const cloneResult = staticPaletteResult("Clone repository… git url github");
   // A typed path (`/`, `~`, `.`) is answered by one row: select, open or create.
@@ -317,7 +322,12 @@ export function AppCommandPalette({
     ],
     newChatIn: pathIntake.pathQuery
       ? pathRowResult ? [pathRowResult] : []
-      : [...workspaceResults.map(({ result }) => result), openFolderResult, cloneResult],
+      : [
+          ...workspaceResults.map(({ result }) => result),
+          ...(noWorkspaceHomeId ? [noWorkspaceResult] : []),
+          openFolderResult,
+          cloneResult,
+        ],
     models: providers.isLoading ? [] : providers.isError ? [modelRetryResult]
       : [...modelResults, ...unavailableResults].map(({ result }) => result),
     providers: [
@@ -887,10 +897,29 @@ export function AppCommandPalette({
                       ) : null}
                     </PaletteResultItem>
                   ))}
+                  {noWorkspaceHomeId ? (
+                    <PaletteResultItem
+                      result={noWorkspaceResult}
+                      onSelect={() => startChatIn(noWorkspaceHomeId)}
+                      aria-current={noWorkspaceCurrent ? "true" : undefined}
+                      className="mt-1 min-h-11 px-3"
+                    >
+                      <MessageCircle className="size-4 shrink-0 text-secondary" />
+                      <span className="flex min-w-0 flex-1 items-baseline gap-2">
+                        <span className="min-w-0 shrink truncate">{NO_WORKSPACE_LABEL}</span>
+                        <span className="min-w-0 flex-1 truncate text-small text-tertiary">
+                          Just chat, with your global settings
+                        </span>
+                      </span>
+                      {noWorkspaceCurrent ? (
+                        <span className="shrink-0 text-small text-tertiary">current</span>
+                      ) : null}
+                    </PaletteResultItem>
+                  ) : null}
                   <PaletteResultItem
                     result={openFolderResult}
                     onSelect={openFolderForChat}
-                    className="mt-1 min-h-11 px-3"
+                    className={noWorkspaceHomeId ? "min-h-11 px-3" : "mt-1 min-h-11 px-3"}
                   >
                     <FolderPlus className="size-4 shrink-0 text-secondary" />
                     <span className="min-w-0 flex-1 truncate">Open folder…</span>

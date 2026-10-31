@@ -39,6 +39,7 @@ import type {
 } from "../lib/types";
 import { isAcpHarnessProvider } from "../shared/acp-harness";
 import { mcpServerOffersTools } from "../shared/mcp-exposure";
+import { isNoWorkspace } from "../lib/no-workspace";
 
 function upcomingLabel(timestamp: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -693,7 +694,7 @@ export function ScheduledTaskEditor({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">No workspace</SelectItem>
-              {workspaces.map((workspace) => (
+              {workspaces.filter((workspace) => !isNoWorkspace(workspace) || workspace.id === draft.workspaceId).map((workspace) => (
                 <SelectItem value={workspace.id} key={workspace.id}>
                   {workspace.name}
                 </SelectItem>
