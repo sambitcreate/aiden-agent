@@ -27,6 +27,9 @@ export const CHAT_PENDING_ATTENTION_SUMMARY_MAX = 200;
 /** Ids per request: a host lists at most 2,000 chats. */
 export const CHAT_PENDING_ATTENTION_MAX_IDS = 2_000;
 
+/** Joiners and emoji tag characters shape scripts and emoji, so they stay. */
+const KEPT_FORMAT_CHARACTERS = /^(?:\u200C|\u200D|[\u{E0020}-\u{E007F}])$/u;
+
 /**
  * One line, at most 200 characters, ending in an ellipsis when cut. Line
  * breaks become spaces; other control and invisible formatting characters
@@ -37,7 +40,7 @@ export function clipPendingAttentionSummary(text: unknown): string {
   if (typeof text !== "string") return "";
   const oneLine = text
     .replace(/\s+/gu, " ")
-    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/[\p{Cc}\p{Cf}]/gu, (character) => (KEPT_FORMAT_CHARACTERS.test(character) ? character : ""))
     .replace(/ {2,}/gu, " ")
     .trim();
   const characters = Array.from(oneLine);

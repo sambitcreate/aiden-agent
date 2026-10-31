@@ -156,6 +156,13 @@ interface ChatSidebarProps {
 
 type SidebarEntry = SidebarProjectEntry<LocalSidebarProject>;
 type SidebarRow = LocalSidebarChat | RemoteSidebarChat;
+type SyncedSidebarField =
+  | "chatSort"
+  | "projectSort"
+  | "projectOrder"
+  | "expandedWorkspaceIds"
+  | "machineFilter"
+  | "projectGrouping";
 
 /**
  * The remote chat a rename dialog is for. It names the chat, not a revision:
@@ -802,28 +809,44 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // Writes only the fields this window changed, so another window's change to a
   // different field survives. The view writes itself through `useSidebarView`.
   const writtenPreferences = React.useRef<Partial<SidebarPreferences>>(initialPreferences);
-  // Another window's write replaces this window's copies, so a later local
-  // change (a drag, a collapse) merges into it rather than restoring old values.
+  // Another window's write replaces this window's copies of the fields it
+  // changed, so a later local change (a drag, a collapse) merges into it rather
+  // than restoring old values. Fields it left alone keep any local edit still
+  // waiting to render.
   useSidebarPreferencesFromOtherWindows((stored) => {
-    writtenPreferences.current = {
-      chatSort: stored.chatSort,
-      projectSort: stored.projectSort,
-      projectOrder: stored.projectOrder,
-      expandedWorkspaceIds: stored.expandedWorkspaceIds,
-      machineFilter: stored.machineFilter,
-      projectGrouping: stored.projectGrouping,
-    };
-    const sameList = (current: readonly string[], next: readonly string[]) =>
-      current.length === next.length && current.every((value, index) => value === next[index]);
-    setChatSort(stored.chatSort);
-    setProjectSort(stored.projectSort);
-    setProjectOrder((current) => (sameList(current, stored.projectOrder) ? current : stored.projectOrder));
-    setExpandedWorkspaceIds((current) =>
-      sameList([...current], stored.expandedWorkspaceIds) ? current : new Set(stored.expandedWorkspaceIds),
-    );
-    setMachineFilter(stored.machineFilter);
-    setProjectGrouping(stored.projectGrouping);
+    const written = writtenPreferences.current;
+    const changed = (field: SyncedSidebarField) =>
+      JSON.stringify(stored[field]) !== JSON.stringify(written[field]);
+    const adopted: Partial<SidebarPreferences> = {};
+    if (changed("chatSort")) {
+      adopted.chatSort = stored.chatSort;
+      setChatSort(stored.chatSort);
+    }
+    if (changed("projectSort")) {
+      adopted.projectSort = stored.projectSort;
+      setProjectSort(stored.projectSort);
+    }
+    if (changed("projectOrder")) {
+      adopted.projectOrder = stored.projectOrder;
+      setProjectOrder(stored.projectOrder);
+    }
+    if (changed("expandedWorkspaceIds")) {
+      adopted.expandedWorkspaceIds = stored.expandedWorkspaceIds;
+      setExpandedWorkspaceIds(new Set(stored.expandedWorkspaceIds));
+    }
+    if (changed("machineFilter")) {
+      adopted.machineFilter = stored.machineFilter;
+      setMachineFilter(stored.machineFilter);
+    }
+    if (changed("projectGrouping")) {
+      adopted.projectGrouping = stored.projectGrouping;
+      setProjectGrouping(stored.projectGrouping);
+    }
+    writtenPreferences.current = { ...written, ...adopted };
   });
+  // Pruning runs only when this window's workspace list changes, so adopting
+  // another window's ids never prunes one this window hasn't loaded yet.
+  const prunedWorkspaces = React.useRef<typeof workspaces | null>(null);
   React.useEffect(() => {
     if (!workspaceRegistryReady) return;
     const own: Partial<SidebarPreferences> = {
@@ -842,6 +865,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     ) as Partial<SidebarPreferences>;
     writtenPreferences.current = own;
+    if (Object.keys(patch).length === 0 && prunedWorkspaces.current === workspaces) return;
+    prunedWorkspaces.current = workspaces;
     writeSidebarPreferences(patch, workspaces.map((workspace) => workspace.id));
   }, [
     chatSort,

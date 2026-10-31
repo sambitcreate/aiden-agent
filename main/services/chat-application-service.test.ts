@@ -352,6 +352,7 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
   };
   const failed = fixture({
     followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
     subagentRunStore: {
       deleteChat: async () => { throw new Error("disk failed"); },
       completeChatDeletion: async () => undefined,
@@ -359,12 +360,13 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
     } as ChatApplicationDependencies["subagentRunStore"],
   });
   await assert.rejects(failed.service.remove("chat-1"), /subagent history/u);
-  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"]);
+  assert.deepEqual(events, ["suppress:chat-1", "restore:chat-1"], "the retained chat keeps its context");
   assert.equal(failed.finishDeletionCalls(), 1, "admission reopens for the retained chat");
 
   events.length = 0;
   const pending = fixture({
     followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
     subagentRunStore: {
       deleteChat: async () => { throw new Error("V2 tombstone failed"); },
       completeChatDeletion: async () => undefined,
@@ -372,11 +374,18 @@ test("a chat deletion that fails before its durable tombstone hands the chat bac
     } as ChatApplicationDependencies["subagentRunStore"],
   });
   await assert.rejects(pending.service.remove("chat-1"), /subagent history/u);
-  assert.deepEqual(events, ["suppress:chat-1"], "a pending durable delete keeps the chat's runs ignored");
+  assert.deepEqual(
+    events,
+    ["suppress:chat-1", "release:chat-1"],
+    "a pending durable delete keeps the chat's runs ignored and drops its context",
+  );
 
   events.length = 0;
-  await fixture({ followThrough }).service.remove("chat-1");
-  assert.deepEqual(events, ["suppress:chat-1"], "a completed delete keeps the chat's runs ignored");
+  await fixture({
+    followThrough,
+    releaseChatContext: (chatId: string) => { events.push(`release:${chatId}`); },
+  }).service.remove("chat-1");
+  assert.deepEqual(events, ["suppress:chat-1", "release:chat-1"], "a completed delete keeps the chat's runs ignored");
 });
 
 test("chat deletion checks a remote revision before cancellation or private-history changes", async () => {

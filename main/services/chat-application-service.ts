@@ -401,7 +401,10 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
             );
           }
         }
-        deps.releaseChatContext?.(chatId);
+        // A delete that rolled back keeps the chat, so it keeps its context
+        // (interrupted waits, Unavailable prompts, spending) too.
+        const rolledBack = releaseAdmission && !chatRemoved;
+        if (!rolledBack) deps.releaseChatContext?.(chatId);
         if (releaseAdmission) {
           // Admission reopening without a removed chat means the delete rolled back
           // before any durable tombstone, so the chat stays in use.

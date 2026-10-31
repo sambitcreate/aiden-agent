@@ -214,10 +214,18 @@ test("a prompt the run raises after its window left shows as Unavailable from wh
 });
 
 test("summaries drop control and bidirectional formatting characters", async () => {
-  const { registry, pending } = harness({ chats: ["chat-a"] });
+  const { registry, pending } = harness({ chats: ["chat-a", "chat-b"] });
   registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
   registry.publish("run-a", "chat:approval", approval("approval-1", "rm \u202Etxt.exe\u202C\u0007 -f\u200B now"));
   assert.equal((await pending(["chat-a"]))[0]?.summary, "rm txt.exe -f now");
+
+  // Joiners shape emoji and scripts such as Persian, so they survive.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+  const scotland = "\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}";
+  const persian = "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645";
+  registry.begin({ runId: "run-b", chatId: "chat-b", origin: "renderer" });
+  registry.publish("run-b", "chat:approval", approval("approval-2", `Send ${family} ${scotland} ${persian}`));
+  assert.equal((await pending(["chat-b"]))[0]?.summary, `Send ${family} ${scotland} ${persian}`);
 });
 
 test("unknown chats are left out and malformed requests are refused", async () => {
