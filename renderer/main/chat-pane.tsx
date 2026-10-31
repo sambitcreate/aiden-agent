@@ -14,6 +14,7 @@ import {
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
+import { resolveModelDisplay } from "../lib/model-display";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -1355,13 +1356,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     environmentPanel.setContextDetails(!draft && chat.data ? {
       chat: chat.data,
+      providerId,
       providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
-      modelLabel: model ?? "Unavailable",
+      providerArtwork: selectedProvider?.artwork,
+      modelId: model,
+      modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
       pressure: contextPressure,
       compacting: contextCompactPending || (displayedGenerationTimeline?.steps.some((step) => isToolStep(step) && step.toolName === "compact_context" && (step.status === "pending" || step.status === "running")) ?? false),
     } : null);
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
+  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, displayedGenerationTimeline, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {

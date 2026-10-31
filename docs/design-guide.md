@@ -135,6 +135,24 @@ focus uses fill and caret changes without a new border or ring. Reuse existing
 hover and press feedback and respect Reduce Motion; do not animate the corner
 shape or add layout shifts.
 
+## Model and provider marks
+
+Every row, chip, or menu item that names a model or a provider shows its mark
+with `ProviderIcon` (`renderer/components/provider-icon.tsx`), never a generic
+glyph such as a robot or server icon. Pass `modelId` when the row is a model, so a
+Claude or Grok model shows that model's mark as the composer's picker does, and
+pass the provider's `artwork` when it is known, so a custom connection shows the
+picture its owner chose. A provider without a bundled logo falls back to a
+neutral initial. Name models with `resolveModelDisplay` and the device-local
+model info (`useProvidersModelInfo`) rather than the raw id, so a model reads the
+same in the composer, the command palette, Bots, and scheduled tasks. The Bot
+capability catalog carries opaque grant ids, so the Bot model picker finds the
+real provider by its label (only when exactly one provider has that label) and
+uses the model's display name as the Claude or Grok hint. iOS
+(`AidenProviderIcon`) and Android (`AidenProviderIcon`) use the same marks for
+new work; some native lists, such as the iOS scheduled-task model picker and
+the iOS Bot model rows, still show text or an initial.
+
 ## Loading and optimistic updates
 
 Reads follow the cache-first rule ([plan](plans/cache-first-loading-states-plan.md)):
