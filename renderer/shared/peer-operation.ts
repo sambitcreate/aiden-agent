@@ -24,7 +24,9 @@ export type PeerReadOperation =
   | "botConversations"
   | "botCapabilities"
   /** A Bot's one durable conversation (`GET /bots/{botId}/session`). */
-  | "botSession";
+  | "botSession"
+  /** Contract revision 45 (`bot:images`): one shared image's bytes; `itemId` is its entry. */
+  | "botSessionImage";
 export type PeerWriteOperation =
   | "createChat"
   | "send"
@@ -94,7 +96,7 @@ export interface PeerOperation {
   revision?: string;
 }
 
-/** `attachmentContent` resolves to bounded image bytes instead of JSON. */
+/** `attachmentContent` and `botSessionImage` resolve to bounded image bytes instead of JSON. */
 export interface PeerAttachmentContent {
   mimeType: "image/png" | "image/jpeg";
   bytes: Uint8Array;

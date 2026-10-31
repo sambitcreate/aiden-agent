@@ -16,9 +16,11 @@ async function fixture(t: TestContext) {
     await store.close();
     await rm(root, { recursive: true, force: true });
   });
-  const workspaces = new Map([
+  const workspaces = new Map<string, { id: string; folderPath?: string; noWorkspace?: true }>([
     ["project", { id: "project", folderPath: "/Users/me/project" }],
     ["scratch", { id: "scratch" }],
+    ["default", { id: "default", folderPath: "/data/chat-folders/home", noWorkspace: true }],
+    ["chat-b", { id: "chat-b", folderPath: "/data/chat-folders/chat-b", noWorkspace: true }],
   ]);
   const facts = createWorkspaceMemoryFacts({
     getWorkspace: async (id) => workspaces.get(id),
@@ -122,4 +124,19 @@ test("unknown workspaces and malformed ids are refused", async (t) => {
   await assert.rejects(f.facts.list("../project"), /Invalid workspace/u);
   await assert.rejects(f.facts.list(42), /Invalid workspace/u);
   await assert.rejects(f.facts.remove("project", "a b"), /Invalid memory/u);
+});
+
+test("every No workspace chat recalls the facts the folderless default workspace saved", async (t) => {
+  const f = await fixture(t);
+  await f.store.put({
+    id: "before-folders",
+    scope: { kind: "workspace", id: "default" },
+    text: "Prefers metric units.",
+    provenance: { kind: "user_edit", sourceId: "settings" },
+    alwaysOn: true,
+  });
+  for (const workspaceId of ["default", "chat-b"]) {
+    assert.deepEqual((await f.facts.list(workspaceId)).map((fact) => fact.text), ["Prefers metric units."]);
+  }
+  assert.deepEqual(await f.facts.list("project"), []);
 });
