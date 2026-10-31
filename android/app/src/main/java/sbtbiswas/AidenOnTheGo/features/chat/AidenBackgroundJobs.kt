@@ -16,7 +16,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -37,6 +36,7 @@ import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobCopy
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobsState
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTheme
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenTonalButton
+import sbtbiswas.AidenOnTheGo.ui.theme.rememberAidenFullSheetState
 import java.time.Instant
 
 const val AIDEN_BACKGROUND_JOBS_CHIP_TAG = "aiden-background-jobs-chip"
@@ -74,7 +74,7 @@ fun AidenBackgroundJobsSheet(
     }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false),
+        sheetState = rememberAidenFullSheetState(),
         containerColor = palette.raised
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -83,7 +83,8 @@ fun AidenBackgroundJobsSheet(
             if (state.jobs.isEmpty()) {
                 Text("Nothing in the background", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
             }
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            // Weighted so a long list scrolls inside the sheet and the Stop error and footer stay in view.
+            LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 items(state.jobs, key = { it.id }) { job ->
                     AidenBackgroundJobRow(job, now, canStop, job.id in state.stoppingJobIds) { onStop(job.id) }
                 }
