@@ -6,6 +6,7 @@ import { ChatApprovalCard, type ChatApprovalDecisionOptions } from "./chat-appro
 import { TooltipProvider } from "./ui";
 import type { ApprovalPrompt } from "../lib/ipc";
 import type { AssistantAutomationApprovalDetails, ScheduledTaskApprovalDetails } from "../shared/assistant";
+import type { HookProposalApprovalDetails } from "../shared/hook-proposal-approval";
 import { toolApprovalPreview } from "../shared/tool-approval-preview";
 import { detectedKeyboardPlatform } from "../shared/keybindings";
 import { subagentOutboundApprovalSummaryV2 } from "../../main/services/subagents/outbound-approval-v2.js";
@@ -469,4 +470,90 @@ test("only a card that takes approval keys answers them, and one that can't allo
   fireEvent.keyDown(denyOnly.composer, primaryKey("Enter"));
   fireEvent.keyDown(denyOnly.composer, primaryKey("Backspace"));
   assert.deepEqual(denyOnly.decisions, [["deny", undefined]]);
+});
+
+/** A hook the agent proposed, as the hooks tool hands it to the card. */
+function hookProposal(overrides: Partial<HookProposalApprovalDetails> = {}): HookProposalApprovalDetails {
+  return {
+    kind: "hook-proposal",
+    action: "create",
+    name: "Block force pushes",
+    scopeLabel: "This workspace (aiden-agent)",
+    warnings: [],
+    previous: null,
+    digestPrefix: "0123456789ab",
+    event: "PreToolUse",
+    matcher: "run_command",
+    command: "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
+    timeoutSeconds: 30,
+    failClosed: false,
+    envAllow: [],
+    ...overrides,
+  };
+}
+
+function mountHook(details: HookProposalApprovalDetails | Record<string, unknown>, extra: Partial<ApprovalPrompt> = {}) {
+  return mount({
+    toolName: "hooks",
+    summary: "Aiden wants to add a hook. Review and approve it on the Mac running this chat.",
+    details: details as unknown as ApprovalPrompt["details"],
+    ...extra,
+  });
+}
+
+test("a proposed hook shows where and when it runs and its whole command, and can only be allowed once", () => {
+  // Even if remembered scopes reached the card, saving a hook stays a one-time decision.
+  const { card, decisions } = mountHook(hookProposal(), { scopes: ["once", "chat", "always"] });
+
+  assert.equal(screen.getByRole("region", { name: "Add this hook?" }), card);
+  assert.deepEqual(facts(card), {
+    Name: "Block force pushes",
+    "Runs in": "This workspace (aiden-agent)",
+    Event: "PreToolUse",
+    Matches: "run_command",
+    "Time limit": "30 s",
+    "If it fails": "Lets the tool run",
+    Environment: "Default only",
+    Digest: "0123456789ab",
+  });
+  assert.equal(
+    within(card).getByLabelText("Complete hook command").textContent,
+    "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
+  );
+  assert.deepEqual(
+    within(card).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    ["Deny", "Allow once"],
+  );
+  fireEvent.click(within(card).getByRole("button", { name: "Allow once" }));
+  assert.deepEqual(decisions, [["allow", undefined]]);
+});
+
+test("a hook change shows the current command beside the new one", () => {
+  const { card } = mountHook(
+    hookProposal({
+      action: "update",
+      command: "npx prettier --write \"$FILE\"",
+      event: "PostToolUse",
+      matcher: "write_file",
+      previous: { event: "PostToolUse", matcher: "write_file", command: "npx prettier --write .", timeoutSeconds: 10, failClosed: false, envAllow: [] },
+    }),
+  );
+  assert.ok(screen.getByRole("region", { name: "Change this hook?" }));
+  assert.equal(within(card).getByLabelText("Current hook command").textContent, "npx prettier --write .");
+  assert.equal(within(card).getByLabelText("Complete new hook command").textContent, "npx prettier --write \"$FILE\"");
+  assert.equal(facts(card)["Time limit"], "10 s 30 s");
+});
+
+test("a malformed hook proposal is blocked instead of shown", () => {
+  for (const details of [
+    { ...hookProposal(), command: "echo ok\u202e" },
+    { ...hookProposal(), extra: true },
+    { ...hookProposal(), action: "update", previous: null },
+  ]) {
+    const { card } = mountHook(details);
+    assert.ok(within(card).getByText("Invalid privileged approval blocked"));
+    assert.equal(within(card).queryByRole("button", { name: "Allow once" }), null);
+    assert.equal(within(card).queryByLabelText("Complete hook command"), null);
+    cleanup();
+  }
 });

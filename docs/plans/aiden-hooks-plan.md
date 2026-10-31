@@ -1,6 +1,6 @@
 # Aiden hooks: user and agent-configurable lifecycle hooks
 
-Status: **Proposed** (2026-10-31). Research only; nothing is implemented. Owner decisions are listed at the end.
+Status: **In review** (2026-10-31) on `feature/aiden-hooks`. Phases 0–3 are implemented; Phase 4 (import) was dropped and Phase 5 (a phone hook step kind) is a follow-up. The user guide is [docs/hooks.md](../hooks.md). The research and decisions below are the original proposal; owner decisions are listed at the end.
 
 Research baseline: `main` at `8c5903a09` (Pi 1.4.0, Remote revision 47). Ten parallel research passes covered Aiden's runtime, the CLI, Bots, opencode (`~/projects/opencode`), t3code (`~/projects/opp/t3code`), the Claude Code and Codex hook specifications, and the Pi extension ecosystem.
 
@@ -238,7 +238,13 @@ Wiring:
   - Stop continues through the harness `onStop` path (`stop_hook_active` on continued turns, at most 8 per person turn), never after an abort, an error, a cut-off or a spending block. Notification fires when an approval card or a question waits. SessionEnd fires, without waiting, when a chat whose hooks ran in this process is deleted.
   - Not wired, each on purpose: Bot chats, Design Studio, the attended Assistant, routines, Telegram, side questions, ACP harness providers, subagents, title generation, probes and catalog work.
 - **Bots** (Phase 3). The Bot extension's `beforeTool` (`{ block }` only) and `afterResponse` call the same dispatcher with `scope: bot:<id>`.
+  - As built (`main/services/agent-surface-hooks.ts`, wired in `bot-runtime/bot-extension.ts`, on the desktop and the CLI): scopes are global, then `bot:<id>`; hooks run in the Bot's folder and `session_id` is the Bot id. PreToolUse runs after the Bot's own tool policy and only blocks: an ask is refused with "No one is here to approve it on this turn." PostToolUse appends feedback to the result, Stop continues the run (at most 8 times), and SessionStart and PreCompact add context. `updatedInput` is never applied. Durable Bots pass an idempotency key per tool call, so a replayed call doesn't run its hooks twice.
+- **Routines** (Phase 3, as built). `scheduled-bot-routines.ts` fires RoutineRun after a successful run and RoutineFailed after a failed one, observe-only, with the Bot's scopes.
+- **Subagents** (Phase 3, as built). `subagent-supervisor-core.ts` fires SubagentStop when a Bot's subagent finishes (desktop `bot-tool-sources-main.ts`, CLI `bot-subagents.ts`). Subagents don't run PreToolUse. Desktop chat subagents are not wired yet; they need `stopHooks: chatSurfaceHooks(...)` passed from `llm-client.ts`.
+- **Managed worktrees** (Phase 3, as built). Creating a managed worktree runs WorktreeCreate in the new checkout with the source workspace's hooks and waits for them, on the desktop and the CLI (`remote-worktrees.ts`). A failing hook is logged and never undoes the worktree; restored or resumed worktrees don't fire it.
 - **CLI** (Phase 3). The daemon's existing `tool_call` gate and `before_agent_start` call the dispatcher. It is the same module, because the CLI bundles `main/services` directly. Advertise the capability through `host-platform-capabilities.ts`.
+  - As built (`packages/cli/src/hooks.ts`, `daemon-chats.ts`): the daemon owns one hook service over `<agentDir>/hooks/`, separate from the desktop's store, on macOS and Linux (the `hooks` capability). Workspace chats run PreToolUse after Aiden's own access rules, PostToolUse, UserPromptSubmit, SessionStart, Stop (at most 8 continuations, kept in the session journal), PreCompact, and SessionEnd when the chat is deleted. Unlike the desktop, Telegram and scheduled chats run hooks too, with asks refused because no one is there. pi tool names (`bash`, `write`, …) are mapped to Aiden's so Claude matchers such as `Bash` and `Write` apply. Notification is not wired, and legacy Bot daemon chats run tool hooks only.
+  - `aiden hooks list | approve <id> [digest] | disable <id> | enable <id> | pause | resume | test <id>` manage the store through the daemon socket, or open it directly under the serve lease when no daemon runs.
 - **Excluded by design:**
   - title generation, probes and model-catalog actions (t3code's `disableAllHooks`);
   - Design Studio runs, which already reject foreign extensions;
@@ -262,7 +268,7 @@ Wiring:
 4. **Protect the config.**
    - Add the hooks files (`.aiden/hooks.json`, the profile store) to the paths `write_file`, `edit_file` and the Bot file router refuse.
    - Fix the existing gap where parent `write_file`/`edit_file` (and so Bots) had no protected-path check, which let the agent write `.claude/settings.json` in a Full-access workspace. (`SAFE_HIDDEN_DIRECTORY_NAMES` in `coding-tools.ts` only governs what subagents may read.)
-   - Done in Phase 0: `main/services/protected-agent-config-paths.ts` refuses writes to `.aiden/hooks.json`, `.aiden/hooks/`, `.claude/settings{,.local}.json`, `.claude/hooks/`, `.claude/plugins/`, `.codex/config.toml`, `.codex/hooks.json` and `.codex/hooks/` at any depth, case-insensitively, on both the given and the symlink-resolved path. It applies to parent and Bot file tools, the subagent write broker and ACP client writes. Reads are unchanged. The profile store still needs adding to the Bot protected roots when it lands.
+   - Done in Phase 0: `main/services/protected-agent-config-paths.ts` refuses writes to `.aiden/hooks.json`, `.aiden/hooks/`, `.claude/settings{,.local}.json`, `.claude/hooks/`, `.claude/plugins/`, `.codex/config.toml`, `.codex/hooks.json` and `.codex/hooks/` at any depth, case-insensitively, on both the given and the symlink-resolved path. It applies to parent and Bot file tools, the subagent write broker and ACP client writes. Reads are unchanged. The hook stores themselves (the desktop's `<userData>/hooks/` and the CLI's `<agentDir>/hooks/`) are refused too, through `setProtectedAgentConfigRoots`, which the hook service sets as it starts.
    - `run_command` writes to these files are caught by the digest check, because a changed file disables the hook rather than running it.
 5. **Unattended turns.**
    - Hooks that already exist run on routines, wake-ups and subagents.
@@ -298,6 +304,7 @@ A deferred tool (listed in `load_tools`, so it costs no tokens until it's used) 
   - status labels: *Waiting for approval*, *Changed — re-approve*, *Disabled after failures*, *Not supported in Aiden*;
   - a "What hooks can see" sheet;
   - Import from Claude Code, in Phase 4.
+  - Status (2026-10-31): built on `feature/aiden-hooks` with an Add hook sheet, a detail sheet with run log, Test and Delete, digest-bound Approve for repo hooks, agent proposals with a before-and-after diff, and Pause all hooks; see the Hooks section of `docs/settings-design-system.md`. Import from Claude Code was dropped by owner decision 5.
 - **In chat.** A hook block or ask shows inside the existing tool row ("Blocked by hook *guard-shell*: pushes to main are not allowed"). Context from hooks appears in the Quick View Context breakdown as a new "Hooks" category.
 - **Phones.** Hook runs appear as `tool` steps in Phase 1, with no protocol change. iOS `AidenAgentStep.Kind` is a closed enum, so adding a `hook` kind needs a capability-gated Remote revision across iOS, Android and the fixtures (Phase 5).
 - **Onboarding.** Hooks are a power-user feature, so they get no onboarding step and no gallery tile in v1. Revisit once Bots can propose hooks.

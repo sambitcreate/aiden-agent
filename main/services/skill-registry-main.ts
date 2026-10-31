@@ -3,12 +3,14 @@ import { discoverSkillCandidates, invalidateSkillDiscoveryCache } from "./skills
 import { SkillRegistry } from "./skill-registry.js";
 import { AIDEN_APP_SKILL } from "./aiden-app-knowledge.js";
 import { AIDEN_ARTIFACTS_SKILL, AIDEN_ARTIFACTS_SKILL_ID } from "./workspace-artifacts/skill.js";
+import { AIDEN_HOOKS_SKILL, AIDEN_HOOKS_SKILL_ID } from "./hooks-skill.js";
 
 /** Process-owned registry. Its invocation key is generated once and never leaves main. */
 export const skillRegistry = new SkillRegistry({
   listBuiltin: async () => [
     { ...AIDEN_APP_SKILL, stableId: "builtin:aiden-app", source: "builtin", enabled: true },
     { ...AIDEN_ARTIFACTS_SKILL, stableId: AIDEN_ARTIFACTS_SKILL_ID, source: "builtin", enabled: true },
+    { ...AIDEN_HOOKS_SKILL, stableId: AIDEN_HOOKS_SKILL_ID, source: "builtin", enabled: true },
   ],
   isEnabled: async () => (await configStore.getSettings()).skillsEnabled !== false,
   getWorkspace: (id) => configStore.getWorkspace(id),

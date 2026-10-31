@@ -30,6 +30,7 @@ import {
   ShieldCheck,
   Hourglass,
   Bot,
+  Webhook,
 } from "lucide-react";
 import { ProvidersSettings } from "../components/settings/providers-settings";
 import { AppearanceSettings } from "../components/settings/appearance-settings";
@@ -53,6 +54,7 @@ import { ConnectionsSettings } from "../components/settings/connections-settings
 import { SimulatorSettingsPage } from "../components/settings/device-workspace-settings";
 import { ToolApprovalSettings } from "../components/settings/tool-approval-settings";
 import { LimitsSettings } from "../components/settings/limits-settings";
+import { HooksSettings } from "../components/settings/hooks-settings";
 import {
   availableSettingsDestinations,
   matchesSettingsSearch,
@@ -80,6 +82,7 @@ const NAV_ICONS: Record<SettingsSection, React.ReactNode> = {
   limits: <Hourglass className="size-5" />,
   skills: <Wand2 className="size-5" />,
   mcp: <Plug className="size-5" />,
+  hooks: <Webhook className="size-5" />,
   telegram: <Send className="size-5" />,
   remoteAccess: <Smartphone className="size-5" />,
   websearch: <Globe className="size-5" />,
@@ -116,6 +119,7 @@ const CONTENT: Record<SettingsSection, React.ComponentType> = {
   telegram: TelegramSettings,
   remoteAccess: ConnectionsSettings,
   mcp: McpSettings,
+  hooks: HooksSettings,
   websearch: WebSearchSettings,
   imageGeneration: ImageGenerationSettings,
   approvals: ToolApprovalSettings,
@@ -140,6 +144,7 @@ const DESCRIPTIONS: Record<SettingsSection, string> = {
   limits: "Choose how long replies wait out a provider’s usage limit, and how much chats and Bots may spend.",
   skills: "Choose the reusable instructions Aiden can load in chats.",
   mcp: "Connect tools and services to extend what Aiden can do.",
+  hooks: "Run your own shell commands at points in a chat, such as before a tool runs. Each one runs only after you approve it.",
   telegram: "Connect your Telegram bots and choose how they respond.",
   remoteAccess: "Use Aiden from your phone or another computer, or control your other computers from here.",
   websearch: "Choose how Aiden searches and reads the web.",

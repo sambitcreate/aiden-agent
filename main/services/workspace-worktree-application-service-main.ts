@@ -135,4 +135,17 @@ export const workspaceWorktreeApplicationService = createWorkspaceWorktreeApplic
   now: Date.now,
   notifyChanged: () => ipcMain.broadcast("workspaces:changed", {}),
   logError: (area, message, error) => logger.error(area, message, error),
+  // WorktreeCreate hooks: the source workspace's, run in the new worktree.
+  onWorktreeCreated: async (event) => {
+    const { runWorktreeCreateHooks } = await import("./agent-surface-hooks.js");
+    const notices = await runWorktreeCreateHooks({
+      sourceFolderPath: event.sourceFolderPath,
+      sourceRoot: event.sourceRoot,
+      worktreePath: event.worktreePath,
+      workspacePath: event.workspacePath,
+      workspaceId: event.workspace.id,
+      branch: event.branch,
+    });
+    for (const notice of notices) logger.warn("hooks", notice);
+  },
 });

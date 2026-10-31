@@ -132,6 +132,9 @@ import { type SkillRegistrySnapshot, withoutSkills } from "./skill-registry.js";
 import { buildSystemPrompt, buildSystemPromptWithSections } from "./chat-system-prompt.js";
 import { skillRegistry } from "./skill-registry-main.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "./workspace-artifacts/skill.js";
+import { DESKTOP_HOOK_SKILLS } from "./hooks-skill.js";
+import { HOOKS_TOOL_NAME, createHooksTool, offersHooksTool, runsWorkspaceChatHooks } from "./hooks-tool.js";
+import { getHookService } from "./hooks/hook-service-main.js";
 import {
   assistantTurnTextSeparator,
   buildAgentRuntimeOptions,
@@ -1586,6 +1589,21 @@ async function prepareGeneration(
   if (skillSnapshot && !offerWorkspaceArtifacts) {
     skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_ARTIFACT_SKILLS);
   }
+  // The agent's hooks tool and its skill: where workspace chat hooks run, and
+  // only while someone can answer the owner's card. Design runs returned above.
+  const offerHooksTool = offersHooksTool({
+    usageSource: options.usageSource,
+    interactionSurface: options.interactionSurface,
+    bot: Boolean(botContext),
+    design: false,
+    assistant: assistantMode,
+    harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+    unattended: options.unattended === true,
+    excludedToolNames: options.excludeToolNames,
+  });
+  if (skillSnapshot && !offerHooksTool) {
+    skillSnapshot = withoutSkills(skillSnapshot, DESKTOP_HOOK_SKILLS);
+  }
   let botSkillToolNames: ReadonlySet<string> = new Set();
   if (botContext && skillSnapshot) {
     if (!botRuntimeCatalog) throw new Error("Bot runtime catalog was not prepared.");
@@ -2295,6 +2313,7 @@ async function prepareGeneration(
     botContext,
     botApprovedRoots,
     botMutatingToolNames,
+    offerHooksTool,
   };
 }
 
@@ -2637,7 +2656,7 @@ export const llmClient = {
       permission,
       folderPath,
       git,
-      tools,
+      tools: setupTools,
       generationExtensions,
       modelImageReferences,
       lateMcpDiscovery,
@@ -2653,7 +2672,7 @@ export const llmClient = {
       computerUse,
       formFill,
       googleWorkspaceSnapshot,
-      skillSnapshot,
+      skillSnapshot: setupSkillSnapshot,
       workspaceId,
       noWorkspace,
       subagentSupervisor,
@@ -2665,6 +2684,7 @@ export const llmClient = {
       botContext: preparedBotContext,
       botApprovedRoots,
       botMutatingToolNames,
+      offerHooksTool,
     } = setup;
     // Claim checks tell connector failures by the tools' real MCP identity.
     const claimCheckOptions = {
@@ -2684,17 +2704,53 @@ export const llmClient = {
     // none; title generation, probes, catalogs and subagents never come
     // through here.
     const chatHooks =
-      (options.usageSource ?? "chat") === "chat" &&
-      !preparedBotContext &&
-      !authoritativeBot &&
-      generationProfile.kind !== "design" &&
-      !attendedAssistant &&
-      !harnessProvider
+      runsWorkspaceChatHooks({
+        usageSource: options.usageSource,
+        bot: Boolean(preparedBotContext || authoritativeBot),
+        design: generationProfile.kind === "design",
+        assistant: attendedAssistant,
+        harnessProvider,
+      })
         ? createWorkspaceChatHooks({
             chatId: params.chatId,
             ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
           })
         : undefined;
+    // The agent's hooks tool (plan §9) where chat hooks run on an attended
+    // turn. A proposal waits for the owner's card on this Mac, raised from
+    // inside the tool so Full access and remembered approvals never answer it.
+    const hooksTool =
+      chatHooks && offerHooksTool
+        ? createHooksTool({
+            chatId: params.chatId,
+            ...(folderPath && !noWorkspace ? { workspaceRoot: folderPath } : {}),
+            service: getHookService,
+            requestApproval: async (toolCallId, card, approvalSignal) => {
+              timeline.toolAwaitingApproval(toolCallId);
+              const publicToolCallId = timeline.publicToolCallId(toolCallId);
+              if (!publicToolCallId) throw new Error("The tool approval step was not initialized.");
+              chatHooks.notify("Aiden needs your permission to save a hook", "permission_prompt");
+              try {
+                return await approvals.request(
+                  {
+                    streamId,
+                    toolCallId: publicToolCallId,
+                    toolName: HOOKS_TOOL_NAME,
+                    summary: card.summary,
+                    details: card.details,
+                  },
+                  approvalSignal,
+                  owner.documentId,
+                );
+              } finally {
+                timeline.toolRunning(toolCallId);
+              }
+            },
+          })
+        : undefined;
+    const tools = hooksTool ? [...setupTools, hooksTool] : setupTools;
+    const skillSnapshot =
+      hooksTool || !setupSkillSnapshot ? setupSkillSnapshot : withoutSkills(setupSkillSnapshot, DESKTOP_HOOK_SKILLS);
     let hookTurnContext: string | undefined;
     // Each response's price counts toward the chat's limit (a Bot chat's, its
     // month). A sign-in or a model on this Mac counts as $0.

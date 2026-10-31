@@ -149,6 +149,29 @@ export interface WorkspaceWorktreeApplicationDependencies {
   now(): number;
   notifyChanged(): void;
   logError(area: string, message: string, error: unknown): void;
+  /**
+   * Runs once a new managed worktree is saved (the `WorktreeCreate` hook).
+   * Awaited, so setup finishes before the caller uses the worktree, but it
+   * can never undo the creation: a failure is logged and the worktree stays.
+   */
+  onWorktreeCreated?(event: ManagedWorktreeCreatedEvent): Promise<void>;
+}
+
+/** A managed worktree Aiden just created and saved. */
+export interface ManagedWorktreeCreatedEvent {
+  /** The new worktree's workspace record. */
+  workspace: Workspace;
+  /** The new worktree's workspace folder (inside the checkout for a subfolder workspace). */
+  workspacePath: string;
+  /** The workspace it was created from; its hooks are the ones that run. */
+  sourceWorkspace: Workspace;
+  /** The source workspace's folder. */
+  sourceFolderPath: string;
+  /** The source checkout's top level. */
+  sourceRoot: string;
+  /** The new worktree's checkout root. */
+  worktreePath: string;
+  branch: string;
 }
 
 /** A new worktree from a chosen base, with an explicit or automatic branch name. */
@@ -231,6 +254,16 @@ export function createWorkspaceWorktreeApplicationService(
   // restores of the same snapshot are serialized here per process.
   const restoreLocks = new Map<string, Promise<void>>();
 
+  /** The WorktreeCreate hook: never fails or rolls back the saved worktree. */
+  const announceCreated = async (event: ManagedWorktreeCreatedEvent): Promise<void> => {
+    if (!dependencies.onWorktreeCreated) return;
+    try {
+      await dependencies.onWorktreeCreated(event);
+    } catch (error) {
+      dependencies.logError("hooks", "A WorktreeCreate hook could not finish; the worktree was kept.", error);
+    }
+  };
+
   const createIn = async (
     resolved: { folderPath: string; workspace: Workspace },
     signal: AbortSignal,
@@ -265,9 +298,10 @@ export function createWorkspaceWorktreeApplicationService(
         : []),
     );
     const provisionedFiles: string[] = [];
+    let sourceRoot = repository.topLevel;
     try {
       await dependencies.checkCreateCapacity(worktree.path, provisionedReserve);
-      const sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
+      sourceRoot = (await dependencies.repositoryPaths(resolved.folderPath)).topLevel;
       await dependencies.provisionIncludedFiles({
         sourceRoot,
         worktreePath: worktree.path,
@@ -336,6 +370,15 @@ export function createWorkspaceWorktreeApplicationService(
           }),
       });
       dependencies.notifyChanged();
+      await announceCreated({
+        workspace: saved,
+        workspacePath: worktree.workspacePath,
+        sourceWorkspace: resolved.workspace,
+        sourceFolderPath: resolved.folderPath,
+        sourceRoot,
+        worktreePath: worktree.path,
+        branch,
+      });
       return saved;
     } catch (error) {
       if (error instanceof ManagedWorktreeCreationError) {

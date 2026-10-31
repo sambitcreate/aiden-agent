@@ -8,6 +8,7 @@ import type { Chat } from "../../../main/services/types.js";
 import { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { createSubagentTool } from "../../../main/services/subagents/subagent-tool.js";
 import { SubagentSupervisor } from "../../../main/services/subagents/subagent-supervisor-core.js";
+import { botSurfaceHooks } from "../../../main/services/agent-surface-hooks.js";
 import { SubagentEventProjector } from "../../../main/services/subagents/subagent-event-projector.js";
 import { createSubagentRunStore } from "../../../main/services/subagents/subagent-run-store-core.js";
 import { createNativeSubagentRunStoreStorage } from "../../../main/services/subagents/subagent-run-store-io.js";
@@ -38,7 +39,7 @@ export function createBotSubagentTool(agentDir: string, admission: BotRuntimeAut
         onSnapshot: async (snapshot) => { await store.upsert(snapshot); } });
       supervisor = new SubagentSupervisor({ generationId, chatId: cliSubagentIdentity(authority.chatId), workspaceId: cliSubagentIdentity(authority.managedHome.workspaceId),
         workspaceRoot: authority.workingDirectory, runtime, thinkingLevel: "off", permission: "full", inheritedCeiling: SUBAGENT_READ_TOOL_NAMES.filter((name) => reads.some((tool) => tool.name === name)),
-        loadPersistedChatForFork: loadChat, projector,
+        loadPersistedChatForFork: loadChat, projector, stopHooks: botSurfaceHooks(authority.botId, authority.workingDirectory),
         runChild: (input) => runCliSubagent(agentDir, input, reads, async () => { combined.throwIfAborted(); await admission.revalidateBeforeEffect(); }),
       });
       return await supervisor.execute(params, combined);

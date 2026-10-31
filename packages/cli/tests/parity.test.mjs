@@ -2176,3 +2176,66 @@ test("CLI advisor failures and cancellation persist unknown attempts before mark
     }
   }
 });
+
+test("daemon chats run approved hooks after Aiden's own rules, and file tools cannot change hook files", async (t) => {
+  const dir = temporary(t), repo = join(dir, "repo"), requests = [];
+  mkdirSync(join(repo, ".aiden"), { recursive: true });
+  const deny = JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "No writes here." } });
+  const hooksFile = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Write", hooks: [{ type: "command", command: `printf '%s' '${deny}'` }] }] } });
+  writeFileSync(join(repo, ".aiden", "hooks.json"), hooksFile);
+  const calls = [
+    { id: "protected-write", name: "write", arguments: { path: ".aiden/hooks.json", content: "{}" } },
+    { id: "hooked-write", name: "write", arguments: { path: "out.txt", content: "written" } },
+  ];
+  const server = createServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    const parsed = JSON.parse(body); requests.push(parsed);
+    const call = calls[parsed.messages.filter((message) => message.role === "tool").length];
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    const delta = call ? { role: "assistant", tool_calls: [{ index: 0, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } }] } : { role: "assistant", content: "Done" };
+    response.write(`data: ${JSON.stringify({ id: "hooks", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ id: "hooks", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: call ? "tool_calls" : "stop" }] })}\n\n`);
+    response.end("data: [DONE]\n\n");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  api.atomicJson(join(dir, "models.json"), { providers: { "cli-test": { api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, apiKey: "test-only", models: [{ id: "test", name: "Test", reasoning: false, input: ["text"], contextWindow: 32000, maxTokens: 4096, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } });
+  const workspace = await api.workspaceCommand(dir, ["add", repo]);
+  await api.workspaceCommand(dir, ["access", workspace.id, "full"]);
+
+  // The repo's hook waits for the owner, from the CLI with no daemon running.
+  const listed = await api.hooksAdminCommand(dir, ["list"]);
+  assert.equal(listed.hooks.length, 1, JSON.stringify(listed));
+  assert.equal(listed.hooks[0].status, "waiting-for-approval");
+  assert.equal(listed.hooks[0].scope, `workspace:${workspace.folderPath}`);
+  const approved = await api.hooksAdminCommand(dir, ["approve", listed.hooks[0].id]);
+  assert.equal(approved.status, "active");
+  await assert.rejects(api.hooksAdminCommand(dir, ["approve"]), /Usage: hooks/u);
+
+  const hooks = await api.startCliHooks(dir);
+  t.after(() => api.stopCliHooks(hooks));
+  assert.ok(hooks);
+  const daemon = api.createDaemonChats(dir);
+  t.after(() => daemon.stop());
+  await daemon.chatStore.create({ id: "hooked-chat", title: "Hooked", workspaceId: workspace.id });
+  const events = [];
+  const owner = { id: 0, documentId: "test", isDestroyed: () => false, onInvalidated: () => () => {}, send: (channel, value) => events.push({ channel, value }) };
+  const admission = daemon.llmClient.beginChatTurn("hooked-chat", "stream", "test"); assert.ok(admission);
+  try {
+    await daemon.chatStore.appendMessage("hooked-chat", { role: "user", content: "Write the files" });
+    admission.settleAsyncWork();
+    await daemon.llmClient.start("stream", { chatId: "hooked-chat", workspaceId: workspace.id, providerId: "cli-test", model: "test", messages: [{ role: "user", content: "Write the files" }] }, owner, { usageSource: "chat" });
+    await daemon.llmClient.waitForChatIdle("hooked-chat");
+  } finally { admission.release(); }
+  assert.equal(events.filter((event) => event.channel === "chat:error").length, 0, JSON.stringify(events));
+  assert.equal(requests.length, 3);
+  const toolResult = (index) => JSON.stringify(requests[index].messages.filter((message) => message.role === "tool").at(-1));
+  // Hook files are off limits to file tools even with full access, before any hook runs.
+  assert.match(toolResult(1), /File tools cannot change hook or agent settings files/u);
+  assert.equal(readFileSync(join(repo, ".aiden", "hooks.json"), "utf8"), hooksFile);
+  // Full access lets the write through Aiden's own rules; the person's hook still blocks it.
+  assert.match(toolResult(2), /Blocked by hook/u);
+  assert.match(toolResult(2), /No writes here\./u);
+  assert.equal(existsSync(join(repo, "out.txt")), false);
+  assert.equal(hooks.getRunLog(listed.hooks[0].id).length, 1, "the hook ran once, for the write it matched");
+});

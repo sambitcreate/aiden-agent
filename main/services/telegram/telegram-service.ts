@@ -29,6 +29,7 @@ import { transcribe } from "../transcription.js";
 import { skillRegistry } from "../skill-registry-main.js";
 import { withoutSkills } from "../skill-registry.js";
 import { DESKTOP_ARTIFACT_SKILLS } from "../workspace-artifacts/skill.js";
+import { DESKTOP_HOOK_SKILLS } from "../hooks-skill.js";
 import {
   mkdir,
   readFile,
@@ -689,8 +690,11 @@ export function createTelegramService(profileName = DEFAULT_TELEGRAM_PROFILE) {
         }),
       );
       if (!workspaceId) return extensionCommands;
-      // Telegram turns never get workspace_artifact, so its skill is not a command here.
-      const snapshot = withoutSkills(await skillRegistry.snapshot(workspaceId), DESKTOP_ARTIFACT_SKILLS);
+      // Telegram turns never get workspace_artifact or hooks, so their skills are not commands here.
+      const snapshot = withoutSkills(
+        withoutSkills(await skillRegistry.snapshot(workspaceId), DESKTOP_ARTIFACT_SKILLS),
+        DESKTOP_HOOK_SKILLS,
+      );
       const skillCommands = snapshot.catalog.flatMap((skill) => {
         if (!skill.available) return [];
         const command = skill.name

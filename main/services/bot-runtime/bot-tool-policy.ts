@@ -82,6 +82,17 @@ export function botTurnOf(requestId: string | undefined): Required<BotToolTurn> 
   };
 }
 
+/**
+ * Whether the person can answer an approval for a run serving these inputs:
+ * not a routine, Telegram or self-intro turn. A run with no inputs is not.
+ */
+export function botTurnAttended(requestIds: readonly (string | undefined)[]): boolean {
+  return requestIds.length > 0 && requestIds.every((requestId) => {
+    const turn = botTurnOf(requestId);
+    return !turn.routine && !turn.telegram && !turn.intro;
+  });
+}
+
 const UNATTENDED_WITHHELD = new Set<string>([
   ASK_USER_QUESTION_TOOL_NAME,
   ROUTINE_TOOL,

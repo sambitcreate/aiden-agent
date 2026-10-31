@@ -566,6 +566,41 @@ test("implementer run grants remain Mac-only approvals", async () => {
   assert.deepEqual(app.approvals, []);
 });
 
+test("agent hook proposals remain Mac-only approvals", async () => {
+  const app = fixture();
+  const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");
+  const details = {
+    kind: "hook-proposal" as const,
+    action: "create" as const,
+    name: "Block force pushes",
+    scopeLabel: "This workspace (repo)",
+    warnings: [],
+    previous: null,
+    digestPrefix: "0123456789ab",
+    event: "PreToolUse",
+    matcher: "run_command",
+    command: "jq -r '.tool_input.command' | grep -q 'push -f' && exit 2 || exit 0",
+    timeoutSeconds: 30,
+    failClosed: false,
+    envAllow: [],
+  };
+  owner.owner.send("chat:approval", {
+    approvalId: "approval-hook",
+    summary: "Aiden wants to add a hook. Review and approve it on the Mac running this chat.",
+    details,
+  });
+  const pending = app.service.pendingApproval("device-1", "stream-1");
+  assert.equal(pending?.canAllow, false);
+  assert.match(pending?.summary ?? "", /on the Mac running this chat/u);
+  await assert.rejects(
+    app.service.respondApproval("device-1", "approval-hook", "allow", "approval-hook-allow-key", inputPassthrough),
+    (error: unknown) => error instanceof AidenRemoteServiceError && error.code === "capability_denied",
+  );
+  assert.deepEqual(app.approvals, []);
+  const denied = await app.service.respondApproval("device-1", "approval-hook", "deny", "approval-hook-deny-key", inputPassthrough);
+  assert.equal(denied.decision, "deny");
+});
+
 test("bounded standard schedule approvals remain mobile-allowable without exposing details", async () => {
   const app = fixture();
   const owner = app.service.create("device-1", "stream-1", "chat-1", "turn-1");

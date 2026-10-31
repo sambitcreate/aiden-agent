@@ -18,6 +18,16 @@ import {
   type SpendingStatusView,
 } from "../shared/spending";
 import type { AnalyticsNoticeChoice, AnalyticsRegistryView, AnalyticsStatusView } from "../shared/analytics";
+import {
+  HOOKS_CHANGED_CHANNEL,
+  isHooksOverview,
+  type HookListing,
+  type HookRunRecord,
+  type HookSaveRequest,
+  type HooksChangedEvent,
+  type HooksOverview,
+  type HookTestResult,
+} from "../shared/hooks-settings";
 import type {
   WorkspaceClonePreview,
   WorkspaceCloneProgress,
@@ -618,6 +628,39 @@ export const spendingApi = {
   onChanged: (handler: (event: SpendingChangedEvent) => void) =>
     onNotification<SpendingChangedEvent>(SPENDING_CHANGED_CHANNEL, (event) => {
       if ((event?.ownerKind === "chat" || event?.ownerKind === "bot") && typeof event.ownerId === "string") handler(event);
+    }),
+};
+
+type HookIpcResult<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+function unwrapHookResult<T>(result: HookIpcResult<T>): T {
+  if (!result.ok) throw new Error(result.reason);
+  return result.value;
+}
+
+export const hooksApi = {
+  list: async (): Promise<HooksOverview> => {
+    const overview = await invoke<unknown>("hooks:list");
+    if (!isHooksOverview(overview)) throw new Error("Aiden could not read your hooks.");
+    return overview;
+  },
+  approveProposal: async (proposalId: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:approveProposal", proposalId)),
+  rejectProposal: (proposalId: string) => invoke<boolean>("hooks:rejectProposal", proposalId),
+  save: async (request: HookSaveRequest) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing | undefined>>("hooks:save", request)),
+  /** Approve exactly the digest the owner saw; a hook that changed since is refused. */
+  approveDigest: async (hookId: string, digest: string) =>
+    unwrapHookResult(await invoke<HookIpcResult<HookListing>>("hooks:approveDigest", hookId, digest)),
+  setEnabled: (hookId: string, enabled: boolean) => invoke<boolean>("hooks:setEnabled", hookId, enabled),
+  delete: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<void>>("hooks:delete", hookId)),
+  setPaused: (paused: boolean) => invoke<boolean>("hooks:setPaused", paused),
+  /** Runs the hook's command against a sample payload. Only from an explicit Test press. */
+  test: async (hookId: string) => unwrapHookResult(await invoke<HookIpcResult<HookTestResult>>("hooks:test", hookId)),
+  runLog: (hookId: string) => invoke<HookRunRecord[]>("hooks:runLog", hookId),
+  onChanged: (handler: (event: HooksChangedEvent) => void) =>
+    onNotification<HooksChangedEvent>(HOOKS_CHANGED_CHANNEL, (event) => {
+      if (event && typeof event.reason === "string") handler(event);
     }),
 };
 

@@ -4,6 +4,7 @@ export const SETTINGS_SECTIONS = [
   "limits",
   "skills",
   "mcp",
+  "hooks",
   "websearch",
   "imageGeneration",
   "telegram",
@@ -75,6 +76,12 @@ export const SETTINGS_DESTINATIONS: ReadonlyArray<{
     title: "Connectors",
     group: "Agent",
     keywords: ["mcp", "plugins", "apps", "integrations", "tools", "servers", "composio"],
+  },
+  {
+    id: "hooks",
+    title: "Hooks",
+    group: "Agent",
+    keywords: ["hooks", "hooks.json", "pretooluse", "posttooluse", "shell command", "scripts", "lint", "format", "block a tool", "claude code hooks", "automation"],
   },
   {
     id: "websearch",

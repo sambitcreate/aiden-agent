@@ -9,9 +9,9 @@ import { visionAttachmentAlias } from "../../../main/services/vision-attachment-
 import type { CliBotGenerationRuntime } from "./bots.ts";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import { assertBotRuntimeProviderSelection } from "../../../main/services/bot-runtime-authority.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, basename, join, resolve } from "node:path";
 import { createAgentSession, DefaultResourceLoader, SessionManager, type AgentSession } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { createChatStore } from "../../../main/services/chat-store-core.js";
@@ -30,6 +30,9 @@ import { messageText } from "./sessions.ts";
 import { GenerationTimelineProjector } from "../../../main/services/generation-timeline.js";
 import type { GenerationCancellationOrigin } from "../../../renderer/shared/generation-timeline.js";
 import { mcpToolActivityLabel } from "../../../main/services/mcp-tool-identity.js";
+import { MAX_STOP_HOOK_CONTINUATIONS, botSurfaceHooks, createSurfaceHooks, hookAskText, hookBlockText, hookPostToolAdditions, hookStopContinuation, hookToolPayload } from "../../../main/services/agent-surface-hooks.js";
+import { hookTurnContextText, markWorkspaceChatCompacted, markWorkspaceChatSessionStarted, promptBlockedMessage, workspaceChatHookScopes, workspaceChatSessionStartSource } from "../../../main/services/workspace-chat-hooks.js";
+import { isProtectedAgentConfigPath, PROTECTED_AGENT_CONFIG_WRITE_MESSAGE } from "../../../main/services/protected-agent-config-paths.js";
 
 /**
  * The approval summary a paired phone shows. A call with only a command or path reads
@@ -47,6 +50,46 @@ export function daemonApprovalSummary(toolName: string, input: unknown): string 
       : toolName === "ls" ? only("path") && `List folder: ${only("path")}`
         : undefined;
   return readable || `${toolName}: ${JSON.stringify(input)}`;
+}
+
+/** At most this much of a hook's ask reason joins the phone's approval summary. */
+const HOOK_ASK_SUMMARY_CHARS = 400;
+
+/**
+ * Whether a pi `write` or `edit` call targets hook or agent settings
+ * (`.aiden/hooks.json`, `.claude/settings.json`, the daemon's own hook
+ * store …). Both the lexical path and its symlink-resolved form are checked,
+ * so a link cannot route around the rule.
+ */
+export function daemonWriteTargetsProtectedConfig(cwd: string, input: unknown): boolean {
+  const raw = input !== null && typeof input === "object" ? (input as Record<string, unknown>).path : undefined;
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  const target = resolve(cwd, raw.startsWith("@") ? raw.slice(1) : raw);
+  const forms = [target];
+  try { forms.push(realpathSync.native(target)); }
+  catch {
+    try { forms.push(join(realpathSync.native(dirname(target)), basename(target))); }
+    catch { /* A parent that does not exist yet has no other spelling. */ }
+  }
+  return forms.some(isProtectedAgentConfigPath);
+}
+
+/**
+ * pi's built-in tool names as Aiden names, so a hook matcher such as `Bash`
+ * or `Write` (or `run_command`) matches the daemon's tools as it does the
+ * desktop's. Other tools (Aiden's own, MCP) already carry Aiden names.
+ */
+const PI_TOOL_AIDEN_NAMES: Readonly<Record<string, string>> = {
+  bash: "run_command", write: "write_file", edit: "edit_file", read: "read_file", grep: "grep", find: "glob", ls: "list_dir",
+};
+
+/** The name a hook sees for one of the daemon's tools. */
+export function daemonHookToolName(toolName: string): string {
+  return Object.prototype.hasOwnProperty.call(PI_TOOL_AIDEN_NAMES, toolName) ? PI_TOOL_AIDEN_NAMES[toolName]! : toolName;
+}
+
+function resultText(content: readonly { type: string; text?: string }[]): string {
+  return content.flatMap((part) => part.type === "text" && typeof part.text === "string" ? [part.text] : []).join("\n");
 }
 
 /** One daemon owns this store. CLI imports always copy its journals into new sessions. */
@@ -151,6 +194,12 @@ export function createDaemonChats(agentDir: string) {
         const unattended = !botAdmission && (options.usageSource === "telegram" || options.usageSource === "scheduled");
         if (unattended && (!workspace.folderPath || accessFor(agentDir, workspace.folderPath) !== "full")) throw new Error("Unattended generation requires explicitly granted full workspace access.");
         const cwd = workspace.folderPath || root;
+        // Hooks (docs/plans/aiden-hooks-plan.md §7): a workspace chat runs the
+        // person's global, workspace and chat hooks; a legacy Bot chat runs
+        // global and Bot hooks, for its tools only.
+        const hookTarget = { chatId: chat.id, ...(workspace.folderPath ? { workspaceRoot: workspace.folderPath } : {}) };
+        const hooks = botAdmission ? botSurfaceHooks(chat.botId!, cwd) : createSurfaceHooks({ scopes: workspaceChatHookScopes(hookTarget), cwd, sessionId: chat.id });
+        let turnHookContext: string | undefined;
         const assertAuthority = async () => {
           if (entry.abort.signal.aborted || owner.isDestroyed()) throw new Error("Generation authority was revoked.");
           if (botAdmission) { await botAdmission.revalidateBeforeEffect(); return; }
@@ -195,7 +244,9 @@ export function createDaemonChats(agentDir: string) {
         const loader = new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
           extensionFactories: [...additionalExtensions, { name: "aiden-daemon-authority", factory(pi) {
             pi.on("before_agent_start", async (event) => {
-              if (!botAdmission) return;
+              // SessionStart and UserPromptSubmit context, once per turn, as host data the chat store never saves.
+              const context = turnHookContext; turnHookContext = undefined;
+              if (!botAdmission) return context ? { message: { customType: "aiden-hook-context", content: context, display: false } } : undefined;
               await assertAuthority();
               const instructions = await bots!.instructions(botAdmission);
               return { systemPrompt: `${event.systemPrompt}\n\n${instructions}` };
@@ -204,10 +255,19 @@ export function createDaemonChats(agentDir: string) {
             pi.on("tool_call", async (event) => {
             try {
               await assertAuthority();
-              if (botAdmission) return botTools.some((tool) => tool.name === event.toolName) ? undefined : { block: true, reason: "This tool is outside the Bot capability grant." };
-              const tier = workspace.folderPath ? accessFor(agentDir, cwd) : "none";
+              if (botAdmission && !botTools.some((tool) => tool.name === event.toolName)) return { block: true, reason: "This tool is outside the Bot capability grant." };
+              const tier = botAdmission ? "full" : workspace.folderPath ? accessFor(agentDir, cwd) : "none";
               if (tier === "none") return { block: true, reason: "Workspace tools are disabled." };
-              if (tier === "full") return;
+              if (!botAdmission && (event.toolName === "write" || event.toolName === "edit") && daemonWriteTargetsProtectedConfig(cwd, event.input)) return { block: true, reason: PROTECTED_AGENT_CONFIG_WRITE_MESSAGE };
+              // PreToolUse runs after Aiden's own rules allowed the call, so a
+              // hook can only tighten them; its updatedInput is not applied.
+              const hooked = await hooks.dispatch("PreToolUse", { ...hookToolPayload(daemonHookToolName(event.toolName), event.input), tool_use_id: event.toolCallId },
+                { idempotencyKey: `PreToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal });
+              if (hooked) await assertAuthority();
+              if (hooked?.decision === "deny") return { block: true, reason: hookBlockText(hooked) };
+              const hookAsks = hooked?.decision === "ask";
+              if (hookAsks && (botAdmission || unattended)) return { block: true, reason: `${hookBlockText(hooked)} No one is here to approve it on this turn.` };
+              if (tier === "full" && !hookAsks) return;
               const original = JSON.stringify(event.input);
               if (Buffer.byteLength(original) > 1_700) return { block: true, reason: "The tool request exceeds the remote approval display budget." };
               timeline.toolAwaitingApproval(event.toolCallId);
@@ -219,13 +279,29 @@ export function createDaemonChats(agentDir: string) {
                 approvals.set(approvalId, { ownerId: owner.documentId, resolve: settle });
                 entry.abort.signal.addEventListener("abort", cancel, { once: true });
                 if (entry.abort.signal.aborted) cancel();
-                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: daemonApprovalSummary(event.toolName, event.input) });
+                else send("chat:approval", { streamId, approvalId, toolCallId: event.toolCallId, toolName: event.toolName, summary: hookAsks ? `${hookAskText(hooked).slice(0, HOOK_ASK_SUMMARY_CHARS)}\n${daemonApprovalSummary(event.toolName, event.input)}` : daemonApprovalSummary(event.toolName, event.input) });
               });
               await assertAuthority();
               if (!allowed || JSON.stringify(event.input) !== original || accessFor(agentDir, cwd) === "none") return { block: true, reason: "The tool request was denied, changed or expired." };
             }
             catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
-          }); } }],
+          });
+            pi.on("tool_result", async (event) => {
+              const hookToolName = daemonHookToolName(event.toolName);
+              if (!hooks.has("PostToolUse", hookToolName)) return;
+              const outcome = await hooks.dispatch("PostToolUse", {
+                ...hookToolPayload(hookToolName, event.input), tool_use_id: event.toolCallId,
+                tool_response: { content: resultText(event.content), is_error: event.isError },
+              }, { idempotencyKey: `PostToolUse:${chat.id}:${event.toolCallId}`, signal: entry.abort.signal });
+              const addition = hookPostToolAdditions(outcome);
+              return addition ? { content: [...event.content, { type: "text" as const, text: addition }] } : undefined;
+            });
+            pi.on("session_before_compact", (event) => {
+              hooks.observe("PreCompact", { trigger: event.reason === "manual" ? "manual" : "auto", aiden_reason: event.reason },
+                { idempotencyKey: `PreCompact:${chat.id}:${streamId}:${event.reason}` });
+            });
+            pi.on("session_compact", () => { if (!botAdmission) markWorkspaceChatCompacted(chat.id); });
+          } }],
         });
         await loader.reload(); await assertAuthority();
         const manager = SessionManager.open(sessionPath(params.chatId), join(root, "journals"), cwd);
@@ -260,8 +336,32 @@ export function createDaemonChats(agentDir: string) {
         if (!input) throw new Error("A user message is required.");
         const attachments = parseAttachments(input.attachments ?? []) ?? [];
         const text = [input.content, ...attachments.filter((item) => item.kind === "image" && !model.input.includes("image")).map((item) => `Attached image: ${visionAttachmentAlias(item)} (${item.name}). Use inspect_image to analyze it.`), ...attachments.filter((item) => item.kind === "text").map((item) => `Attachment: ${item.name}\n${item.text ?? ""}`)].join("\n\n");
+        if (!botAdmission) {
+          const hookContext: (string | undefined)[] = [];
+          const source = workspaceChatSessionStartSource(chat.id, chat.messages.some((message) => message.role === "assistant"));
+          if (source) {
+            const started = await hooks.dispatch("SessionStart", { source }, { idempotencyKey: `SessionStart:${chat.id}:${streamId}`, signal: entry.abort.signal });
+            markWorkspaceChatSessionStarted(hookTarget);
+            hookContext.push(started?.additionalContext);
+          }
+          const submitted = await hooks.dispatch("UserPromptSubmit", { prompt: input.content }, { idempotencyKey: `UserPromptSubmit:${chat.id}:${streamId}`, signal: entry.abort.signal });
+          if (submitted?.blockPrompt) throw new Error(promptBlockedMessage(submitted));
+          hookContext.push(submitted?.additionalContext);
+          turnHookContext = hookTurnContextText(hookContext);
+        }
         await assertAuthority();
         await session.prompt(text, { expandPromptTemplates: false, preflightResult: (accepted) => { if (accepted) options.onTurnAccepted?.(); }, images: (model.input.includes("image") ? attachments : []).flatMap((item) => item.kind === "image" && item.data ? [{ type: "image" as const, data: item.data, mimeType: item.mimeType }] : []) });
+        if (entry.abort.signal.aborted) throw new Error("Generation cancelled.");
+        // Stop hooks may keep a workspace chat's turn going, at most MAX_STOP_HOOK_CONTINUATIONS times.
+        for (let continuation = 0; !botAdmission && continuation < MAX_STOP_HOOK_CONTINUATIONS; continuation += 1) {
+          const ended = produced.at(-1);
+          if (entry.abort.signal.aborted || !ended || ended.stopReason === "error" || ended.stopReason === "aborted" || ended.stopReason === "length") break;
+          const stop = await hooks.dispatch("Stop", { stop_hook_active: continuation > 0 }, { idempotencyKey: `Stop:${chat.id}:${streamId}:${continuation}`, signal: entry.abort.signal });
+          const next = hookStopContinuation(stop);
+          if (!next) break;
+          await assertAuthority();
+          await session.prompt(next, { expandPromptTemplates: false });
+        }
         if (entry.abort.signal.aborted) throw new Error("Generation cancelled.");
         const last = produced.at(-1);
         if (!last || last.stopReason === "error" || last.stopReason === "aborted") throw new Error(last?.errorMessage ?? "Generation returned no final answer.");

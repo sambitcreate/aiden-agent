@@ -27,7 +27,7 @@ import { createBotMemoryStore } from "../../../main/services/bot-memory/store.js
 import { renderBotMemorySection } from "../../../main/services/bot-memory/prompt.js";
 import { botMemoryToolEntry, withBotMemoryIngress } from "../../../main/services/bot-memory/tool.js";
 import { botRecallToolEntry } from "../../../main/services/bot-memory/recall.js";
-import { botIngressAllowsTool } from "../../../main/services/bot-runtime/bot-tool-policy.js";
+import { botIngressAllowsTool, botTurnAttended } from "../../../main/services/bot-runtime/bot-tool-policy.js";
 import { mcpAgentToolDescriptor } from "../../../main/services/mcp-agent-tool-descriptor.js";
 import type { BotRuntimeAuthorityAdmission } from "../../../main/services/bot-runtime-authority.js";
 import type { createBotApplicationService } from "../../../main/services/bot-application-service.js";
@@ -150,6 +150,8 @@ export async function createCliDurableBots(profileDir: string, ports: CliDurable
       requestApproval: approvals.request,
       codemodeSandbox: botCodemodeSandbox,
       turnAllows: withBotMemoryIngress(botIngressAllowsTool),
+      // The person's global and Bot hooks, run in the Bot's working directory.
+      hooks: { cwd: (botId) => admitted(botId, async (lease) => lease.authority.workingDirectory), attended: botTurnAttended },
       readmit: async (botId) => {
         if (!await ports.botStore.get(botId)) return { ok: false, reason: "bot_missing" };
         try { await admitted(botId, async () => {}); return { ok: true }; }

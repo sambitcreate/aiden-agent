@@ -246,6 +246,9 @@ Selection nonces are a separate type. Workspace creation atomically revalidates 
   authenticated device's `schedule:write` grant. A device that can respond to
   approvals but lacks that mutation grant still receives the bounded approval
   with `canAllow: false` and may deny it; an attempted allow fails closed.
+  A hook the agent proposes through the `hooks` tool is host-only: every
+  device gets its summary with `canAllow: false` and may deny it, and the
+  owner approves the exact hook on the Mac running the chat.
   Contract revision 17 adds an optional `scope` (`once` | `chat` | `always`)
   that is valid only with `allow` and only when the pending approval listed it
   in `scopes`; anything else is `invalid_request`, and the response echoes the

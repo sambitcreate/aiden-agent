@@ -13,6 +13,8 @@ export interface HostPlatformCapabilities {
   macAppConnectors: boolean;
   /** The agent's background jobs follow process groups, which macOS and Linux both offer. */
   backgroundJobs: boolean;
+  /** Aiden hooks run commands in their own process group, so they need macOS or Linux, as background jobs do. */
+  hooks: boolean;
 }
 /**
  * Main-owned host capability policy. Persisted settings and renderer state may
@@ -36,5 +38,6 @@ export function hostPlatformCapabilities(
     nativeShare: darwin,
     macAppConnectors: darwin,
     backgroundJobs: darwin || platform === "linux",
+    hooks: darwin || platform === "linux",
   };
 }
