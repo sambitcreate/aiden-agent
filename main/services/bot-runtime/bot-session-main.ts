@@ -25,7 +25,7 @@
 // its summary.
 
 import * as path from "node:path";
-import { app, BrowserWindow, ipcMain, logger, Notification } from "../../platform.js";
+import { app, BrowserWindow, ipcMain, logger, Notification, powerMonitor } from "../../platform.js";
 import { requestAppPath } from "../app-navigation.js";
 import { setBotFileToolProtectedRoots } from "../bot-file-tool-router.js";
 import { isAcpHarnessProvider } from "../../../renderer/shared/acp-harness.js";
@@ -849,6 +849,9 @@ export function botSessionRuntime(): Promise<BotSessionRuntime> {
 }
 
 let initialized: Promise<void> | undefined;
+/** Time asleep is not a stall; subscribed once Bots are open (the app is ready by then). */
+const resumeRunWatchdog = (): void => runWatchdog.resume();
+let watchingResume = false;
 
 /** Startup: after Bot storage is ready, sweep orphaned sessions and record interrupted Bots. */
 export function initializeBotSessionRuntime(): Promise<void> {
@@ -857,6 +860,10 @@ export function initializeBotSessionRuntime(): Promise<void> {
       const { removedOrphans, interrupted } = await service.initialize();
       if (removedOrphans.length > 0) logger.info("bots", `Removed ${removedOrphans.length} orphaned Bot sessions.`);
       if (interrupted.length > 0) logger.info("bots", `${interrupted.length} Bot turns are waiting for Resume.`);
+      if (!watchingResume) {
+        powerMonitor.on("resume", resumeRunWatchdog);
+        watchingResume = true;
+      }
       // Pre-fire checks arm only once Bots are open, never during onboarding.
       void import("../bot-health/health-main.js")
         .then(({ startBotHealth }) => startBotHealth())
@@ -877,6 +884,10 @@ export async function shutdownBotSessionRuntime(): Promise<void> {
   await liveProjection?.close();
   memoryReview.shutdown();
   runWatchdog.dispose();
+  if (watchingResume) {
+    powerMonitor.removeListener("resume", resumeRunWatchdog);
+    watchingResume = false;
+  }
   await import("../bot-health/health-main.js").then(({ stopBotHealth }) => stopBotHealth()).catch(() => undefined);
   await service?.shutdown();
   await toolSources.shutdown();
