@@ -185,6 +185,8 @@ test("three consecutive failures disable a hook until it is re-enabled", async (
   assert.equal((await service.listHooks([{ kind: "global" }])).hooks[0]?.status, "active");
   await service.dispatcher.dispatch("PostToolUse", { ...bashCall("ls"), hook_event_name: "PostToolUse" }, f.context);
   assert.equal(runs, 4);
+  // Turning it back on starts the failure count over: one more failure doesn't turn it off again.
+  assert.equal((await service.listHooks([{ kind: "global" }])).hooks[0]?.status, "active");
 });
 
 test("pause-all and AIDEN_HOOKS=0 stop every hook", async (t) => {

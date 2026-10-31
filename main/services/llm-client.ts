@@ -196,9 +196,11 @@ import {
   hookTurnContextText,
   markWorkspaceChatCompacted,
   markWorkspaceChatSessionStarted,
+  preCompactSummaryInstructions,
   promptBlockedMessage,
   workspaceChatSessionStartSource,
 } from "./workspace-chat-hooks.js";
+import { chatSurfaceHooks } from "./agent-surface-hooks.js";
 import type { ComputerUseController } from "./computer-use/controller.js";
 import {
   authorizeAllowedComputerUseAction,
@@ -1568,6 +1570,24 @@ async function prepareGeneration(
           modelOptions: subagentModelOptions,
           healthMetrics: subagentHealthMetrics,
           projector: subagentProjector,
+          // SubagentStop for the chats whose own turns run hooks (the same
+          // gate as `chatHooks` in runChat); Bots wire their own.
+          ...(runsWorkspaceChatHooks({
+            usageSource: options.usageSource,
+            interactionSurface: options.interactionSurface,
+            bot: botBound,
+            design: false,
+            assistant: assistantMode,
+            harnessProvider: isAcpHarnessProvider(runtime.provider.id),
+          })
+            ? {
+                stopHooks: chatSurfaceHooks({
+                  chatId: params.chatId,
+                  cwd: folderPath,
+                  ...(workspace.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+                }),
+              }
+            : {}),
         })
       : undefined;
   // Assistant modes use positive allowlists: the dock gets safe metadata plus
@@ -3516,6 +3536,15 @@ export const llmClient = {
         },
         signal: initialization.controller.signal,
         onEvent: onCompactionEvent,
+        // PreCompact: every compaction inside a turn (threshold, overflow and
+        // the emergency checkpoint) is "auto"; hook context becomes summary
+        // instructions, bounded by each hook's timeout, and errors add none.
+        ...(chatHooks
+          ? {
+              summaryInstructions: (reason: string, compactionSignal: AbortSignal) =>
+                preCompactSummaryInstructions(chatHooks, { trigger: "auto", reason, signal: compactionSignal }),
+            }
+          : {}),
       };
 
       const currentUser = [...generationChat.messages]

@@ -18,6 +18,7 @@ import {
   hookTurnContextText,
   markWorkspaceChatCompacted,
   markWorkspaceChatSessionStarted,
+  preCompactSummaryInstructions,
   promptBlockedMessage,
   resetWorkspaceChatSessionsForTests,
   workspaceChatSessionStartSource,
@@ -311,5 +312,49 @@ test("a refused prompt names the hooks and their reason", () => {
   assert.equal(
     promptBlockedMessage({ stopTurn: true, stopReason: "quiet hours", reason: "ignored", ranHooks: [] }),
     "Blocked by a hook: quiet hours",
+  );
+});
+
+test("PreCompact tells hooks the trigger and turns their context into summary instructions", async () => {
+  const { dispatcher, calls } = fakeDispatcher({
+    PreCompact: { ranHooks: ["keep-plan"], additionalContext: fenced("the migration plan"), systemMessages: ["saved"] },
+  });
+  const hooks = createWorkspaceChatHooks({ chatId: "long", workspaceRoot: "/work/app" }, dispatcher);
+  const signal = new AbortController().signal;
+
+  const instructions = await preCompactSummaryInstructions(hooks, { trigger: "auto", reason: "overflow", signal });
+
+  assert.ok(instructions?.includes(fenced("the migration plan")));
+  assert.equal(instructions?.includes("saved"), false);
+  assert.deepEqual(
+    calls.map((call) => [call.event, call.payload.trigger, call.payload.aiden_reason, call.payload.session_id, call.context.signal]),
+    [["PreCompact", "auto", "overflow", "long", signal]],
+  );
+});
+
+test("PreCompact adds no instructions without hooks, without context, or when the dispatcher fails", async () => {
+  const none = fakeDispatcher({});
+  assert.equal(
+    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, none.dispatcher), { trigger: "manual", reason: "manual" }),
+    undefined,
+  );
+  assert.equal(none.calls.length, 0);
+
+  const quiet = fakeDispatcher({ PreCompact: { ranHooks: ["log"] } });
+  assert.equal(
+    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, quiet.dispatcher), { trigger: "manual", reason: "manual" }),
+    undefined,
+  );
+  assert.equal(quiet.calls[0]?.payload.trigger, "manual");
+
+  const throwing: HookDispatcher = {
+    hasHooks: () => true,
+    dispatch: async () => {
+      throw new Error("runner crashed");
+    },
+  };
+  assert.equal(
+    await preCompactSummaryInstructions(createWorkspaceChatHooks({ chatId: "c" }, () => throwing), { trigger: "auto", reason: "threshold" }),
+    undefined,
   );
 });

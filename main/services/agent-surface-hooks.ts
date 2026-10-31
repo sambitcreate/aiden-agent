@@ -94,10 +94,18 @@ export function botSurfaceHooks(botId: string, botFolder: string, dispatcher?: (
 
 /**
  * A desktop workspace chat's hooks for the work it starts outside its own
- * turn (its subagents): global, then the workspace, then the chat.
+ * turn (its subagents): global, then the workspace, then the chat. A No
+ * workspace chat passes no `workspaceRoot`, so only global and chat hooks run,
+ * the same scopes its own turns use.
  */
-export function chatSurfaceHooks(chatId: string, workspaceRoot: string, dispatcher?: () => HookDispatcher): SurfaceHooks {
-  return createSurfaceHooks({ scopes: hookScopesFor({ workspaceRoot, chatId }), cwd: workspaceRoot, sessionId: chatId }, dispatcher);
+export function chatSurfaceHooks(
+  input: { chatId: string; cwd: string; workspaceRoot?: string },
+  dispatcher?: () => HookDispatcher,
+): SurfaceHooks {
+  return createSurfaceHooks(
+    { scopes: hookScopesFor({ workspaceRoot: input.workspaceRoot, chatId: input.chatId }), cwd: input.cwd, sessionId: input.chatId },
+    dispatcher,
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -5,14 +5,16 @@
  * host `beforeToolCall`, PostToolUse and per-turn context through the
  * `aiden.hooks` runtime extension, UserPromptSubmit and SessionStart at prompt
  * intake, Stop through the harness `onStop` continuation, Notification when a
- * card or question waits for the person, and SessionEnd when the chat is
- * deleted.
+ * card or question waits for the person, PreCompact before each compaction
+ * (in a turn, and through the context lifecycle service for the Compact
+ * action), and SessionEnd when the chat is deleted. The chat's subagents fire
+ * SubagentStop through `chatSurfaceHooks` in `agent-surface-hooks.ts`.
  *
  * Not wired here, each on purpose: Bot chats (their hooks are policy-owned and
- * arrive with Bots, phase 3), Design Studio runs, ACP harness providers such
- * as Antigravity (the agent runs its own tools), subagents, routines, title
- * generation, provider probes and model-catalog work. None of those reach this
- * module.
+ * run through `agent-surface-hooks.ts`), Design Studio runs, ACP harness
+ * providers such as Antigravity (the agent runs its own tools), routines,
+ * title generation, provider probes and model-catalog work. None of those
+ * reach this module.
  *
  * Hooks can only tighten a chat, and they never break one: a dispatcher that
  * throws counts as no outcome (a fail-closed PreToolUse hook is already mapped
@@ -322,6 +324,28 @@ export function createWorkspaceChatHooks(
       };
     },
   };
+}
+
+/**
+ * PreCompact for one compaction of a chat that runs hooks. Hook context
+ * (already fenced as data) becomes extra instructions for the summary; other
+ * output is ignored. Each hook is bounded by its own timeout and the dispatch
+ * never throws, so a hook never fails the compaction or holds it up longer.
+ */
+export async function preCompactSummaryInstructions(
+  hooks: Pick<WorkspaceChatHooks, "has" | "dispatch">,
+  input: { trigger: "manual" | "auto"; reason: string; signal?: AbortSignal },
+): Promise<string | undefined> {
+  if (!hooks.has("PreCompact")) return undefined;
+  const outcome = await hooks
+    .dispatch(
+      "PreCompact",
+      { trigger: input.trigger, aiden_reason: input.reason },
+      input.signal ? { signal: input.signal } : undefined,
+    )
+    .catch(() => undefined);
+  const context = outcome?.additionalContext?.trim();
+  return context ? `Keep what the person's PreCompact hooks point out:\n\n${context}` : undefined;
 }
 
 /**

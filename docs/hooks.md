@@ -117,12 +117,12 @@ echo '{"decision":"block","reason":"Run the test suite and report the result bef
 | SessionStart | On a chat's first turn in this run of Aiden. | `startup` (new chat), `resume` (first turn after a restart), `compact` (first turn after compaction) | Add context for this turn. |
 | SessionEnd | When a chat whose hooks ran in this run of Aiden is deleted. Not awaited. | Ignored | Nothing; observe only. |
 | Stop | When a reply finishes normally. Never after Stop, an error, a cut-off or a spending block. | Ignored | Keep the agent working, up to 8 times per message you send. |
-| SubagentStop | When a subagent finishes. <!-- TODO(hooks-wave3): confirm Bots/CLI --> | Ignored | Observe only. |
+| SubagentStop | When a subagent run ends (completed, failed, timed out or stopped), once per run, for subagents of desktop chats and of Bots on the desktop and `aiden serve`. Not awaited. | Ignored | Nothing; observe only. |
 | Notification | When an approval card (`permission_prompt`) or a question (`elicitation_dialog`) waits for you. Not awaited. | `notification_type` | Nothing; observe only. |
-| PreCompact | Before a long chat is compacted, in Bot chats and on the CLI server; desktop workspace chats don't fire it yet. <!-- TODO(hooks-wave3): confirm Bots/CLI --> | `manual` or `auto` | Observe only. |
-| WorktreeCreate | After Aiden creates a managed worktree. The source workspace's hooks run, in the new worktree. Awaited, but a failure never undoes the worktree. <!-- TODO(hooks-wave3): confirm Bots/CLI --> | Ignored | Messages shown to you. |
-| RoutineRun | After a Bot routine run finishes, in the Bot's folder. Skipped or blocked runs fire nothing. <!-- TODO(hooks-wave3): confirm Bots/CLI --> | Ignored | Observe only. |
-| RoutineFailed | When a Bot routine run fails, with `error`, `failure_kind` and `will_retry`. | Ignored | Observe only. |
+| PreCompact | Before a long chat is compacted: `manual` when you choose Compact, `auto` when Aiden compacts during a turn or to recover. Desktop chats, Bot chats and `aiden serve` chats fire it. | `manual` or `auto` | In a desktop chat, `additionalContext` tells the summary what to keep; the compaction waits at most the hook's timeout and goes ahead if the hook fails. Bots and `aiden serve` only observe. |
+| WorktreeCreate | After Aiden creates a managed worktree, on the desktop and on `aiden serve`. Global and the source workspace's hooks run, in the new worktree. Awaited, but a failure never undoes the worktree. | Ignored | `systemMessage` and notices go to Aiden's log (stderr on `aiden serve`). |
+| RoutineRun | After a Bot routine run succeeds (including a silent run), in the Bot's folder, on the desktop and on `aiden serve`. Skipped or blocked runs fire nothing. | Ignored | Nothing; observe only. |
+| RoutineFailed | When a Bot routine run fails, with `error`, `failure_kind` and `will_retry`. Each failed attempt fires, including one that will be retried. | Ignored | Nothing; observe only. |
 
 A matcher that is empty or `*` matches everything. One made only of letters, digits, `_`, `-`, spaces, `,` and `|` is a list of exact names (`Edit|Write`). Anything else is a regular expression matched against the whole name, at most 512 characters.
 
@@ -150,14 +150,14 @@ Tool matchers match Aiden's name or its Claude Code name. The payload's `tool_na
 
 ## Input and output
 
-Every hook gets JSON on stdin: `hook_event_name`, `session_id` (the chat id) and `cwd`, plus the fields its event has: `tool_name`, `aiden_tool_name`, `tool_input`, `tool_response` (`{content, is_error}`), `prompt`, `source`, `stop_hook_active`, `message`, `notification_type`, `trigger`. SubagentStop adds `agent_id`, `agent_type`, `aiden_label`, `aiden_status` and `last_assistant_message`; WorktreeCreate adds `worktree_path` and `branch`; routine events add `bot_id`, `routine_id`, `routine_name`, `run_id`, `result` and `trigger`.
+Every hook gets JSON on stdin: `hook_event_name`, `session_id` (the chat id) and `cwd`, plus the fields its event has: `tool_name`, `aiden_tool_name`, `tool_input`, `tool_response` (`{content, is_error}`), `prompt`, `source`, `stop_hook_active`, `message`, `notification_type`, `trigger`. PreCompact adds `aiden_reason`; SubagentStop adds `agent_id`, `agent_type`, `aiden_label`, `aiden_status` and `last_assistant_message`; WorktreeCreate adds `worktree_path` and `branch`; routine events add `bot_id`, `routine_id`, `routine_name`, `run_id`, `result` and `trigger`.
 
 ### Exit codes
 
 | Exit | Meaning |
 | --- | --- |
 | 0 | Success. Stdout that starts with `{` is read as JSON. Other stdout becomes context for SessionStart and UserPromptSubmit and is ignored elsewhere. |
-| 2 | Block, with stderr as the reason. PreToolUse denies the tool; PostToolUse flags the result; UserPromptSubmit refuses the message; Stop and SubagentStop keep the agent working. For other events, stderr is shown to you only. |
+| 2 | Block, with stderr as the reason. PreToolUse denies the tool; PostToolUse flags the result; UserPromptSubmit refuses the message; Stop keeps the agent working. For other events, stderr is shown to you only. |
 | Anything else | An error. So is a command that can't start, a timeout, or output over 64 KiB. Aiden shows a notice and continues without the hook, unless it is a `failClosed` PreToolUse hook, which blocks the tool. |
 
 ### JSON fields
@@ -168,7 +168,7 @@ Every hook gets JSON on stdin: `hook_event_name`, `session_id` (the chat id) and
 | `hookSpecificOutput.permissionDecisionReason` or `reason` | PreToolUse | Why. |
 | `hookSpecificOutput.updatedInput` | PreToolUse | Replaces the tool's input. Applied only with `allow`, never to `run_command`, and checked against the tool's schema; invalid input blocks the tool. |
 | `hookSpecificOutput.additionalContext` | All that add context | Text for the model. |
-| `decision: "block"` and `reason` | PostToolUse, UserPromptSubmit, Stop, SubagentStop | As exit 2. |
+| `decision: "block"` and `reason` | PostToolUse, UserPromptSubmit, Stop | As exit 2. |
 | `systemMessage` | All | Shown to you, never to the model. |
 | `continue: false` and `stopReason` | All | Ends the turn. It wins over a Stop hook that asks to continue. |
 
@@ -224,10 +224,10 @@ File tools in chats, Bots, subagents and agent harnesses refuse writes to `.aide
 
 | Surface | Hooks |
 | --- | --- |
-| Desktop chats, with or without a workspace | Global, workspace (when there's a folder) and chat hooks for PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd, Stop and Notification. |
-| Bots and their routines | Global hooks and that Bot's own, in the Bot's folder. A hook's ask on an unattended run blocks the call. <!-- TODO(hooks-wave3): confirm Bots/CLI --> |
-| `aiden serve` | Workspace and Bot chats run hooks from `<agentDir>/hooks/`; `aiden hooks list`, `approve`, `enable`, `disable`, `pause`, `resume` and `test` manage them. See the [CLI guide](../packages/cli/README.md). <!-- TODO(hooks-wave3): confirm Bots/CLI --> |
-| Not run | Telegram, Design Studio, the Assistant, agent harness providers (such as Antigravity), side questions, title generation and other background model calls. |
+| Desktop chats, with or without a workspace | Global, workspace (when there's a folder) and chat hooks for PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd, Stop, Notification and PreCompact. The chat's subagents fire SubagentStop with the same hooks. |
+| Bots and their routines | Global hooks and that Bot's own, in the Bot's folder: PreToolUse (after the Bot's own rules allow the call), PostToolUse, Stop, SessionStart and PreCompact. Bot subagents fire SubagentStop, and routines fire RoutineRun and RoutineFailed. A hook's ask joins the Bot's approval card on an attended turn and blocks the call on an unattended one. |
+| `aiden serve` | Hooks from the server's own `<agentDir>/hooks/` store and each registered workspace's `.aiden/hooks.json`. Workspace chats, including Telegram and scheduled turns, run PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, PreCompact and SessionEnd; on a Telegram or scheduled turn an ask blocks the tool. Bots work as on the desktop. `aiden hooks list`, `approve`, `enable`, `disable`, `pause`, `resume` and `test` manage them. See the [CLI guide](../packages/cli/README.md). |
+| Not run on the desktop | Telegram, Design Studio, the Assistant, agent harness providers (such as Antigravity), side questions, title generation and other background model calls. |
 
 Phones and paired Macs don't configure hooks; hooks run on the host that runs the chat. A phone routine step for hooks is a planned follow-up.
 

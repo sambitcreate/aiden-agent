@@ -44,6 +44,7 @@ import {
   hookScopeLabel,
   hookShortDigest,
   hookStatusPresentation,
+  hookSwitchAvailable,
   hookSwitchOn,
   parseHookTimeoutField,
   type HookEvent,
@@ -163,7 +164,7 @@ function HookRow({
         <Switch
           aria-label={`Run ${listing.name}`}
           checked={enabled}
-          disabled={busy || unsupported}
+          disabled={busy || !hookSwitchAvailable(listing)}
           onCheckedChange={onToggle}
         />
       </span>

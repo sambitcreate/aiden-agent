@@ -68,7 +68,7 @@ export const HOOK_EVENT_DESCRIPTIONS: Record<HookEvent, string> = {
   Notification: "When Aiden shows you a notice.",
   PreCompact: "Before a long chat is compacted.",
   WorktreeCreate: "When Aiden creates a worktree.",
-  RoutineRun: "When a Bot routine starts.",
+  RoutineRun: "After a Bot routine run succeeds.",
   RoutineFailed: "When a Bot routine fails.",
 };
 
@@ -99,9 +99,18 @@ export function hookNeedsApproval(listing: Pick<HookListing, "status">): boolean
   return listing.status === "waiting-for-approval" || listing.status === "changed";
 }
 
-/** The trailing switch is on for hooks that would run, or will once approved or recovered. */
+/**
+ * The trailing switch is on only for a hook that runs now. A hook waiting for
+ * approval (or re-approval) shows off until the owner approves it, and one
+ * Aiden turned off after failures shows off until the owner turns it back on.
+ */
 export function hookSwitchOn(listing: Pick<HookListing, "status">): boolean {
-  return listing.status !== "disabled" && listing.status !== "unsupported";
+  return listing.status === "active";
+}
+
+/** The owner can flip the switch: not for unsupported hooks, and not before approval (Approve is the action). */
+export function hookSwitchAvailable(listing: Pick<HookListing, "status">): boolean {
+  return listing.status !== "unsupported" && !hookNeedsApproval(listing);
 }
 
 export function hookScopeKey(scope: HookScope): string {

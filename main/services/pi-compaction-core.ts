@@ -91,6 +91,12 @@ export interface PiCompactionCoordinatorOptions {
   settings?: Partial<CompactionSettings>;
   signal?: AbortSignal;
   onEvent?: (event: PiCompactionEvent) => void;
+  /**
+   * Asked once each compaction starts, after its `start` event, for extra
+   * summary instructions (a chat's PreCompact hooks). It must bound its own
+   * wait; a throw or no text adds none, and the local engine only observes.
+   */
+  summaryInstructions?: (reason: PiCompactionReason, signal: AbortSignal) => Promise<string | undefined>;
   /** Retries and backoff for transient provider/transport failures. */
   providerRetry?: RetryPolicy;
   /** Current-Pi-compatible retry policy for each standalone hidden summary request. */
@@ -682,6 +688,12 @@ export class PiCompactionCoordinator {
       }
       started = true;
       this.options.onEvent?.({ type: "start", reason });
+      let customInstructions: string | undefined;
+      try {
+        customInstructions = (await this.options.summaryInstructions?.(reason, abortController.signal))?.trim() || undefined;
+      } catch {
+        customInstructions = undefined;
+      }
       const compileLocal = () => (this.options.compileVcc ?? compileVccInWorker)(
         { branch, preparation, contextWindow: this.options.model.contextWindow },
         abortController.signal,
@@ -691,7 +703,7 @@ export class PiCompactionCoordinator {
           input,
           boundedCompactionModels(this.options.models),
           this.options.model,
-          undefined,
+          customInstructions,
           this.options.thinkingLevel,
           this.options.summaryRetry ?? {
             enabled: true,
@@ -732,6 +744,7 @@ export class PiCompactionCoordinator {
               this.options.model,
               this.options.thinkingLevel,
               abortController.signal,
+              customInstructions,
             );
           const reduceChannel = async (channel: RecoveryChannel, messages: AgentMessage[]): Promise<AgentMessage[]> => {
             // A channel whose own Pi request already fits stays raw.
@@ -992,6 +1005,7 @@ async function summaryRequestSpareTokens(
   model: ResolvedModelRuntime["model"],
   thinkingLevel: ThinkingLevel,
   signal: AbortSignal,
+  customInstructions?: string,
 ): Promise<number> {
   const probe = {
     completeSimple: (...args: Parameters<Models["completeSimple"]>) => {
@@ -1006,7 +1020,7 @@ async function summaryRequestSpareTokens(
       input,
       probe,
       model,
-      undefined,
+      customInstructions,
       thinkingLevel,
       { enabled: false, maxRetries: 0, baseDelayMs: 0 },
       undefined,

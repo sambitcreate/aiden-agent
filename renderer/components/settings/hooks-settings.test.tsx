@@ -114,6 +114,12 @@ test("each row shows its command and status, grouped by where it applies", async
   assert.equal(screen.getByRole("switch", { name: "Run Idle ping" }).hasAttribute("disabled"), true, "an unsupported hook can't be turned on");
   assert.equal(screen.getByRole("switch", { name: "Run Idle ping" }).getAttribute("aria-checked"), "false");
   assert.equal(screen.getByRole("switch", { name: "Run Guard shell" }).getAttribute("aria-checked"), "true");
+  // A hook that won't run until it's approved shows off, and Approve is its action.
+  for (const name of ["Lint on edit", "Tests before done"]) {
+    const toggle = screen.getByRole("switch", { name: `Run ${name}` });
+    assert.equal(toggle.getAttribute("aria-checked"), "false", `${name} isn't running yet`);
+    assert.equal(toggle.hasAttribute("disabled"), true, `${name} is approved, not switched on`);
+  }
   // Only hooks that wait for the owner offer approval.
   assert.equal(screen.getAllByRole("button", { name: /^(Approve|Re-approve)$/u }).length, 2);
 });
@@ -155,6 +161,24 @@ test("a row switch turns its hook off by id", async () => {
   const { callsTo } = mount(overview({ hooks: HOOKS }));
   fireEvent.click(await screen.findByRole("switch", { name: "Run Guard shell" }));
   await waitFor(() => assert.deepEqual(callsTo("hooks:setEnabled"), [["hk_guard", false]]));
+});
+
+test("a hook Aiden turned off after failures shows off, and its switch turns it back on", async () => {
+  const failing = listing({ id: "hk_flaky", name: "Flaky check", status: "disabled-after-failures" });
+  const { callsTo, set } = mount(overview({ hooks: [failing] }), {
+    "hooks:setEnabled": () => {
+      set(overview({ hooks: [{ ...failing, status: "active" }] }));
+      return true;
+    },
+  });
+  await screen.findByText("Disabled after failures");
+  const toggle = screen.getByRole("switch", { name: "Run Flaky check" });
+  assert.equal(toggle.getAttribute("aria-checked"), "false");
+  assert.equal(toggle.hasAttribute("disabled"), false);
+  fireEvent.click(toggle);
+  await waitFor(() => assert.deepEqual(callsTo("hooks:setEnabled"), [["hk_flaky", true]]));
+  await screen.findByText("Active");
+  assert.equal(screen.getByRole("switch", { name: "Run Flaky check" }).getAttribute("aria-checked"), "true");
 });
 
 test("with no hooks the page explains them in one line and offers Add hook; AIDEN_HOOKS=0 is called out", async () => {
