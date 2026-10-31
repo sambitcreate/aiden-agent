@@ -172,3 +172,29 @@ test("attempt IDs are fresh and accepted by main", () => {
   assert.equal(peerPairingAttemptId(first), first);
   assert.notEqual(mintPeerPairingAttemptId(), first);
 });
+
+
+test("connection recovery names the failing step and suggests actions for the route it could have used", () => {
+  const backoff = status({ kind: "backoff", attempt: 2, retryAt: NOW + 5_000 });
+  const dns = peerHostPresentation(host({ activeRouteKind: "tailscale" }), { ...backoff, failure: "dns" }, NOW);
+  assert.match(dns.detail!, /resolve.*address/);
+  assert.match(dns.detail!, /Tailscale.*same tailnet/);
+  const network = peerHostPresentation(host({ activeRouteKind: "lan" }), { ...backoff, failure: "network" }, NOW);
+  assert.match(network.detail!, /no network route/);
+  assert.match(network.detail!, /Local Network permission/);
+  const refused = peerHostPresentation(host(), { ...backoff, failure: "refused" }, NOW);
+  assert.match(refused.detail!, /refused.*Open Aiden.*Control this device/);
+  const timeout = peerHostPresentation(host(), { ...backoff, failure: "timeout" }, NOW);
+  assert.match(timeout.detail!, /didn.t respond in time/);
+  assert.equal(timeout.needsRepair, false);
+  const twoRoutes = host({
+    activeRouteKind: "lan",
+    routes: [
+      { id: "lan", kind: "lan", origin: "paired", active: true },
+      { id: "tailnet", kind: "tailscale", origin: "learned", active: false },
+    ],
+  });
+  const mixed = peerHostPresentation(twoRoutes, { ...backoff, failure: "network" }, NOW);
+  assert.match(mixed.detail!, /same network or Tailscale/);
+  assert.doesNotMatch(mixed.detail!, /Local Network permission|same tailnet/);
+});
