@@ -77,6 +77,21 @@ test("Linux install without a systemd user session names the fix instead of half
   assert.equal(api.serviceStatus(host).installed, false, "the unit written for the attempt is removed again");
 });
 
+test("a failed reinstall puts back the service that was already installed", (t) => {
+  for (const [platform, failing] of [["linux", "systemctl --user restart"], ["darwin", "launchctl bootstrap"]]) {
+    let fail = false;
+    const { host, calls, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" }, [failing]: () => fail ? { status: 1, stderr: "Job failed" } : {} });
+    const { file } = api.installService(host, local);
+    const working = readFileSync(file, "utf8");
+    fail = true;
+    calls.length = 0;
+    assert.throws(() => api.installService(host, { ...local, path: "/opt/new/bin" }), /Job failed/);
+    assert.equal(readFileSync(file, "utf8"), working, `${platform}: the earlier service file is back`);
+    assert.ok(!calls.some((call) => call.includes("disable")), `${platform}: the earlier service is not disabled`);
+    assert.equal(calls.at(-1), platform === "linux" ? "systemctl --user restart aiden.service" : `launchctl bootstrap gui/501 ${file}`, `${platform}: the earlier service is started again`);
+  }
+});
+
 test("Linux uninstall stops the service and removes the unit; a second uninstall reports nothing to remove", (t) => {
   const { host, calls, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
   const { file } = api.installService(host, local);
