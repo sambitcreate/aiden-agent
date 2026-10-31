@@ -145,7 +145,8 @@ export const REMOTE_NETWORKS: readonly RemoteNetwork[] = ["local", "tailscale", 
 
 /** Switch the server to `network`. Local only also removes Aiden's own Tailscale Serve route. */
 export async function setRemoteNetwork(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, network: RemoteNetwork) {
-  if (network === "local") await service.setConnectionMode("lan");
+  // Leaving Tailscale can stop on a route change that never reported back; name the fix rather than the bare code.
+  if (network === "local") await service.setConnectionMode("lan").catch((error: unknown) => { throw withTailscaleSetupMessage(error); });
   else await connectTailscaleTransport(service, tailscale, network);
   return service.status();
 }

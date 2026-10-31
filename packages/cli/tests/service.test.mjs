@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -141,8 +141,12 @@ test("an install that starts its server applies the chosen network and pairs ove
   process.env.AIDEN_CLI_ENTRY = entry;
   t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
   /** Installs on a fake Linux host whose server is ready at once, and records what reaches the server. */
-  const install = async (flags, { failNetwork, status, tty = true, interrupt = false } = {}) => {
+  const install = async (flags, { failNetwork, status, tty = true, interrupt, saved } = {}) => {
     const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
+    if (saved) {
+      mkdirSync(local.agentDir, { recursive: true });
+      writeFileSync(join(local.agentDir, "remote.json"), JSON.stringify({ version: 1, connectionMode: saved }));
+    }
     const sent = [];
     const paired = [];
     const remote = async (args) => {
@@ -153,8 +157,8 @@ test("an install that starts its server applies the chosen network and pairs ove
     const pair = async (transport) => {
       paired.push(transport);
       if (!interrupt) return "session-1";
-      // The person presses Ctrl+C while the code is on screen.
-      process.emit("SIGINT", "SIGINT");
+      // The person presses Ctrl+C, the SSH session drops, or the command is killed while the code is on screen.
+      process.emit(interrupt, interrupt);
       return "session-1";
     };
     let output = "";
@@ -192,10 +196,24 @@ test("an install that starts its server applies the chosen network and pairs ove
   assert.doesNotMatch(unreachable.output, /reachable over/);
 
   // Ctrl+C skips pairing but the service keeps running, so the code on screen is closed; a finished window is left alone.
-  const skipped = await install(["--network", "local"], { interrupt: true });
-  assert.deepEqual(skipped.sent, ["network local", "pair-cancel session-1"]);
-  assert.match(skipped.output, /Closed the pairing code\./);
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    const skipped = await install(["--network", "local"], { interrupt: signal });
+    assert.deepEqual(skipped.sent, ["network local", "pair-cancel session-1"], signal);
+    assert.match(skipped.output, /Closed the pairing code\./, signal);
+  }
   assert.ok(!(await install(["--network", "local"])).sent.some((line) => line.startsWith("pair-cancel")), "no cancel without Ctrl+C");
+
+  // An unfinished Tailscale route change leaves the server's reach unknown: no reachable claim, no code, and the fix.
+  const unfinished = await install(["--network", "local"], { failNetwork: true, status: { connectionMode: "lan", tailscaleRouteState: "reconciliation_required" } });
+  assert.deepEqual(unfinished.paired, []);
+  assert.match(unfinished.output, /unfinished change.*aiden remote tailscale-reconcile/s);
+  assert.doesNotMatch(unfinished.output, /reachable over|no phone can reach/);
+
+  // A reinstall without --network keeps the Tailscale network saved in the profile, and pairs over it.
+  const kept = await install([], { saved: "tailscale" });
+  assert.deepEqual(kept.sent, ["network tailscale"]);
+  assert.deepEqual(kept.paired, ["tailscale"]);
+  assert.match(kept.output, /Keeping the server's network: Tailscale only\./);
 
   // --no-pair, or no terminal to show a code in, names the pair command instead.
   for (const [flags, tty] of [[["--network", "both", "--no-pair"], true], [["--network", "both"], false]]) {
@@ -295,12 +313,12 @@ test("install flags take a network choice and --no-pair, and reject anything els
   assert.throws(() => api.parseInstallFlags(["--daemon"]), /Usage: aiden service install/);
 });
 
-function networkDouble({ connectionMode = "lan", tailscaleConnected = false, connectError } = {}) {
+function networkDouble({ connectionMode = "lan", tailscaleConnected = false, connectError, modeError } = {}) {
   const calls = [];
   let mode = connectionMode, connected = tailscaleConnected;
   const service = {
     async status() { return { connectionMode: mode, tailscaleConnected: connected }; },
-    async setConnectionMode(next) { calls.push(["mode", next]); mode = next; if (next === "lan") connected = false; },
+    async setConnectionMode(next) { calls.push(["mode", next]); if (modeError) throw new Error(modeError); mode = next; if (next === "lan") connected = false; },
     async connectTailscale() { calls.push(["connect"]); if (connectError) throw new Error(connectError); connected = true; },
   };
   const tailscale = { async status() { calls.push(["node"]); return { installed: true, dnsName: "box.tail1234.ts.net", httpsAvailable: true }; } };
@@ -334,6 +352,9 @@ test("choosing a network sets the mode and connects Tailscale only when the choi
   const local = networkDouble({ connectionMode: "both", tailscaleConnected: true });
   await api.setRemoteNetwork(local.service, local.tailscale, "local");
   assert.deepEqual(local.calls, [["mode", "lan"]]);
+
+  const unfinished = networkDouble({ connectionMode: "both", tailscaleConnected: true, modeError: "tailscale_reconciliation_required" });
+  await assert.rejects(api.setRemoteNetwork(unfinished.service, unfinished.tailscale, "local"), /aiden remote tailscale-reconcile/, "leaving Tailscale names the fix, not the bare code");
 
   const conflict = networkDouble({ connectError: "tailscale_route_conflict" });
   await assert.rejects(api.setRemoteNetwork(conflict.service, conflict.tailscale, "tailscale"), /already points somewhere else/);

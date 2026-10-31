@@ -379,8 +379,10 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
 }
 
 /** Which networks really reach the server: none while Remote is off or not listening, the local network in LAN modes, Tailscale only while its route is connected. */
-export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean } | undefined): RemoteNetwork | undefined {
+export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean; tailscaleRouteState?: string } | undefined): RemoteNetwork | undefined {
   if (status?.enabled === false || status?.running === false) return undefined;
+  // An unfinished route change may have left Aiden's old Serve route live, so the server's reach is unknown.
+  if (status?.tailscaleRouteState === "reconciliation_required") return undefined;
   const lan = status?.connectionMode === "lan" || status?.connectionMode === "both";
   const tailscale = (status?.connectionMode === "tailscale" || status?.connectionMode === "both") && status.tailscaleConnected === true;
   return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
@@ -475,7 +477,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
     out(reachable
       ? `For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`
-      : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
+      : status?.tailscaleRouteState === "reconciliation_required"
+        ? "Aiden's Tailscale route may have an unfinished change, so it is unclear which networks reach the server. Run `aiden remote tailscale-reconcile`, then `aiden remote network local|tailscale|both`."
+        : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
   }
   // Without lingering a Linux user service does not start at boot; the warning says so instead.
   const boot = installed.manager === "systemd" && installed.warning ? "" : installed.manager === "systemd" ? " It starts again after a reboot." : " It starts again when you log in.";
@@ -491,7 +495,9 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   out("Scan this code with Aiden on your phone. Press Ctrl+C to skip; the server keeps running.");
   const controller = new AbortController();
   const stop = () => controller.abort();
-  process.once("SIGINT", stop);
+  // Ctrl+C, a dropped SSH session (SIGHUP) or a kill all close the code, since the server keeps running.
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  for (const signal of signals) process.once(signal, stop);
   try {
     const pair = options.pair ?? (async (transport: "lan" | "tailscale", signal: AbortSignal) => (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
     const session = await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
@@ -500,6 +506,6 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
       await remote(["pair-cancel", session]).then(() => out("Closed the pairing code."), () => undefined);
     }
   } finally {
-    process.removeListener("SIGINT", stop);
+    for (const signal of signals) process.removeListener(signal, stop);
   }
 }
