@@ -22,4 +22,21 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - ⌘1–9 skips remote rows today; including them is a behaviour change, keyed by `projectOrderKey(hostId, chatId)` and following the frozen order. Bot routes swap in `BotSidebar`, which owns ⌘1–9 there.
 - `aiden serve` lacks `/host/events`, `HostRunRegistry`, read markers and activity; 2d builds them. Desktops don't negotiate `bot:issues`, so remote Bot state goes on feed Bot rows. Triage is last-writer-wins per field with a revision (Undo uses `ifRevision`). Phones have 30 of 32 feature tokens used.
 
+## Phase 0 done (2026-10-31, branch `claude/inbox-sidebar-plan`)
+- `renderer/components/sidebar/`:
+  - `chat-row.tsx`: `ChatRow` for local and remote rows. Status pill, context slot, ⌘ hint, the context menu and ••• menu from one `menu: ChatRowMenu` builder. `layout: ChatRowLayout` is `"standard"` only; the Inbox two-line row joins that union rather than forking the component. The rule "the open chat never shows unread" (`selected`) lives here. `aria-busy` is `busy || state === "working"`.
+  - `row-group.tsx`: `RowGroup`, the disclosure group used by workspace and remote project groups.
+  - `section-header.tsx`: `SectionHeader` (label, count, accessory, actions, optional collapse button).
+  - `sidebar-overflow-menu.tsx`: moved out of `chat-sidebar.tsx`.
+- `chat-sidebar.tsx` keeps state, data reads and view switching.
+- Remote ••• menu: `remoteChatRowActions(chat, remoteHostCapabilities(view))` in `sidebar-remote-groups.ts`.
+  - Open is always shown.
+  - Mark read needs an unread row plus `markRead` (`chat-read-state-v1` + `chat:read`).
+  - Rename needs `rename` (`chat:write`) and the row's `revision`.
+  - On stale hosts, Mark read and Rename are disabled.
+  - The calls go through a short-lived `RemoteHostAdapter`, and the host feed refreshes the rows.
+  - Delete and other control actions are omitted.
+- `usePeerHostSidebar` now also returns `views`.
+- Tests: `renderer/components/sidebar/chat-row.test.tsx`, run by `test:chat-row-states`.
+
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

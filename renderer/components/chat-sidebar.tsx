@@ -23,17 +23,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertDialog,
   Button,
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
   Dialog,
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
   EmptyState,
   Input,
   Sidebar,
@@ -47,14 +39,10 @@ import {
 } from "./ui";
 import { Progress } from "./ui-primitives";
 import {
-  ChevronDown,
-  ChevronRight,
   Folder,
   FolderPlus,
-  GitFork,
   Loader2,
   MessageCircle,
-  MoreHorizontal,
   Plus,
   Settings,
   SquarePen,
@@ -81,8 +69,6 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useEnvironmentPanel } from "./environment-panel";
 import type { ChatMeta, Workspace } from "../lib/types";
 import { useCommandHandler, useCommandSystem } from "../lib/command-system";
-import { openContextMenuFromKeyboard } from "../lib/keyboard-context-menu";
-import { cn } from "../lib/ui-utils";
 import type { CommandId } from "../shared/keybindings";
 import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
 import { removeDeletedChatFromCache } from "../lib/chat-deletion-cache";
@@ -91,7 +77,12 @@ import type { AppUpdateRestartResult, AppUpdateSnapshot } from "../shared/app-up
 import { useChatActivityState, useChatReadMarkers } from "../lib/use-chat-activity";
 import { chatRowStateFor } from "../lib/chat-activity";
 import { isChatUnread } from "../shared/chat-row-state";
-import { ChatRowStatus } from "./chat-row-status";
+import { ChatRow, type ChatRowMenu } from "./sidebar/chat-row";
+import { RowGroup } from "./sidebar/row-group";
+import { SectionHeader } from "./sidebar/section-header";
+import { SidebarOverflowMenu } from "./sidebar/sidebar-overflow-menu";
+import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
+import type { HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
 import { sidebarPullRequestChatIds } from "../lib/chat-row-context";
 import { RemoteConnectionPopover } from "./remote-connection-popover";
@@ -132,6 +123,7 @@ import {
   isRemoteSidebarProject,
   machineFilterLabel,
   projectEntryMachineLabels,
+  remoteChatRowActions,
   remoteSidebarRows,
   type RemoteSidebarChat,
   type RemoteSidebarProject,
@@ -141,13 +133,13 @@ import { useLocalRepositoryIdentities, usePeerHostSidebar } from "../lib/hosts/u
 import {
   MachineBadges,
   MachineFilterChip,
-  RemoteHostMarker,
   RemoteHostStatusList,
 } from "./sidebar-remote";
 
 const AIDEN_MARK_URL = new URL("../../resources/app-icon.png", import.meta.url).href;
 const SIDEBAR_PREFERENCES_KEY = "aiden-agent.sidebar.v1";
 const COLLAPSED_WORKSPACE_CHAT_LIMIT = 4;
+const NO_REMOTE_CAPABILITIES: ReadonlySet<HostChatCapability> = new Set();
 /** Must match aiden-app-update-banner-out in styles.css. */
 const APP_UPDATE_BANNER_EXIT_MS = 120;
 
@@ -165,97 +157,6 @@ function workspaceAccessibleName(workspace: Workspace, preferences: WorkspacePat
   // The Chats group stands for every hidden No workspace folder; its own folder is no name for it.
   if (isNoWorkspace(workspace)) return NO_WORKSPACE_GROUP_LABEL;
   return [workspaceDisplayName(workspace, workspaces), workspaceSecondaryLabel(workspace, preferences)].filter(Boolean).join(", ");
-}
-
-function SidebarOverflowMenu({
-  ariaLabel,
-  triggerClassName,
-  contentClassName,
-  triggerIcon = <MoreHorizontal />,
-  children,
-}: React.PropsWithChildren<{
-  ariaLabel: string;
-  triggerClassName?: string;
-  contentClassName: string;
-  triggerIcon?: React.ReactNode;
-}>) {
-  const triggerRef = React.useRef<HTMLButtonElement>(null);
-  const [sideOffset, setSideOffset] = React.useState(8);
-  const [contentAlign, setContentAlign] = React.useState<"start" | "end">("start");
-  const [contentAlignOffset, setContentAlignOffset] = React.useState(0);
-  const [contentMaxHeight, setContentMaxHeight] = React.useState<number>();
-  const [open, setOpen] = React.useState(false);
-
-  const positionOutsideSidebar = React.useCallback(() => {
-    const trigger = triggerRef.current;
-    const sidebar = trigger?.closest<HTMLElement>("[data-sidebar]");
-    if (!trigger || !sidebar) return;
-
-    const triggerBounds = trigger.getBoundingClientRect();
-    const sidebarBounds = sidebar.getBoundingClientRect();
-    const nextAlign = triggerBounds.bottom > window.innerHeight / 2 ? "end" : "start";
-    const viewportPadding = 8;
-    const nextAlignOffset =
-      nextAlign === "end"
-        ? Math.max(0, triggerBounds.bottom - (window.innerHeight - viewportPadding))
-        : Math.max(0, viewportPadding - triggerBounds.top);
-    const contentEdge =
-      nextAlign === "end"
-        ? triggerBounds.bottom - nextAlignOffset
-        : triggerBounds.top + nextAlignOffset;
-    setSideOffset(Math.max(8, Math.ceil(sidebarBounds.right - triggerBounds.right) + 8));
-    setContentAlign(nextAlign);
-    setContentAlignOffset(nextAlignOffset);
-    setContentMaxHeight(
-      Math.max(
-        1,
-        Math.floor(
-          nextAlign === "end"
-            ? contentEdge - viewportPadding
-            : window.innerHeight - contentEdge - viewportPadding,
-        ),
-      ),
-    );
-  }, []);
-
-  React.useEffect(() => {
-    if (!open) return;
-    window.addEventListener("resize", positionOutsideSidebar);
-    return () => window.removeEventListener("resize", positionOutsideSidebar);
-  }, [open, positionOutsideSidebar]);
-
-  return (
-    <DropdownMenu
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) positionOutsideSidebar();
-      }}
-    >
-      <DropdownMenuTrigger asChild>
-        <Button
-          ref={triggerRef}
-          variant="transparent"
-          size="small"
-          iconOnly
-          className={triggerClassName}
-          aria-label={ariaLabel}
-        >
-          {triggerIcon}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="right"
-        align={contentAlign}
-        alignOffset={contentAlignOffset}
-        sideOffset={sideOffset}
-        avoidCollisions={false}
-        className={contentClassName}
-        style={{ maxHeight: contentMaxHeight, overflowY: "auto" }}
-      >
-        {children}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
 }
 
 function updateRestartError(result: AppUpdateRestartResult): string | null {
@@ -558,11 +459,20 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   );
   const peerHosts = usePeerHostSidebar();
   const hasHosts = peerHosts.hosts.length > 0;
+  const remoteCapabilities = React.useMemo(
+    () =>
+      new Map(
+        [...peerHosts.views].map(([hostId, view]) => [hostId, remoteHostCapabilities(view)] as const),
+      ),
+    [peerHosts.views],
+  );
   const shownMachines = effectiveMachineFilter(machineFilter, peerHosts.hosts);
   const initializedExpansionRef = React.useRef(false);
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
   const [renameValue, setRenameValue] = React.useState("");
   const [renamingWithAppleId, setRenamingWithAppleId] = React.useState<string | null>(null);
+  const [remoteRenaming, setRemoteRenaming] = React.useState<RemoteSidebarChat | null>(null);
+  const [remoteRenameBusy, setRemoteRenameBusy] = React.useState(false);
   const [deleting, setDeleting] = React.useState<ChatMeta | null>(null);
   const [removingWorkspace, setRemovingWorkspace] = React.useState<Workspace | null>(null);
   const [removingWorkspaceBusy, setRemovingWorkspaceBusy] = React.useState(false);
@@ -775,6 +685,41 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     },
     [openChat, openRemoteChat],
   );
+  const markRemoteChatRead = React.useCallback(
+    async (chat: RemoteSidebarChat) => {
+      const view = peerHosts.views.get(chat.hostId);
+      if (!view) return;
+      const adapter = new RemoteHostAdapter(view);
+      try {
+        await adapter.ready();
+        // Summaries name no message, so the host marks through its newest output.
+        const result = await adapter.markRead(chat.chatId);
+        if (!result.ok) toast.error(result.error.message || "Aiden could not mark that chat read.");
+      } finally {
+        adapter.dispose();
+      }
+    },
+    [peerHosts.views],
+  );
+  const commitRemoteRename = React.useCallback(async () => {
+    const chat = remoteRenaming;
+    const title = renameValue.trim();
+    const view = chat ? peerHosts.views.get(chat.hostId) : undefined;
+    if (!chat || !title || !view) return;
+    setRemoteRenameBusy(true);
+    const adapter = new RemoteHostAdapter(view);
+    try {
+      await adapter.ready();
+      // The host's feed broadcasts the new title; the row updates from it.
+      await adapter.rename(chat.chatId, { title, revision: chat.revision });
+      setRemoteRenaming(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aiden could not rename that chat.");
+    } finally {
+      adapter.dispose();
+      setRemoteRenameBusy(false);
+    }
+  }, [peerHosts.views, remoteRenaming, renameValue]);
   const reconnectHost = React.useCallback(async (hostId: string) => {
     try {
       await peerHostsApi.reconnect(hostId);
@@ -1179,10 +1124,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ) : (
         chat.title
       );
-    const menuItems = (
-      Item: typeof DropdownMenuItem | typeof ContextMenuItem,
-      Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator,
-    ) => (
+    const menuItems: ChatRowMenu = (Item, Separator) => (
       <>
       <Item
         icon="pencil"
@@ -1228,107 +1170,91 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       </>
     );
     return (
-      <div key={chat.id} data-roving-row className="group/chat-row relative">
-        <ContextMenu>
-          <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
-            <SidebarListItem
-              data-roving-item
-              className={cn(
-                indented && "pl-8",
-                // Room for the ••• button while it shows, including while its menu is open.
-                !chatShortcutsVisible &&
-                  "group-hover/chat-row:pr-10 group-focus-within/chat-row:pr-10 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:pr-10",
-              )}
-              icon={
-                renamingWithAppleId === chat.id ? (
-                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                ) : undefined
-              }
-              aria-busy={renamingWithAppleId === chat.id || rowState === "working"}
-              aria-description={forkedFrom}
-              data-forked={forkedFrom ? "true" : undefined}
-              title={
-                forkedFrom ? (
-                  <span className="flex min-w-0 items-center gap-1.5" title={forkedFrom}>
-                    <GitFork aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
-                    <span className="min-w-0 truncate">{titleContent}</span>
-                  </span>
-                ) : (
-                  titleContent
-                )
-              }
-              trailing={
-                <span
-                  className={cn(
-                    "flex items-center gap-1 transition-opacity duration-(--motion-duration) ease-standard motion-reduce:transition-none",
-                    // The ••• button takes this spot while the row is hovered or focused.
-                    !chatShortcutsVisible &&
-                    "group-hover/chat-row:opacity-0 group-focus-within/chat-row:opacity-0 group-has-[[aria-haspopup=menu][data-state=open]]/chat-row:opacity-0",
-                  )}
-                >
-                  {chatShortcutsVisible && shortcutBinding ? (
-                    <kbd
-                      aria-hidden="true"
-                      data-chat-shortcut-hint="true"
-                      className="inline-flex h-5 min-w-8 items-center justify-center rounded-pill bg-control px-1.5 font-sans text-mini font-medium tabular-nums text-tertiary"
-                    >
-                      {prettyAccelerator(shortcutBinding)}
-                    </kbd>
-                  ) : null}
-                  {/* Only rows in a group the user expanded (not one search opened)
-                      read live branch PRs, as the old group indicator did, and only
-                      once their dismissals are known. */}
-                  <ChatRowContextGlyphs
-                    workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
-                    pullRequests={sidebarPullRequests[chat.id]}
-                    live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
-                  />
-                  <ChatRowStatus state={rowState} unread={unread} failed={chat.lastAssistantFailed === true} />
-                </span>
-              }
-              aria-keyshortcuts={ariaKeyShortcut(shortcutBinding)}
-              selected={chat.id === activeChatId}
-              onPointerEnter={() => prefetchChat(chat.id)}
-              onFocus={() => prefetchChat(chat.id)}
-              onClick={() => void openChat(chat)}
-            />
-          </ContextMenuTrigger>
-          <ContextMenuContent>{menuItems(ContextMenuItem, ContextMenuSeparator)}</ContextMenuContent>
-        </ContextMenu>
-        {chatShortcutsVisible ? null : (
-          <SidebarOverflowMenu
-            ariaLabel={`More for ${chat.title}`}
-            triggerClassName="pointer-events-none absolute right-1.5 top-1/2 size-7 -translate-y-1/2 text-tertiary opacity-0 transition-opacity duration-(--motion-duration) ease-standard group-hover/chat-row:pointer-events-auto group-hover/chat-row:opacity-100 group-focus-within/chat-row:pointer-events-auto group-focus-within/chat-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100 motion-reduce:transition-none"
-            contentClassName="w-56"
-          >
-            {menuItems(DropdownMenuItem, DropdownMenuSeparator)}
-          </SidebarOverflowMenu>
-        )}
-      </div>
+      <ChatRow
+        key={chat.id}
+        title={chat.title}
+        titleContent={titleContent}
+        status={{ state: rowState, unread, failed: chat.lastAssistantFailed === true }}
+        selected={chat.id === activeChatId}
+        indented={indented}
+        icon={
+          renamingWithAppleId === chat.id ? (
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+          ) : undefined
+        }
+        busy={renamingWithAppleId === chat.id}
+        forkedFrom={forkedFrom}
+        context={
+          // Only rows in a group the user expanded (not one search opened)
+          // read live branch PRs, as the old group indicator did, and only
+          // once their dismissals are known.
+          <ChatRowContextGlyphs
+            workspace={chat.workspaceId ? workspacesById.get(chat.workspaceId) : undefined}
+            pullRequests={sidebarPullRequests[chat.id]}
+            live={liveContext && sidebarPullRequestsKnown.has(chat.id)}
+          />
+        }
+        shortcutHint={shortcutBinding ? prettyAccelerator(shortcutBinding) : undefined}
+        shortcutsRevealed={chatShortcutsVisible}
+        ariaKeyShortcuts={ariaKeyShortcut(shortcutBinding)}
+        menu={menuItems}
+        onPointerEnter={() => prefetchChat(chat.id)}
+        onFocus={() => prefetchChat(chat.id)}
+        onOpen={() => void openChat(chat)}
+      />
     );
   };
 
-  // Remote rows are read-only here: no rename, delete, or shortcut, and stale rows look muted.
-  const renderRemoteChatRow = (chat: RemoteSidebarChat, indented = false) => (
-    <SidebarListItem
-      key={chat.key}
-      data-roving-item
-      className={indented ? "pl-8" : undefined}
-      data-remote-chat={chat.stale ? "stale" : "live"}
-      aria-busy={chat.rowState === "working"}
-      title={chat.stale ? <span className="text-secondary">{chat.title}</span> : chat.title}
-      trailing={
-        <span className="flex items-center gap-1">
-          <RemoteHostMarker hostLabel={chat.hostLabel} stale={chat.stale} />
-          <ChatRowStatus state={chat.rowState} unread={chat.unread} failed={chat.lastRunFailed} />
-        </span>
-      }
-      selected={
-        activeRemoteChat?.hostId === chat.hostId && activeRemoteChat.chatId === chat.chatId
-      }
-      onClick={() => void openRemoteChat(chat)}
-    />
-  );
+  // Remote rows offer only what this Mac's client for that host supports; stale rows look muted.
+  const renderRemoteChatRow = (chat: RemoteSidebarChat, indented = false) => {
+    const actions = remoteChatRowActions(chat, remoteCapabilities.get(chat.hostId) ?? NO_REMOTE_CAPABILITIES);
+    const menuItems: ChatRowMenu = (Item) =>
+      actions.map((action) => {
+        switch (action.id) {
+          case "open":
+            return (
+              <Item key="open" onSelect={() => void openRemoteChat(chat)}>
+                Open
+              </Item>
+            );
+          case "markRead":
+            return (
+              <Item key="markRead" disabled={action.disabled} onSelect={() => void markRemoteChatRead(chat)}>
+                Mark read
+              </Item>
+            );
+          case "rename":
+            return (
+              <Item
+                key="rename"
+                icon="pencil"
+                disabled={action.disabled}
+                onSelect={() => {
+                  setRenameValue(chat.title);
+                  setRemoteRenaming(chat);
+                }}
+              >
+                Rename
+              </Item>
+            );
+        }
+      });
+    return (
+      <ChatRow
+        key={chat.key}
+        title={chat.title}
+        status={{ state: chat.rowState, unread: chat.unread, failed: chat.lastRunFailed }}
+        selected={
+          activeRemoteChat?.hostId === chat.hostId && activeRemoteChat.chatId === chat.chatId
+        }
+        indented={indented}
+        remote={{ hostLabel: chat.hostLabel, stale: chat.stale }}
+        shortcutsRevealed={chatShortcutsVisible}
+        menu={menuItems}
+        onOpen={() => void openRemoteChat(chat)}
+      />
+    );
+  };
 
   const renderSidebarChat = (summary: SidebarRow, indented = false, liveContext = false) =>
     isRemoteSidebarChat(summary)
@@ -1361,25 +1287,17 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const name = group.project.name;
     const accessibleName = `${name}, on ${primary.hostLabel}${primary.stale ? ", offline" : ""}`;
     return (
-      <div
+      <RowGroup
         key={projectKey}
-        className="group/workspace relative"
-        data-roving-group
         data-remote-project={primary.stale ? "stale" : "live"}
         {...dropProps}
-      >
-        {dropIndicator}
-        <div data-roving-row className="flex min-w-0 items-center gap-0.5" {...dragProps}>
-          <SidebarListItem
-            data-roving-item
-            className="min-w-0 flex-1"
-            icon={
-              <span className="flex items-center gap-1.5">
-                {expanded ? <ChevronDown /> : <ChevronRight />}
-                <Folder />
-              </span>
-            }
-            title={
+        dropIndicator={dropIndicator}
+        dragProps={dragProps}
+        expanded={expanded}
+        icon={<Folder />}
+        accessibleName={accessibleName}
+        onToggle={() => toggleRemoteProject(projectKey)}
+        title={
               <span className="flex min-w-0 flex-col">
                 <span className={primary.stale ? "truncate text-secondary" : "truncate"}>{name}</span>
                 <span className="flex min-w-0 items-center gap-1 text-small text-tertiary">
@@ -1390,11 +1308,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                 </span>
                 <MachineBadges labels={projectEntryMachineLabels(group.project)} />
               </span>
-            }
-            aria-label={`${expanded ? "Collapse" : "Expand"} ${accessibleName}`}
-            aria-expanded={expanded}
-            onClick={() => toggleRemoteProject(projectKey)}
-          />
+        }
+        actions={
           <div className="group/workspace-actions relative size-7 shrink-0">
             <SidebarOverflowMenu
               ariaLabel={`Actions for ${accessibleName}`}
@@ -1422,9 +1337,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
               {moveItems}
             </SidebarOverflowMenu>
           </div>
-        </div>
-        {expanded ? (
-          <div className="flex flex-col gap-0.5">
+        }
+      >
             {visibleChats.map((summary) => renderSidebarChat(summary, true))}
             {group.chats.length === 0 ? (
               <SidebarListItem data-roving-item className="pl-9 text-secondary" title="No chats yet" disabled />
@@ -1437,9 +1351,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                 onClick={() => setRevealedRemoteKeys((current) => new Set(current).add(projectKey))}
               />
             ) : null}
-          </div>
-        ) : null}
-      </div>
+      </RowGroup>
     );
   };
 
@@ -1450,15 +1362,6 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         onClear={() => setMachineFilter("all")}
       />
     ) : null;
-  const groupHeading = (label: string) =>
-    machineFilterChip ? (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="shrink-0">{label}</span>
-        {machineFilterChip}
-      </span>
-    ) : (
-      <span>{label}</span>
-    );
 
   const sidebarOrganizationMenu = (
     <SidebarOverflowMenu
@@ -1574,13 +1477,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           {view === "projects" ? (
             <SidebarListGroup
               title={
-                <div className="flex items-center justify-between gap-2">
-                  {groupHeading("Workspaces")}
-                  <span className="flex items-center gap-0.5">
-                    {sidebarOrganizationMenu}
-                    {workspaceCreationMenu}
-                  </span>
-                </div>
+                <SectionHeader
+                  label="Workspaces"
+                  accessory={machineFilterChip}
+                  actions={
+                    <span className="flex items-center gap-0.5">
+                      {sidebarOrganizationMenu}
+                      {workspaceCreationMenu}
+                    </span>
+                  }
+                />
               }
             >
               {chats.isLoading ? (
@@ -1721,24 +1627,16 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                   const explicitlyExpanded = expandedWorkspaceIds.has(workspace.id);
                   const expanded = searching || explicitlyExpanded;
                   return (
-                    <div
+                    <RowGroup
                       key={projectKey}
-                      data-roving-group
-                      className="group/workspace relative"
                       {...dropProps}
-                    >
-                      {dropIndicator}
-                      <div data-roving-row className="flex min-w-0 items-center gap-0.5" {...dragProps}>
-                        <SidebarListItem
-                          data-roving-item
-                          className="min-w-0 flex-1"
-                          icon={
-                            <span className="flex items-center gap-1.5">
-                              {expanded ? <ChevronDown /> : <ChevronRight />}
-                              {chatsGroup ? <MessageCircle /> : <Folder />}
-                            </span>
-                          }
-                          title={
+                      dropIndicator={dropIndicator}
+                      dragProps={dragProps}
+                      expanded={expanded}
+                      icon={chatsGroup ? <MessageCircle /> : <Folder />}
+                      accessibleName={workspaceAccessibleName(workspace, pathPreferences, workspaces)}
+                      onToggle={() => toggleWorkspace(workspace.id)}
+                      title={
                             <span className="flex min-w-0 flex-col">
                               <span className="truncate">{groupName}</span>
                               {!chatsGroup && workspace.folderPath && pathPreferences.showWorkspacePaths ? (
@@ -1749,11 +1647,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                               ) : secondaryLabel ? <span className="truncate text-small text-tertiary">{secondaryLabel}</span> : null}
                               <MachineBadges labels={projectEntryMachineLabels(group.project)} />
                             </span>
-                          }
-                          aria-label={`${expanded ? "Collapse" : "Expand"} ${workspaceAccessibleName(workspace, pathPreferences, workspaces)}`}
-                          aria-expanded={expanded}
-                          onClick={() => toggleWorkspace(workspace.id)}
-                        />
+                      }
+                      actions={
+                        <>
                         <Button
                           variant="transparent"
                           size="small"
@@ -1827,9 +1723,9 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                             ) : null}
                           </SidebarOverflowMenu>
                         </div>
-                      </div>
-                      {expanded ? (
-                        <div className="flex flex-col gap-0.5">
+                        </>
+                      }
+                    >
                           {draftsByWorkspace.get(workspace.id)?.map(renderDraftRow)}
                           {visibleChats.map((summary) => renderSidebarChat(summary, true, explicitlyExpanded))}
                           {group.chats.length === 0 &&
@@ -1857,9 +1753,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                               }
                             />
                           ) : null}
-                        </div>
-                      ) : null}
-                    </div>
+                    </RowGroup>
                   );
                 })
               )}
@@ -1867,10 +1761,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           ) : chats.isLoading ? (
             <SidebarListGroup
               title={
-                <div className="flex items-center justify-between gap-2">
-                  {groupHeading(chatViewTitle)}
-                  {sidebarOrganizationMenu}
-                </div>
+                <SectionHeader
+                  label={chatViewTitle}
+                  accessory={machineFilterChip}
+                  actions={sidebarOrganizationMenu}
+                />
               }
             >
               <EmptyState
@@ -1882,10 +1777,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           ) : chats.isError ? (
             <SidebarListGroup
               title={
-                <div className="flex items-center justify-between gap-2">
-                  {groupHeading(chatViewTitle)}
-                  {sidebarOrganizationMenu}
-                </div>
+                <SectionHeader
+                  label={chatViewTitle}
+                  accessory={machineFilterChip}
+                  actions={sidebarOrganizationMenu}
+                />
               }
             >
               <div role="alert" className="flex flex-col gap-1">
@@ -1900,10 +1796,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           ) : organized.chatSections.length === 0 ? (
             <SidebarListGroup
               title={
-                <div className="flex items-center justify-between gap-2">
-                  {groupHeading(chatViewTitle)}
-                  {sidebarOrganizationMenu}
-                </div>
+                <SectionHeader
+                  label={chatViewTitle}
+                  accessory={machineFilterChip}
+                  actions={sidebarOrganizationMenu}
+                />
               }
             >
               <EmptyState
@@ -1922,12 +1819,13 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
                 key={group.id}
                 title={
                   index === 0 ? (
-                    <div className="flex items-center justify-between gap-2">
-                      {groupHeading(group.label)}
-                      {sidebarOrganizationMenu}
-                    </div>
+                    <SectionHeader
+                      label={group.label}
+                      accessory={machineFilterChip}
+                      actions={sidebarOrganizationMenu}
+                    />
                   ) : (
-                    group.label
+                    <SectionHeader label={group.label} />
                   )
                 }
               >
@@ -1946,6 +1844,27 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         confirmLabel="Save"
         confirmDisabled={!renameValue.trim()}
         onConfirm={commitRename}
+      >
+        <Input
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          placeholder="Chat name"
+          autoFocus
+        />
+      </Dialog>
+
+      <Dialog
+        open={remoteRenaming !== null}
+        onOpenChange={(open) => !open && !remoteRenameBusy && setRemoteRenaming(null)}
+        title="Rename chat"
+        description={
+          remoteRenaming
+            ? `Choose the name shown for this conversation on ${remoteRenaming.hostLabel}.`
+            : undefined
+        }
+        confirmLabel="Save"
+        confirmDisabled={!renameValue.trim() || remoteRenameBusy}
+        onConfirm={commitRemoteRename}
       >
         <Input
           value={renameValue}

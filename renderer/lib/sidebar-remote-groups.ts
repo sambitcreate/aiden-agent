@@ -17,6 +17,7 @@ import {
   type SidebarProjectGrouping,
   type SidebarProjectSummary,
 } from "./sidebar-organization";
+import type { HostChatCapability } from "./hosts/host-chat-adapter";
 
 /**
  * Remote adapter for the sidebar projection: maps each paired host's
@@ -59,6 +60,32 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   /** The host reports that the chat's newest output is a failed turn (revision 36). */
   lastRunFailed: boolean;
   stale: boolean;
+  /** The host's chat revision, which a rename must name. Absent from older hosts. */
+  revision?: string;
+}
+
+/** One action a remote chat row offers, in menu order. */
+export interface RemoteChatRowAction {
+  id: "open" | "markRead" | "rename";
+  /** Shown but unavailable: the host is offline, so its rows are last-known. */
+  disabled: boolean;
+}
+
+/**
+ * The actions a remote chat row offers, limited to what this Mac's client for
+ * that host supports. Open always works (an offline chat opens its last-known
+ * transcript). Mark read needs the host's read-state grant and unseen output.
+ * Rename needs chat write access and the chat's revision. Delete and Rename
+ * with Apple stay in the open chat, where the host's full state is loaded.
+ */
+export function remoteChatRowActions(
+  chat: RemoteSidebarChat,
+  capabilities: ReadonlySet<HostChatCapability>,
+): RemoteChatRowAction[] {
+  const actions: RemoteChatRowAction[] = [{ id: "open", disabled: false }];
+  if (chat.unread && capabilities.has("markRead")) actions.push({ id: "markRead", disabled: chat.stale });
+  if (chat.revision && capabilities.has("rename")) actions.push({ id: "rename", disabled: chat.stale });
+  return actions;
 }
 
 export function isRemoteSidebarProject(project: SidebarProjectSummary): project is RemoteSidebarProject {
@@ -201,6 +228,7 @@ export function remoteSidebarRows(
     const hostUnread = typeof row.unread === "boolean" ? row.unread : run?.unread === true;
     const unread = !isOpen(host.id, row.id) && hostUnread;
     const lastRunFailed = row.lastRunFailed === true;
+    const revision = text(row, "revision");
     return [
       {
         key: projectOrderKey(host.id, row.id),
@@ -218,6 +246,7 @@ export function remoteSidebarRows(
         unread,
         lastRunFailed,
         stale,
+        ...(revision ? { revision } : {}),
       },
     ];
   });

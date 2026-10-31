@@ -846,6 +846,7 @@
         "renderer/components/btw-card.test.tsx",
         "renderer/components/chat-row-context.test.tsx",
         "renderer/components/chat-row-status.test.tsx",
+        "renderer/components/sidebar/chat-row.test.tsx",
         "renderer/components/chat-find-bar.test.tsx",
         "renderer/components/keyboard-shortcuts-dialog.test.tsx",
         "renderer/components/chat-sidebar.test.tsx",

@@ -109,7 +109,7 @@ test("workspace outline expands groups without creating or opening chats", () =>
   const sidebar = source("./chat-sidebar.tsx");
   assert.match(sidebar, /useAllRegularChats\(workspaces\.length > 0\)/u);
   assert.match(sidebar, /expandedWorkspaceIds\.has\(workspace\.id\)/u);
-  assert.match(sidebar, /onClick=\{\(\) => toggleWorkspace\(workspace\.id\)\}/u);
+  assert.match(sidebar, /onToggle=\{\(\) => toggleWorkspace\(workspace\.id\)\}/u);
   assert.doesNotMatch(
     between(sidebar, "const toggleWorkspace", "const revealWorkspace"),
     /chatsApi\.create|navigate\(/u,
@@ -139,9 +139,9 @@ test("workspace actions and destructive confirmations disambiguate duplicate nam
 test("sidebar overflow menus open beyond the sidebar's right edge", () => {
   const sidebar = source("./chat-sidebar.tsx");
   const overflowMenu = between(
-    sidebar,
+    source("./sidebar/sidebar-overflow-menu.tsx"),
     "function SidebarOverflowMenu",
-    "\n}\n\nfunction updateRestartError",
+    "\n}\n",
   );
 
   assert.match(overflowMenu, /closest<HTMLElement>\("\[data-sidebar\]"\)/u);
