@@ -484,3 +484,54 @@ test("a host that was unpaired while its Bot was open says so, instead of blamin
   assert.ok(await screen.findByText("This device isn't paired anymore"));
   assert.equal(screen.queryByText("Bot not found"), null);
 });
+
+const PIXEL = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/** A host that sends this Mac its Bot's shared images (revision 45); `image` answers each byte read. */
+function sharedImageSession(image: (operation: PeerOperation) => unknown) {
+  return {
+    "remote:peerCall": (_hostId: unknown, operation: unknown) => {
+      const call = operation as PeerOperation;
+      if (call.operation === "botSession")
+        return {
+          ok: true,
+          value: {
+            ...SESSION,
+            entries: [
+              ...SESSION.entries,
+              { type: "shared_image", id: "img_1", name: "dentist-map.png", mimeType: "image/png", size: PIXEL.byteLength },
+            ],
+          },
+        };
+      if (call.operation === "botSessionImage") return image(call);
+      return { ok: false, error: { code: "failed", message: `unexpected ${call.operation}` } };
+    },
+  };
+}
+
+test("an image a Bot on another Mac shared draws here once its bytes are read from that Mac", async () => {
+  const { peerCalls } = await mount(
+    { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
+    sharedImageSession(() => ({ ok: true, value: { mimeType: "image/png", bytes: new Uint8Array(PIXEL) } })),
+  );
+  const image = (await screen.findByRole("img", { name: "dentist-map.png" })) as HTMLImageElement;
+  assert.equal(image.getAttribute("src"), `data:image/png;base64,${PIXEL.toString("base64")}`);
+  assert.deepEqual(
+    peerCalls()
+      .filter((call) => call.operation === "botSessionImage")
+      .map((call) => [call.resourceId, call.itemId]),
+    [["bot_1", "img_1"]],
+  );
+});
+
+test("a shared image whose bytes cannot be read from the other Mac says what it was instead", async () => {
+  await mount(
+    { ...HOST, capabilities: [...HOST.capabilities, "bot:images"] },
+    sharedImageSession(() => ({ ok: false, error: { code: "not_found", message: "This image is no longer in the Bot's chat." } })),
+  );
+  assert.ok(await screen.findByText(/I shared an image: dentist-map\.png\. Open this chat on its Mac to see it\./));
+  assert.ok(!screen.queryByRole("img", { name: "dentist-map.png" }), "no image drawn");
+});

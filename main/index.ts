@@ -129,6 +129,7 @@ import {
 } from "./services/git.js";
 import { reconcilePendingManagedWorktreeDeletions } from "./services/managed-worktree-deletion-recovery.js";
 import { reconcilePendingChatDeletions } from "./services/chat-deletion-reconciliation.js";
+import { workspaceApplicationService } from "./services/workspace-application-service-main.js";
 import { EmptyChatMigrationSnapshotError } from "./services/empty-chat-migration.js";
 import { migrateLegacyEmptyWorkspaceChats } from "./services/empty-chat-migration-main.js";
 import { ensureUserDataDir } from "./services/data-store.js";
@@ -2258,6 +2259,10 @@ if (!ownsSingleInstanceLock) {
         await piRuntimeEffectStore.deleteChat(chatId);
         await piCompactionSessionStore.deleteChat(chatId);
         await chatStore.remove(chatId);
+      });
+      // After deletions settle and before any renderer draft exists.
+      await workspaceApplicationService.prepareNoWorkspaceChats().catch((error: unknown) => {
+        logger.warn("workspace", "No workspace chats could not be prepared; they keep their current folders.", error);
       });
       await startDesignStudio({
         enabled: designStudioEnabled(),

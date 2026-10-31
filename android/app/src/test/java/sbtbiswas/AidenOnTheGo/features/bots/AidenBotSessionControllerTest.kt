@@ -2320,6 +2320,47 @@ class AidenBotSessionControllerTest {
         assertFalse(controller.state.value.outbox.single().unheld)
     }
 
+    // A message taken on an earlier visit can have its entry beyond the window a snapshot carries.
+    // Coming back, it never sits at the bottom as Sent for the grace; one sent on this visit still waits it out.
+    @Test
+    fun aMessageTakenOnAnEarlierVisitThatTheMacNoLongerShowsDoesNotFlashBack() = runTest {
+        val sessions = AidenBotSessionStore(null, io = { it.run() })
+        val transport = FakeTransport(runningSession)
+        transport.receiptIds += "21"
+        val first = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        first.refetch()
+        runCurrent()
+        assertTrue(first.send("Plan lunch"))
+        runCurrent()
+        assertEquals(AidenBotOutgoingStatus.SENT, first.state.value.outbox.single().status)
+        first.stopFollowing()
+        runCurrent()
+
+        val next = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        assertEquals("it waits for the Mac's word", listOf("Plan lunch"), next.state.value.outgoing.map { it.text })
+        next.refetch()
+        runCurrent()
+        assertTrue("nothing on the Mac shows it: no Sent bubble", next.state.value.outgoing.isEmpty())
+        next.stopFollowing()
+        runCurrent()
+
+        // Open again before its grace ran out: it stays hidden while connecting.
+        val third = AidenBotSessionController(
+            runningSession.botId, transport, backgroundScope, activitySupported = true, sessionKey = chatKey, store = sessions
+        )
+        assertTrue(third.state.value.outgoing.isEmpty())
+        // The Mac lists it after all: its own Queued bubble stands for it, with no copy beside it.
+        val queued = AidenBotQueuedMessage("21", AidenStreamInputMode.QUEUE, "Plan lunch")
+        third.handle(snapshotOf(runningSession.copy(seq = runningSession.seq + 1, queued = listOf(queued))))
+        assertEquals("21", third.state.value.outbox.single().queuedId)
+        assertEquals(listOf(queued), third.state.value.queued)
+        assertTrue(third.state.value.outgoing.isEmpty())
+    }
+
     // Controller polish: a frozen request refused for the Bot's state keeps its key for Try again.
     @Test
     fun aFrozenMessageTheBotCantTakeKeepsItsKey() = runTest {

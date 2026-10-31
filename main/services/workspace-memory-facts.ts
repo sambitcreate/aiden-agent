@@ -2,7 +2,7 @@
 // person delete a fact. It reads the same scope chats use (memory-context.ts),
 // so what is listed here is exactly what a chat in that workspace can recall.
 
-import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { DEFAULT_CHAT_WORKSPACE_ID, persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { sharedWorkspaceScopeId } from "./memory-shared.js";
 import type { MemoryFact, MemoryScope } from "./memory-store.js";
 
@@ -18,7 +18,7 @@ export interface WorkspaceMemoryFactView {
 }
 
 export interface WorkspaceMemoryFactsDeps {
-  getWorkspace(id: string): Promise<{ id: string; folderPath?: string } | null | undefined>;
+  getWorkspace(id: string): Promise<{ id: string; folderPath?: string; noWorkspace?: true } | null | undefined>;
   store: {
     list(scope: MemoryScope): Promise<MemoryFact[]>;
     remove(scope: MemoryScope, id: string): Promise<boolean>;
@@ -37,6 +37,8 @@ export function createWorkspaceMemoryFacts(deps: WorkspaceMemoryFactsDeps) {
   const scopeFor = async (workspaceId: unknown): Promise<MemoryScope> => {
     const workspace = await deps.getWorkspace(requireId(workspaceId, "workspace"));
     if (!workspace) throw new Error("This workspace no longer exists.");
+    // All No workspace chats share the default workspace's memory (see memoryScopeForChat).
+    if (workspace.noWorkspace) return { kind: "workspace", id: DEFAULT_CHAT_WORKSPACE_ID };
     return workspace.folderPath
       ? { kind: "workspace", id: sharedWorkspaceScopeId(workspace.folderPath) }
       : { kind: "workspace", id: persistedChatWorkspaceId(workspace.id) };

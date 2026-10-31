@@ -150,6 +150,8 @@ import {
   type ApprovalPrompt,
   type GenerationHandle,
 } from "../lib/ipc";
+import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
   installAppendedChatSnapshot,
@@ -1960,12 +1962,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
+        /** Set when this No workspace draft is saved in a fresh hidden folder. */
+        let separateNoWorkspaceId: string | undefined;
         try {
+          if (firstDraft && !worktreeRequest) {
+            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
+            if (isNoWorkspace(draftWorkspace)) {
+              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
+                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+                draftWorkspace!.id,
+              );
+              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+            }
+          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: firstDraft.chat.workspaceId!,
+                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2082,7 +2096,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // into an unsent composer payload.
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
-        if (worktreeRequest) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        // A No workspace draft that needed its own folder was saved in a fresh one.
+        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2110,6 +2125,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      workspaces,
     ],
   );
 
@@ -2551,11 +2567,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(effectiveWorkspace.id, { permission });
+      let targetId = effectiveWorkspace.id;
+      // A No workspace draft shares its folder with an existing chat until it
+      // is sent. Give it its own folder now so that chat keeps its access.
+      if (getChatDraft(chatId) && isNoWorkspace(effectiveWorkspace)) {
+        const separateId = await noWorkspaceFolderForFirstSend(
+          { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+          effectiveWorkspace.id,
+        );
+        if (separateId) {
+          updateChatDraft(chatId, { workspaceId: separateId });
+          selectWorkspace(separateId);
+          targetId = separateId;
+        }
+      }
+      await workspacesApi.update(targetId, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
-          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+          queryKey: queryKeys.skillCatalog(targetId),
         }),
       ]);
     },
@@ -2568,6 +2598,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
       qc,
+      selectWorkspace,
     ],
   );
 
@@ -2798,6 +2829,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     qc,
     workspaceChangeBusy,
   ]);
+
+  // The workspace menu's No workspace: the draft joins the Chats group. It
+  // gets its own hidden folder when sent (see noWorkspaceFolderForFirstSend).
+  const chooseNoWorkspace = React.useCallback(async () => {
+    let home = noWorkspaceHome(workspaces);
+    if (!home) {
+      home = await workspacesApi.createNoWorkspace();
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    }
+    await moveNewChatToWorkspace(home.id);
+  }, [moveNewChatToWorkspace, qc, workspaces]);
 
   // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
   // picker registers the folder, then this draft (text, attachments and model
@@ -3731,6 +3773,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onChooseNoWorkspace={chooseNoWorkspace}
                 onOpenFolderAsWorkspace={openFolderForDraft}
                 workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}
