@@ -3,7 +3,10 @@
 export const CLI_COMMAND_HELP = `Aiden commands:
   serve [--no-remote] [--pair lan|tailscale|--no-pair] [--daemon] | stop | status
                                             Server for phones and other clients (Remote on by default)
+  service install [--network local|tailscale|both] [--no-pair] | uninstall | status
+                                            Run the server at login and boot (systemd or launchd)
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
+  remote network local|tailscale|both        Who can reach the server; Tailscale is set up for you
   auth list|login|logout                     Provider credentials (OAuth or API key)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   workspace list|add|remove|access|scratch    Workspace registry and tool approval tiers

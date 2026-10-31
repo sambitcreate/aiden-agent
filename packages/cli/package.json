@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "node scripts/patch-branding.mjs && node scripts/build.mjs",
-    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/extensions.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs",
+    "test": "node --test tests/bundle.test.mjs tests/runtime.test.mjs tests/extensions.test.mjs tests/parity.test.mjs tests/serve-startup.test.mjs tests/service.test.mjs",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

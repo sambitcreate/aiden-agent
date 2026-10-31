@@ -98,33 +98,52 @@ function withTailscaleSetupMessage(error: unknown): Error {
   return setup ? new Error(setup, { cause: error }) : error instanceof Error ? error : new Error(message);
 }
 
-type TailscalePairingService = Pick<AidenRemoteService, "status" | "setConnectionMode" | "connectTailscale" | "beginPairing">;
+type TailscaleTransportService = Pick<AidenRemoteService, "status" | "setConnectionMode" | "connectTailscale">;
+type TailscalePairingService = TailscaleTransportService & Pick<AidenRemoteService, "beginPairing">;
 
 /**
- * Pair over Tailscale, first preparing the transport when it is not ready:
- * check the node, add Tailscale to the connection mode (LAN keeps working),
- * and connect Serve through the ownership-safe operation. A route someone
- * else owns is never replaced; that needs the explicit review and takeover.
- * A mode this call added is put back when the route cannot be connected.
+ * Make Tailscale reachable, in `mode` when given, otherwise next to LAN:
+ * check the node, set the connection mode, and connect Serve through the
+ * ownership-safe operation. A route someone else owns is never replaced;
+ * that needs the explicit review and takeover. A mode this call changed is
+ * put back when the route cannot be connected.
  */
-export async function beginTailscalePairing(service: TailscalePairingService, tailscale: Pick<AidenRemoteTailscaleController, "status">) {
+export async function connectTailscaleTransport(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, mode?: "tailscale" | "both") {
   const before = await service.status();
+  const target = mode ?? (before.connectionMode === "lan" ? "both" : before.connectionMode);
+  if (before.tailscaleConnected && before.connectionMode === target) return;
   if (!before.tailscaleConnected) {
     const node = await tailscale.status();
     const blocked = !node.installed ? "tailscale_not_installed" : node.errorCode ? `tailscale_${node.errorCode}`
       : !node.dnsName ? "tailscale_not_connected" : node.httpsAvailable !== true ? "tailscale_https_unavailable" : undefined;
     if (blocked) throw withTailscaleSetupMessage(blocked);
-    const addedMode = before.connectionMode === "lan";
-    try {
-      if (addedMode) await service.setConnectionMode("both");
-      await service.connectTailscale();
-      if ((await service.status()).tailscaleErrorCode === "permission_denied") throw new Error("tailscale_permission_denied");
-    } catch (error) {
-      if (addedMode) await service.setConnectionMode("lan").catch(() => undefined);
-      throw withTailscaleSetupMessage(error);
-    }
   }
+  const changed = before.connectionMode !== target;
+  try {
+    if (changed) await service.setConnectionMode(target);
+    if (!(await service.status()).tailscaleConnected) await service.connectTailscale();
+    if ((await service.status()).tailscaleErrorCode === "permission_denied") throw new Error("tailscale_permission_denied");
+  } catch (error) {
+    if (changed) await service.setConnectionMode(before.connectionMode).catch(() => undefined);
+    throw withTailscaleSetupMessage(error);
+  }
+}
+
+/** Pair over Tailscale, first preparing the transport when it is not ready. */
+export async function beginTailscalePairing(service: TailscalePairingService, tailscale: Pick<AidenRemoteTailscaleController, "status">) {
+  await connectTailscaleTransport(service, tailscale);
   try { return await service.beginPairing("tailscale"); } catch (error) { throw withTailscaleSetupMessage(error); }
+}
+
+/** Who can reach this server: the local network only, Tailscale only, or both. */
+export type RemoteNetwork = "local" | "tailscale" | "both";
+export const REMOTE_NETWORKS: readonly RemoteNetwork[] = ["local", "tailscale", "both"];
+
+/** Switch the server to `network`. Local only also removes Aiden's own Tailscale Serve route. */
+export async function setRemoteNetwork(service: TailscaleTransportService, tailscale: Pick<AidenRemoteTailscaleController, "status">, network: RemoteNetwork) {
+  if (network === "local") await service.setConnectionMode("lan");
+  else await connectTailscaleTransport(service, tailscale, network);
+  return service.status();
 }
 
 /** Shared protocol services retain their own identity, revision and authorization checks. */
@@ -211,13 +230,14 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         case "roots": return (await state.snapshot()).approvedRoots.map(({ id, label }) => ({ id, label }));
         case "approve-root": return roots.addLocalFolder(value, { confirmHomeDirectory: args[2] === "--entire-home" });
         case "remove-root": return roots.removeLocalRoot(value);
+        case "network": { if (!REMOTE_NETWORKS.includes(value as RemoteNetwork)) throw new Error("Usage: remote network local|tailscale|both"); return setRemoteNetwork(service, tailscale, value as RemoteNetwork); }
         case "mode": { if (!["lan", "tailscale", "both"].includes(value)) throw new Error("Usage: remote mode lan|tailscale|both"); await service.setConnectionMode(value as "lan" | "tailscale" | "both"); return service.status(); }
         case "tailscale-connect": await service.connectTailscale(); return service.status();
         case "tailscale-disconnect": await service.disconnectTailscale(); return service.status();
         case "tailscale-review": return service.reviewTailscaleTakeover();
         case "tailscale-takeover": await service.takeOverTailscale(value); return service.status();
         case "tailscale-reconcile": await service.reconcileTailscale(); return service.status();
-        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|mode lan|tailscale|both|tailscale-connect|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
+        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
       }
     },
   };

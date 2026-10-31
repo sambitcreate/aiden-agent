@@ -57,3 +57,4 @@ export { cliDurableBotToolContext } from "./bot-durable.ts";
 export { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 export { capturePersistedSubagentContext } from "../../../main/services/subagents/forked-context.js";
 export { createAdvisorInlineExtension } from "./extensions/advisor.ts";
+export { installService, launchdPlist, parseInstallFlags, serviceFile, serviceStatus, systemdUnit, uninstallService } from "./service.ts";

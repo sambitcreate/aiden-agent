@@ -70,7 +70,33 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 
 Each lease holds an OS lock on a permanent `*.lease.lock` guard. Process death releases the lock; owner JSON is diagnostic and stale metadata is cleaned only under the guard. Never delete or replace guard files. Stop old `aiden` processes and daemons before upgrading a shared agent directory, because old binaries do not use this guard. Each server needs its own agent directory.
 
-Starting the server at boot (a launchd or systemd unit) is not built in yet; until it is, use your own unit that runs `aiden serve --no-pair`, or `aiden serve --daemon` from a login script.
+## Running the server as a service
+
+```bash
+aiden service install
+```
+
+`aiden service install` keeps the server running after you close the SSH session and starts it again after a reboot. It asks who should be able to reach the server:
+
+1. **Local network only:** phones on the same Wi-Fi or LAN. Pairing needs `<hostname>.local` to resolve, as described under Pairing over the local network.
+2. **Tailscale only:** your devices from anywhere on your tailnet. The install sets Tailscale up the same way `aiden remote pair tailscale` does, and the local network listener stops answering.
+3. **Both.**
+
+Pass `--network local|tailscale|both` to skip the question (the default without a terminal is `local`). If Tailscale can't be set up, the install says what to do next and keeps the server on the network it had. Once the server is running, the install shows a pairing code in the terminal; `--no-pair` skips it, and Ctrl-C stops waiting without stopping the server.
+
+- **Linux** gets a systemd user unit, `~/.config/systemd/user/aiden.service`, that runs `aiden serve --no-pair`. It turns on lingering (`loginctl enable-linger`) so the server starts at boot without a login; when that needs root, it tells you to run `sudo loginctl enable-linger $USER` once. Run the install as the server's user over SSH (not through `su` or `sudo`), because systemd user services need that user's session. Logs: `journalctl --user -u aiden`.
+- **macOS** gets a LaunchAgent, `~/Library/LaunchAgents/com.sambitcreate.aiden-agent.serve.plist`, that runs while you are logged in. On a Mac without a screen, turn on automatic login. Logs go to `<agentDir>/serve.log`.
+
+The service runs the built `dist/app/cli.js` of this checkout with the current Node, `PATH` and agent directory, so run `aiden service install` again after moving the checkout or changing Node. A server already started with `aiden serve` or `--daemon` is stopped first, so the service can take it over.
+
+| Command | What it does |
+| --- | --- |
+| `aiden service install [--network local\|tailscale\|both] [--no-pair]` | Install (or reinstall) and start the service |
+| `aiden service status` | Whether the service is installed and running, and where its logs are |
+| `aiden service uninstall` | Stop the service and remove it |
+| `aiden remote network local\|tailscale\|both` | Change who can reach a running server; Tailscale is set up for you |
+
+`aiden serve stop` stops the server without removing the service; it starts again at the next boot or login.
 
 ## What paired devices get
 
@@ -113,7 +139,9 @@ Server chats have no schedule tool, so the model can't create or change schedule
 | Command | Purpose |
 | --- | --- |
 | `serve [--no-remote] [--daemon] [--pair lan\|tailscale] [--no-pair]`, `serve stop\|status` | Run, background, inspect or stop the server |
+| `service install [--network local\|tailscale\|both] [--no-pair]\|uninstall\|status` | Run the server at login and boot (systemd or launchd) |
 | `remote status\|devices\|pair lan\|tailscale\|pair-status\|pair-cancel <id>\|revoke <id>\|roots\|approve-root <path>` | Pairing and paired-device administration (server must be running) |
+| `remote network local\|tailscale\|both` | Who can reach the server; Tailscale is set up for you (server must be running) |
 | `auth list\|login\|logout` | Provider credentials (OAuth or API key) |
 | `workspace list\|add\|remove\|access\|scratch` | Workspace registry and tool access tiers |
 | `mcp list\|presets\|add\|preset\|login\|logout\|remove` | MCP connectors and their OAuth sign-ins |
