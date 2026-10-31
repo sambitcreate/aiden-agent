@@ -177,6 +177,18 @@ export class FormFillRuntime {
     }
   }
 
+  /**
+   * App quit: kill the helper now instead of waiting for an in-flight compile
+   * or load (up to minutes) to finish. The runtime stays closed afterwards.
+   */
+  dispose(): void {
+    this.lifecycle.abort();
+    this.client?.dispose();
+    this.client = null;
+    this.compiled = null;
+    this.preparation = null;
+  }
+
   async shutdown(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.lifecycle.abort();

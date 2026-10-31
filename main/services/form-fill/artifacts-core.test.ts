@@ -357,6 +357,56 @@ test("concurrent runtime preparation compiles once and shutdown fences late comp
   }
 });
 
+test("disposing the runtime at quit stops the helper without waiting for a running compile", async () => {
+  const { FormFillRuntime } = await import("./runtime.js");
+  const { FormFillHelperError } = await import("./helper-client.js");
+  const root = makeTemp();
+  let started!: () => void;
+  const compiling = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let failCompile!: (error: Error) => void;
+  let disposed = 0;
+  const client = {
+    isPoisoned: false,
+    dispose() {
+      disposed++;
+      // Killing the helper fails whatever it was working on.
+      failCompile(new FormFillHelperError("transport", "closed"));
+    },
+    compileModel() {
+      started();
+      // A first-use compile that would run for minutes.
+      return new Promise<string>((_resolve, reject) => {
+        failCompile = reject;
+      });
+    },
+    async loadModel() {},
+    async shutdown() {
+      throw new Error("quit must not wait on a graceful helper shutdown");
+    },
+  } as unknown as import("./helper-client.js").FormFillHelperClient;
+  const runtime = new FormFillRuntime(
+    new FormFillArtifactStore({ rootDir: path.join(root, "source") }),
+    {
+      clientFactory: () => client,
+      supported: () => ({ supported: true }),
+      verifyPackage: async () => null,
+    },
+  );
+  try {
+    const ready = runtime.ensureReady();
+    const rejected = assert.rejects(ready);
+    await compiling;
+    runtime.dispose();
+    await rejected;
+    assert.equal(disposed, 1);
+    await assert.rejects(runtime.ensureReady(), "the runtime stays closed after quit");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("removal immediately hides readiness and a prior refresh cannot resurrect it", async () => {
   const root = makeTemp();
   writeTestTree(root);

@@ -684,7 +684,7 @@ export class PeerHostManager {
     const reason = blockedReason(error);
     sup.failure = error instanceof PeerTransportError && error.code === "invalid_response"
       ? "invalid_response"
-      : "unreachable";
+      : error instanceof PeerTransportError ? error.failure ?? "unreachable" : "unreachable";
     if (reason) {
       this.transition(sup, { kind: "blocked", reason });
     } else {

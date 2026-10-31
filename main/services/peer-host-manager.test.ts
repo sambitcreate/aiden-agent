@@ -486,6 +486,22 @@ test("a pin or identity mismatch blocks without retrying and only re-enabling cl
   }
 });
 
+test("transport failure categories survive supervision and clear after successful synchronization", async () => {
+  const host = new FakeHost("host_a", "Plans");
+  host.server = () => { throw new PeerTransportError("unavailable", undefined, undefined, "dns"); };
+  const harness = setup([host]);
+  try {
+    await harness.manager.whenReady();
+    await settle();
+    assert.equal(harness.status("host_a").state.kind, "backoff");
+    assert.equal(harness.status("host_a").failure, "dns");
+    host.server = () => ({ protocolVersion: 1, instanceId: "host_a", capabilities: CAPABILITIES, features: FEATURES });
+    await harness.advance(3_000);
+    assert.equal(harness.status("host_a").state.kind, "connected");
+    assert.equal(harness.status("host_a").failure, undefined);
+  } finally { harness.close(); }
+});
+
 test("reconnects back off 3, 4, 8, 16 and 30 seconds and reset after 30 seconds connected", async () => {
   const host = new FakeHost("host_a", "Plans");
   host.server = () => {

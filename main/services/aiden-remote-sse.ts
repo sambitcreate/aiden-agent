@@ -17,8 +17,12 @@ export interface CursorSseOptions {
    * as frames are returned; an empty batch means "caught up, wait for wake".
    */
   pull(): CursorSsePull;
-  /** Called exactly once when the connection ends for any reason. */
-  onClose(): void;
+  /**
+   * Called exactly once when the connection ends for any reason. `finished`
+   * is true only when a clean `end` was fully flushed to the socket, so a
+   * source can tell confirmed delivery from a disconnect, error or timeout.
+   */
+  onClose(finished: boolean): void;
   /** Extra response headers (for example an epoch header). */
   headers?: Record<string, string>;
   heartbeatMs?: number;
@@ -45,7 +49,7 @@ export function sseFrame(id: string | undefined, event: string, data: unknown): 
 }
 
 /**
- * Wake-then-read SSE pump shared by the host feed and run streams. The
+ * Wake-then-read SSE pump shared by every Remote event stream. The
  * source journal is the only queue: the pump pulls one bounded batch at a
  * time and stops pulling while Node's writable buffer is blocked, so a slow
  * client costs bounded journal memory and never back-pressure on the source.
@@ -64,16 +68,17 @@ export function openCursorSse(
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let drainTimeout: ReturnType<typeof setTimeout> | undefined;
 
-  const cleanup = () => {
+  const cleanup = (finished = false) => {
     if (closed) return;
     closed = true;
     clearInterval(heartbeat);
     clearTimeout(drainTimeout);
-    response.off("close", cleanup);
+    response.off("close", onCloseEvent);
     response.off("error", abort);
     response.off("drain", onDrain);
+    response.off("finish", onFinish);
     try {
-      options.onClose();
+      options.onClose(finished);
     } catch {
       // Source bookkeeping must not keep a dead connection alive.
     }
@@ -82,10 +87,14 @@ export function openCursorSse(
     cleanup();
     response.destroy();
   };
+  const onCloseEvent = () => cleanup();
+  const onFinish = () => cleanup(true);
   const end = () => {
     if (closed || ending) return;
     ending = true;
-    response.once("finish", cleanup);
+    response.once("finish", onFinish);
+    // A frame in the final batch may have blocked; one timer covers both.
+    clearTimeout(drainTimeout);
     drainTimeout = setTimeout(abort, drainTimeoutMs);
     drainTimeout.unref?.();
     try {
@@ -149,9 +158,16 @@ export function openCursorSse(
     drainTimeout = undefined;
     wake();
   };
-  response.once("close", cleanup);
+  response.once("close", onCloseEvent);
   response.once("error", abort);
   response.on("drain", onDrain);
+  // Callers await authorization and refreshes first. A client that dropped
+  // meanwhile already emitted "close", so release its slot now instead of at
+  // the first failed heartbeat.
+  if (response.destroyed || response.writableEnded) {
+    cleanup();
+    return { wake, close: abort, get closed() { return closed; } };
+  }
   try {
     response.writeHead(200, {
       "aiden-protocol-version": String(AIDEN_REMOTE_PROTOCOL_VERSION),

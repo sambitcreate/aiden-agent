@@ -125,6 +125,8 @@ Server chats have no schedule tool, so the model can't create or change schedule
 
 ## MCP connectors
 
+The desktop's per-workspace skill and connector switches (Workspace settings) are not read by the server yet; it uses every skill and connector it has.
+
 `aiden-mcp.json` and the `aiden mcp` commands are the server's only MCP configuration. Pi's native `mcp.json` (`mcpServers` object) and its plaintext `mcp-auth.json` are never read and native servers are not started; native entries are not migrated, so add them again with `aiden mcp add`. An older Aiden array configuration in `mcp.json` still migrates to `aiden-mcp.json`, with an exact private backup in `mcp.pre-pi-1.json`. The source inode is retained under a private `.mcp-migration-*/mcp.json` recovery directory so concurrent writers cannot lose their data. A native object configuration is never migrated or overwritten, and conflicting legacy/new Aiden inventories stop with a reconciliation error.
 
 `aiden mcp presets`, `mcp preset <id>`, `mcp add <file>`, `mcp login <id>`, `mcp logout <id>`, `mcp list` and `mcp remove <id>` configure connectors. `mcp presets` lists the desktop's connector catalog (`renderer/shared/connector-catalog.ts`) except connectors served by a Mac app (iMCP), which are set up in the desktop app on a Mac; a connector marked unavailable there (hosted Figma) is refused by `mcp preset`, as is `imcp`, and `figma-desktop` connects to the Figma desktop app's local server without a sign-in. The server runs the desktop's MCP client, transports and OAuth provider (`main/services`, on `@earendil-works/pi-mcp`). Tool schemas are paginated, bounded and rechecked before execution; failed servers do not silently gain tools.
@@ -180,9 +182,12 @@ Notes:
 | `~/.aiden/` | Shared Aiden home (the desktop's portable `config.json`, `skills/`, `scripts/`; `memory/` is the shared desktop and server memory store, `ws-<folder-hash>` scopes) |
 | `AIDEN_CODING_AGENT_DIR` | Environment override for the agent directory (mirrors Pi's `PI_CODING_AGENT_DIR`; use it for tests and for running more than one server) |
 
+New Memory databases support bounded incremental space reclamation on open and close. Existing databases keep their format. See [SQLite storage maintenance](../../docs/sqlite-storage.md).
+
 ## Privacy and network
 
 - **No telemetry.** The server ships without Pi telemetry, enforced three ways: the entry forces `PI_TELEMETRY=0` (which gates both the pi.dev `report-install` ping and Pi's attribution headers, and overrides settings), the settings default is off, and the build patches the ping's call sites and endpoint out of the bundle, asserted by `tests/bundle.test.mjs`. The shared desktop runtime and durable Bots, which don't read that switch, set their own request identity with no attribution (`main/services/pi-client-identity.ts`). The entry also turns off pi.dev's version feed (`PI_SKIP_VERSION_CHECK=1`, overridable), because this package versions independently.
+- **No Aiden usage data.** The desktop app's opt-out usage data ([`docs/analytics.md`](../../docs/analytics.md)) does not apply to the server yet; when the server adopts it, it will follow the same event list, `DO_NOT_TRACK=1` and `AIDEN_ANALYTICS=0`.
 - **Manual-only catalogs.** models.dev, Artificial Analysis and OpenRouter benchmark data are fetched only by the explicit `aiden catalog models-dev fetch` and `aiden insights aa|openrouter fetch` commands, never on startup or in the background, and the fetched data is display-only. Speech models download only with `aiden speech download`.
 - **Remote.** Paired devices authenticate to the server's own TLS identity. Tailscale is used only after you choose it for pairing.
 
