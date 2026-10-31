@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { closeRendererBeforeShutdown, type RendererQuitWindow, withDeadline } from "./quit-barrier.js";
+import { closeRendererBeforeShutdown, joinInFlight, type RendererQuitWindow, withDeadline } from "./quit-barrier.js";
 
 class FakeQuitWindow extends EventEmitter implements RendererQuitWindow {
   readonly webContents = new EventEmitter();
@@ -136,4 +136,36 @@ test("withDeadline ignores a rejection that arrives after the deadline", async (
   assert.deepEqual(outcome, { status: "timed-out" });
   reject(new Error("late"));
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+test("a call made while a run is in flight waits for that run's outcome", async () => {
+  // Models the startup-failure path: destroying the last window starts the
+  // shutdown from before-quit, then the catch calls it again and checks
+  // whether Aiden really quit once it settles.
+  let started = false;
+  let release!: () => void;
+  const runs: boolean[] = [];
+  const shutdown = joinInFlight(async (settingsPrepared: boolean) => {
+    if (started) return;
+    started = true;
+    runs.push(settingsPrepared);
+    await new Promise<void>((resolve) => { release = resolve; });
+    started = false; // the shutdown gave up and Aiden stayed open
+  });
+
+  const first = shutdown(false);
+  let joinedSawStarted: boolean | undefined;
+  const joined = shutdown(true).then(() => { joinedSawStarted = started; });
+  await Promise.resolve();
+  assert.equal(joinedSawStarted, undefined, "the second caller waits instead of returning at once");
+  release();
+  await Promise.all([first, joined]);
+  assert.deepEqual(runs, [false], "only one shutdown ran");
+  assert.equal(joinedSawStarted, false, "the joined caller sees that the shutdown gave up");
+
+  // After it settles, a new call starts a fresh run.
+  const again = shutdown(true);
+  release();
+  await again;
+  assert.deepEqual(runs, [false, true]);
 });

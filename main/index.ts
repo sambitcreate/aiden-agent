@@ -62,7 +62,7 @@ import { spending } from "./services/spending-main.js";
 import { usageLimits } from "./services/usage-limit-main.js";
 import { computerUseStatus } from "./services/computer-use/status.js";
 import { computerUseSettings } from "./services/computer-use/settings.js";
-import { closeRendererBeforeShutdown, type DeadlineOutcome, withDeadline } from "./services/quit-barrier.js";
+import { closeRendererBeforeShutdown, type DeadlineOutcome, joinInFlight, withDeadline } from "./services/quit-barrier.js";
 import { disposeDictation, prepareDictationPill, toggleDictation } from "./services/dictation.js";
 import { disposeLocalSpeech } from "./services/local-speech.js";
 import { isPackagedRuntime } from "./runtime-mode.js";
@@ -476,7 +476,15 @@ function armShutdownCeiling(): () => void {
   return () => clearTimeout(timer);
 }
 
-async function shutdownAndQuit(settingsPrepared = false): Promise<void> {
+/**
+ * Start the application shutdown, or join the one already running. A caller
+ * that arrives while another path (for example `before-quit` after the last
+ * window was destroyed) is shutting down waits for that shutdown, so it sees
+ * whether Aiden actually quit or stayed open.
+ */
+const shutdownAndQuit = joinInFlight((settingsPrepared: boolean = false) => runShutdownAndQuit(settingsPrepared));
+
+async function runShutdownAndQuit(settingsPrepared: boolean): Promise<void> {
   if (shutdownStarted) return;
   shutdownStarted = true;
   llmClient.setQuitInProgress(true);
@@ -2627,9 +2635,10 @@ if (!ownsSingleInstanceLock) {
       if (!startupIpcAdmitted && mainWindow && !mainWindow.isDestroyed())
         mainWindow.destroy();
       void shutdownAndQuit().then(() => {
-        // shutdownAndQuit returns without quitting when Computer Use state
-        // cannot be saved. Startup already failed and no window is left, so
-        // exit rather than idle with nothing to show.
+        // Destroying the last window may already have started the shutdown
+        // from before-quit; this joins it. It returns without quitting when
+        // Computer Use state cannot be saved. Startup already failed and no
+        // window is left, so exit rather than idle with nothing to show.
         if (!shutdownStarted && (!mainWindow || mainWindow.isDestroyed())) app.exit(1);
       });
     });

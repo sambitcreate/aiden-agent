@@ -104,3 +104,22 @@ export function closeRendererBeforeShutdown(
     }, Math.max(0, deadlineMs));
   });
 }
+
+/**
+ * Wrap a run so a call made while one is in flight joins that run instead of
+ * starting (or silently skipping) another. Every caller then observes the same
+ * outcome. Once the run settles, the next call starts a fresh one.
+ */
+export function joinInFlight<A extends unknown[]>(
+  run: (...args: A) => Promise<void>,
+): (...args: A) => Promise<void> {
+  let inFlight: Promise<void> | undefined;
+  return (...args: A) => {
+    if (inFlight) return inFlight;
+    const current = run(...args).finally(() => {
+      if (inFlight === current) inFlight = undefined;
+    });
+    inFlight = current;
+    return current;
+  };
+}
