@@ -1087,6 +1087,7 @@
         "renderer/shared/bot-handoffs.test.ts",
         "main/handlers/bot-rules.test.ts",
         "renderer/main/bots/bot-rules.test.tsx",
+        "renderer/components/settings/bots-settings.test.tsx",
         "renderer/shared/bot-rules.test.ts",
         "main/handlers/bot-browser.test.ts",
         "renderer/main/bots/bot-browser-tab.test.tsx",
