@@ -149,7 +149,7 @@
     "pretest:bot-issues": "npm run build:lease-flock",
     "test:bot-issues": "tsx --test main/services/bot-issues/service.test.ts main/handlers/bot-issues.test.ts renderer/components/bots/bot-issue-card.test.tsx",
     "pretest:bot-rules": "npm run build:lease-flock",
-    "test:bot-rules": "tsx --test main/services/bot-rules/*.test.ts main/handlers/bot-rules.test.ts renderer/main/bots/bot-rules.test.tsx renderer/shared/bot-rules.test.ts",
+    "test:bot-rules": "tsx --test main/services/bot-rules/*.test.ts main/handlers/bot-rules.test.ts renderer/main/bots/bot-rules.test.tsx renderer/components/settings/bots-settings.test.tsx renderer/shared/bot-rules.test.ts",
     "pretest:bot-browser": "npm run build:lease-flock",
     "test:bot-browser": "tsx --test main/services/bot-runtime/bot-browser-tools.test.ts main/services/bot-runtime/bot-browser-handoff.test.ts main/services/renderer-document-owner.test.ts main/handlers/bot-browser.test.ts renderer/main/bots/bot-browser-tab.test.tsx",
     "pretest:bot-sign-in": "npm run build:lease-flock",

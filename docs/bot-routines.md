@@ -12,6 +12,8 @@ The Bot chat and routine run history keep completed answers. Desktop banners are
 
 The desktop app must be running and the computer awake for a routine to run on time. If the Bot has an interrupted turn, a routine never resumes that turn itself; Aiden records the missed fire and can catch up after the person resumes the turn. This includes a one-time routine whose scheduled fire has already switched it off; that exact missed fire can still run once within the seven-day catch-up window. If the person pauses the whole Bot, new fires are skipped without automatic catch-up. A fire already admitted to Pi remains pending until the Bot resumes so Aiden can observe its answer without resubmission. Ordinary scheduled tasks are separate from Bot routines and use their own chats and approval settings.
 
+Nobody is watching a routine run, so by default a step set to Ask first is skipped and the Bot says in its reply that it needs the person's OK, and a connection tool that changes something waits under **Needs you** until the person answers. On the desktop, Settings → Bots → **Go ahead without asking** lets every Bot's routines take those steps without asking. Passwords, codes, money, Hand off to me rules and Computer Use on the person's Mac still come back to the person. See [Bot rules](bot-rules.md#routines-that-go-ahead-settings--bots).
+
 ## Wake-ups a Bot sets for itself
 
 A Bot can also come back to its chat on its own, for example "I'll check whether the flight got rebooked in two hours". It uses the `wake_up` tool, which needs no approval card:
