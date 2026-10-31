@@ -28,7 +28,7 @@ Ten research passes looked at two reference apps and Aiden's current sidebar. Th
 | D2 | Default | **By workspace** stays the default. Inbox is opt-in and labelled Beta. |
 | D3 | Where the switch lives | In both Settings → Appearance → Sidebar (cards) and the sidebar's Organize menu → View. Both edit one stored value (see "One stored view"). |
 | D4 | Approvals and questions | They get their own "Needs you" section on top. |
-| D5 | Acting from a row | Approve and Deny work in place. The row shows the pending command or question in at most 2 lines. Reply opens the chat with the question focused. A text field inside the row is a Phase 2 option, and only if the row shape allows it. |
+| D5 | Acting from a row | Rows carry no Approve, Deny, Reply or Open Bot buttons and no request preview, which keeps every row two lines tall. A Needs you row shows a coloured status (Approval, Question, Failed, or Needs you for a Bot) and how long it has waited; the pending command or question is only in the row's tooltip. Clicking the row opens the chat or Bot, and the person approves, denies or answers there. |
 | D6 | Triage | Mark read ships in Phase 1. Done, Snooze and Pin ship in Phase 2. |
 | D7 | Running chats | A collapsible Working shelf pinned to the bottom, ordered by when each run started. |
 | D8 | Bots | A Bot appears only when it needs the person, a run failed, or it has an unread reply. This amends the unified sidebar plan's "Bots do not enter the outline" rule; the amendment applies only to the Inbox view. |
@@ -100,7 +100,7 @@ While the pointer is over the list or focus is inside it, rows keep their positi
 - New rows still appear, added to the end of their section.
 - State changes update a row's badge but don't move the row.
 - The held-back moves apply when the pointer and focus leave the list.
-- An action the person takes, such as Approve or Mark read, applies at once.
+- An action the person takes, such as opening a row or Mark read, places that row at once.
 
 Moves animate with FLIP for 150 ms, capped at 40 px. There's no animation under Reduce Motion or when more than 40 rows move at once.
 
@@ -141,20 +141,17 @@ The existing sidebar Playwright specs must pass unchanged.
 **1b. The Inbox view.**
 
 - Sections: Needs you, Updates, Earlier, plus the Working shelf. The shelf is collapsible, takes at most 40% of the sidebar height, scrolls on its own, and remembers whether it is collapsed.
-- Rich rows. A meta line shows `project · Mac · time`; the Mac part appears only when paired Macs exist. Needs you rows add the pending request in at most 2 lines, from `ChatActivityRegistry` for local chats.
+- Compact two-line rows, sized like OpenCode's Inbox: the whole row is one button with 6 px block padding and a 2 px gap; line 1 is 16 px tall in 12 px quaternary text (`project · Mac`, then the status or age at the end); line 2 is the title, 13 px on a 16 px line, medium weight when unread. Rows come out about 46 px. Section headers are 24 px. The Mac part appears only when paired Macs exist. Working rows dim to 75% opacity and show `Working {duration}`.
+- Status text in Needs you uses the soft semantic colours: Approval and Question in warning, Failed in danger. The tooltip carries the pending command, question or failure reason (from `ChatActivityRegistry` for local chats, the Remote summary for remote chats).
 - Freeze-while-in-use, and the FLIP rules above.
 - Empty state: "Nothing needs you".
 - Keyboard: the existing F6 and arrow-key sidebar navigation, plus ⌘1–9 over the visible rows in display order, remote rows included (`renderer/lib/sidebar-chat-shortcuts.ts`).
 
-**1c. Acting from a row.**
+**1c. Opening from a row.**
 
-New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, promptId, summary }`. The summary is capped at 200 characters and never includes file contents. Rows in Needs you show their actions instead of the status slot. The actions appear on hover and keyboard focus, and are always shown in Needs you.
+New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, summary }` for the status label and tooltip. The summary is capped at 200 characters and never includes file contents. Rows never send an approval or an answer.
 
-- **Approve / Deny**
-  - Local chats send through the existing approval responder with the `promptId` the row showed. If that prompt has been answered or replaced, nothing changes: the row refreshes, and a toast says it was already handled.
-  - Remote chats use `POST /runs/{runId}/approvals/{approvalId}/respond` where the host grants `runs:control`. First responder wins; on a `409 approval_resolved` the row shows who won. Without `runs:control`, the row shows **Open**.
-  - Always allow is never offered from a row.
-- **Reply** opens the chat and focuses the question card.
+- **Open.** Clicking a row, Enter on a focused row, or ⌘1–9 opens the chat or Bot. A chat waiting on an approval or a question scrolls to that card and focuses its first control, so Approve, Deny and the answer field are one keystroke away. Approve, Deny and Always allow keep their existing rules in the chat, for local and remote chats alike.
 - **Mark read** uses `chats:markRead` for local chats and `POST /chats/{chatId}/read` with `throughMessageId` for remote chats. It is available on Updates rows and from the ••• menu.
 
 **1d. Bots, Settings and docs.**
@@ -165,18 +162,18 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, p
   - `README.md` and `PRODUCT.md`: the Inbox view.
   - `docs/settings-design-system.md`: the "Chat width is the one Appearance layout preference" line, plus a new "Sidebar" section.
   - `docs/plans/README.md`: the status row.
-  - `docs/design-guide.md`, if the row action shape is new.
+  - `docs/design-guide.md`: the compact Inbox row and its hover-icon overlay.
 
 **Phase 1 tests.**
 
 - `sidebar-inbox.test.ts`.
-- A render test for the Inbox sections and row actions.
+- A render test for the Inbox sections, the status labels and the tooltip, and that Needs you rows render no action buttons.
 - A register-and-invoke test for `chats:pendingAttention` (it refuses unknown chat ids and caps summary length).
-- A Playwright spec run through `npm run test:e2e:space`: switch to Inbox, a chat asking for approval appears in Needs you, Approve from the row, the chat moves to Working, and ⌘1 opens the first row.
+- A Playwright spec run through `npm run test:e2e:space`: switch to Inbox, a chat asking for approval appears in Needs you, clicking the row opens the chat with the approval card focused, Approve there moves the chat to Working, and ⌘1 opens the first row.
 - Each new file is registered in `package.json` and `scripts/ci-test-registry.json`, then `npm run test:ci-policy` is run.
 - Screenshots of every new surface in light and dark go to the owner before approval.
 
-**Exit.** The owner uses the Inbox daily for a week, with no row jumping under the pointer and no wrong-prompt approvals.
+**Exit.** The owner uses the Inbox daily for a week, with no row jumping under the pointer and no opened chat that lands somewhere other than its pending card.
 
 ## Phase 2 — Triage and reach (Remote revision 48, additive, 3–4 PRs)
 
@@ -244,7 +241,7 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 Remove the Beta label once all of the following hold:
 
 - Phases 1 and 2 have shipped in a release.
-- No reported row-jump or wrong-prompt bugs are open.
+- No reported row-jump bugs are open.
 - Phones show the same buckets as the desktop.
 
 Whether Inbox becomes the default is a separate owner decision, made afterwards.
@@ -253,7 +250,7 @@ Whether Inbox becomes the default is a separate owner decision, made afterwards.
 
 | Risk | Mitigation |
 | --- | --- |
-| Approving the wrong command from a row | Every approval carries the `promptId` or `approvalId` the row showed. A stale id is refused. Always allow is never offered from a row. The full command is in the row's tooltip. |
+| Approving the wrong command from a row | Rows can't approve. Approvals happen only in the chat, where the existing `promptId` / `approvalId` checks apply. |
 | Rows moving under the pointer | Freeze-while-in-use, capped animation, and a Playwright check that moves are held back. |
 | Phase 1 times are window-local guesses | Labelled as such in code. Phase 2 replaces them with host times. Ordering degrades to `updatedAt`, never to a wrong section. |
 | Large hosts (up to 2,000 chats each) | `organizeInbox` is linear plus one sort per section, memoized on the inputs. Earlier is capped at 20 with Show more. |
