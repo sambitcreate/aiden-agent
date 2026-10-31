@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -251,6 +252,26 @@ test("a sweep that overlaps a delete does not use up the deleted chat's cleanup"
 
   const restarted = createChatStore(async () => directory);
   assert.equal((await restarted.sweepUnusedImages({ onlyWhenNeeded: true })).removed, 1);
+  assert.deepEqual(await imageFiles(directory), []);
+});
+
+test("a staging file left by an interrupted write is cleaned up once it is old enough", async (t) => {
+  const directory = await tempDir(t);
+  const { store, chatId } = await chatWithImage(directory);
+  const sha = imageSha256(PNG_BYTES);
+  await store.clearMessages(chatId);
+  await ageImageFiles(directory, 2 * DAY);
+  const staging = path.join(directory, CHAT_IMAGES_DIRECTORY, sha.slice(0, 2), `.${sha}.${randomUUID()}.tmp`);
+  await fs.writeFile(staging, PNG_BYTES);
+
+  // The unused image goes; the staging file is too young, so the cleanup
+  // request stays for a later pass.
+  const restarted = createChatStore(async () => directory);
+  assert.equal((await restarted.sweepUnusedImages({ onlyWhenNeeded: true })).removed, 1);
+  assert.deepEqual(await imageFiles(directory), [path.basename(staging)]);
+
+  await ageImageFiles(directory, 2 * DAY);
+  await createChatStore(async () => directory).sweepUnusedImages({ onlyWhenNeeded: true });
   assert.deepEqual(await imageFiles(directory), []);
 });
 

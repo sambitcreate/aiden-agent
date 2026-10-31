@@ -1097,7 +1097,8 @@ export function createChatStore(
   async function markImageSweepNeeded(): Promise<void> {
     const marker = await sweepMarkerPath();
     try {
-      await fs.writeFile(marker, String(Date.now()), { mode: 0o600 });
+      // Unique per write, so a sweep only ever clears the very mark it read.
+      await fs.writeFile(marker, `${Date.now()} ${randomUUID()}`, { mode: 0o600 });
     } catch (error) {
       // No images folder means no image files to clean up.
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

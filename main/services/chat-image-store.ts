@@ -254,7 +254,8 @@ export function createChatImageStore(
             age < options.graceMs ||
             (image && (putsInFlight.has(name) || options.isProtected?.(name)))
           ) {
-            if (image) defer(age < options.graceMs ? options.graceMs - age : options.graceMs);
+            // A young staging file is kept too, and still needs a later pass.
+            defer(age < options.graceMs ? options.graceMs - age : options.graceMs);
             continue;
           }
           if (image) durableImages.delete(name);
