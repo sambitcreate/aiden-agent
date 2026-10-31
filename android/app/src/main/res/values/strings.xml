@@ -1030,7 +1030,10 @@
     <string name="chat_question_title">Aiden needs your input</string>
     <string name="chat_question_multi_hint">Answer what you can — unanswered questions are skipped.</string>
     <string name="chat_question_single_hint">Choose an option or type your own answer.</string>
+    <string name="chat_question_multi_recommended_hint">Recommended answers are already selected. Questions you leave blank are skipped.</string>
+    <string name="chat_question_single_recommended_hint">The recommended answer is already selected. Change it or type your own.</string>
     <string name="chat_question_select_all">Select all that apply</string>
+    <string name="chat_question_recommended">Recommended</string>
     <string name="chat_question_custom_answer_cd">Custom answer</string>
     <string name="chat_question_custom_placeholder">Type your answer</string>
     <string name="chat_question_type_something_cd">Type something. Shows a field for a custom answer</string>

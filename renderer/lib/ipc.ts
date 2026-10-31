@@ -1,6 +1,8 @@
 import type { AppControlSnapshot, AppControlOperation, AppControlReceipt } from "../shared/app-controls";
+import type { InterruptedWaitV1 } from "../shared/interrupted-reply";
 import type { SavedChatIntent } from "../shared/chat-intent";
 import type { CompactionEngine } from "../shared/compaction";
+import type { WorkspaceFolderPresenceResult } from "../shared/workspace-folder-presence";
 import type { ModelPaceSummary } from "../shared/model-pace";
 import {
   parseUsageLimitWaits,
@@ -399,6 +401,9 @@ export const appApi = {
   setOnboardingProgress: (step: "profile" | "provider" | "bots", selectedProviderId?: string) =>
     invoke<OnboardingSnapshot>("app:setOnboardingProgress", step, selectedProviderId),
   rendererReady: () => invoke<boolean>("app:renderer-ready"),
+  /** The commands that can run now, so the menu bar greys out the rest. */
+  setMenuCommands: (commandIds: readonly string[]) =>
+    invoke<boolean>("app:setMenuCommands", [...commandIds]),
   setCloseGuard: (guard: { dirty: boolean; gitBusy: boolean; path?: string; saving: boolean }) =>
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
@@ -993,6 +998,8 @@ export const workspacesApi = {
     invoke<Workspace>("workspaces:create", input),
   createFromFolder: () => invoke<Workspace | null>("workspaces:createFromFolder"),
   createScratch: () => invoke<Workspace>("workspaces:createScratch"),
+  /** A hidden workspace for one No workspace chat: its own managed folder, global settings. */
+  createNoWorkspace: () => invoke<Workspace>("workspaces:createNoWorkspace"),
   /**
    * Read-only check of a typed path (`/…`, `~/…`, or `./…` relative to the
    * given workspace's folder). Never creates anything.
@@ -1025,6 +1032,9 @@ export const workspacesApi = {
   /** Credential-free repository identity, or null outside a repository with a network remote. */
   repositoryIdentity: (workspaceId: string) =>
     invoke<PeerRepositoryIdentity | null>("workspaces:repositoryIdentity", workspaceId),
+  /** Whether the workspace's folder is still on disk. */
+  folderPresence: (workspaceId: string) =>
+    invoke<WorkspaceFolderPresenceResult>("workspaces:folderPresence", workspaceId),
   openFolder: (workspaceId: string) => invoke<void>("workspaces:openFolder", workspaceId),
   externalEditors: (forceRefresh = false) =>
     invoke<ExternalEditor[]>("workspaces:externalEditors", forceRefresh),
@@ -1577,6 +1587,9 @@ export const chatsApi = {
   abandonTurn: (id: string, turnId: string) => invoke<boolean>("chats:abandonTurn", id, turnId),
   /** Whether the chat's last reply was cut short by a quit or crash and can be resumed. */
   replyInterrupted: (id: string) => invoke<boolean>("chats:replyInterrupted", id),
+  /** The questions and approvals the interrupted reply was waiting on, questions first. */
+  interruptedWaits: (id: string) => invoke<InterruptedWaitV1[]>("chats:interruptedWaits", id),
+  dismissInterruptedWait: (id: string, waitId: string) => invoke<void>("chats:dismissInterruptedWait", id, waitId),
   htmlArtifactSrcdoc: (
     chatId: string,
     mediaId: string,

@@ -526,6 +526,24 @@ test("the status line follows live activity, and hides while the reply's words s
   assert.equal(screen.queryByText("Writing") === null, true, "the words themselves are the signal");
 });
 
+test("a long turn shows its elapsed time on the status line and one Stop, the composer's", async () => {
+  const calls = await mountChat({
+    "bots:live:subscribe": () =>
+      snapshot({
+        entries: [userEntry("u1", "Do you have access to my messages?")],
+        state: { kind: "running", submissionId: "s1" },
+        activity: { phase: "thinking", startedAt: Date.now() - 25_000 },
+      }),
+    "bots:stop": () => ({ kind: "idle" }),
+  });
+  const line = await screen.findByRole("group", { name: "Thinking" });
+  assert.match(line.textContent ?? "", /· 2\ds/u);
+  const stops = screen.getAllByRole("button", { name: /^Stop/u });
+  assert.deepEqual(stops.map((button) => button.getAttribute("aria-label")), ["Stop generating"], "the line doesn't repeat the composer's Stop");
+  fireEvent.click(stops[0]!);
+  await waitFor(() => assert.deepEqual(calls.filter((call) => call.channel === "bots:stop").map((call) => call.args), [["bot-1"]]));
+});
+
 test("one status region stays mounted from an idle chat through streaming, so each new line is announced", async () => {
   await mountChat({
     "bots:live:subscribe": () => snapshot({ entries: [assistantEntry("a1", "Hi there.")] }),

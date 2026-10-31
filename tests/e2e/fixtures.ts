@@ -423,7 +423,7 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
               }
             : undefined,
         );
-        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string } }> } | null;
+        const completion = body as { messages?: Array<{ role?: string; content?: unknown; tool_call_id?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> } | null;
         // pi-ai forwards tool-result images as a follow-up user message; that
         // carrier is not the user's prompt.
         const latestUser = [...(completion?.messages ?? [])]
@@ -501,6 +501,15 @@ async function startMockLmStudio(): Promise<MockLmStudio> {
           }
           const call = script.calls[next]!;
           if (!completion.tools.some((tool) => tool.function?.name === call.name)) {
+            // A tool held back until loaded: load it first, as a real model
+            // does from the `load_tools` catalog, then make the scripted call.
+            const loadId = `${id}-load-${next}`;
+            const catalog = completion.tools.find((tool) => tool.function?.name === "load_tools")?.function?.description ?? "";
+            const loaded = (completion.messages ?? []).some(({ role, tool_call_id }) => role === "tool" && tool_call_id === loadId);
+            if (!loaded && catalog.includes(`- ${call.name}:`)) {
+              sendCompletion({ id: loadId, name: "load_tools", arguments: { names: [call.name] } });
+              return;
+            }
             state.error = `The real generation did not advertise required tool ${call.name}.`;
             sendCompletion({ text: state.error });
             return;
@@ -777,6 +786,33 @@ export async function finishLmStudioOnboarding(page: Page): Promise<void> {
       name: /^Selected model: .+\. Choose a model\.$/u,
     }),
   ).toBeVisible();
+}
+
+/**
+ * Moves the new chat into a workspace with no folder. A fresh install starts
+ * in No workspace, which has a hidden folder, so folder-free states need a
+ * folderless workspace of their own.
+ */
+export async function chooseFolderlessWorkspace(page: Page, name = "Notes"): Promise<void> {
+  await page.evaluate(async (workspaceName) => {
+    const bridge = (
+      window as unknown as {
+        aidenAPI: { ipc: { invoke<T>(channel: string, ...args: unknown[]): Promise<T> } };
+      }
+    ).aidenAPI.ipc;
+    await bridge.invoke("workspaces:create", { name: workspaceName, permission: "ask" });
+  }, name);
+  await page.reload();
+  const picker = page.getByRole("button", { name: "Choose a workspace" });
+  await picker.click();
+  const option = page.getByRole("option", { name: new RegExp(`^${name}`, "u") });
+  await option.click();
+  await expect(picker).toHaveText(name);
+  // Let the menu finish closing and the composer settle before the caller moves on.
+  await expect(option).toHaveCount(0);
+  await expect(page.getByText(`What should we build in ${name}?`)).toBeVisible();
+  await page.locator("textarea").focus();
+  await expect(page.locator("textarea")).toBeFocused();
 }
 
 /**

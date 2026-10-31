@@ -24,6 +24,8 @@ Or from this directory: `npm install && npm run build`. During development, `npm
 | `aiden --mode rpc` | JSONL request/response + event protocol over stdio for embedding (see pi's `docs/rpc.md`, vendored into the bundle) |
 | `aiden --list-models`, `aiden --help`, `aiden --version` | Metadata commands |
 
+Started from a folder that has since been deleted, `aiden` prints one line asking you to change to an existing folder and exits with status 1 (the static `aiden --version` and `aiden help` answers still work).
+
 Credentials use `aiden auth login <provider>` (printed browser/device-code OAuth or validated API keys), the native `/login` command, or standard provider environment variables. `auth.json` is encrypted with an owner-private local wrapping key; legacy plaintext entries migrate atomically on first access. Keep the whole agent directory private: this protects against accidental disclosure of the credential file, but does not provide OS-keychain protection against someone who can read the wrapping key. MCP OAuth and benchmark keys have separate credential namespaces.
 
 ## Aiden features in the terminal
