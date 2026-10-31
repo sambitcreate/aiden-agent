@@ -2557,7 +2557,7 @@ class AidenRemoteClient(
     suspend fun gitReview(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/review"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2566,14 +2566,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitDiffRequest(snapshotId = snapshotId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitBranches(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/branches"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2589,7 +2589,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2605,7 +2605,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2628,7 +2628,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2655,7 +2655,7 @@ class AidenRemoteClient(
     suspend fun gitPushCapability(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/push-capability"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2672,7 +2672,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2681,7 +2681,7 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitCompareRequest(baseRef = baseRef))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2690,14 +2690,14 @@ class AidenRemoteClient(
         method = "POST",
         bodyJson = json.encodeToString(AidenGitComparisonDiffRequest(comparisonId = comparisonId, fileId = fileId))
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
     suspend fun gitWorktrees(workspaceId: String): AidenGitResult = executeRequest(
         "/workspaces/$workspaceId/git/worktrees"
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2713,7 +2713,7 @@ class AidenRemoteClient(
         idempotencyKey = idempotencyKey,
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 
@@ -2729,7 +2729,7 @@ class AidenRemoteClient(
         bodyJson = json.encodeToString(AidenForegroundConfirmation()),
         acceptedStatus = setOf(202)
     ) { bytes ->
-        val result = json.decodeFromString<AidenGitResult>(String(bytes, Charsets.UTF_8))
+        val result = json.decodeFromString(AidenGitResultWire, String(bytes, Charsets.UTF_8))
         AidenWorkspaceEnvironmentValidation.validated(result)
     }
 

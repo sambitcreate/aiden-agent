@@ -118,7 +118,7 @@ class AidenNewWorktreeTest {
         assertFalse("not offered", aidenShouldRequestChatNewWorktree(mac(base, emptyList()), installationHolding(base)))
 
         val names = base.map { it.rawValue } + "chat:new-worktree"
-        val listed = JsonArray(names.map(::JsonPrimitive))
+        val listed = JsonArray(names.map { JsonPrimitive(it) })
         server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":$listed}"""))
         server.enqueue(MockResponse().setResponseCode(200).setBody(
             """{"protocolVersion":1,"instanceId":"test_instance","name":"Mac","appVersion":"1.0.0","connectionMode":"lan",
@@ -233,15 +233,38 @@ class AidenNewWorktreeTest {
     }
 
     @Test
-    fun aBranchListTellsWhetherTheRepositoryHasCommits() {
-        fun result(branches: List<String>?) = AidenGitResult(
-            operationId = "op_1",
-            status = AidenGitOperationStatus.SNAPSHOT,
-            snapshotId = "s1",
-            branches = branches?.let { AidenGitBranches(current = "main", branches = it) }
-        )
-        assertEquals(true, AidenNewWorktreeAvailability.hasCommits(result(listOf("main", "fix"))))
-        assertEquals(false, AidenNewWorktreeAvailability.hasCommits(result(emptyList())))
-        assertNull(AidenNewWorktreeAvailability.hasCommits(result(null)))
+    fun theMacsBranchListTellsWhetherTheRepositoryHasCommits() = runBlocking {
+        // The Mac sends every Git projection under `result`, tagged by `kind`.
+        fun branches(allowed: Boolean, names: List<String>) = JsonObject(mapOf(
+            "operationId" to JsonPrimitive("op_" + "A".repeat(32)),
+            "status" to JsonPrimitive("snapshot"),
+            "snapshotId" to JsonPrimitive("git_snapshot_1"),
+            "capability" to JsonObject(buildMap<String, JsonElement> {
+                put("allowed", JsonPrimitive(allowed))
+                if (!allowed) put("reason", JsonPrimitive("This workspace is not a Git repository."))
+            }),
+            "result" to JsonObject(mapOf(
+                "kind" to JsonPrimitive("branches"),
+                "current" to JsonPrimitive("main"),
+                "branches" to JsonArray(names.map { JsonPrimitive(it) })
+            ))
+        ))
+        server.enqueue(reply(200, branches(allowed = true, names = listOf("main", "fix"))))
+        server.enqueue(reply(200, branches(allowed = false, names = emptyList())))
+
+        val repository = client.gitBranches(site.id)
+        assertEquals(listOf("main", "fix"), repository.branches?.branches)
+        assertNull(repository.result)
+        assertEquals(true, AidenNewWorktreeAvailability.hasCommits(repository))
+        assertEquals(false, AidenNewWorktreeAvailability.hasCommits(client.gitBranches(site.id)))
+        assertEquals("/api/aiden/v1/workspaces/workspace_site/git/branches", server.takeRequest(5, TimeUnit.SECONDS)?.path)
+    }
+
+    @Test
+    fun theSharedGitReviewExampleLandsOnItsTypedField() {
+        val review = Json { ignoreUnknownKeys = true }.decodeFromJsonElement(AidenGitResultWire, fixture.getValue("git"))
+        assertEquals("feature/mobile", review.review?.branch)
+        assertNull(review.result)
+        assertNull(AidenNewWorktreeAvailability.hasCommits(review))
     }
 }
