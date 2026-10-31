@@ -7,6 +7,9 @@ import { after, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools, type Message } from "@earendil-works/pi-ai";
 import { renderBotMemorySection } from "../bot-memory/prompt.js";
+import { BotRuntimeAuthorityError } from "../bot-runtime-authority.js";
+import { createBotRoutineExecutor } from "../scheduled-bot-routines.js";
+import type { ScheduledRun, ScheduledTask } from "../types.js";
 import { createBotMemoryService } from "../bot-memory/service.js";
 import { createBotMemoryStore } from "../bot-memory/store.js";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
@@ -77,7 +80,9 @@ test("the same requestId twice admits one user message and reports the repeat as
   const fauxModels = createFauxModels([fauxAssistantMessage("hello back")]);
   const service = await serviceFor(tempProfile(), fauxModels);
   try {
+    assert.equal(await service.submissionForRequest("bot:a", "desk-1"), undefined);
     const first = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
+    assert.equal(await service.submissionForRequest("bot:a", "desk-1"), first.submissionId);
     const second = await service.send("bot:a", { text: "hello", requestId: "desk-1" });
     assert.equal(first.deduped, false);
     assert.deepEqual(second, { submissionId: first.submissionId, deduped: true });
@@ -99,6 +104,7 @@ test("a requestId is still deduped after a restart", async () => {
 
   const second = await serviceFor(profile, fauxModels);
   try {
+    assert.equal(await second.submissionForRequest("bot:a", "tg:1:2:0:3"), submissionId);
     assert.deepEqual(await second.send("bot:a", { text: "hi", requestId: "tg:1:2:0:3" }), {
       submissionId,
       deduped: true,
@@ -426,6 +432,40 @@ test("a configured model that fails to resolve shows its real error, not 'needs 
     failure = null;
     const sent = await service.send("bot:a", { text: "hi", requestId: "m-2" });
     assert.equal((await service.awaitReply("bot:a", sent.submissionId, new AbortController().signal)).kind, "completed");
+  } finally {
+    await service.shutdown();
+  }
+});
+
+test("a routine whose model was refused by runtime authority records access_changed with the typed code", async () => {
+  const fauxModels = createFauxModels([fauxAssistantMessage("hi")]);
+  const service = await serviceFor(tempProfile(), fauxModels, {
+    resolveModel: async () => {
+      throw new BotRuntimeAuthorityError("model_changed");
+    },
+  });
+  const runs: ScheduledRun[] = [];
+  const executor = createBotRoutineExecutor({
+    store: {
+      recordRun: async (run) => {
+        const recorded = { ...run, id: run.id ?? `run-${runs.length + 1}` } as ScheduledRun;
+        runs.push(recorded);
+        return recorded;
+      },
+      runById: async (taskId, runId) => runs.find((run) => run.taskId === taskId && run.id === runId),
+      get: async () => undefined,
+      settleRoutineFire: async () => undefined,
+    },
+    ports: () => service,
+    broadcast: () => undefined,
+  });
+  try {
+    const task = { id: "routine-1", name: "Briefing", enabled: true, mode: "llm", cron: "0 9 * * *", timezone: "UTC", permission: "read-only", botId: "bot:a", prompt: "Brief me.", notify: true, createdAt: 1, updatedAt: 1 } as ScheduledTask;
+    const run = await executor.run(task, { trigger: { kind: "manual", key: "k1" }, signal: new AbortController().signal });
+    assert.equal(run.result, "error");
+    assert.equal(run.failure?.kind, "access_changed");
+    assert.equal(run.failure?.code, "model_changed");
+    assert.equal(fauxModels.calls(), 0);
   } finally {
     await service.shutdown();
   }

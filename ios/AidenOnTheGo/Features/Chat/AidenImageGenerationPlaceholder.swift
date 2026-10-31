@@ -225,15 +225,25 @@ enum AidenImageGenerationPlaceholderState {
     }
 
     /// The one attachment of a settled message that plays the arrival reveal:
-    /// its first strip image (visual snapshots excluded). Attachments carry no
-    /// tool association, so when the turn also completed a `display_image`
-    /// call the generated image cannot be told apart and nothing reveals.
+    /// the first image a completed `generate_image` call produced (contract
+    /// revision 44 names each image's call). From an older host, whose
+    /// attachments carry no call, it is the first strip image (visual
+    /// snapshots excluded), and nothing reveals when the turn also completed a
+    /// `display_image` call, since the generated image cannot be told apart.
     static func arrivalRevealAttachmentID(in message: AidenChatMessage) -> String? {
         guard message.role == .assistant, let steps = message.timeline?.steps,
-              steps.contains(where: { isGenerateImage($0) && $0.status == .completed }),
-              !steps.contains(where: { $0.kind == .tool && $0.toolName == displayImageToolName && $0.status == .completed })
+              steps.contains(where: { isGenerateImage($0) && $0.status == .completed })
         else { return nil }
-        return stripImageAttachments(for: message).first?.id
+        let generateCalls = Set(steps.compactMap { step in
+            isGenerateImage(step) && step.status == .completed ? step.toolCallId : nil
+        })
+        let images = stripImageAttachments(for: message)
+        if images.contains(where: { $0.toolCallId != nil }) {
+            return images.first(where: { $0.toolCallId.map(generateCalls.contains) == true })?.id
+        }
+        guard !steps.contains(where: { $0.kind == .tool && $0.toolName == displayImageToolName && $0.status == .completed })
+        else { return nil }
+        return images.first?.id
     }
 
     /// The images the attachment strip draws, in order.

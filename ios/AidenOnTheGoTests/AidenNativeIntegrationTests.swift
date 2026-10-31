@@ -5,6 +5,124 @@ import XCTest
 @testable import AidenOnTheGo
 
 final class AidenNativeIntegrationTests: XCTestCase {
+    @MainActor
+    func testExternalVoiceLinkHasNoRecordingAuthorityAndForgedProvenanceIsRejected() throws {
+        let external = try XCTUnwrap(AidenDeepLink.request(from: URL(string: "aiden-otg://new-chat-voice?instance=mac&workspace=workspace")!))
+        XCTAssertEqual(external.destination, .newChat)
+        XCTAssertFalse(external.startsVoice)
+        for query in ["internal=true", "trusted=1", "startsVoice=true", "action=voice"] {
+            XCTAssertNil(AidenDeepLink.request(from: URL(string: "aiden-otg://new-chat-voice?\(query)")!))
+        }
+    }
+
+    @MainActor
+    func testExternalNewChatWaitsForReadinessThenOffersConsentOnlyOnce() throws {
+        let queue = AidenExternalNewChatQueue()
+        let request = try XCTUnwrap(AidenDeepLink.request(from: URL(string: "aiden-otg://new-chat-voice?instance=mac&workspace=project")!))
+        let entry = AidenExternalNewChatQueue.Entry(request: request, origin: nil, instanceID: "mac", deviceID: "phone", pairedAt: Date())
+        queue.receive(entry)
+        var presentations = 0
+        for _ in 0..<3 {
+            if queue.takeIfReady(false, isValid: { _ in true }) != nil { presentations += 1 }
+        }
+        XCTAssertEqual(presentations, 0)
+        XCTAssertEqual(queue.waiting?.request.workspaceId, "project")
+        if let ready = queue.takeIfReady(true, isValid: { _ in true }) {
+            presentations += 1
+            XCTAssertFalse(ready.request.startsVoice)
+        }
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+        XCTAssertEqual(presentations, 1)
+    }
+
+    @MainActor
+    func testNewerNavigationAndRevocationDiscardWaitingNewChatRequests() throws {
+        let queue = AidenExternalNewChatQueue()
+        func entry(_ workspace: String) -> AidenExternalNewChatQueue.Entry {
+            .init(request: .init(destination: .newChat, instanceId: "mac", workspaceId: workspace, startsVoice: false),
+                  origin: nil, instanceID: "mac", deviceID: "phone", pairedAt: Date())
+        }
+        queue.receive(entry("older"))
+        XCTAssertNil(queue.takeIfReady(false, isValid: { _ in true }))
+        queue.receive(entry("newer"))
+        XCTAssertEqual(queue.takeIfReady(true, isValid: { _ in true })?.request.workspaceId, "newer")
+        queue.receive(entry("revoked"))
+        XCTAssertNil(queue.takeIfReady(false, isValid: { _ in false }))
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+        queue.receive(entry("superseded-by-shortcut"))
+        queue.invalidate()
+        XCTAssertNil(queue.takeIfReady(true, isValid: { _ in true }))
+    }
+
+    @MainActor
+    func testForegroundIntentIsRetainedBeforeConsumerMountsThenConsumedOnceAndExpires() async throws {
+        let router = AidenForegroundIntentRouter.shared
+        _ = router.take()
+        _ = try await NewChatVoiceIntent().perform()
+        let action = try XCTUnwrap(router.take())
+        XCTAssertTrue(action.startsVoice)
+        XCTAssertNil(router.take())
+        let clock = Date(timeIntervalSince1970: 100)
+        router.submit(instanceID: "mac", workspaceID: "workspace", startsVoice: true, now: clock)
+        XCTAssertNil(router.take(now: clock.addingTimeInterval(60)))
+        XCTAssertNil(router.take(now: clock))
+    }
+
+    @MainActor
+    func testNewChatConsentCancellationStalePairingAndDuplicateDeliveryNeverCreate() async throws {
+        let consent = AidenNewChatLinkConsent()
+        let now = Date()
+        func target(_ workspace: String = "workspace") -> AidenNewChatLinkConsent.Target {
+            .init(instanceID: "mac", deviceID: "phone", pairedAt: now, installationName: "My Mac",
+                  workspaceID: workspace, workspaceName: workspace, origin: nil, startsVoice: false, createdAt: now)
+        }
+        var creates = 0
+        let cancelled = target()
+        XCTAssertTrue(consent.propose(cancelled))
+        XCTAssertFalse(consent.propose(target("other")))
+        consent.invalidate()
+        let cancelledResult = await consent.perform(id: cancelled.id, isValid: { true }) { _ in creates += 1; return 1 }
+        XCTAssertNil(cancelledResult)
+        let stale = target()
+        XCTAssertTrue(consent.propose(stale))
+        let staleResult = await consent.perform(id: stale.id, isValid: { false }) { _ in creates += 1; return 1 }
+        XCTAssertNil(staleResult)
+        XCTAssertEqual(creates, 0)
+        let accepted = target()
+        XCTAssertTrue(consent.propose(accepted))
+        let result = await consent.perform(id: accepted.id, isValid: { true }) { frozen in
+            XCTAssertEqual(frozen.workspaceID, "workspace")
+            creates += 1
+            let duplicate = await consent.perform(id: accepted.id, isValid: { true }) { _ in creates += 1; return 2 }
+            XCTAssertNil(duplicate)
+            return 1
+        }
+        XCTAssertEqual(result, 1)
+        XCTAssertEqual(creates, 1)
+    }
+
+    @MainActor
+    func testNewChatConsentDropsLateResultsAndExpiredApproval() async {
+        let consent = AidenNewChatLinkConsent()
+        let now = Date()
+        let target = AidenNewChatLinkConsent.Target(instanceID: "mac", deviceID: "phone", pairedAt: now,
+            installationName: "My Mac", workspaceID: "workspace", workspaceName: "Project", origin: nil,
+            startsVoice: false, createdAt: now)
+        _ = consent.propose(target)
+        var creates = 0
+        let expired = await consent.perform(id: target.id, now: now.addingTimeInterval(60), isValid: { true }) { _ in creates += 1; return 1 }
+        XCTAssertNil(expired)
+        XCTAssertEqual(creates, 0)
+        _ = consent.propose(target)
+        let late = await consent.perform(id: target.id, isValid: { true }) { _ in
+            creates += 1
+            consent.invalidate() // Revocation/background/navigation won while the request was suspended.
+            return 1
+        }
+        XCTAssertNil(late)
+        XCTAssertEqual(creates, 1)
+    }
+
     func testDiagnosticVocabularyIsClosedAndContentFree() {
         XCTAssertEqual(
             Set(AidenDiagnosticArea.allCases.map(\.rawValue)),
@@ -178,7 +296,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
                 destination: .newChat,
                 instanceId: "instance-1",
                 workspaceId: "workspace-1",
-                startsVoice: true
+                startsVoice: false
             )
         )
         XCTAssertFalse(newChat.absoluteString.lowercased().contains("prompt"))
@@ -801,7 +919,7 @@ final class AidenNativeIntegrationTests: XCTestCase {
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Bots"))
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Workspaces"))
         XCTAssertTrue(AidenMobileOnboardingPhase.build.detail.contains("Aiden logo"))
-        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("MCP"))
+        XCTAssertTrue(AidenMobileOnboardingPhase.extend.detail.contains("connectors"))
         XCTAssertTrue(AidenMobileOnboardingPhase.control.detail.contains("scheduled"))
     }
 

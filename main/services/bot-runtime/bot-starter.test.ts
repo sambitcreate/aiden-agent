@@ -267,3 +267,27 @@ test("a crash before the starter Bot is created leaves one Bot after the next ta
   assert.equal(second.bot.id, first.bot.id);
   assert.equal(bots.size, 1);
 });
+
+test("a caller that defers the self-intro gets the Bot at once, and one later introduce sends it exactly once", async () => {
+  const profile = tempDir();
+  const directory = botDirectory(profile);
+  const fauxModels = createFauxModels([fauxAssistantMessage("Hi, I'm your Meal Planner.")]);
+  const session = await sessionFor(profile, fauxModels);
+  try {
+    const starter = createBotStarter({ ...directory.deps, session });
+    const result = await starter.startFromPreset("meal-planner", { introduce: false });
+    assert.equal(result.created, true);
+    assert.equal(result.introduced, false, "the intro was left to the caller");
+    assert.equal(fauxModels.calls(), 0, "nothing was sent while creating");
+
+    await Promise.all([starter.introduce(result.bot.id), starter.introduce(result.bot.id)]);
+    const state = await session.state(result.bot.id);
+    if (state.kind === "running") {
+      await session.awaitReply(result.bot.id, state.submissionId, new AbortController().signal);
+    }
+    assert.equal(fauxModels.calls(), 1);
+    assert.deepEqual(await visibleTranscript(session, result.bot.id), ["assistant:Hi, I'm your Meal Planner."]);
+  } finally {
+    await session.shutdown();
+  }
+});

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import os from "node:os";
 import {
   hasPlaintextMcpFields,
   isMcpFieldSecretMarker,
@@ -323,6 +324,38 @@ test("connection credentials: approval first, stored values filled in, preset ke
   assert.equal(filled, false, "nothing is resolved for a launch that may not run");
 });
 
+test("connection credentials: a closed Mac app connector fails at once, only after its launch is approved", async () => {
+  const { resolveMcpConnectionCredentials } = await import("./mcp-connection-credentials.js");
+  const { getMcpPreset, macAppServerCommands } = await import("./mcp-presets.js");
+  const imcp = getMcpPreset("imcp")!;
+  assert.ok(imcp.transport === "stdio");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const record: McpServer = {
+      id: "preset-imcp", name: "iMCP", transport: "stdio", presetId: "imcp", enabled: true,
+      command: macAppServerCommands(imcp.macApp, os.homedir())[0], args: [],
+    };
+    const checked: string[] = [];
+    const deps = (approved: boolean, open: boolean) => ({
+      isLaunchApproved: async () => { checked.push("approval"); return approved; },
+      isMacAppOpen: async () => { checked.push("open"); return open; },
+      resolveFieldSecrets: async (server: McpServer) => server,
+      presetKey: async () => null,
+      isCurrent: () => true,
+      missingKey: () => "",
+    });
+    await assert.rejects(resolveMcpConnectionCredentials(record, deps(true, false)), /iMCP isn’t open\. Open iMCP, then try again\./u);
+    assert.deepEqual(checked.splice(0), ["approval", "open"]);
+    // An unapproved launch is reported as such, without probing the app.
+    await assert.rejects(resolveMcpConnectionCredentials(record, deps(false, true)), /added outside Aiden/u);
+    assert.deepEqual(checked.splice(0), ["approval"]);
+    assert.deepEqual(await resolveMcpConnectionCredentials(record, deps(true, true)), record);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
 test("moving plain-text values into the keychain survives the config snapshot listener without clearing credentials", async () => {
   const { createLastSafeSnapshotReload } = await import("./portable-config-watch-core.js");
   const { mutatePortableConfigAndSync, setPortableCredentialSnapshotListener } = await import("./portable-credential-snapshot.js");
@@ -425,4 +458,28 @@ test("a failed prune after an outside edit stays pending and the next reload ret
   servers = [saved.server];
   await reload();
   assert.throws(() => resolveMcpFieldSecrets(saved.server, record), (error: unknown) => error instanceof McpFieldSecretMissingError && /“X-Team”/u.test(error.message));
+});
+
+test("a pre-registered OAuth client secret is sealed like a header, survives the record round trip and resolves only for its server", () => {
+  const server: McpServer = { ...remote, headers: undefined, oauthClientId: "slack-app", oauthClientSecret: "client-secret-value" };
+  assert.equal(hasPlaintextMcpFields(server), true);
+  const plan = planMcpFieldSecrets(server, counter());
+  assert.equal(plan.server.oauthClientId, "slack-app", "the client ID stays in config");
+  assert.ok(isMcpFieldSecretMarker(plan.server.oauthClientSecret));
+  assert.equal(JSON.stringify(plan.server).includes("client-secret-value"), false, "config never holds the secret");
+  assert.equal(hasPlaintextMcpFields(plan.server), false);
+  const record = parseMcpFieldSecretRecord(serializeMcpFieldSecretRecord(stored(plan)));
+  assert.equal(resolveMcpFieldSecrets(plan.server, record).oauthClientSecret, "client-secret-value");
+  // Sent nowhere else: another address resolves nothing.
+  assert.throws(() => resolveMcpFieldSecrets({ ...plan.server, url: "https://elsewhere.test/mcp" }, record), /changed outside Aiden/u);
+  // Unchanged on the next save: the marker is reused, so nothing looks like a new credential.
+  const again = planMcpFieldSecrets({ ...server }, counter(0x500), { reuse: { current: plan.server, values: mcpFieldSecretFieldValues(plan.server, record) } });
+  assert.equal(again.server.oauthClientSecret, plan.server.oauthClientSecret);
+  assert.deepEqual(again.added, {});
+  // Removing the secret prunes it from the record.
+  assert.equal(pruneMcpFieldSecretRecord(record!, { ...plan.server, oauthClientSecret: undefined }), undefined);
+  // A secret under the same marker but recorded for a header does not resolve as the client secret.
+  const marker = plan.server.oauthClientSecret!;
+  const misfiled: McpFieldSecretRecord = { bindings: { [mcpFieldSecretDestination(plan.server)]: { [marker]: { field: "headers:Authorization", value: "Bearer x" } } } };
+  assert.throws(() => resolveMcpFieldSecrets(plan.server, misfiled), McpFieldSecretMissingError);
 });

@@ -4,7 +4,7 @@
 // handoff, and pill visibility.
 
 import { clipboard, ipcMain, logger, systemPreferences } from "../platform.js";
-import { destroyPill, hidePill, showPill } from "../windows/pill-window.js";
+import { destroyPill, hidePill, preparePill, showPill } from "../windows/pill-window.js";
 import { effectiveBindings } from "../../renderer/shared/keybindings.js";
 import { configStore } from "./config-store.js";
 import { cleanupDictationTranscript } from "./dictation-cleanup.js";
@@ -13,6 +13,7 @@ import { watchMacKeyUntilUp } from "./dictation-key-state.js";
 import { acceleratorPrimaryMacKeyCode } from "./dictation-keycode.js";
 import { dictationPlatformBehavior } from "./dictation-platform.js";
 import {
+  createSecureInputPrefetch,
   detectMacSecureInput,
   pasteTranscript,
   runAtomicMacPaste,
@@ -32,6 +33,16 @@ const pressVoice = createPressVoiceCheck({
   warmLocal: async (modelId) => (await import("./local-speech.js")).warmLocalVoice(modelId),
 });
 
+// Probed when capture stops, so the osascript launch overlaps transcription.
+const secureInput = createSecureInputPrefetch({
+  probe: () => detectMacSecureInput(),
+  now: () => performance.now(),
+});
+
+function canAutoPaste(): boolean {
+  return dictationPlatformBehavior().accessibilityPaste && systemPreferences.isTrustedAccessibilityClient(false);
+}
+
 function livePasteDeps(): PasteDeps {
   const behavior = dictationPlatformBehavior();
   return {
@@ -42,7 +53,7 @@ function livePasteDeps(): PasteDeps {
       behavior.accessibilityPaste &&
       systemPreferences.isTrustedAccessibilityClient(false),
     isSecureInputActive: behavior.accessibilityPaste
-      ? () => detectMacSecureInput()
+      ? () => secureInput.isSecureInputActive()
       : async () => false,
     pasteWithPreservedClipboard: behavior.accessibilityPaste
       ? runAtomicMacPaste
@@ -65,6 +76,7 @@ async function deliverTranscript(text: string) {
 
 const coordinator = new DictationCoordinator({
   showPill,
+  preparePill,
   hidePill,
   destroyPill,
   broadcast: (payload) => ipcMain.broadcast("dictation:state", payload),
@@ -90,6 +102,10 @@ const coordinator = new DictationCoordinator({
   resolveVoice: pressVoice.resolveVoice,
   // Warm only the on-device model this press resolved; cloud needs no preload.
   warmUp: pressVoice.warmUp,
+  prepareDelivery: () => {
+    if (canAutoPaste()) secureInput.prefetch();
+  },
+  onTiming: (timing) => logger.info("dictation", "Dictation timing", timing),
   applyDictionary: async (text) =>
     applyDictationDictionary(text, parseDictationDictionary((await configStore.getSettings()).dictationDictionary)),
   shouldCleanup: async () => (await configStore.getSettings()).dictationCleanup === true,
@@ -154,6 +170,11 @@ export async function stopDictationRecording(): Promise<void> {
  */
 export async function handlePillReady(): Promise<void> {
   await coordinator.ready();
+}
+
+/** Load the hidden pill after launch, so the first press does not wait for a window. */
+export function prepareDictationPill(): Promise<void> {
+  return coordinator.prepare();
 }
 
 /** App shutdown: tear down the pill window. */

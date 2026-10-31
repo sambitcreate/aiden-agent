@@ -14,8 +14,8 @@ import { McpDeadlineError } from "./mcp-tool-discovery-core.js";
 export interface ConnectionBounds {
   /**
    * Deadline for one whole connection attempt, including transport start
-   * (an SSE `endpoint` event, OAuth refresh) which the SDK's initialize
-   * timeout does not cover. A timed-out attempt is cancelled and never cached.
+   * (a stdio spawn, an OAuth refresh) which the initialize request timeout
+   * does not cover. A timed-out attempt is cancelled and never cached.
    */
   connectTimeoutMs?: number;
   /** How long a disconnect waits for an in-flight attempt to finish tearing down. */

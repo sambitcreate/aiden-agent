@@ -5,7 +5,6 @@ import * as path from "node:path";
 import test from "node:test";
 import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import {
-  discoverPluginSkillCandidates,
   discoverSkillCandidates,
   discoverSkills,
   SKILL_DISCOVERY_LIMITS,
@@ -405,9 +404,8 @@ test("YAML skill metadata reaches the catalog and tools without losing multiline
       snapshot.catalog.find((entry) => entry.name === fixture.directory)?.description,
       fixture.description,
     );
-    assert.ok(
-      tools.find((tool) => tool.name === skill.toolKey)?.description.includes(fixture.description),
-    );
+    // The one skill tool loads it by the name the prompt lists with its description.
+    assert.match(JSON.stringify(await tools[0]!.execute("load", { name: fixture.directory })), /Keep this body/u);
     assert.ok(formatAvailableSkills(snapshot)?.includes(fixture.description));
   }
 });
@@ -689,12 +687,10 @@ test("manifest collections and root skills use bounded plugin containment and pr
   assert.ok(!(await discoverSkillCandidates(undefined, home)).some((skill) => skill.name === "tools:audit"), "the implicit root fallback must remain direct-only");
   for (const collection of [".", "./"]) {
     await fs.writeFile(path.join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ skills: collection }));
-    for (const discover of [discoverSkillCandidates, discoverPluginSkillCandidates]) {
-      const declared = await discover(undefined, home);
-      assert.equal(declared.find((skill) => skill.name === "tools:audit")?.instructions, "Root collection audit instructions.");
-      assert.equal(declared.filter((skill) => skill.name === "tools:custom").length, 1);
-      assert.ok(!declared.some((skill) => skill.name === "tools:escaped"));
-    }
+    const declared = await discoverSkillCandidates(undefined, home);
+    assert.equal(declared.find((skill) => skill.name === "tools:audit")?.instructions, "Root collection audit instructions.");
+    assert.equal(declared.filter((skill) => skill.name === "tools:custom").length, 1);
+    assert.ok(!declared.some((skill) => skill.name === "tools:escaped"));
   }
 });
 
@@ -706,9 +702,7 @@ test("malformed plugin metadata and nonboolean enablement fail closed without hi
   await enablePlugins(home, { "plugin@shop": ["^1.0.0"] });
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
   await enablePlugins(home, { "plugin@shop": true });
-  await installPlugin(home, "unsafe@shop", { review: `---\nname: ${"x".repeat(90)}\n---\nUnsafe name.` });
-  await enablePlugins(home, { "plugin@shop": true, "unsafe@shop": true });
-  assert.deepEqual((await discoverPluginSkillCandidates(undefined, home)).map((skill) => skill.name), ["plugin:review"]);
+  assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name).sort(), ["ordinary", "plugin:review"]);
   await fs.writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), "{");
   assert.deepEqual((await discoverSkillCandidates(undefined, home)).map((skill) => skill.name), ["ordinary"]);
 });

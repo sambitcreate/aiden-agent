@@ -38,6 +38,13 @@ export interface BotCapabilityInventoryPortDependencies {
   subagentsAvailable(): boolean;
   /** Host policy always narrows a persisted Computer Use preference. */
   computerUseSupported?: () => boolean;
+  /** Browser settings let agents use Aiden's browser (a Bot's own browser follows them). */
+  browserAgentAccess?: () => Promise<boolean>;
+  /**
+   * Bot computers are set up on a host that has them (Apple silicon), so a Bot
+   * given a computer can use it. Each Bot still needs its own computer.
+   */
+  botComputersReady?: () => Promise<boolean>;
   shellFingerprint?: string;
   fullMacScopeFingerprint?: string;
   botHomeScopeFingerprint?: string;
@@ -93,16 +100,23 @@ function providerInventory(
     models: provider.models.flatMap((modelId) => {
       const metadata = provider.modelMetadata?.[modelId];
       if (!modelId || isNonChatModel({ model: modelId, metadataType: metadata?.type })) return [];
+      const supportsImages =
+        (metadata?.overrides?.vision ?? metadata?.vision) === true &&
+        metadata?.overrides?.maxImages !== 0;
       return [
         {
           sourceId: modelId,
           label: metadata?.name ?? modelId,
           available,
-          supportsImages: (metadata?.overrides?.vision ?? metadata?.vision) === true && metadata?.overrides?.maxImages !== 0,
+          supportsImages,
+          // Only authority facts. Descriptive catalog metadata (name, context
+          // window, thinking levels, pricing) changes with Pi releases and the
+          // remote catalog refresh; hashing it re-minted the opaque model id
+          // and failed every Bot bound to that model until it was re-chosen.
           modelFingerprint: botCapabilityFactsFingerprint({
             providerId: provider.id,
             modelId,
-            metadata: metadata ?? null,
+            supportsImages,
           }),
         },
       ];
@@ -256,6 +270,8 @@ function ordinaryInventory(input: {
   webSearchReady: boolean;
   subagentsAvailable: boolean;
   computerUseSupported: boolean;
+  browserAgentAccess: boolean;
+  botComputersReady: boolean;
 }): BotOrdinaryCapabilityInventory[] {
   const values: Array<{
     kind: BotOrdinaryCapabilityInventory["kind"];
@@ -272,8 +288,8 @@ function ordinaryInventory(input: {
     {
       kind: "browser",
       label: "Browser",
-      description: "Browser control is not currently available to ordinary Bot chats.",
-      available: false,
+      description: "Browse the web in its own browser, with its own sign-ins, which you can watch in its Browser tab.",
+      available: input.browserAgentAccess,
     },
     {
       kind: "computer_use",
@@ -284,15 +300,20 @@ function ordinaryInventory(input: {
         input.settings.computerUseEnabled === true,
     },
     {
+      kind: "computer",
+      label: "Bot computer",
+      description: "Use its own computer, a macOS virtual machine apart from your Mac that you can watch and take over. Give it one in its profile.",
+      available: input.botComputersReady,
+    },
+    {
       kind: "schedules",
       label: "Schedules",
-      description: "Coming after scheduled runs can re-check this Bot's access at run time.",
-      // Ordinary scheduled tasks persist a workspace/provider/MCP snapshot and
-      // execute later without a live Bot audience or Bot capability admission.
-      // Advertising that path would turn Full access into a delayed authority
-      // bypass. Keep it unavailable until the scheduler stores Bot identity and
-      // re-admits the run against current Bot/chat policy and managed home.
-      available: false,
+      description: "Suggest Bot routines that post into this chat after you approve them.",
+      // Bot routines use the Bot's own durable session. Each scheduled turn
+      // re-admits its current Bot/chat authority before inference and each
+      // tool effect; it never inherits an ordinary task's saved workspace or
+      // provider snapshot. A disabled scheduler cannot deliver a wake-up.
+      available: input.settings.scheduledTasksEnabled !== false,
     },
     {
       kind: "subagents",
@@ -440,9 +461,12 @@ export function createBotCapabilityInventoryPorts(
       return skills;
     },
     async inspectOtherCapabilities(signal) {
-      const [settings, webSearchAvailability] = await Promise.all([
+      const [settings, webSearchAvailability, browserAgentAccess, botComputersReady] = await Promise.all([
         dependencies.getSettings(),
         dependencies.webSearchAvailability(),
+        dependencies.browserAgentAccess?.() ?? Promise.resolve(false),
+        // An unreadable Bot computers state offers nothing rather than failing the catalog.
+        dependencies.botComputersReady?.().catch(() => false) ?? Promise.resolve(false),
       ]);
       if (signal.aborted) throw signal.reason;
       return ordinaryInventory({
@@ -451,6 +475,8 @@ export function createBotCapabilityInventoryPorts(
         subagentsAvailable: dependencies.subagentsAvailable(),
         computerUseSupported:
           dependencies.computerUseSupported?.() === true,
+        browserAgentAccess: browserAgentAccess === true,
+        botComputersReady: botComputersReady === true,
       });
     },
   };

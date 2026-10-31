@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,6 +58,25 @@ test("--version answers before the runtime loads and agrees with pi's own answer
 	assert.equal(viaPi.status, 0, viaPi.stderr);
 	assert.equal(fast.stdout, viaPi.stdout);
 	assert.equal(fast.stderr, "", "the static answer must not load node:sqlite or anything that warns");
+});
+
+test("a deleted current folder gets one plain line instead of a crash", { skip: process.platform === "win32" }, () => {
+	const parent = mkdtempSync(path.join(tmpdir(), "aiden-deleted-cwd-"));
+	const doomed = path.join(parent, "gone");
+	mkdirSync(doomed);
+	try {
+		// The shell enters the folder, removes it, then starts the CLI there.
+		const result = spawnSync("/bin/sh", ["-c", 'cd "$1" && rmdir "$1" && exec "$2" "$3" --no-session -p hello', "sh", doomed, process.execPath, cli], {
+			encoding: "utf-8",
+			timeout: 60_000,
+			env: { ...process.env, AIDEN_CODING_AGENT_DIR: path.join(parent, "agent") },
+		});
+		assert.equal(result.status, 1, result.stderr || result.stdout);
+		assert.equal(result.stderr.trim(), "aiden: The current folder no longer exists. Change to an existing folder and try again.");
+		assert.doesNotMatch(result.stderr, /uv_cwd|at .*\.js:\d+/);
+	} finally {
+		rmSync(parent, { recursive: true, force: true });
+	}
 });
 
 test("aiden help lists the Aiden commands", () => {
@@ -182,6 +201,45 @@ test("fullscreen TUI is the default unless overridden by flag or saved setting",
 		true,
 		"settings without a tuiMode key still get the fullscreen default",
 	);
+});
+
+/** Evaluates shouldDefaultToCodemode from the pure src/codemode-default.ts module, like fullscreenDefault. */
+function codemodeDefault(args, settingsPaths) {
+	const result = spawnSync(
+		process.execPath,
+		[
+			"--experimental-strip-types",
+			"--input-type=module",
+			"-e",
+			`import { shouldDefaultToCodemode } from ${JSON.stringify(
+				pathToFileURL(path.join(pkgDir, "src", "codemode-default.ts")).href,
+			)}; process.stdout.write(String(shouldDefaultToCodemode(${JSON.stringify(args)}, ${JSON.stringify(
+				settingsPaths,
+			)})));`,
+		],
+		{ cwd: pkgDir, encoding: "utf-8", timeout: 60_000 },
+	);
+	assert.equal(result.status, 0, result.stderr);
+	return result.stdout === "true";
+}
+
+test("codemode is on by default unless a tool flag or saved defaultTools chooses otherwise", () => {
+	assert.equal(codemodeDefault([], []), true, "fresh installs get codemode next to the default tools");
+	for (const flags of [["--tools", "read,bash"], ["-t", "-codemode"], ["--no-tools"], ["-nbt"], ["--no-extensions"]]) {
+		assert.equal(codemodeDefault(flags, []), false, `${flags.join(" ")} wins over the default`);
+	}
+	const dir = mkdtempSync(path.join(tmpdir(), "aiden-cli-codemode-"));
+	const settings = path.join(dir, "settings.json");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["-codemode"] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved -codemode turns it off");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["read", "bash"] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved plain list replaces the defaults, codemode included");
+	writeFileSync(settings, JSON.stringify({ defaultTools: [] }));
+	assert.equal(codemodeDefault([], [settings]), false, "a saved empty list means no default tools, codemode included");
+	writeFileSync(settings, JSON.stringify({ defaultTools: ["+grep"] }));
+	assert.equal(codemodeDefault([], [settings]), true, "adding other tools keeps the codemode default");
+	writeFileSync(settings, "{ not json");
+	assert.equal(codemodeDefault([], [settings]), true, "an unreadable settings file falls through to the default");
 });
 
 
@@ -345,7 +403,7 @@ test("Aiden commands are available over the RPC (GUI-interop) surface", () => {
 			.map((line) => JSON.parse(line))
 			.filter((message) => message.type === "response" && message.command === "get_commands")
 			.flatMap((message) => message.data.commands.map((command) => command.name));
-		for (const expected of ["usage", "voice", "dictate", "btw", "mcp", "aiden-mcp"]) {
+		for (const expected of ["usage", "voice", "dictate", "btw", "mcp"]) {
 			assert.ok(commands.includes(expected), `/${expected} missing over RPC; got: ${commands.join(", ")}`);
 		}
 	} finally {
@@ -407,17 +465,42 @@ console.log(JSON.stringify({ early, missing, unhandled }));
 	} finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("native MCP command routing leaves Aiden's migrated inventory intact", () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-mcp-"));
+test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () => {
+  const result = runCli(["help"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^ {2}mcp list\|presets\|add\|preset\|login\|logout\|remove /m);
+  assert.doesNotMatch(result.stdout, /pi-mcp/);
+});
+
+test("Pi's built-in MCP extension stays off: /mcp is Aiden's and native mcp.json servers never start", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-native-mcp-"));
   try {
-    const server = { id: "old", name: "Old", enabled: false, transport: "stdio", command: "example" };
-    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify([server]));
-    const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
-    const native = runCli(["pi-mcp", "list"], options);
-    assert.equal(native.status, 0, native.stderr);
-    const legacy = runCli(["mcp", "list"], options);
-    assert.equal(legacy.status, 0, legacy.stderr);
-    assert.deepEqual(JSON.parse(legacy.stdout), [server]);
+    const marker = path.join(agentDir, "native-server-started");
+    // A server in Pi's native configuration that records being launched.
+    writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({ mcpServers: { probe: {
+      command: process.execPath, args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "started"); setInterval(() => {}, 1000);`],
+    } } }));
+    const child = spawn(process.execPath, [cli, "--mode", "rpc", "--no-session"], {
+      env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.stdin.write('{"id":"mcp-probe","type":"get_commands"}\n');
+    // Long enough for a native connection to have spawned its server.
+    const deadline = Date.now() + 30_000;
+    while (!stdout.includes('"mcp-probe"') && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    child.stdin.end();
+    await exited;
+    const response = stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((message) => message.id === "mcp-probe");
+    assert.ok(response?.success, stdout);
+    const mcp = response.data.commands.filter((command) => command.name === "mcp");
+    assert.equal(mcp.length, 1, JSON.stringify(mcp));
+    assert.match(JSON.stringify(mcp[0].sourceInfo), /aiden-mcp/u, "/mcp must come from Aiden's extension");
+    assert.equal(existsSync(marker), false, "a native mcp.json server was started");
+    assert.doesNotMatch(stderr, /was not loaded|builtin:mcp/u, "turning Pi's MCP off must not print a replacement diagnostic");
   } finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
 
@@ -476,54 +559,4 @@ test("bundled ChatGPT OAuth module loads and rejects missing installation identi
     prompt: async () => { throw new Error("Unexpected prompt before identity validation"); },
     notify: () => { throw new Error("Unexpected network login before identity validation"); },
   }), /requires a device ID/);
-});
-
-test("built CLI discovers additional directories and enabled plugin skills after trust without replacing explicit skills", () => {
-	const root = mkdtempSync(path.join(tmpdir(), "aiden-cli-plugin-runtime-"));
-	const home = path.join(root, "home");
-	const project = path.join(root, "project");
-	const agentDir = path.join(home, ".aiden", "agent");
-	const plugin = path.join(home, "installed", "tools");
-	const extra = path.join(project, "extra skills");
-	mkdirSync(project, { recursive: true });
-	makeProbeSkill(path.join(extra, ".claude", "skills"), "extra-probe", "Additional directory.");
-	makeProbeSkill(path.join(plugin, "skills"), "review", "Plugin review.");
-	mkdirSync(path.join(home, ".claude", "plugins"), { recursive: true });
-	writeFileSync(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: { "tools@shop": [{ scope: "user", installPath: plugin }] } }));
-	writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "tools@shop": true } }));
-	const options = { cwd: project, env: { ...process.env, HOME: home, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" } };
-	try {
-		mkdirSync(agentDir, { recursive: true });
-		writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "never" }));
-		assert.ok(!rpcCommands(["--add-dir", "extra skills"], options).includes("skill:extra-probe"));
-		const details = rpcCommandDetails(["--add-dir", "extra skills", "--approve"], options);
-		assert.equal(details.find((skill) => skill.name === "skill:extra-probe")?.description, "Additional directory.");
-		assert.equal(details.find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
-		assert.equal(details.find((skill) => skill.name === "skill:tools:review")?.sourceInfo?.scope, "user");
-		const refused = rpcCommands(["--add-dir=extra skills", "--no-approve"], options);
-		assert.ok(!refused.includes("skill:extra-probe"));
-		assert.ok(refused.includes("skill:tools:review"));
-		const disabled = rpcCommands(["--add-dir=extra skills", "--no-skills", "--approve"], options);
-		assert.ok(!disabled.includes("skill:extra-probe"));
-		assert.ok(!disabled.includes("skill:tools:review"));
-		const projectPlugin = path.join(root, "project-plugin");
-		makeProbeSkill(path.join(projectPlugin, "skills"), "review", "Project plugin review.");
-		mkdirSync(path.join(projectPlugin, ".claude-plugin"), { recursive: true });
-		writeFileSync(path.join(projectPlugin, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "tools" }));
-		writeFileSync(path.join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ plugins: {
-			"tools@shop": [{ scope: "user", installPath: plugin }],
-			"project@shop": [{ scope: "project", installPath: projectPlugin, projectPath: project }],
-		} }));
-		mkdirSync(path.join(project, ".claude"), { recursive: true });
-		writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ enabledPlugins: { "project@shop": true } }));
-		assert.equal(rpcCommandDetails([], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
-		assert.equal(rpcCommandDetails(["--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Project plugin review.");
-		assert.equal(rpcCommandDetails(["--no-approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Plugin review.");
-		writeFileSync(path.join(projectPlugin, "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Automatic-only project review.\nuser-invocable: false\n---\nAutomatic review instructions.\n");
-		assert.ok(!rpcCommands(["--approve"], options).includes("skill:tools:review"), "omitting an automatic-only project winner must not expose the shadowed global implementation");
-		const explicit = makeProbeSkill(path.join(root, "explicit"), "tools:review", "Explicit override.");
-		assert.equal(rpcCommandDetails(["--skill", explicit, "--approve"], options).find((skill) => skill.name === "skill:tools:review")?.description, "Explicit override.");
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
 });

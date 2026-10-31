@@ -28,6 +28,7 @@ export const BOT_ORDINARY_CAPABILITY_KINDS = [
   "web",
   "browser",
   "computer_use",
+  "computer",
   "schedules",
   "subagents",
   "tasks",

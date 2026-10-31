@@ -23,6 +23,17 @@ Copyright (c) 2014 Ryan L McIntyre
 MIT License. See `renderer/lib/ghostty-terminal/fonts/LICENSE`
 
 
+## iMCP menu bar mark
+
+The iMCP connector's icon (`renderer/components/settings/mcp-preset-icons.tsx`)
+is the path from iMCP's `Assets/icon.svg`, recolored with `currentColor`.
+Aiden does not bundle the iMCP app; it runs the copy the person installs.
+Source: https://github.com/mattt/iMCP
+
+Copyright 2025 Mattt (https://mat.tt)
+
+MIT License. See https://github.com/mattt/iMCP/blob/main/LICENSE.md
+
 ## Chart.js
 
 Chart.js is vendored into `resources/generative-ui` for sandboxed Generative UI artifacts.
@@ -517,8 +528,9 @@ FluidAudio source: https://github.com/FluidInference/FluidAudio/tree/87a39dfe406
 ## Node.js glob traversal rules
 
 The segment traversal rules in `main/services/coding-tool-glob-worker.ts` are
-adapted from Node.js `lib/internal/fs/glob.js` (Node 22.22.3), with host-owned
-bounded filesystem access. Node.js is licensed under the MIT license:
+adapted from Node.js `lib/internal/fs/glob.js` (Node 22.22.3, plus the Node
+24.22 rule that never follows a symlink after `**`), with host-owned bounded
+filesystem access. Node.js is licensed under the MIT license:
 
 Copyright Node.js contributors. All rights reserved.
 Copyright Joyent, Inc. and other Node contributors. All rights reserved.
@@ -790,3 +802,90 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Lume
+
+Lume 0.6.1 (`lume.app`, the macOS virtualization CLI Aiden uses for Bot
+computers on Apple silicon) is vendored unmodified from the signed release
+asset and shipped at `Contents/Helpers/lume.app`. Source:
+https://github.com/trycua/cua/tree/lume-v0.6.1/libs/lume. The licence text is
+kept at `resources/bot-computers/LICENSE.lume.md`.
+
+MIT License
+
+Copyright (c) 2025 Cua AI, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## cua-driver
+
+cua-driver (Computer Use's signed helper, `Contents/Helpers/CuaDriver.app`) is
+vendored unmodified from its signed release. The licence text is kept at
+`resources/computer-use/LICENSE.cua-driver.md`.
+
+MIT License
+
+Copyright (c) 2025 Cua AI, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## transcribe.cpp, ggml and koffi (on-device dictation on Apple silicon)
+
+On Apple silicon Macs, on-device dictation runs Parakeet on the GPU through
+`transcribe-cpp` 0.4.0 and its `@transcribe-cpp/darwin-arm64-metal` prebuilt
+libraries, which bundle ggml and miniz. The binding loads them with `koffi`
+3.3.3. The native libraries ship unpacked in the macOS app and are left out of
+Linux packages.
+
+transcribe.cpp: Copyright (c) 2026 The transcribe.cpp authors  
+ggml: Copyright (c) 2023-2026 The ggml authors  
+miniz: Copyright 2013-2014 RAD Game Tools and Valve Software; Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC  
+koffi: Copyright (C) 2026 Niels Martignène
+
+MIT License. The package's `licenses/` folder carries each license; see
+https://github.com/handy-computer/transcribe.cpp and
+https://github.com/Koromix/koffi
+
+## pi-web-access (web page extract mode)
+
+The `web_fetch` extract mode follows the field types, the 0.80 confidence
+threshold and the text-matching rules of `field-extract.ts` in pi-web-access
+v0.45.0 (https://github.com/nicobailon/pi-web-access). Aiden's implementation is
+its own code (`main/services/web-extract-core.ts`); no pi-web-access files are
+vendored or installed.
+
+Copyright (c) 2025 Nico Bailon
+
+MIT License. See https://github.com/nicobailon/pi-web-access/blob/main/LICENSE

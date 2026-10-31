@@ -4,7 +4,7 @@
 // and on its session state change (`bots:changed`).
 
 import * as React from "react";
-import { useQueries, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { botsApi } from "../../lib/ipc";
 import { queryKeys, useBots } from "../../lib/queries";
 import { matchesSearch } from "../../lib/search-fold";
@@ -70,6 +70,16 @@ async function readLiveSummary(queryClient: QueryClient, botId: string): Promise
   const summary = await botsApi.liveSummary(botId);
   if (latestSummaryRead.get(botId) === read) return summary;
   return queryClient.getQueryData<BotLiveSummary>(queryKeys.botLiveSummary(botId)) ?? summary;
+}
+
+/** One Bot's live summary, from the same cache (and the same newest-read rule) as its sidebar row. */
+export function useBotLiveSummary(botId: string) {
+  const queryClient = useQueryClient();
+  return useQuery({
+    queryKey: queryKeys.botLiveSummary(botId),
+    queryFn: () => readLiveSummary(queryClient, botId),
+    retry: false,
+  });
 }
 
 export function useBotRows() {

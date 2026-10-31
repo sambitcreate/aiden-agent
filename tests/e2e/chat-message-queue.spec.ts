@@ -873,7 +873,8 @@ test("Escape in an empty composer stops the response, but not while a draft or m
   await composer.fill("Response to stop from the keyboard");
   await composer.press("Enter");
   await expect(stop).toBeEnabled();
-  await expect(stop).toHaveAttribute("aria-keyshortcuts", "Escape");
+  // Escape from the empty message box, plus the Stop reply command's own key.
+  await expect(stop).toHaveAttribute("aria-keyshortcuts", /^Escape (Meta|Control)\+\.$/u);
 
   // A draft keeps Escape harmless.
   await composer.fill("Half-written follow-up");

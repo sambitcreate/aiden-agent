@@ -1,5 +1,6 @@
 package sbtbiswas.AidenOnTheGo.models
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -243,7 +244,32 @@ enum class AidenBotSessionState {
     @SerialName("running") RUNNING,
     @SerialName("interrupted") INTERRUPTED,
     @SerialName("needs_model") NEEDS_MODEL,
-    @SerialName("unavailable") UNAVAILABLE
+    @SerialName("unavailable") UNAVAILABLE,
+    /**
+     * Contract revision 37: the person paused the Bot. Only `bot:handoffs` devices are sent it;
+     * an older phone sees the Bot as unavailable.
+     */
+    @SerialName("paused") PAUSED
+}
+
+/**
+ * Revision 37: a Bot's `paused` flag and a `paused` session state always travel together, the
+ * check the Mac's own parser makes. A Bot without a session state says nothing either way.
+ */
+internal fun aidenValidateBotPaused(sessionState: AidenBotSessionState?, paused: Boolean, field: String) {
+    if (sessionState != null && (sessionState == AidenBotSessionState.PAUSED) != paused) {
+        throw AidenBotContractException.InvalidCombination("$field paused")
+    }
+}
+
+/** Revision 42: the most open "Needs you" cards a Bot keeps. */
+internal const val AIDEN_BOT_MAX_ISSUE_COUNT = 8
+
+/** Revision 42: `issueCount` is sent only above zero, and never above the host's own limit. */
+internal fun aidenValidateBotIssueCount(issueCount: Int?, field: String) {
+    if (issueCount != null && issueCount !in 1..AIDEN_BOT_MAX_ISSUE_COUNT) {
+        throw AidenBotContractException.InvalidField("$field issueCount")
+    }
 }
 
 @Serializable
@@ -255,6 +281,21 @@ data class AidenBotSummary(
     val health: AidenBotHealth,
     /** Present when the host advertises `bot-durable-session-v1`. */
     val sessionState: AidenBotSessionState? = null,
+    /**
+     * Revision 37 (`bot:handoffs` devices only): the person paused this Bot. The Mac sends it only
+     * as `true`, beside a `paused` session state; a missing flag reads as false and is never
+     * written back, so a Bot that isn't paused encodes as it came.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
+    /**
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Present only above zero; a Mac or phone without the grant never sends it.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val issueCount: Int? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String
@@ -267,6 +308,8 @@ data class AidenBotSummary(
         if (updatedAt.isBefore(createdAt)) {
             throw AidenBotContractException.InvalidCombination("bot timestamps")
         }
+        aidenValidateBotPaused(sessionState, paused, "bot summary")
+        aidenValidateBotIssueCount(issueCount, "bot summary")
     }
 }
 
@@ -370,6 +413,20 @@ data class AidenBotDetail(
     val visionModelSelection: AidenBotModelSelection? = null,
     /** Revision 30 (`bot:activity`). */
     val chatActivity: AidenBotChatActivity? = null,
+    /**
+     * Revision 37 (`bot:handoffs` devices only): the person paused this Bot. A holder's detail
+     * always carries it; an older phone's never does, and a missing flag reads as false. False
+     * is never written back (to the cache), so an older Mac's detail encodes as it came.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @Serializable(with = AidenStrictBooleanSerializer::class) val paused: Boolean = false,
+    /**
+     * Revision 42 (`bot:issues` devices only): how many open "Needs you" cards the Bot holds.
+     * Present only above zero; a Mac or phone without the grant never sends it.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val issueCount: Int? = null,
     @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
     @Serializable(with = InstantIso8601Serializer::class) val updatedAt: Instant,
     val revision: String
@@ -386,6 +443,8 @@ data class AidenBotDetail(
         if (updatedAt.isBefore(createdAt)) {
             throw AidenBotContractException.InvalidCombination("bot timestamps")
         }
+        aidenValidateBotPaused(sessionState, paused, "bot detail")
+        aidenValidateBotIssueCount(issueCount, "bot detail")
     }
 }
 

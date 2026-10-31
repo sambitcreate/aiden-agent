@@ -23,6 +23,7 @@ import {
   pruneExpiredDiagnosticCrashDumps,
   type DiagnosticExportBundle,
 } from "./diagnostic-support.js";
+import { DIAGNOSTIC_REF_SALT_FILE, diagnosticRefSalt, forgetDiagnosticRefSalt } from "./diagnostic-ref-salt.js";
 
 const gunzipAsync = promisify(gunzip);
 
@@ -386,6 +387,21 @@ test("delete removes only diagnostic allowlist files and dumps", async () => {
     assert.equal(await fs.readFile(settings, "utf8"), "keep");
     await assert.rejects(fs.stat(path.join(logs, "subagent-runtime.log")), { code: "ENOENT" });
     await assert.rejects(fs.stat(path.join(dumps, "crash.dmp")), { code: "ENOENT" });
+  });
+});
+
+test("the per-install reference salt persists beside the journal and is replaced after delete", async () => {
+  await fixture(async (_root, logs, dumps) => {
+    initDiagnosticJournal({ targetPath: path.join(logs, "aiden.log"), profile: "production" });
+    const salt = diagnosticRefSalt();
+    const file = path.join(logs, DIAGNOSTIC_REF_SALT_FILE);
+    assert.equal((await fs.readFile(file, "utf8")).trim(), salt);
+    assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
+    forgetDiagnosticRefSalt();
+    assert.equal(diagnosticRefSalt(), salt, "a restart reads the same salt");
+    await deleteAllDiagnosticData({ logsPath: logs, crashDumpsPath: dumps });
+    await assert.rejects(fs.stat(file), { code: "ENOENT" });
+    assert.notEqual(diagnosticRefSalt(), salt);
   });
 });
 

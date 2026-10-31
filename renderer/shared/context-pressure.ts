@@ -285,6 +285,27 @@ export function formatContextTokenCount(value: number): string {
 }
 
 /** Whole-number percentage for labels and screen readers. */
-export function contextPressurePercent(pressure: ChatContextPressureV1): number {
+/**
+ * What the composer's context meter reads: the projection a paired Mac can
+ * also send for its chats. A local chat adds its per-category breakdown; a
+ * remote one never carries it, nor the cache or compaction candidates.
+ */
+export type ContextMeterPressure = Pick<
+  ChatContextPressureV1,
+  | "contextTokens"
+  | "contextWindow"
+  | "inputBudgetTokens"
+  | "reservedTokens"
+  | "percentOfWindow"
+  | "percentOfUsableInput"
+  | "shouldCompact"
+  | "messageTokens"
+  | "staticTokens"
+  | "source"
+  | "computedAt"
+> &
+  Partial<Pick<ChatContextPressureV1, "addedAfterUsageAnchorTokens" | "breakdown">>;
+
+export function contextPressurePercent(pressure: Pick<ChatContextPressureV1, "percentOfUsableInput">): number {
   return Math.max(0, Math.round(pressure.percentOfUsableInput));
 }

@@ -71,13 +71,13 @@ test("Telegram switches have explicit accessible names and setup uses the real w
   assert.doesNotMatch(telegram, /Settings → Workspaces/u);
 });
 
-test("Plugins settings render their title inside the shared settings page heading", () => {
+test("Connectors settings render their title inside the shared settings page heading", () => {
   const markup = renderToStaticMarkup(
     createElement(QueryClientProvider, { client: new QueryClient() }, createElement(McpSettings)),
   );
   const { document } = new Window();
   document.body.innerHTML = markup;
   const headings = [...document.querySelectorAll("h1")];
-  assert.deepEqual(headings.map((heading) => heading.textContent), ["Plugins"]);
+  assert.deepEqual(headings.map((heading) => heading.textContent), ["Connectors"]);
   assert.ok(headings[0]!.closest(".settings-page-heading"), "the page title sits in the shared heading");
 });

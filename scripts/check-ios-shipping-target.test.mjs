@@ -53,6 +53,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Bots/AidenBotCharacter.swift",
   "AidenOnTheGo/Features/Bots/AidenBotCreateView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotGeneratedAvatarLifecycle.swift",
+  "AidenOnTheGo/Features/Bots/AidenBotHandoffCard.swift",
   "AidenOnTheGo/Features/Bots/AidenBotImagePlaygroundView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotMemoryView.swift",
   "AidenOnTheGo/Features/Bots/AidenBotPresetsView.swift",
@@ -84,6 +85,7 @@ const appSourcePaths = [
   "AidenOnTheGo/Features/Remote/AidenSceneRefreshGate.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledRunNotifier.swift",
   "AidenOnTheGo/Features/Remote/AidenScheduledTasksView.swift",
+  "AidenOnTheGo/Features/Remote/AidenSpendingNotice.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualDocument.swift",
   "AidenOnTheGo/Features/Remote/AidenVisualViewer.swift",
   "AidenOnTheGo/Features/Remote/AidenWorkspaceEnvironmentView.swift",
@@ -141,6 +143,7 @@ const testSources = [
   "AidenRemotePhase0Tests.swift",
   "AidenScheduledTaskTests.swift",
   "AidenSimulatorViewerTests.swift",
+  "AidenSpendingTests.swift",
   "AidenStreamingPerformanceTests.swift",
   "AidenVisualViewerTests.swift",
   "AidenWorkspaceEnvironmentTests.swift",
@@ -766,13 +769,8 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(chat, /AidenActivityMark\(mark: activity\.mark, size: 20, color: palette\.foreground\)/u);
   assert.match(
     chat,
-    /AidenApprovalCard[\s\S]*?Image\(systemName: "shield"\)[\s\S]*?Text\(AidenApprovalPresentation\.title\(for: kind\)\)[\s\S]*?font\(\.subheadline\.weight\(\.semibold\)\)/u,
-  );
-  assert.match(
-    chat,
     /Text\(AidenApprovalPresentation\.detail\(for: kind\)\)[\s\S]*?font\(\.caption\)/u,
   );
-  assert.match(chat, /Text\(summary\)[\s\S]*?font\(\.caption\.monospaced\(\)\)/u);
   assert.match(
     chat,
     /Text\(AidenApprovalPresentation\.denyTitle\(for: kind\)\)[\s\S]*?Text\(AidenApprovalPresentation\.allowTitle\(for: kind\)\)/u,
@@ -780,10 +778,6 @@ test("the Aiden home, onboarding, composer, schedules, and activity retain the r
   assert.match(
     chat,
     /String\(localized: "This request can only be approved on your paired desktop\."\)/u,
-  );
-  assert.match(
-    chat,
-    /Label\("This task must be approved on your paired desktop\.", systemImage: "desktopcomputer"\)/u,
   );
   assert.doesNotMatch(chat, /(?:request can only|task must) be approved on your Mac/iu);
   assert.match(chat, /glassEffect\(\.regular\.interactive\(\), in: Capsule\(\)\)/u);

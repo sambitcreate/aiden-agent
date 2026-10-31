@@ -22,9 +22,16 @@ import { userFacingErrorMessage } from "../../lib/ipc-error";
 import { BOT_LIMITS, type BotDefinition } from "../../shared/bots";
 import type { BotMemoryView } from "../../shared/bot-memory";
 import { BotCharacterCard } from "./bot-character-card";
+import { BotComputerSection } from "./bot-computer-section";
+import { BotHealthSection } from "./bot-health-section";
+import { BotEventRoutines } from "./bot-event-routines";
 import { updateBotIdentity, type BotIdentityPatch } from "./bot-identity";
 import { BotPageShell } from "./bot-page-shell";
+import { setBotPaused } from "./bot-menu";
 import { BotRoutines } from "./bot-routines";
+import { BotSpendingSection } from "./bot-spending-section";
+import { BotRules } from "./bot-rules";
+import { useBotLiveSummary } from "./bot-sidebar-rows";
 import { botMemoryCount, botMemoryCountLabel, useBotMemory } from "./use-bot-memory";
 
 /** The file's bytes as base64 (no data: prefix). */
@@ -58,10 +65,11 @@ function InlineField({
   onSave(next: string): Promise<void>;
 }) {
   const [draft, setDraft] = React.useState(value);
-  const [saving, setSaving] = React.useState(false);
   // Escape blurs to leave the field; the blur must not save the abandoned edit.
   const discarding = React.useRef(false);
   React.useEffect(() => setDraft(value), [value]);
+  // The save shows at once (the Bot's cache takes the new value) and the field
+  // stays usable meanwhile; a failed save puts the stored value back.
   const commit = async () => {
     if (discarding.current) {
       discarding.current = false;
@@ -73,13 +81,10 @@ function InlineField({
       setDraft(value);
       return;
     }
-    setSaving(true);
     try {
       await onSave(next);
     } catch {
       setDraft(value);
-    } finally {
-      setSaving(false);
     }
   };
   return (
@@ -88,7 +93,6 @@ function InlineField({
       value={draft}
       maxLength={maxLength}
       placeholder={placeholder}
-      disabled={saving}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => void commit()}
       onKeyDown={(event) => {
@@ -154,6 +158,7 @@ export function BotProfile({
   onOpenInstructions,
   onOpenAdvanced,
   onOpenMemory,
+  onOpenLearning,
   onDelete,
 }: {
   bot: BotDefinition;
@@ -162,6 +167,7 @@ export function BotProfile({
   onOpenInstructions(): void;
   onOpenAdvanced(): void;
   onOpenMemory(): void;
+  onOpenLearning?(): void;
   onDelete(): void;
 }) {
   const qc = useQueryClient();
@@ -204,6 +210,7 @@ export function BotProfile({
     }
   };
   const preview = instructionsPreview(bot.instructions);
+  const paused = useBotLiveSummary(bot.id).data?.state.kind === "paused";
   return (
     <BotPageShell
       scrollId={`bot-profile:${bot.id}`}
@@ -219,6 +226,9 @@ export function BotProfile({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onSelect={onOpenAdvanced}>Advanced</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => void setBotPaused(bot, !paused)}>
+              {paused ? "Resume Bot" : "Pause Bot"}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem color="status-red" onSelect={onDelete}>
               Delete Bot
@@ -304,9 +314,24 @@ export function BotProfile({
           <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
         </button>
         <MemoryRow botId={bot.id} onOpen={onOpenMemory} />
+        {onOpenLearning ? (
+          <button type="button" aria-label="What I've learned" className={PROFILE_ROW_CLASS} onClick={onOpenLearning}>
+            <span className="min-w-0 flex-1">
+              <span className="block text-strong text-primary">What I’ve learned</span>
+              <span className="mt-0.5 block truncate text-small text-secondary">Lessons, skills and follow-ups, with Undo</span>
+            </span>
+            <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-tertiary" />
+          </button>
+        ) : null}
       </FieldSet>
       <BotCharacterCard avatar={bot.avatar} onChange={(avatar) => void save({ avatar }).catch(() => undefined)} />
       <BotRoutines bot={bot} />
+      <BotEventRoutines bot={bot} />
+      <BotHealthSection bot={bot} />
+      <BotSpendingSection bot={bot} />
+      <BotRules bot={bot} />
+      {/* Apple silicon only; renders nothing elsewhere. */}
+      <BotComputerSection bot={bot} />
       <Text as="p" variant="small" color="tertiary" className="px-1 text-center">
         Changes save as you make them and apply from the next message.
       </Text>

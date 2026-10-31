@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants, createReadStream, createWriteStream } from "node:fs";
 import {
+  access,
   chmod,
   copyFile,
   lstat,
@@ -52,27 +53,36 @@ const CARGO_BUILD_TIMEOUT_MS = 10 * 60_000;
 const COMMAND_TERMINATE_GRACE_MS = 500;
 const COMMAND_KILL_GRACE_MS = 1_000;
 
+function defaultCommandEnvironment() {
+  return {
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: process.env.HOME,
+    TMPDIR: process.env.TMPDIR,
+    LANG: "C",
+    LC_ALL: "C",
+    CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
+    CUA_TELEMETRY_ENABLED: "0",
+    CUA_DRIVER_RS_UPDATE_CHECK: "false",
+  };
+}
+
+/**
+ * Run one fixed command in its own guarded process group. `env` replaces the
+ * fixed default environment entirely (it is never merged with process.env).
+ */
 export function runBoundedCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const {
       timeoutMs = COMMAND_TIMEOUT_MS,
       terminateGraceMs = COMMAND_TERMINATE_GRACE_MS,
       killGraceMs = COMMAND_KILL_GRACE_MS,
+      env = defaultCommandEnvironment(),
       ...spawnOptions
     } = options;
     const child = spawn(process.execPath, [commandGuardPath, JSON.stringify({ command, args })], {
       ...spawnOptions,
       detached: process.platform !== "win32",
-      env: {
-        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-        HOME: process.env.HOME,
-        TMPDIR: process.env.TMPDIR,
-        LANG: "C",
-        LC_ALL: "C",
-        CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
-        CUA_TELEMETRY_ENABLED: "0",
-        CUA_DRIVER_RS_UPDATE_CHECK: "false",
-      },
+      env,
       shell: false,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
@@ -361,8 +371,37 @@ async function pathExists(candidate) {
   }
 }
 
-export async function buildBrokerApp(runner = run) {
-  const cargo = process.env.CARGO || path.join(os.homedir(), ".cargo", "bin", "cargo");
+async function isExecutableFile(candidate) {
+  try {
+    const info = await lstat(candidate);
+    if (!info.isFile() && !info.isSymbolicLink()) return false;
+    await access(candidate, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find Cargo as an absolute path, because the build itself runs with the
+ * fixed minimal PATH. An explicit CARGO wins, then a rustup install in
+ * ~/.cargo/bin, then the first absolute PATH entry that has one (GitHub's
+ * macOS images install rustup from Homebrew, with no ~/.cargo/bin/cargo).
+ */
+export async function resolveCargo({ env = process.env, home = os.homedir() } = {}) {
+  if (env.CARGO) return env.CARGO;
+  const candidates = [path.join(home, ".cargo", "bin", "cargo")];
+  for (const directory of (env.PATH ?? "").split(path.delimiter)) {
+    if (path.isAbsolute(directory)) candidates.push(path.join(directory, "cargo"));
+  }
+  for (const candidate of candidates) {
+    if (await isExecutableFile(candidate)) return candidate;
+  }
+  throw new Error("Cargo was not found in ~/.cargo/bin or on PATH. Install rustup or set CARGO.");
+}
+
+export async function buildBrokerApp(runner = run, findCargo = resolveCargo) {
+  const cargo = await findCargo();
   await runner(
     cargo,
     [
@@ -376,6 +415,12 @@ export async function buildBrokerApp(runner = run) {
     ],
     {
       cwd: brokerPackage,
+      // A Homebrew rustup does not add its proxies to PATH, so Cargo would
+      // not find rustc beside it under the fixed minimal PATH.
+      env: {
+        ...defaultCommandEnvironment(),
+        PATH: [path.dirname(cargo), defaultCommandEnvironment().PATH].join(path.delimiter),
+      },
       // A clean rustup toolchain install, crate fetch, and release/LTO compile
       // can legitimately take several minutes. It remains inside the same
       // occupied process-group guard and bounded TERM-to-KILL cleanup.

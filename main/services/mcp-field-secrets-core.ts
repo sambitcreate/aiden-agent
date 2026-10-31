@@ -1,4 +1,5 @@
-// Custom MCP servers' env and header values live in the encrypted secrets
+// Custom MCP servers' env and header values, and a custom server's
+// pre-registered OAuth client secret, live in the encrypted secrets
 // store, never in the portable config.json. config.json keeps each name with
 // an opaque marker (`aiden-secret:v1:<random>`); the server's secret record
 // maps markers to values. A new marker is minted whenever a value is entered,
@@ -14,7 +15,7 @@ export { MCP_FIELD_SECRET_PREFIX, isMcpFieldSecretMarker };
 
 export const MCP_FIELD_SECRET_LIMITS = Object.freeze({ entries: 64, valueChars: 16_384, nameChars: 256 });
 
-/** Field (`env:NAME` / `headers:NAME`) → the stored value its marker resolves to. */
+/** Field (`env:NAME` / `headers:NAME` / `oauth:client_secret`) → the stored value its marker resolves to. */
 export type McpFieldSecretValues = Record<string, string>;
 
 /** One stored value and the field it was saved for (`env:NAME` or `headers:NAME`). */
@@ -38,12 +39,35 @@ export interface McpFieldSecretRecord {
 
 export class McpFieldSecretDestinationError extends Error {
   constructor(readonly serverName: string) {
-    super(`The address or command of “${serverName}” changed outside Aiden, so its saved header and environment values were not sent. Enter them again in Settings → Plugins.`);
+    super(`The address or command of “${serverName}” changed outside Aiden, so its saved header and environment values were not sent. Enter them again in Settings → Connectors.`);
   }
 }
 
-type FieldKind = "env" | "headers";
-const KINDS: readonly FieldKind[] = ["env", "headers"];
+type FieldKind = "env" | "headers" | "oauth";
+const KINDS: readonly FieldKind[] = ["env", "headers", "oauth"];
+
+/** The field name of a custom server's pre-registered OAuth client secret (`oauth:client_secret`). */
+const OAUTH_CLIENT_SECRET = "client_secret";
+
+/**
+ * One kind's name → value (or marker) map. The "oauth" kind has a single
+ * field, the custom server's pre-registered client secret.
+ */
+function fieldsOf(server: McpServer | undefined, kind: FieldKind): Record<string, string> | undefined {
+  if (!server) return undefined;
+  if (kind === "oauth") return server.oauthClientSecret === undefined ? undefined : { [OAUTH_CLIENT_SECRET]: server.oauthClientSecret };
+  return server[kind];
+}
+
+function setFields(server: McpServer, kind: FieldKind, fields: Record<string, string>): void {
+  if (kind !== "oauth") {
+    server[kind] = fields;
+    return;
+  }
+  const secret = Object.prototype.hasOwnProperty.call(fields, OAUTH_CLIENT_SECRET) ? fields[OAUTH_CLIENT_SECRET] : undefined;
+  if (secret === undefined) delete server.oauthClientSecret;
+  else server.oauthClientSecret = secret;
+}
 
 
 /** Secrets-store id holding one server's env/header values. */
@@ -53,11 +77,12 @@ export function mcpFieldSecretId(serverId: string): string {
 
 export class McpFieldSecretMissingError extends Error {
   constructor(readonly serverName: string, readonly field: string) {
-    super(`The saved value for ${field} of “${serverName}” is missing on this device. Enter it again in Settings → Plugins.`);
+    super(`The saved value for ${field} of “${serverName}” is missing on this device. Enter it again in Settings → Connectors.`);
   }
 }
 
 function fieldLabel(kind: FieldKind, name: string): string {
+  if (kind === "oauth") return "OAuth client secret";
   return kind === "env" ? `environment variable “${name}”` : `header “${name}”`;
 }
 
@@ -65,15 +90,15 @@ function fieldKey(kind: FieldKind, name: string): string {
   return `${kind}:${name}`;
 }
 
-/** True when config still holds an env or header value in plain text. */
+/** True when config still holds an env, header or client-secret value in plain text. */
 export function hasPlaintextMcpFields(server: McpServer): boolean {
-  return KINDS.some((kind) => Object.values(server[kind] ?? {}).some((value) => !isMcpFieldSecretMarker(value)));
+  return KINDS.some((kind) => Object.values(fieldsOf(server, kind) ?? {}).some((value) => !isMcpFieldSecretMarker(value)));
 }
 
 /** Every marker the server references. */
 export function mcpFieldSecretMarkers(server: McpServer | undefined): string[] {
   if (!server) return [];
-  return KINDS.flatMap((kind) => Object.values(server[kind] ?? {}).filter(isMcpFieldSecretMarker));
+  return KINDS.flatMap((kind) => Object.values(fieldsOf(server, kind) ?? {}).filter(isMcpFieldSecretMarker));
 }
 
 export function newMcpFieldSecretMarker(random: () => string): string {
@@ -113,7 +138,7 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
   const kept: McpFieldSecretPlan["kept"] = [];
   const server: McpServer = { ...target };
   for (const kind of KINDS) {
-    const fields = target[kind];
+    const fields = fieldsOf(target, kind);
     if (!fields) continue;
     const entries = Object.entries(fields);
     if (entries.length > MCP_FIELD_SECRET_LIMITS.entries) {
@@ -132,7 +157,7 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
         sealed[name] = value;
         continue;
       }
-      const existing = options.reuse?.current?.[kind]?.[name];
+      const existing = fieldsOf(options.reuse?.current, kind)?.[name];
       if (existing !== undefined && isMcpFieldSecretMarker(existing) && own(options.reuse!.values, fieldKey(kind, name)) === value) {
         kept.push({ marker: existing, field: fieldKey(kind, name), label: fieldLabel(kind, name) });
         sealed[name] = existing;
@@ -142,7 +167,7 @@ export function planMcpFieldSecrets(target: McpServer, random: () => string, opt
       added[marker] = { field: fieldKey(kind, name), value };
       sealed[name] = marker;
     }
-    server[kind] = sealed;
+    setFields(server, kind, sealed);
   }
   return { server, added, kept };
 }
@@ -180,7 +205,7 @@ export function stageMcpFieldSecrets(
   const additions: Record<string, McpFieldSecretEntry> = {};
   const server: McpServer = { ...plan.server };
   for (const kind of KINDS) {
-    const fields = plan.server[kind];
+    const fields = fieldsOf(plan.server, kind);
     if (!fields) continue;
     const staged: Record<string, string> = {};
     for (const [name, marker] of Object.entries(fields)) {
@@ -208,7 +233,7 @@ export function stageMcpFieldSecrets(
       additions[copy] = { field, value: stored.value };
       staged[name] = copy;
     }
-    server[kind] = staged;
+    setFields(server, kind, staged);
   }
   Object.assign(additions, plan.added);
   if (Object.keys(additions).length === 0) return { server };
@@ -219,7 +244,7 @@ export function stageMcpFieldSecrets(
 function referencesUnder(server: McpServer | undefined, marker: string, field: string): boolean {
   const separator = field.indexOf(":");
   const kind = field.slice(0, separator) as FieldKind;
-  return server?.[kind]?.[field.slice(separator + 1)] === marker;
+  return fieldsOf(server, kind)?.[field.slice(separator + 1)] === marker;
 }
 
 function own<T>(map: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -236,15 +261,15 @@ export function mcpFieldSecretCleanupBaseline(current: McpServer | undefined, pl
   if (!current) return current;
   const baseline: McpServer = { ...current };
   for (const kind of KINDS) {
-    const fields = current[kind];
-    const sealed = plan.server[kind];
+    const fields = fieldsOf(current, kind);
+    const sealed = fieldsOf(plan.server, kind);
     if (!fields || !sealed) continue;
-    baseline[kind] = Object.fromEntries(Object.entries(fields).map(([name, value]) => {
+    setFields(baseline, kind, Object.fromEntries(Object.entries(fields).map(([name, value]) => {
       const marker = sealed[name];
       return !isMcpFieldSecretMarker(value) && marker !== undefined && plan.added[marker]?.value === value
         ? [name, marker]
         : [name, value];
-    }));
+    })));
   }
   return baseline;
 }
@@ -278,7 +303,7 @@ export function mcpFieldSecretFieldValues(server: McpServer, record: Readonly<Mc
   const binding = bindingFor(record, server);
   const values: McpFieldSecretValues = {};
   for (const kind of KINDS) {
-    for (const [name, marker] of Object.entries(server[kind] ?? {})) {
+    for (const [name, marker] of Object.entries(fieldsOf(server, kind) ?? {})) {
       const value = isMcpFieldSecretMarker(marker) ? occurrenceValue(binding, kind, name, marker) : undefined;
       if (value !== undefined) values[fieldKey(kind, name)] = value;
     }
@@ -301,14 +326,14 @@ export function resolveMcpFieldSecrets(server: McpServer, record: Readonly<McpFi
   const values = mcpFieldSecretFieldValues(server, record);
   const resolved: McpServer = { ...server };
   for (const kind of KINDS) {
-    const fields = server[kind];
+    const fields = fieldsOf(server, kind);
     if (!fields) continue;
-    resolved[kind] = Object.fromEntries(Object.entries(fields).map(([name, value]) => {
+    setFields(resolved, kind, Object.fromEntries(Object.entries(fields).map(([name, value]) => {
       if (!isMcpFieldSecretMarker(value)) return [name, value];
       const stored = own(values, fieldKey(kind, name));
       if (stored === undefined) throw new McpFieldSecretMissingError(server.name || server.id, fieldLabel(kind, name));
       return [name, stored];
-    }));
+    })));
   }
   return resolved;
 }
@@ -338,7 +363,7 @@ export function pruneMcpFieldSecretRecord(
   // Keep each entry some occurrence still resolves for its own field.
   const used = new Set<string>();
   for (const kind of KINDS) {
-    for (const [name, marker] of Object.entries(server[kind] ?? {})) {
+    for (const [name, marker] of Object.entries(fieldsOf(server, kind) ?? {})) {
       if (isMcpFieldSecretMarker(marker) && occurrenceValue(binding, kind, name, marker) !== undefined) used.add(marker);
     }
   }
@@ -359,7 +384,7 @@ export function parseMcpFieldSecretRecord(value: string | null): McpFieldSecretR
     const entries: Record<string, McpFieldSecretEntry> = {};
     for (const [marker, entry] of Object.entries(group)) {
       const { field, value: stored } = (entry ?? {}) as { field?: unknown; value?: unknown };
-      if (isMcpFieldSecretMarker(marker) && typeof field === "string" && /^(?:env|headers):/u.test(field) && typeof stored === "string") {
+      if (isMcpFieldSecretMarker(marker) && typeof field === "string" && /^(?:env|headers|oauth):/u.test(field) && typeof stored === "string") {
         entries[marker] = { field, value: stored };
       }
     }
@@ -391,6 +416,6 @@ export function mcpStdioLaunchFingerprint(server: McpServer): string {
  */
 export function mcpFieldSecretReferencesChanged(before: McpServer, after: McpServer | undefined): boolean {
   if (!after) return true;
-  return KINDS.some((kind) => JSON.stringify(before[kind] ?? {}) !== JSON.stringify(after[kind] ?? {})) ||
+  return KINDS.some((kind) => JSON.stringify(fieldsOf(before, kind) ?? {}) !== JSON.stringify(fieldsOf(after, kind) ?? {})) ||
     mcpFieldSecretDestination(before) !== mcpFieldSecretDestination(after);
 }

@@ -9,6 +9,7 @@ import {
   BOT_FILE_TOOL_NAMES,
   buildBotFileTools,
 } from "./bot-file-tool-router.js";
+import { cliBotProtectedRoots } from "./bot-protected-settings.js";
 import { piRuntimeReplayPolicy } from "./pi-runtime-tool.js";
 
 function byName(tools: readonly AgentTool[], name: string): AgentTool {
@@ -119,6 +120,87 @@ test("a full-Mac write into a Bot's session or memory files is refused, however 
     );
     await write.execute("ok", { path: "profile/notes.md", content: "fine" });
     assert.equal(await fs.readFile(path.join(parent, "profile", "notes.md"), "utf8"), "fine");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a full-Mac Bot cannot edit Aiden's settings files but can write next to them", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-settings-"));
+  const profile = path.join(parent, "profile");
+  const settings = path.join(profile, "settings.json");
+  try {
+    await fs.mkdir(profile, { recursive: true });
+    await fs.writeFile(settings, '{"settings":{"appControlPolicy":"ask"}}', "utf8");
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "loc.mac.opaque", label: "This Mac", root: parent },
+      protectedRoots: () => [settings],
+    });
+    await assert.rejects(
+      byName(tools, "write_file").execute("w", { path: "profile/settings.json", content: "{}" }),
+      /settings files; file tools cannot change them/u,
+    );
+    await assert.rejects(
+      byName(tools, "edit_file").execute("e", { path: "profile/settings.json", old_string: "ask", new_string: "safe" }),
+      /cannot change them/u,
+    );
+    assert.equal(await fs.readFile(settings, "utf8"), '{"settings":{"appControlPolicy":"ask"}}');
+    // Only the named file is fenced: a sibling with a longer name is ordinary.
+    await byName(tools, "write_file").execute("ok", { path: "profile/settings.json.notes", content: "fine" });
+    assert.equal(await fs.readFile(path.join(profile, "settings.json.notes"), "utf8"), "fine");
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a CLI Bot cannot edit the CLI's settings, credentials, Bot storage or the portable config", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-bot-file-router-cli-settings-"));
+  const agentDir = path.join(parent, "agent");
+  const configDir = path.join(parent, ".aiden");
+  try {
+    await fs.mkdir(path.join(agentDir, "credentials"), { recursive: true });
+    await fs.mkdir(path.join(agentDir, "bot-service", "homes", "bot-a"), { recursive: true });
+    await fs.mkdir(path.join(agentDir, "authority"), { recursive: true });
+    await fs.mkdir(configDir, { recursive: true });
+    const stored = {
+      "agent/bot-service/bots.json": '{"version":1,"bots":[]}',
+      "agent/bot-service/bot-capabilities.json": '{"version":1}',
+      "agent/bot-service/bot-pauses.json": '{"paused":{}}',
+      "agent/authority/bot-anchor.json": '{"value":"anchor"}',
+      "agent/telegram.json": '{"telegramAllowedUserId":"1"}',
+    };
+    for (const [file, content] of Object.entries(stored)) await fs.writeFile(path.join(parent, file), content);
+    const tools = buildBotFileTools({
+      defaultLocation: { id: "loc.mac.opaque", label: "This Mac", root: parent },
+      protectedRoots: () => cliBotProtectedRoots(agentDir, configDir),
+    });
+    for (const target of [
+      "agent/aiden.json", "agent/auth.json", "agent/workspaces.json", "agent/credentials/insights.json", ".aiden/config.json",
+      ...Object.keys(stored),
+      // Files Aiden has not written yet are fenced too.
+      "agent/bot-service/bot-capability-state-head.json", "agent/authority/bot-bootstrap.json",
+    ]) {
+      await assert.rejects(
+        byName(tools, "write_file").execute("w", { path: target, content: "{}" }),
+        /cannot change them/u,
+        target,
+      );
+    }
+    for (const target of Object.keys(stored)) {
+      await assert.rejects(
+        byName(tools, "edit_file").execute("e", { path: target, old_string: "1", new_string: "2" }),
+        /cannot change them/u,
+        target,
+      );
+    }
+    for (const [file, content] of Object.entries(stored)) {
+      assert.equal(await fs.readFile(path.join(parent, file), "utf8"), content, file);
+    }
+    // The Bot's own work next to them, and in its home inside Bot storage, is ordinary.
+    await byName(tools, "write_file").execute("ok", { path: "agent/notes.md", content: "fine" });
+    assert.equal(await fs.readFile(path.join(agentDir, "notes.md"), "utf8"), "fine");
+    await byName(tools, "write_file").execute("home", { path: "agent/bot-service/homes/bot-a/report.md", content: "made" });
+    assert.equal(await fs.readFile(path.join(agentDir, "bot-service", "homes", "bot-a", "report.md"), "utf8"), "made");
   } finally {
     await fs.rm(parent, { recursive: true, force: true });
   }

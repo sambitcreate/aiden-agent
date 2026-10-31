@@ -62,8 +62,15 @@ function SettingControl({ controlRef }: { controlRef: string }) {
           disabled={Boolean(context.pending) || Boolean(row.disabledReason)}
           onValueChange={(value) => context.change(row, value)}
         >
-          <SelectTrigger id={id} aria-label={`${row.label} — ${row.scope}`} className="max-w-36">
-            <SelectValue />
+          <SelectTrigger
+            id={id}
+            aria-label={`${row.label} — ${row.scope}`}
+            className={row.id === "models.newChat" ? "max-w-60" : "max-w-36"}
+          >
+            {/* Long model names stay on one line. */}
+            <span className="min-w-0 truncate text-left">
+              <SelectValue />
+            </span>
           </SelectTrigger>
           <SelectContent>
             {row.options.map((option) => (

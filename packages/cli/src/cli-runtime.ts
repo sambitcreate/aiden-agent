@@ -18,8 +18,8 @@ import { exitAfterFlush } from "./exit-after-flush.ts";
 import { CLI_COMMAND_HELP } from "./command-help.ts";
 import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { migrateAidenMcpConfigOnce } from "./mcp.ts";
-import { configureAdditionalSkillDirectories } from "./skill-paths.ts";
 import { shouldDefaultToFullscreenTui } from "./tui-default.ts";
+import { shouldDefaultToCodemode } from "./codemode-default.ts";
 
 /**
  * Extra Aiden theme presets shipped beside the bundle. pi only auto-loads
@@ -39,11 +39,11 @@ function bundledThemePaths(appDir: string): string[] {
 }
 
 /**
- * Mirrors pi's own resolution for where a tuiMode preference could be saved:
+ * Mirrors pi's own resolution for where a preference (tuiMode, defaultTools) could be saved:
  * the rebranded agent dir (env override, else <home>/<configDir>/agent) and
  * the current project's settings.
  */
-function tuiSettingsPaths(appDir: string): string[] {
+function settingsPaths(appDir: string): string[] {
 	let configDir = ".aiden";
 	let appName = "aiden";
 	try {
@@ -67,9 +67,28 @@ function tuiSettingsPaths(appDir: string): string[] {
 	return paths;
 }
 
-export async function runCli(argv: string[], appDir: string): Promise<void> {
+/** The one line printed when the CLI starts in a folder that was deleted. */
+export const DELETED_WORKING_DIRECTORY_MESSAGE =
+	"aiden: The current folder no longer exists. Change to an existing folder and try again.";
+
+/** The current folder, or undefined when it was deleted after the shell entered it. */
+function currentDirectory(): string | undefined {
 	try {
-		argv = configureAdditionalSkillDirectories(argv, process.cwd());
+		return process.cwd();
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		return undefined;
+	}
+}
+
+export async function runCli(argv: string[], appDir: string): Promise<void> {
+	// Everything below reads the current folder (settings, migrations, pi's
+	// own startup), so a deleted one gets one plain line instead of `uv_cwd`.
+	if (currentDirectory() === undefined) {
+		console.error(DELETED_WORKING_DIRECTORY_MESSAGE);
+		await exitAfterFlush(1);
+	}
+	try {
 		migrateCliAzureConfig(getAgentDir());
 		try {
 			migrateAidenMcpConfigOnce(getAgentDir());
@@ -78,20 +97,24 @@ export async function runCli(argv: string[], appDir: string): Promise<void> {
 			// `aiden mcp` commands retry it and report the same error.
 			process.stderr.write(`aiden: MCP migration deferred (${error instanceof Error ? error.message : String(error)})\n`);
 		}
-		if (argv[0] === "pi-mcp") {
-			await main(["mcp", ...argv.slice(1)]);
-			return;
-		}
 		if (await dispatchCommand(getAgentDir(), process.cwd(), argv)) await exitAfterFlush(0);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error)); await exitAfterFlush(1);
 	}
 	if (argv.includes("--help")) process.stdout.write(CLI_COMMAND_HELP + "\n");
+	// Aiden's extension owns MCP (aiden-mcp.json, /mcp). Disabling Pi's built-in
+	// MCP extension outright keeps Pi from reporting it as replaced on every launch.
+	if (!argv.includes("--no-mcp")) argv.push("--no-mcp");
 	for (const themePath of bundledThemePaths(appDir)) {
 		argv.push("--theme", themePath);
 	}
-	if (shouldDefaultToFullscreenTui(argv, tuiSettingsPaths(appDir))) {
+	const savedSettings = settingsPaths(appDir);
+	if (shouldDefaultToFullscreenTui(argv, savedSettings)) {
 		argv.push("--tui-mode", "fullscreen");
+	}
+	// Codemode is on by default, as on the desktop; an explicit tool choice wins.
+	if (shouldDefaultToCodemode(argv, savedSettings)) {
+		argv.push("--tools", "+codemode");
 	}
 	try {
 		const extensionFactories = await createAidenInlineExtensions();

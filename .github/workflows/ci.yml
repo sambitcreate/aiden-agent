@@ -2,15 +2,10 @@ name: CI
 
 on:
   pull_request:
-  # Started by model-catalog-main-baseline.yml after a catalog merge, which
-  # (made with the job token) produces no push event of its own.
   workflow_dispatch:
   push:
     branches:
       - main
-      # The model catalog bot pushes here with its deploy key; a pull request it
-      # opens with the job token would not start CI on its own.
-      - "automation/models-dev-catalog-*"
 
 permissions:
   contents: read
@@ -40,7 +35,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
       - name: Detect shared and platform changes
         id: filter
         env:
@@ -59,7 +54,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -83,7 +78,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -120,7 +115,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -136,7 +131,7 @@ jobs:
         run: node scripts/ci-e2e-shards.mjs ${{ matrix.shard }}/3
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -158,7 +153,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -179,7 +174,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -213,7 +208,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -242,7 +237,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install locked dependencies
         run: npm ci
@@ -266,7 +261,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
       - name: Run Apple Foundation Models tests
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -291,7 +286,7 @@ jobs:
         if: ${{ needs.changes.outputs.desktop == 'false' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
       - name: Install iOS policy dependencies
         if: ${{ needs.changes.outputs.desktop == 'false' }}
@@ -359,6 +354,19 @@ jobs:
           -clonedSourcePackagesDirPath '${{ runner.temp }}/AidenOnTheGoSourcePackages'
           -resultBundlePath '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult'
           CODE_SIGNING_ALLOWED=NO
+
+      - name: Print failed iOS simulator test messages
+        if: failure()
+        shell: bash
+        run: |
+          # Parallel test runs print only test names; the failure messages
+          # live in the result bundle.
+          xcrun xcresulttool get test-results summary --compact \
+            --path '${{ runner.temp }}/AidenOnTheGoSimulator.xcresult' | python3 -c '
+          import json, sys
+          for failure in json.load(sys.stdin).get("testFailures", []):
+              print("::error title=" + failure.get("testName", "test") + "::" + failure.get("failureText", "").replace("\n", " "))
+          ' || true
 
       - name: Preserve failed iOS simulator test results
         if: failure()
@@ -476,7 +484,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: packages/cli-playground/package-lock.json
       - name: Install playground dependencies
@@ -501,7 +509,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
       - name: Require every selected check to pass
         env:
           CI_NEEDS_JSON: ${{ toJSON(needs) }}
@@ -524,7 +532,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
       - name: Summarize this CI attempt
         env:
           GH_TOKEN: ${{ github.token }}
@@ -585,7 +593,7 @@ jobs:
         if: ${{ needs.changes.outputs.linux == 'true' }}
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
 
       - name: Install Linux test dependencies
@@ -701,7 +709,7 @@ jobs:
 
       - name: Build sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}
-        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed
+        run: npm run diagnostics:failure-receipt -- test-results/e2e-safe-receipt.json electron-e2e test-failed test-results/safe-test-details.json
 
       - name: Upload sanitized E2E failure receipt
         if: ${{ failure() && matrix.arch == 'x64' }}
@@ -729,7 +737,7 @@ jobs:
       - name: Use Node.js 22
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          node-version: 22.22.3
+          node-version: 22.23.4
           cache: npm
 
       - name: Install locked dependencies

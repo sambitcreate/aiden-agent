@@ -11,24 +11,52 @@ export function mcpPresetCredentialReady({
   draftKey: string;
   authorized: boolean;
 }): boolean {
-  return auth.kind === "apiKey"
-    ? hasStoredKey || Boolean(draftKey.trim())
-    : authorized;
+  switch (auth.kind) {
+    case "apiKey":
+      return hasStoredKey || Boolean(draftKey.trim());
+    case "oauth":
+      return authorized;
+    case "none":
+      return true;
+  }
 }
 
-export function mcpPresetConnectionBadge(
+export type McpCardStatusColor = "green" | "red" | "warning" | "gray";
+
+/**
+ * The badge on a connector card. Saved state says whether it is set up; the
+ * live connection decides the rest, so a failing connection is never shown as
+ * connected and nothing turns green before a connection succeeds.
+ */
+export function mcpPresetCardStatus(
   state: McpPresetState,
-): { label: string; color: "green" | "red" | "gray" } | null {
+  live: McpLiveStatus | undefined,
+  /** False until main's live snapshot has loaded: a ready card then shows no badge rather than a guess. */
+  liveLoaded = true,
+): { label: string; color: McpCardStatusColor } | null {
   if (!state.configured) return null;
   if (state.error) return { label: "Needs repair", color: "red" };
   if (!state.ready) {
     return {
       label: state.preset.auth.kind === "oauth" ? "Needs sign-in" : "Needs key",
-      color: "red",
+      color: "warning",
     };
   }
-  if (!state.enabled) return { label: "Disabled", color: "gray" };
-  return { label: "Configured", color: "green" };
+  if (!state.enabled) return { label: "Off", color: "gray" };
+  if (live?.needsSignIn || state.needsSignIn) return { label: "Needs sign-in", color: "warning" };
+  if (!liveLoaded) return null;
+  switch (live?.state) {
+    case "connected":
+      return { label: "Connected", color: "green" };
+    case "failed":
+      return { label: "Couldn’t connect", color: "red" };
+    case "connecting":
+      return { label: "Connecting…", color: "gray" };
+    case "closed":
+      return { label: "Idle", color: "gray" };
+    default:
+      return { label: "Not connected yet", color: "gray" };
+  }
 }
 
 export function mcpServerEditorKind(
@@ -112,7 +140,8 @@ export function mcpConnectionChanged(saved: McpServer, draft: McpServer): boolea
       map(server.headers),
       server.oauth === true,
       server.authServerMetadataUrl ?? null,
-      server.oauthClientName ?? null,
+      server.oauthClientId ?? null,
+      server.oauthClientSecret ?? null,
       server.authProvider ?? null,
     ]);
   return pick(saved) !== pick(draft);

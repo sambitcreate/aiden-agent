@@ -66,22 +66,3 @@ test("a home-directory launch keeps home skill roots in user scope", async () =>
 		rmSync(home, { recursive: true, force: true });
 	}
 });
-
-test("additional directory arguments are repeated, launch-relative, bounded, and stop at the positional separator", async () => {
-	const { configureAdditionalSkillDirectories, desktopSkillDiscoveryPaths } = await import(pathToFileURL(path.join(pkgDir, "src", "skill-paths.ts")));
-	const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-add-dir-"));
-	try {
-		const extra = path.join(home, "extra skills");
-		makeSkill(path.join(extra, ".claude", "skills"), "extra");
-		assert.deepEqual(configureAdditionalSkillDirectories(["--add-dir", "extra skills", "--add-dir=extra skills", "--mode", "rpc"], home), ["--mode", "rpc"]);
-		assert.deepEqual(desktopSkillDiscoveryPaths(home, home, true).map(({ path: file }) => path.basename(file)), ["extra"]);
-		assert.deepEqual(desktopSkillDiscoveryPaths(home, home, false), []);
-		assert.throws(() => configureAdditionalSkillDirectories(["--add-dir", "--no-skills"], home), /requires a directory/);
-		assert.throws(() => configureAdditionalSkillDirectories(Array.from({ length: 33 }, (_, i) => `--add-dir=${i}`), home), /at most 32/);
-		assert.deepEqual(configureAdditionalSkillDirectories(["--", "--add-dir", "extra skills"], home), ["--", "--add-dir", "extra skills"]);
-		assert.deepEqual(desktopSkillDiscoveryPaths(home, home, true), []);
-	} finally {
-		configureAdditionalSkillDirectories([], home);
-		rmSync(home, { recursive: true, force: true });
-	}
-});

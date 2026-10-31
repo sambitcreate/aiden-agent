@@ -14,8 +14,22 @@ type Emit = (tag: string, value: unknown) => void;
 export interface ScenarioArgs {
   profileDir: string;
   botId: string;
-  kind: "approval" | "tools";
+  /** `handoff-answered`: the person answers Done at once, and the child dies while the answer is recorded. */
+  /** `script-approval`: a codemode script's call waits for approval. */
+  kind: "approval" | "script-approval" | "tools" | "handoff" | "handoff-answered";
 }
+
+/** The rule hand-off every `handoff` scenario call gets. */
+export const SCENARIO_RULE_HANDOFF = {
+  rule: { id: "default.purchase", label: "Make a purchase or booking" },
+  summary: "Click Place your order — Safari",
+  action: "Make a purchase or booking",
+  why: "Your rule “Make a purchase or booking” hands this to you.",
+} as const;
+
+/** The connection tool the `script-approval` script calls, and the script. */
+export const SCENARIO_SCRIPT_TOOL = "docs__gated";
+export const SCENARIO_SCRIPT = `text(await tools.${SCENARIO_SCRIPT_TOOL}({ text: "x" }))`;
 
 export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
   const ctx = BACKGROUND_CONTEXT;
@@ -25,9 +39,23 @@ export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
       return blockingUntilAborted(signal);
     });
   const deps =
-    args.kind === "approval"
+    args.kind === "handoff" || args.kind === "handoff-answered"
       ? recordingDeps({
           tools: [{ tool: countingTool("gated"), replay: "unsafe" }],
+          policy: () => ({ allowed: true, handoff: { ...SCENARIO_RULE_HANDOFF, rule: { ...SCENARIO_RULE_HANDOFF.rule } } }),
+          handoff: async (request) => {
+            emit("HANDOFF", request.waitId);
+            if (args.kind === "handoff-answered") return { outcome: "done", note: "Booked for two" };
+            return blockingUntilAborted(request.signal);
+          },
+        })
+      : args.kind === "approval" || args.kind === "script-approval"
+      ? recordingDeps({
+          tools: [
+            args.kind === "approval"
+              ? { tool: countingTool("gated"), replay: "unsafe" }
+              : { tool: countingTool(SCENARIO_SCRIPT_TOOL), replay: "unsafe", mcp: true },
+          ],
           policy: () => ({ allowed: true, approval: { summary: "Run gated" } }),
           approve: async (request) => {
             emit("APPROVAL", request.waitId);
@@ -40,8 +68,16 @@ export async function run(args: ScenarioArgs, emit: Emit): Promise<void> {
             { tool: hang("safe_op"), replay: "safe" },
           ],
         });
+  if (args.kind === "handoff-answered") {
+    deps.recordHandoff = async (record) => {
+      emit("RECORDING", record.toolCallId);
+      await new Promise<never>(() => undefined);
+    };
+  }
   const firstResponse =
-    args.kind === "approval"
+    args.kind === "script-approval"
+      ? fauxAssistantMessage([fauxToolCall("codemode", { code: SCENARIO_SCRIPT }, { id: "script-1" })], { stopReason: "toolUse" })
+      : args.kind !== "tools"
       ? fauxAssistantMessage([fauxToolCall("gated", { text: "x" })], { stopReason: "toolUse" })
       : fauxAssistantMessage(
           [fauxToolCall("unsafe_op", { text: "u" }), fauxToolCall("safe_op", { text: "s" })],

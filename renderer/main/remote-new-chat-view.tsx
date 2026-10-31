@@ -10,21 +10,21 @@ import {
   SCRATCH_PROJECT,
   type NewChatMachineId,
 } from "../components/remote-new-chat-pickers";
-import { RemoteHostMarker, RemoteHostStatusRow } from "../components/sidebar-remote";
-import { Button, Dialog, EmptyState, ScrollArea, Text, toast } from "../components/ui";
+import { RemoteHostChip, RemoteHostStatusRow } from "../components/sidebar-remote";
+import { Button, Dialog, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import { composerSurfacesFor } from "../lib/hosts/composer-surfaces";
 import { hostResultValue, isOutcomeUnknown, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { hostQueryKeys } from "../lib/hosts/host-query-keys";
 import {
   defaultHostModel,
-  findHostModel,
+  findOfferedHostModel,
   type HostBrowserPage,
   type HostBrowserRoot,
   type HostCreatedWorkspace,
   type HostModelCatalog,
   type HostModelChoice,
 } from "../lib/hosts/host-resources";
-import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
+import { prepareRemoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import { RemoteHostAdapter } from "../lib/hosts/remote-host-adapter";
 import {
   hostFolderChoice,
@@ -109,57 +109,53 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
   const unresolved = snapshot?.unresolved ?? null;
   const starting = Boolean(snapshot?.starting);
   const unavailable = host.availability !== "online";
-  const chosenModel = findHostModel(models, model);
+  const chosenModel = findOfferedHostModel(models, model);
   const draftKey = remoteNewChatDraftKey(host.id);
 
   return (
     <ScrollArea
       className="h-full min-h-0"
       alignFooterToScrollContent
-      title={
-        <span className="flex min-w-0 items-center gap-2">
-          <RemoteHostMarker hostLabel={host.label} stale={unavailable} />
-          <span className="min-w-0">
-            <span className="block truncate">New chat</span>
-            <span className="block truncate text-small font-normal text-secondary">{`Runs on ${host.label}`}</span>
-          </span>
-        </span>
-      }
+      title="New chat"
+      titleAccessory={<RemoteHostChip host={host} />}
       footer={
-        <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-3">
-          {unresolved ? (
-            <div
-              role="alert"
-              data-remote-new-chat-unresolved="true"
-              className="flex items-start gap-2.5 rounded-card bg-status-warning-surface p-3"
-            >
-              <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-warning" aria-hidden="true" />
-              <div className="min-w-0 flex-1">
-                <Text variant="small-strong" as="p">
-                  {unresolved.message}
-                </Text>
-                <Text variant="small" color="secondary" as="p" className="mt-0.5 line-clamp-3 break-words">
-                  {unresolved.text}
-                </Text>
-                <Text variant="small" color="tertiary" as="p" className="mt-1">
-                  Retry checks with that Mac and never sends it twice.
-                </Text>
+        <ScrollAreaFooterStack>
+          {/* The composer carries its own column inset, as in a local chat. */}
+          <div className="aiden-dock-inset chat-content-column flex flex-col gap-2 pb-2 empty:hidden">
+            {unresolved ? (
+              <div
+                role="alert"
+                data-remote-new-chat-unresolved="true"
+                className="flex items-start gap-2.5 rounded-card bg-status-warning-surface p-3"
+              >
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-status-warning" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <Text variant="small-strong" as="p">
+                    {unresolved.message}
+                  </Text>
+                  <Text variant="small" color="secondary" as="p" className="mt-0.5 line-clamp-3 break-words">
+                    {unresolved.text}
+                  </Text>
+                  <Text variant="small" color="tertiary" as="p" className="mt-1">
+                    Retry checks with that Mac and never sends it twice.
+                  </Text>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button variant="muted" size="small" disabled={unresolved.retrying} onClick={props.onDismiss}>
+                    Dismiss
+                  </Button>
+                  <Button variant="muted" size="small" onClick={() => props.onOpenChat(unresolved.chatId)}>
+                    Open chat
+                  </Button>
+                  <Button variant="accent" size="small" disabled={unresolved.retrying || unavailable} onClick={props.onRetry}>
+                    {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
+                    Retry
+                  </Button>
+                </div>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Button variant="muted" size="small" disabled={unresolved.retrying} onClick={props.onDismiss}>
-                  Dismiss
-                </Button>
-                <Button variant="muted" size="small" onClick={() => props.onOpenChat(unresolved.chatId)}>
-                  Open chat
-                </Button>
-                <Button variant="accent" size="small" disabled={unresolved.retrying || unavailable} onClick={props.onRetry}>
-                  {unresolved.retrying ? <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> : null}
-                  Retry
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          {unavailable ? <RemoteHostStatusRow host={host} onReconnect={props.onReconnect} onManage={props.onManage} /> : null}
+            ) : null}
+            {unavailable ? <RemoteHostStatusRow host={host} onReconnect={props.onReconnect} onManage={props.onManage} /> : null}
+          </div>
           <Composer
             // Keyed by host, so a draft typed for one Mac never appears for another.
             key={draftKey}
@@ -201,7 +197,7 @@ export function RemoteNewChatPane(props: RemoteNewChatPaneProps) {
               />
             }
           />
-        </div>
+        </ScrollAreaFooterStack>
       }
     >
       <div className="flex min-h-full items-center justify-center">
@@ -492,7 +488,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
     else if (!project && projects[0]) setProject(projects[0].id);
   }, [project, projects, feed.data]);
   React.useEffect(() => {
-    if (!findHostModel(models.data, model)) setModel(defaultHostModel(models.data));
+    if (!findOfferedHostModel(models.data, model)) setModel(defaultHostModel(models.data));
   }, [model, models.data]);
 
   const reconnect = React.useCallback(async (id: string) => {
@@ -527,7 +523,7 @@ export function RemoteNewChatRoute({ hostId, workspaceId, onOpenChat, onSelectMa
 
   const send = async (text: string, attachments: Attachment[]) => {
     if (!binding) throw new Error(`Connecting to ${listed.label}…`);
-    const uploads = remoteAttachmentUploads(attachments);
+    const uploads = await prepareRemoteAttachmentUploads(attachments);
     let target = project;
     if (target === SCRATCH_PROJECT) {
       // Once created, the scratch project is the selection, so a retry never makes another.

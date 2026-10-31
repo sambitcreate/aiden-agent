@@ -197,10 +197,37 @@ async function copyImage(chatId: string, attachment: Attachment): Promise<void> 
   }
 }
 
+/** A quiet icon action under an assistant image; shown on hover or keyboard focus, like the reply's actions. */
+function ImageCaptionAction({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Button
+      size="small"
+      variant="transparent"
+      iconOnly
+      aria-label={label}
+      title={label}
+      className="text-tertiary opacity-0 transition-[opacity,background-color] hover:text-secondary group-hover/assistant-image:opacity-100 group-focus-within/assistant-image:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none"
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
+}
+
 /**
- * An assistant image stands alone at its natural shape (within 42rem by
- * 32rem), with its name and actions in a caption row below. Nothing overlays
- * the image; right-click offers the same actions.
+ * An assistant image stands alone at the start of the column, message-sized
+ * like a photo in Messages: its natural shape within 22.5rem by 20rem (the
+ * Lens placeholder's box). Its name and icon actions sit in a caption row
+ * below, never wider than the image. Nothing overlays the image; right-click
+ * offers the same actions, and Expand opens it full size.
  */
 function AssistantImage({
   attachment,
@@ -218,19 +245,20 @@ function AssistantImage({
   };
   const chatId = imageActions?.chatId;
   // Reserve the box from the header so a long history never shifts as images
-  // decode lazily: natural size, at most the column width and 32rem tall.
+  // decode lazily: natural size, at most the column width, 22.5rem wide and
+  // 20rem tall.
   const size = React.useMemo(
     () => (attachment.data ? imagePixelSize(attachment.mimeType, attachment.data) : undefined),
     [attachment.data, attachment.mimeType],
   );
   const box: React.CSSProperties | undefined = size
     ? {
-        width: `min(100%, ${size.width}px, calc(32rem * ${size.width / size.height}))`,
+        width: `min(100%, ${size.width}px, 22.5rem, calc(20rem * ${size.width / size.height}))`,
         aspectRatio: `${size.width} / ${size.height}`,
       }
     : undefined;
   return (
-    <figure className="m-0 flex w-fit min-w-0 max-w-[min(100%,42rem)] flex-col" data-assistant-image={attachment.id}>
+    <figure className="group/assistant-image m-0 flex w-fit min-w-[min(100%,9rem)] max-w-[min(100%,22.5rem)] flex-col" data-assistant-image={attachment.id}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
@@ -253,7 +281,7 @@ function AssistantImage({
               width={size?.width}
               height={size?.height}
               onError={() => controller.markDecodeFailed(attachment)}
-              className={size ? "block size-full object-contain" : "block h-auto max-h-[32rem] w-auto max-w-full"}
+              className={size ? "block size-full object-contain" : "block h-auto max-h-[20rem] w-auto max-w-full"}
             />
           </button>
         </ContextMenuTrigger>
@@ -269,39 +297,23 @@ function AssistantImage({
           <ContextMenuItem onSelect={open}>Open full view</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      <figcaption className="mt-1.5 flex min-w-0 items-center gap-1 pl-1">
+      {/* Sized to the figure (w-0 min-w-full), so the caption never widens it; a
+          tiny image still gets a 9rem figure, room for its name and actions. */}
+      <figcaption className="mt-1 flex w-0 min-w-full items-center gap-0.5 pl-1">
         <span className="min-w-0 flex-1 truncate text-mini text-tertiary">
           {attachment.name} · {fileSize(attachment.size)}
         </span>
-        <Button
-          size="small"
-          variant="transparent"
-          className="px-2"
-          onClick={open}
-        >
+        <ImageCaptionAction label="Expand" onClick={open}>
           <Expand aria-hidden="true" className="size-3.5" />
-          Expand
-        </Button>
+        </ImageCaptionAction>
         {chatId ? (
           <>
-            <Button
-              size="small"
-              variant="transparent"
-              className="px-2"
-              onClick={() => void copyImage(chatId, attachment)}
-            >
+            <ImageCaptionAction label="Copy" onClick={() => void copyImage(chatId, attachment)}>
               <Copy aria-hidden="true" className="size-3.5" />
-              Copy
-            </Button>
-            <Button
-              size="small"
-              variant="transparent"
-              className="px-2"
-              onClick={() => void saveImageToDownloads(chatId, attachment)}
-            >
+            </ImageCaptionAction>
+            <ImageCaptionAction label="Save" onClick={() => void saveImageToDownloads(chatId, attachment)}>
               <Download aria-hidden="true" className="size-3.5" />
-              Save
-            </Button>
+            </ImageCaptionAction>
           </>
         ) : null}
       </figcaption>

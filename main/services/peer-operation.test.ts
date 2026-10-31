@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import protocol from "../../protocol/aiden-remote/v1/openapi.json";
 import contract from "../../protocol/aiden-remote/v1/fixtures/contract.json";
-import { peerOperationRequest, peerOperationResult } from "./peer-operation.js";
+import { hostQueryValue, peerOperationRequest, peerOperationResult } from "./peer-operation.js";
+import { isSafeEncodedQuery } from "./aiden-remote-router.js";
+import { peerRequestUrl } from "./peer-transport.js";
 
 type Endpoint = {
   operationId?: string;
@@ -56,6 +58,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "runRespondQuestion", resourceId: "run_1", itemId: "prompt_1", idempotencyKey: KEY }, "respondRunQuestion"],
     [{ operation: "runInputs", resourceId: "run_1", idempotencyKey: KEY }, "submitRunInput"],
     [{ operation: "createBotChat", resourceId: "bot_1", idempotencyKey: KEY }, "createBotChat"],
+    [{ operation: "botSessionImage", resourceId: "bot_1", itemId: "entry_7" }, "getBotSessionImage"],
     [{ operation: "uploadAttachment", resourceId: "chat_1", body: { name: "a.txt" } }, "uploadChatAttachment"],
     [{ operation: "removeAttachment", resourceId: "chat_1", itemId: `att_${"A".repeat(43)}` }, "removeChatAttachment"],
     [{ operation: "botSession", resourceId: "bot_1" }, "getBotSession"],
@@ -64,6 +67,10 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "botDismiss", resourceId: "bot_1", idempotencyKey: KEY }, "dismissBotSession"],
     [{ operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY }, "stopBotSession"],
     [{ operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "answerBotQuestion"],
+    [{ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done" } }, "answerBotHandoff"],
+    [{ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }, "openBotHandoffOnMac"],
+    [{ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY }, "pauseBot"],
+    [{ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY }, "unpauseBot"],
     [{ operation: "botConnectionRequest", resourceId: "bot_1", idempotencyKey: KEY, body: { pluginId: "notion" } }, "requestBotConnection"],
     [{ operation: "uploadBotAttachment", resourceId: "bot_1", body: { name: "a.png" } }, "uploadBotAttachment"],
     [{ operation: "removeBotAttachment", resourceId: "bot_1", itemId: `att_${"A".repeat(43)}` }, "removeBotAttachment"],
@@ -104,6 +111,10 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     "botDismiss",
     "botStop",
     "botAnswerQuestion",
+    "botAnswerHandoff",
+    "botHandoffOpenOnMac",
+    "botPause",
+    "botUnpause",
     "botConnectionRequest",
   ])
     assert.throws(
@@ -125,12 +136,59 @@ test("expanded peer mutations demand a client-minted key and reject malformed pa
     { operation: "attachmentContent", resourceId: "chat_1", itemId: "a/b" },
     { operation: "botAnswerQuestion", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY },
     { operation: "botStop", resourceId: "bot_1", idempotencyKey: KEY, body: { force: true } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait/1", idempotencyKey: KEY, body: { outcome: "done" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "maybe" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", note: "   " } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { outcome: "done", password: "x" } },
+    { operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY },
+    { operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY, body: { url: "https://x" } },
+    { operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY, body: { by: "mac" } },
     { operation: "runCancel", resourceId: "../../server", idempotencyKey: KEY },
     { operation: "bots", url: "https://elsewhere" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: "att_short" },
     { operation: "removeAttachment", resourceId: "chat_1", itemId: `../${"A".repeat(43)}` },
   ])
     assert.throws(() => peerOperationRequest(invalid), JSON.stringify(invalid));
+});
+
+test("hand-off and pause operations send what the host's revision-37 routes take, and read their answers", async () => {
+  const fixture = contract.botHandoffs;
+  const answer = peerOperationRequest({
+    operation: "botAnswerHandoff",
+    resourceId: "bot_1",
+    itemId: fixture.answer.response.waitId,
+    idempotencyKey: KEY,
+    body: fixture.answer.request,
+  });
+  assert.equal(answer.path, `/bots/bot_1/handoffs/${fixture.answer.response.waitId}/answer`);
+  assert.deepEqual(answer.body, fixture.answer.request);
+  assert.throws(
+    () => peerOperationRequest({ operation: "botAnswerHandoff", resourceId: "bot_1", itemId: "wait-1", body: fixture.answer.request }),
+    /Invalid peer text/u,
+    "an answer without its key never leaves this Mac",
+  );
+  assert.deepEqual(
+    peerOperationRequest({ operation: "botHandoffOpenOnMac", resourceId: "bot_1", itemId: "wait-1", idempotencyKey: KEY }).body,
+    fixture.openOnMac.request,
+  );
+  const pause = peerOperationRequest({ operation: "botPause", resourceId: "bot_1", idempotencyKey: KEY });
+  assert.deepEqual([pause.method, pause.path, pause.body], ["POST", "/bots/bot_1/pause", fixture.pause.request]);
+  const unpause = peerOperationRequest({ operation: "botUnpause", resourceId: "bot_1", idempotencyKey: KEY, body: {} });
+  // Lifting a pause is a DELETE without a body, keyed like every other Bot session write.
+  assert.deepEqual([unpause.method, unpause.path, "body" in unpause, unpause.idempotencyKey], ["DELETE", "/bots/bot_1/pause", false, KEY]);
+
+  assert.deepEqual(await peerOperationResult({ operation: "botAnswerHandoff" }, fixture.answer.response), fixture.answer.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botHandoffOpenOnMac" }, fixture.openOnMac.response), fixture.openOnMac.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botPause" }, fixture.pause.response), fixture.pause.response);
+  assert.deepEqual(await peerOperationResult({ operation: "botUnpause" }, fixture.unpause.response), fixture.unpause.response);
+  for (const [operation, invalid] of [
+    ["botAnswerHandoff", { waitId: "wait/1" }],
+    ["botAnswerHandoff", { waitId: "wait-1", extra: true }],
+    ["botHandoffOpenOnMac", { waitId: "wait-1" }],
+    ["botPause", { state: "asleep", interrupted: false }],
+    ["botUnpause", {}],
+  ] as const)
+    await assert.rejects(peerOperationResult({ operation }, invalid), `${operation} ${JSON.stringify(invalid)}`);
 });
 
 test("only an attachment upload may send a body past the 1 MiB JSON cap", () => {
@@ -192,14 +250,21 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
   assert.equal(content.mimeType, "image/png");
   assert.deepEqual([...content.bytes], [...png]);
   assert.ok(!Buffer.isBuffer(content.bytes));
-  for (const invalid of [
-    { mimeType: "text/html", data: png },
-    { mimeType: "image/png", data: Buffer.alloc(0) },
-    { mimeType: "image/png", data: "iVBOR" },
-  ])
-    await assert.rejects(
-      peerOperationResult({ operation: "attachmentContent" }, invalid),
-    );
+  // A Bot's shared image (revision 45) comes back the same way.
+  const shared = (await peerOperationResult(
+    { operation: "botSessionImage" },
+    { mimeType: "image/jpeg", data: png },
+  )) as { mimeType: string; bytes: Uint8Array };
+  assert.deepEqual([shared.mimeType, [...shared.bytes]], ["image/jpeg", [...png]]);
+  for (const operation of ["attachmentContent", "botSessionImage"])
+    for (const invalid of [
+      { mimeType: "text/html", data: png },
+      { mimeType: "image/png", data: Buffer.alloc(0) },
+      { mimeType: "image/png", data: "iVBOR" },
+    ])
+      await assert.rejects(
+        peerOperationResult({ operation }, invalid),
+      );
 });
 
 test("fork operations reach the contract's fork routes with the headers each one declares", () => {
@@ -321,7 +386,7 @@ test("a newer host's Bot session reads here as far as this Mac understands it", 
       botId: "bot_1",
       epoch: "e1",
       seq: 3,
-      state: "paused",
+      state: "hibernating",
       interrupted: false,
       entries: [
         { type: "message", id: "m1", role: "assistant", text: "Done." },
@@ -346,6 +411,19 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
     };
     assert.equal(session.botId, (fixtures[key] as { botId: string }).botId, key);
   }
+  // A holder of bot:handoffs reads the waiting card and the paused state. The
+  // host test checks these fixtures are what its sessions really send.
+  const handoffs = contract.botHandoffs;
+  const waiting = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.session)) as {
+    handoff?: unknown;
+  };
+  assert.deepEqual(waiting.handoff, handoffs.session.handoff, "the card reaches the paired Mac");
+  const paused = (await peerOperationResult({ operation: "botSession", resourceId: "bot_1" }, handoffs.pausedSession)) as {
+    state?: string;
+    handoff?: unknown;
+  };
+  assert.deepEqual([paused.state, paused.handoff], [handoffs.pausedSession.state, handoffs.pausedSession.handoff]);
+  assert.equal(paused.state, "paused");
   assert.deepEqual(
     await peerOperationResult({ operation: "botSend", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
     fixtures.botSessionSend!.response,
@@ -358,4 +436,81 @@ test("the host's real Bot session, send receipt and controls pass this Mac's con
   await assert.rejects(
     peerOperationResult({ operation: "botResume", resourceId: "bot_1" }, fixtures.botSessionSend!.response),
   );
+});
+
+test("a context pressure read names the host's route, and its model pair travels whole and literal", async () => {
+  const own = peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1" });
+  assert.equal(contractRoute(own.method ?? "GET", own.path)?.operationId, "getChatContextPressure");
+  assert.equal(own.path.includes("?"), false);
+
+  const priced = peerOperationRequest({
+    operation: "contextPressure",
+    resourceId: "chat_1",
+    providerId: "custom:local",
+    modelId: "org/model-large:free@2026",
+  });
+  const route = contractRoute(priced.method ?? "GET", priced.path);
+  assert.equal(route?.operationId, "getChatContextPressure");
+  assert.equal(route?.query.get("providerId"), "custom:local");
+  assert.equal(route?.query.get("modelId"), "org/model-large:free@2026");
+  // The host refuses any percent-encoded URL, so nothing is encoded, here or
+  // when the transport resolves the route against the host's endpoint.
+  assert.equal(priced.path.includes("%"), false);
+  const everyAllowed = peerOperationRequest({
+    operation: "contextPressure",
+    resourceId: "chat_1",
+    providerId: "aZ09._~:@/!$()*,;-",
+    modelId: "m",
+  });
+  const sent = peerRequestUrl("https://studio.example.ts.net/api/aiden/v1", everyAllowed.path);
+  assert.equal(`${sent.pathname}${sent.search}`.includes("%"), false);
+  assert.equal(new URLSearchParams(sent.search).get("providerId"), "aZ09._~:@/!$()*,;-");
+
+  for (const malformed of [
+    { providerId: "custom:local" },
+    { modelId: "model-1" },
+    { providerId: "p", modelId: "model one" },
+    { providerId: "p&modelId=x", modelId: "m" },
+    { providerId: "p", modelId: "o'brien" },
+    { providerId: "p", modelId: "" },
+    { providerId: "p", modelId: "m".repeat(257) },
+  ])
+    assert.throws(
+      () => peerOperationRequest({ operation: "contextPressure", resourceId: "chat_1", ...malformed }),
+      JSON.stringify(malformed),
+    );
+});
+
+test("a context pressure answer is checked against the contract before it reaches the renderer", async () => {
+  const answer = contract.chatContextPressure;
+  assert.deepEqual(await peerOperationResult({ operation: "contextPressure" }, answer), answer);
+  const unknown = { chatId: "chat_1", pressure: null };
+  assert.deepEqual(await peerOperationResult({ operation: "contextPressure" }, unknown), unknown);
+  for (const refused of [
+    {},
+    { chatId: "chat_1" },
+    { ...answer, pressure: { ...answer.pressure, breakdown: { categories: [], deferred: [] } } },
+    { ...answer, pressure: { ...answer.pressure, promptCache: { ttlMs: 1, lastRequestAt: 1 } } },
+    { ...answer, pressure: { ...answer.pressure, contextTokens: -5 } },
+  ])
+    await assert.rejects(peerOperationResult({ operation: "contextPressure" }, refused), JSON.stringify(refused));
+});
+
+test("a Bot search reaches the host exactly as typed, and plain words still work on older hosts", () => {
+  const endpoint = "https://studio.example.ts.net/api/aiden/v1";
+  const sent = (search: string) => {
+    const url = peerRequestUrl(endpoint, peerOperationRequest({ operation: "botConversations", query: search }).path);
+    return url.search.slice(1);
+  };
+  for (const search of ["plan week", "release notes & more", "café ☕ 100% done+", "it's #1 = best", "a/b:c@d"]) {
+    const query = sent(search);
+    // The host's own URL rule, then the way it reads the value.
+    assert.equal(isSafeEncodedQuery(query), true, search);
+    assert.equal(new URLSearchParams(query).get("query"), search, search);
+  }
+  // Hosts before revision 41 refuse any `%`; spaces and id separators never need one.
+  for (const search of ["plan week", "team: ops/weekly", "Q3, Q4; done"]) {
+    assert.equal(sent(search).includes("%"), false, search);
+  }
+  assert.equal(hostQueryValue("plan week"), "plan+week");
 });

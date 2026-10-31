@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient, type McpTransport } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { callMcpTool } from "../mcp-tool-inventory.js";
+import { connectMcpClient } from "../mcp-client.js";
+import { connectSdkServer } from "../mcp-test-support.js";
+import { callMcpTool, listMcpToolPage } from "../mcp-tool-inventory.js";
 import type { McpServer } from "../types.js";
 import {
   MAX_CHILD_STRUCTURED_BYTES,
@@ -12,7 +13,7 @@ import {
   SUBAGENT_MCP_REQUEST_TIMEOUT_MS,
   withIsolatedSubagentMcpClientCore,
   type IsolatedSubagentMcpClientDependencies,
-  type IsolatedSubagentMcpSdkClient,
+  type IsolatedSubagentMcpClient,
 } from "./subagent-mcp-client-core.js";
 
 const server: McpServer = {
@@ -36,20 +37,19 @@ function harness(): Harness {
   const events: string[] = [];
   const requestSignals: AbortSignal[] = [];
   const transportPolicy: Array<{ forceNoRedirect: true }> = [];
-  const client: IsolatedSubagentMcpSdkClient = {
+  const client: IsolatedSubagentMcpClient = {
     connect: async (_transport, options) => {
       events.push("connect");
       requestSignals.push(options.signal);
-      assert.equal(options.timeout, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
-      assert.equal(options.maxTotalTimeout, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
+      assert.equal(options.timeoutMs, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
     },
     close: async () => {
       events.push("close");
     },
-    listTools: async (_params, options) => {
+    listTools: async (_cursor, options) => {
       events.push("list");
       requestSignals.push(options.signal);
-      assert.equal(options.timeout, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
+      assert.equal(options.timeoutMs, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
       return {
         tools: [
           {
@@ -60,10 +60,10 @@ function harness(): Harness {
         ],
       };
     },
-    callTool: async (_params, _schema, options) => {
+    callTool: async (_params, options) => {
       events.push("call");
       requestSignals.push(options.signal);
-      assert.equal(options.maxTotalTimeout, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
+      assert.equal(options.timeoutMs, SUBAGENT_MCP_REQUEST_TIMEOUT_MS);
       return { content: [{ type: "text", text: "evidence echo-secret" }] };
     },
   };
@@ -108,7 +108,7 @@ function harness(): Harness {
   };
 }
 
-test("isolated production core forces no-redirect and closes after bounded SDK requests", async () => {
+test("isolated production core forces no-redirect and closes after bounded MCP requests", async () => {
   const h = harness();
   const signal = new AbortController().signal;
   const result = await withIsolatedSubagentMcpClientCore({
@@ -135,7 +135,7 @@ test("isolated production core forces no-redirect and closes after bounded SDK r
   assert.ok(h.requestSignals.every((requestSignal) => !requestSignal.aborted));
 });
 
-test("mutation raw boundary fences and invokes the SDK exactly once without an await gap", async () => {
+test("mutation raw boundary fences and invokes the client exactly once without an await gap", async () => {
   const h = harness();
   const signal = new AbortController().signal;
   let rawCalls = 0;
@@ -145,9 +145,9 @@ test("mutation raw boundary fences and invokes the SDK exactly once without an a
       h.events.push("close");
     },
     listTools: async () => ({ tools: [] }),
-    callTool: (_params, _schema, options) => {
+    callTool: (_params, options) => {
       rawCalls += 1;
-      h.events.push("raw-sdk-call");
+      h.events.push("raw-client-call");
       assert.equal(options.signal, signal);
       return Promise.resolve({
         isError: false,
@@ -176,7 +176,7 @@ test("mutation raw boundary fences and invokes the SDK exactly once without an a
     h.events.indexOf("config-fence") < h.events.indexOf("final-authority-ledger-budget-fence"),
   );
   assert.equal(
-    h.events.indexOf("raw-sdk-call"),
+    h.events.indexOf("raw-client-call"),
     h.events.indexOf("final-authority-ledger-budget-fence") + 1,
   );
 });
@@ -298,7 +298,7 @@ test("abort reaches in-flight requests and triggers eager plus final client clos
       h.events.push("close");
     },
     listTools: async () => ({ tools: [] }),
-    callTool: async (_params, _schema, options) => {
+    callTool: async (_params, options) => {
       requestSignal = options.signal;
       return new Promise<never>((_resolve, reject) => {
         options.signal.addEventListener("abort", () => reject(options.signal.reason), {
@@ -521,9 +521,9 @@ test("isolated child inventory follows pages and rejects credential revocation b
     h.dependencies.resolveCredentialBoundary = async () => ({ revision, redactText: (text) => text });
     h.dependencies.createClient = () => ({
       connect: async () => {}, close: async () => {}, callTool: async () => ({}),
-      listTools: async (params) => {
-        cursors.push(params?.cursor);
-        if (params?.cursor) return { tools: [{ name: "last", annotations: { readOnlyHint: true } }] };
+      listTools: async (cursor) => {
+        cursors.push(cursor);
+        if (cursor) return { tools: [{ name: "last", annotations: { readOnlyHint: true } }] };
         if (revoke) revision = "revoked";
         return { tools: [{ name: "first" }], nextCursor: "next" };
       },
@@ -546,7 +546,7 @@ test("child regular and raw calls validate success, preserve server errors and b
     let response: unknown = { content: [], structuredContent: { value: "invalid" } };
     h.dependencies.createClient = () => ({
       connect: async () => {}, close: async () => {},
-      listTools: async (params) => params?.cursor ? { tools: [{ name: "last" }] } : { tools: [
+      listTools: async (cursor) => cursor ? { tools: [{ name: "last" }] } : { tools: [
         { name: "typed", outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } } },
         { name: "task", execution: { taskSupport: "required" } },
       ], nextCursor: "last" },
@@ -575,12 +575,11 @@ test("child regular and raw calls validate success, preserve server errors and b
   }
 });
 
-test("real SDK child calls preserve last-page diagnostics through the public request adapter", async () => {
+test("real child calls preserve last-page diagnostics through the raw request adapter", async () => {
   for (const raw of [false, true]) {
     const h = harness();
-    const sdk = new Client({ name: "child-test", version: "1" });
+    const mcp = new McpClient({ name: "child-test", version: "1" });
     const remote = new Server({ name: "child-server", version: "1" }, { capabilities: { tools: {} } });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     remote.setRequestHandler(ListToolsRequestSchema, async ({ params }) => params?.cursor ? { tools: [{
       name: "typed", inputSchema: { type: "object" },
       outputSchema: { type: "object", required: ["value"], properties: { value: { type: "number" } } },
@@ -589,14 +588,15 @@ test("real SDK child calls preserve last-page diagnostics through the public req
     remote.setRequestHandler(CallToolRequestSchema, async () => fail ? {
       isError: true, content: [{ type: "text", text: "Permission denied for echo-secret" }], structuredContent: { code: "DENIED" },
     } : { content: [], structuredContent: { value: "invalid" } });
+    const clientTransport = await connectSdkServer(remote);
     h.dependencies.makeTransport = () => clientTransport;
+    // The same adapter the MCP manager builds over Pi's client.
     h.dependencies.createClient = () => ({
-      connect: (_transport, options) => sdk.connect(clientTransport, options),
-      close: () => sdk.close(),
-      listTools: (params, options) => sdk.listTools(params, options),
-      callTool: (params, _schema, options) => callMcpTool(sdk, params, options),
+      connect: (transport, options) => connectMcpClient(mcp, transport as McpTransport, options),
+      close: () => mcp.close(),
+      listTools: (cursor, options) => listMcpToolPage(mcp, cursor, options),
+      callTool: (params, options) => callMcpTool(mcp, params, options),
     });
-    await remote.connect(serverTransport);
     const signal = new AbortController().signal;
     try {
       await withIsolatedSubagentMcpClientCore({ server, signal, configurationLease: h.configurationLease, dependencies: h.dependencies, operation: async client => {

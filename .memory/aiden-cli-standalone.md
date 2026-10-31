@@ -44,3 +44,6 @@ CLI `acquireLease` holds an OS `flock` on a permanent `<resource>.lease.lock` fi
 - Merging #251 (main's Remote contract revision 14) renumbered this PR's `GET /scheduled-tasks/notifications` addition to contract revision 15. The shared fixture and the Android copy are byte-identical at 15. The TS, iOS and Android fixture assertions expect 15, and the iOS fixture CodingKeys keep both main's streamInput/question/chatSkills and this PR's scheduleRunNotification.
 
 - 2026-09-27 review: plan index now describes Phase 6 as implemented; physical iPhone acceptance remains pending.
+
+- 2026-10-19 H3 adds an explicit durable Bot host switch; see `docs/cli-durable-bots.md` for ownership, preserving migration, supported endpoints, and remaining boundaries.
+- MCP (2026-10-21, Phase 3 of `docs/plans/mcp-pi-migration-plan.md`): the CLI's MCP client and OAuth are the desktop's `main/services` modules on `@earendil-works/pi-mcp`; the CLI build rejects any bundled `@modelcontextprotocol/sdk` client. Pi's built-in MCP extension is replaced by Aiden's `/mcp` command and `aiden pi-mcp` is gone; `aiden-mcp.json` is the only MCP config. Details in `.memory/mcp-pi-migration.md`.

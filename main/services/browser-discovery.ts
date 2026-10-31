@@ -11,7 +11,7 @@ export function createBrowserDiscovery(tools: AgentTool[], revalidate: () => Pro
   const tool: AgentTool = declarePiRuntimeReplay({
     name: BROWSER_DISCOVERY_TOOL_NAME,
     label: "Discover browser tools",
-    description: "Load tools for Aiden's shared Environment browser: tabs, navigation, local previews, page inspection, interaction and recording. Call this before browser work; tools become available next turn.",
+    description: "Load browser tools for the next turn: tabs, navigation, previews, inspection, input, recording.",
     parameters: Type.Object({}, { additionalProperties: false }),
     execute: async (id, args, signal) => {
       validateToolArguments(tool, { type: "toolCall", id, name: tool.name, arguments: args as Record<string, never> });

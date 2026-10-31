@@ -544,6 +544,54 @@ export function assertBoundBotProviderModelCurrent(
   if (issues.length > 0) throw new BotCapabilityBindingDriftError(issues);
 }
 
+/**
+ * Refresh a provider/model binding whose authority is unchanged. Returns
+ * undefined when the binding is current or when anything that grants
+ * authority changed: the provider connection (endpoint, credential or resource
+ * incarnation), the model's identity or public id, its availability, or its
+ * image capability. Only a stale model fingerprint is repaired, such as one
+ * minted while the fingerprint still hashed descriptive catalog metadata.
+ */
+export function refreshBoundBotProviderModel(
+  binding: BoundBotProviderModel,
+  current: BotCapabilityCatalogSnapshot,
+): BoundBotProviderModel | undefined {
+  binding = parseBoundBotProviderModel(binding);
+  const provider = current.resources.providers.find(
+    ({ sourceId }) => sourceId === binding.sourceProviderId,
+  );
+  if (
+    !provider ||
+    provider.option.id !== binding.providerOption.id ||
+    provider.exactFingerprint !== binding.providerExactFingerprint ||
+    !provider.option.available
+  ) {
+    return undefined;
+  }
+  const model = provider.models.find(({ sourceId }) => sourceId === binding.sourceModelId);
+  if (
+    !model ||
+    model.option.id !== binding.modelOption.id ||
+    model.exactFingerprint === binding.modelExactFingerprint ||
+    !model.option.available ||
+    model.option.supportsImages !== binding.modelOption.supportsImages
+  ) {
+    return undefined;
+  }
+  const { models: _models, ...providerOption } = provider.option;
+  void _models;
+  return {
+    providerOption: { ...providerOption },
+    modelOption: { ...model.option },
+    sourceProviderId: provider.sourceId,
+    sourceModelId: model.sourceId,
+    connectionFingerprint: provider.connectionFingerprint,
+    providerExactFingerprint: provider.exactFingerprint,
+    modelFingerprint: model.modelFingerprint,
+    modelExactFingerprint: model.exactFingerprint,
+  };
+}
+
 function parseBoundFileScope(value: unknown, index: number): BoundBotFileScope {
   const scope = storedRecord(value, `Bot bound file scope ${index}`, [
     "option",

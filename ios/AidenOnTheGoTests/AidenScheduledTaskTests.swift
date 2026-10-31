@@ -216,7 +216,7 @@ final class AidenScheduledTaskTests: XCTestCase {
         )
 
         XCTAssertTrue(legacy.usesLegacyInheritedMcpAccess)
-        XCTAssertEqual(legacy.mcpAccessSummary, "All enabled MCP servers (legacy)")
+        XCTAssertEqual(legacy.mcpAccessSummary, "All enabled connectors (legacy)")
         XCTAssertFalse(legacy.canBeginEdit(hasCurrentMcpInventory: false))
 
         let unresolved = AidenScheduledTaskDraft(task: legacy, currentMcpServers: nil)
@@ -331,10 +331,10 @@ final class AidenScheduledTaskTests: XCTestCase {
 
         draft.mcpServerIds = ["mcp-1"]
         draft.permission = .readOnly
-        XCTAssertEqual(draft.validationMessage, "MCP access requires Full permission.")
+        XCTAssertEqual(draft.validationMessage, "Connector access requires Full permission.")
         draft.permission = .full
         draft.workspaceId = "workspace-1"
-        XCTAssertEqual(draft.validationMessage, "MCP access is available only without a workspace binding.")
+        XCTAssertEqual(draft.validationMessage, "Connector access is available only without a workspace binding.")
     }
 
     func testScheduledOfflineCacheIsInstallationScopedAndRetainsBoundedHistory() async throws {

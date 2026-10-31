@@ -19,7 +19,7 @@ import * as path from "path";
 import { isPathInside } from "../shared/path-containment.js";
 import { constants as fsConstants } from "node:fs";
 import { isMap, isScalar, parseDocument } from "yaml";
-import { normalizeSafeSkillText, SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
+import { SLASH_LIMITS } from "../../renderer/shared/slash-commands.js";
 import { AIDEN_DIR_NAME, aidenConfigDir } from "./aiden-config-dir.js";
 import { projectDiagnosticError } from "./diagnostics-contract.js";
 import { writeDiagnosticEvent } from "./diagnostic-journal.js";
@@ -38,7 +38,7 @@ interface Frontmatter {
  * the document to JS: unrelated metadata and aliases must not be expanded or
  * allowed to overwrite the skill's identity. Invalid files are skipped alone.
  */
-function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
+export function parseSkillMd(input: string): { frontmatter: Frontmatter; body: string } | null {
   const raw = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input; // strip BOM if present
   const opening = raw.match(/^---[\t ]*\r?\n/);
   if (!opening) return { frontmatter: {}, body: raw.trim() };
@@ -478,29 +478,6 @@ function pluginScanConfigs(home: string, workspaceRoot?: string): ScanConfig[] {
   })).sort((left, right) =>
     (left.source === "workspace" ? 0 : 1) - (right.source === "workspace" ? 0 : 1) ||
     left.root.localeCompare(right.root) || left.namespace.localeCompare(right.namespace));
-}
-
-/** Bounded plugin-only candidates shared with the standalone CLI resource loader. */
-export async function discoverPluginSkillCandidates(workspaceRoot: string | undefined, home: string): Promise<DiscoveredSkill[]> {
-  const budgets = {
-    workspace: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
-    global: { candidates: 0, traversedEntries: 0, aggregateBytes: 0 },
-  };
-  const results: DiscoveredSkill[] = [];
-  for (const config of pluginScanConfigs(home, workspaceRoot)) {
-    results.push(...await scanPatterns(config, budgets[config.source], {}));
-  }
-  return results.flatMap((skill) => {
-    try {
-      return [{
-        ...skill,
-        name: normalizeSafeSkillText(skill.name, "skill name", SLASH_LIMITS.safeNameCharacters),
-        description: normalizeSafeSkillText(skill.description, "skill description", SLASH_LIMITS.safeDescriptionCharacters, true),
-      }];
-    } catch {
-      return [];
-    }
-  });
 }
 
 const DISCOVERY_CACHE_TTL_MS = 5_000;

@@ -8,7 +8,7 @@ import { createDeviceFeatures, type DeviceFeatures } from "../services/devices/d
 import { registerDeviceFeatureHandlersWith } from "../services/devices/device-feature-ipc.js";
 import { createDeviceRecorder } from "../services/devices/device-recording.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
-import { startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
+import { rendererProxyOrigins, startDeviceHubProxy } from "../services/devices/device-hub-proxy.js";
 import { registerDeviceHandlersWith } from "../services/devices/device-ipc.js";
 import {
   createDeviceService,
@@ -41,19 +41,6 @@ const SSH_PATH = "/usr/bin/ssh";
 
 let deviceService: DeviceService | null = null;
 let deviceFeatures: DeviceFeatures | null = null;
-
-function proxyAllowedOrigins(): string[] {
-  const origins = ["file://"];
-  const devServer = process.env.AIDEN_RENDERER_URL;
-  if (devServer) {
-    try {
-      origins.push(new URL(devServer).origin);
-    } catch {
-      // A malformed dev URL cannot load the renderer either.
-    }
-  }
-  return origins;
-}
 
 function defaultDeviceService(): DeviceService {
   if (deviceService) return deviceService;
@@ -93,7 +80,7 @@ function defaultDeviceService(): DeviceService {
         ),
     },
     startProxy: (resolveHub) =>
-      startDeviceHubProxy({ resolveHub, allowedOrigins: proxyAllowedOrigins() }),
+      startDeviceHubProxy({ resolveHub, allowedOrigins: rendererProxyOrigins() }),
     fetch: (url, init) => fetch(url, { ...init, redirect: "error" }),
   });
   return deviceService;

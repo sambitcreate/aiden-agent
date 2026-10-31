@@ -1,3 +1,6 @@
+import { PiVerificationStore, VERIFICATION_RETENTION_MS, verificationIdentity, verificationSnapshot } from "./pi-verification-store.js";
+import { WorkflowEvidenceStore } from "./workflow-evidence-store.js";
+import { toolOutputScope } from "./tool-output-store.js";
 import { DataStore } from "./data-store.js";
 import {
   MAX_PI_RUNTIME_EFFECTS,
@@ -125,14 +128,19 @@ function makeDataStore(
  * effect by itself; operation resumption remains a harness policy decision.
  */
 export class PiRuntimeEffectStore {
+  readonly verification: PiVerificationStore;
+  readonly workflowEvidence: WorkflowEvidenceStore;
   private readonly now: () => number;
   private readonly data: DataStore<DurablePiRuntimeEffectDatabase>;
   private readonly localUnknown = new Map<string, DurablePiRuntimeEffect>();
   private initialized = false;
   private initialization?: Promise<void>;
+  private receiptCatchUp: Promise<void> = Promise.resolve();
 
   constructor(options: PiRuntimeEffectStoreOptions) {
     this.now = options.now ?? Date.now;
+    this.verification = new PiVerificationStore(options.root, this.now);
+    this.workflowEvidence = new WorkflowEvidenceStore(this.verification, options.root, this.now);
     this.data = options.dataStore ?? makeDataStore(options);
   }
 
@@ -199,15 +207,29 @@ export class PiRuntimeEffectStore {
       database.operations = database.operations.map((operation) => {
         if (operation.state !== "running") return operation;
         changed = true;
-        return {
-          ...operation,
-          state: "interrupted" as const,
-          updatedAt: Math.max(operation.updatedAt, restartAt),
+        const recovered: DurablePiRuntimeOperation = {
+          ...operation, state: "interrupted", updatedAt: Math.max(operation.updatedAt, restartAt),
         };
+        return recovered;
       });
       if (changed) database.revision += 1;
     });
     this.initialized = true;
+    // Terminal operations are the durable publication outbox. Retry receipts
+    // lost after the effect journal committed, off the startup path: receipts
+    // are private evidence and must never delay or fail runtime recovery.
+    // Operations past receipt retention would only be pruned again.
+    const retainedSince = this.currentTime() - VERIFICATION_RETENTION_MS;
+    const pending = (await this.data.load()).operations
+      .filter((operation) => operation.state !== "running" && operation.updatedAt > retainedSince);
+    this.receiptCatchUp = (async () => {
+      for (const operation of pending) await this.recordOperationVerification(operation);
+    })();
+  }
+
+  /** Resolves once startup receipt catch-up has finished; failures are already absorbed. */
+  settleVerificationReceipts(): Promise<void> {
+    return this.receiptCatchUp;
   }
 
   async startOperation(value: unknown): Promise<DurablePiRuntimeOperation> {
@@ -296,7 +318,26 @@ export class PiRuntimeEffectStore {
       return structuredClone(finished);
     });
     for (const effect of localTerminalEffects) this.localUnknown.delete(effect.effectId);
+    await this.recordOperationVerification(finished);
     return finished;
+  }
+
+  /** Best effort: the effect journal is authoritative, so a receipt failure never fails the run. */
+  private async recordOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
+    try {
+      await this.publishOperationVerification(finished);
+    } catch {
+      // A missing receipt reads as "no evidence"; startup catch-up retries it.
+    }
+  }
+
+  private async publishOperationVerification(finished: DurablePiRuntimeOperation): Promise<void> {
+    await this.verification.check(finished.chatId, toolOutputScope({ runId: finished.runId, sessionId: finished.sessionId }), {
+      checkId: verificationIdentity("check", finished.operationId), runId: verificationIdentity("run", finished.runId), turnId: verificationIdentity("turn", finished.operationId),
+      artifactId: verificationIdentity("artifact", finished.operationId), kind: "response_ended",
+      snapshot: async () => verificationSnapshot(JSON.stringify(finished)),
+      observe: async () => ({ result: finished.state === "completed" ? "passed" : finished.state === "app_cancelled" ? "not_run" : "inconclusive" }),
+    });
   }
 
   async prepareEffect(input: PreparePiRuntimeEffectInput): Promise<DurablePiRuntimeEffect> {
@@ -656,18 +697,21 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (effect.chatId === chatId) this.localUnknown.delete(effectId);
     }
+    // Both stores fence the chat before loading, so an unreadable evidence
+    // file stays preserved without blocking deletion or allowing new writes.
+    await this.workflowEvidence.deleteByChat(chatId).catch(() => undefined);
+    await this.verification.deleteByChat(chatId).catch(() => undefined);
   }
 
   /** Remove private effect evidence whose visible chat no longer exists. */
   async reconcileChats(validChatIds: ReadonlySet<string>): Promise<void> {
     this.requireInitialized();
     const valid = new Set([...validChatIds].filter((chatId) => isSafePiRuntimeIdentity(chatId)));
+    const orphanChats = new Set<string>();
     await this.data.update((database) => {
-      const orphanOperationIds = new Set(
-        database.operations
-          .filter((operation) => !valid.has(operation.chatId))
-          .map(({ operationId }) => operationId),
-      );
+      const orphans = database.operations.filter((operation) => !valid.has(operation.chatId));
+      for (const { chatId } of orphans) orphanChats.add(chatId);
+      const orphanOperationIds = new Set(orphans.map(({ operationId }) => operationId));
       if (orphanOperationIds.size === 0) return;
       database.operations = database.operations.filter(
         ({ operationId }) => !orphanOperationIds.has(operationId),
@@ -680,6 +724,13 @@ export class PiRuntimeEffectStore {
     for (const [effectId, effect] of this.localUnknown) {
       if (!valid.has(effect.chatId)) this.localUnknown.delete(effectId);
     }
+    // Fence orphans first: startup receipt catch-up may still hold their
+    // operations. Evidence cleanup is best effort, so an unreadable private
+    // file stays preserved and never blocks startup.
+    this.verification.revokeChats(orphanChats);
+    this.workflowEvidence.revokeChats(orphanChats);
+    await this.workflowEvidence.reconcileChats(validChatIds).catch(() => undefined);
+    await this.verification.reconcileChats(validChatIds).catch(() => undefined);
   }
 }
 

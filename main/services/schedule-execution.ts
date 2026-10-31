@@ -19,6 +19,7 @@ import type { ChatDone, ChatError, ScheduledRun, ScheduledTask } from "./types.j
 import type { ChatGenerationOwner } from "./chat-generation-owner.js";
 import type { NotificationChannel } from "../../renderer/preload-channels.js";
 import { assertManagedWorktreeAdmission } from "./managed-worktree-admission.js";
+import { assertWorkspaceFolderPresent } from "./workspace-folder-presence.js";
 import { createScheduledChatClaim } from "./scheduled-chat-creation.js";
 import { firstVisibleModelForProvider } from "../../renderer/shared/model-visibility.js";
 import { canUseGeminiChatModel } from "../../renderer/shared/gemini-usage-scope.js";
@@ -117,20 +118,6 @@ function notify(task: ScheduledTask, body: string, chatId: string | undefined): 
   });
 }
 
-function notifyBotRoutine(task: ScheduledTask, body: string): void {
-  showScheduledNotification(task, body, task.botId, {
-    isSupported: () => Notification.isSupported(),
-    create: (options) => new Notification(options),
-    openChat: async (botId) => {
-      // The routine posted into the Bot's chat, not its Profile.
-      await requestAppPath(`/bots/${encodeURIComponent(botId)}/chat`);
-    },
-    onError: (stage) => {
-      logger.warn("schedule", `Routine notification ${stage} failed.`);
-    },
-  });
-}
-
 export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
   const activeStreams = new Map<string, string>();
   const activeControllers = new Map<string, AbortController>();
@@ -140,8 +127,18 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
     (botRoutines ??= createBotRoutineExecutor({
       store,
       ports: async () => (await import("./scheduled-bot-routines-main.js")).botRoutinePorts(),
-      notify: notifyBotRoutine,
+      // Everything a Bot says to the person leaves through one funnel: the
+      // delivery log, the Mac banner, Telegram and the phone feed.
+      deliver: async (input) => (await import("./bot-delivery/funnel-main.js")).botDeliveryFunnel().deliver(input),
       broadcast: (payload) => ipcMain.broadcast("bots:changed", payload),
+      afterRun: async (task, run, trigger) => {
+        const outcome = await (await import("./bot-routine-recovery-main.js")).botRoutineRecovery().afterRun(task, run, trigger);
+        // Reflection runs on its own time; the routine's delivery never waits for it.
+        void import("./bot-learning/learning-main.js")
+          .then(({ afterRoutineRunForLearning }) => afterRoutineRunForLearning(task, run))
+          .catch(() => undefined);
+        return outcome;
+      },
     }));
 
   async function ensureChat(task: ScheduledTask): Promise<string> {
@@ -193,7 +190,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) await assertManagedWorktreeAdmission(workspace);
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
+    }
     const script = await resolveScheduledScript({
       script: task.script ?? "",
       workspaceRoot: workspace?.folderPath,
@@ -255,7 +255,10 @@ export function createScheduleExecution(store: ScheduleStore = scheduleStore) {
       : undefined;
     if (task.workspaceId && !workspace) throw new Error("The task workspace no longer exists.");
     if (workspace?.permission === "none") throw new Error("The task workspace has No Access.");
-    if (workspace) await assertManagedWorktreeAdmission(workspace);
+    if (workspace) {
+      await assertWorkspaceFolderPresent(workspace);
+      await assertManagedWorktreeAdmission(workspace);
+    }
     const settings = await configStore.getSettings();
     if (!task.providerId && isAcpHarnessProvider(settings.lastProviderId ?? "")) {
       throw new Error(

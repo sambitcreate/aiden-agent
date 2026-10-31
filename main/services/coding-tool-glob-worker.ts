@@ -76,7 +76,8 @@ function globStep({ task, entries, directory }) {
         const nextMatches = test(next, entry.name);
         if (nextMatches && next === last && !isLast) matches.push(child);
         else if (nextMatches && entry.directory) positions.add(index + 2);
-        if ((nextMatches || parts[0] === '.') && (entry.directory || entry.link) && !viaLink) positions.add(next);
+        // Node 24.22 stopped stepping into symlinks here (Node 22 still does).
+        if ((nextMatches || parts[0] === '.') && entry.directory && !viaLink) positions.add(next);
         if (entry.link) symlinks.add(index);
         if (parts[next] === '..' && entry.directory) {
           if (next === last) matches.push(task.path, join(task.path, '..'));

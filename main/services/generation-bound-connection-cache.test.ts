@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectSdkServer } from "./mcp-test-support.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpRemoteTransport } from "./mcp-remote-transport.js";
 import {
@@ -325,8 +325,8 @@ test("an immediate close at the end of connect is rejected instead of cached", a
   assert.equal(closes, 1, "failed setup retains its best-effort cleanup");
 });
 
-test("real SDK server closure allows the next discovery to establish a fresh session", async (t) => {
-  const cache = new GenerationBoundConnectionCache<Client>();
+test("real server closure allows the next discovery to establish a fresh session", async (t) => {
+  const cache = new GenerationBoundConnectionCache<McpClient>();
   const servers: Server[] = [];
   t.after(async () => {
     await cache.disconnect("server");
@@ -334,28 +334,26 @@ test("real SDK server closure allows the next discovery to establish a fresh ses
   });
   const acquire = () => cache.getOrConnect(
     "server",
-    () => new Client({ name: "cache-regression", version: "1" }),
+    () => new McpClient({ name: "cache-regression", version: "1" }),
     async (client, _isCurrent, onClosed) => {
-      client.onclose = onClosed;
+      client.onClose(onClosed);
       const server = new Server({ name: "fixture", version: "1" }, { capabilities: { tools: {} } });
       const session = servers.push(server);
       server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
         { name: `session_${session}`, inputSchema: { type: "object" } },
       ] }));
-      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-      await server.connect(serverTransport);
-      await client.connect(clientTransport);
+      await client.connect(await connectSdkServer(server));
     },
     async (client) => client.close(),
   );
 
   const first = await acquire();
-  assert.equal((await first.listTools()).tools[0].name, "session_1");
+  assert.equal((await first.listTools())[0].name, "session_1");
   await servers[0].close();
-  await assert.rejects(first.listTools(), /not connected/i);
+  await assert.rejects(first.listTools(), /closed/i);
   const second = await acquire();
   assert.notEqual(second, first);
-  assert.equal((await second.listTools()).tools[0].name, "session_2");
+  assert.equal((await second.listTools())[0].name, "session_2");
   assert.equal(servers.length, 2);
 });
 
@@ -424,22 +422,22 @@ test("forgetting a removed server prunes its bookkeeping without reviving stale 
   );
 });
 
-test("an SSE endpoint that never arrives times out the whole connect and drops the pending attempt", { timeout: 10_000 }, async () => {
-  const cache = new GenerationBoundConnectionCache<Client>({ connectTimeoutMs: 100 });
+test("an initialize response stream that never answers times out the whole connect and drops the pending attempt", { timeout: 10_000 }, async () => {
+  const cache = new GenerationBoundConnectionCache<McpClient>({ connectTimeoutMs: 100 });
   const streams: AbortSignal[] = [];
   let created = 0;
-  // The receive stream opens but never sends the `endpoint` event, so the SDK's
-  // SSE start() (and with it Client.connect) would wait forever.
+  // The initialize POST opens an event stream that never carries the
+  // response, so McpClient.connect alone would wait for its own timeout.
   const fetch: typeof globalThis.fetch = async (_input, init) => {
     streams.push(init!.signal!);
     return new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { "content-type": "text/event-stream" } });
   };
   const acquire = () => cache.getOrConnect(
     "server",
-    () => { created += 1; return new Client({ name: "stalled", version: "1" }); },
+    () => { created += 1; return new McpClient({ name: "stalled", version: "1" }); },
     async (client, isCurrent, onClosed) => {
-      client.onclose = onClosed;
-      await client.connect(createMcpRemoteTransport({ transport: "sse", serviceUrl: "https://stalled.example/sse", fetch, isCurrent, onTerminalFailure: onClosed }));
+      client.onClose(onClosed);
+      await client.connect(createMcpRemoteTransport({ serviceUrl: "https://stalled.example/mcp", fetch, isCurrent, onTerminalFailure: onClosed }));
     },
     async (client) => client.close(),
   );
@@ -448,7 +446,7 @@ test("an SSE endpoint that never arrives times out the whole connect and drops t
   assert.ok(Date.now() - started < 2_000);
   assert.deepEqual(cache.ids(), [], "the timed-out attempt is not handed to later callers");
   assert.equal(streams.length, 1);
-  assert.equal(streams[0].aborted, true, "the stalled receive stream was cancelled");
+  assert.equal(streams[0].aborted, true, "the stalled response stream was cancelled");
   await assert.rejects(acquire(), { name: "TimeoutError" });
   assert.equal(created, 2, "a later caller starts a fresh attempt");
   await cache.disconnect("server");

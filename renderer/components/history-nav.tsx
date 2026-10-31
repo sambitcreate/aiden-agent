@@ -7,6 +7,12 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useEnvironmentPanel } from "./environment-panel";
 import { Button, toast } from "./ui";
 import { historyNavigationAvailability } from "../lib/history-navigation";
+import { useShortcutBinding } from "../lib/command-system";
+import { ariaKeyShortcut, prettyAccelerator } from "../shared/keybindings";
+
+function titleWithShortcut(label: string, binding: string | null): string {
+  return binding ? `${label} (${prettyAccelerator(binding)})` : label;
+}
 
 // `aria-disabled` rather than `disabled`: reaching the first or last entry
 // must not drop keyboard focus from the button that was just used.
@@ -41,6 +47,8 @@ export function HistoryNavButtons() {
     entryIndex,
     router.history.length,
   );
+  const backBinding = useShortcutBinding("navigate.back");
+  const forwardBinding = useShortcutBinding("navigate.forward");
   return (
     <>
       <Button
@@ -49,7 +57,8 @@ export function HistoryNavButtons() {
         variant="bar"
         className={UNAVAILABLE}
         aria-label="Go back"
-        title="Go back"
+        aria-keyshortcuts={ariaKeyShortcut(backBinding)}
+        title={titleWithShortcut("Go back", backBinding)}
         aria-disabled={!canGoBack || undefined}
         onClick={() => {
           if (canGoBack) traverse(() => router.history.back());
@@ -63,7 +72,8 @@ export function HistoryNavButtons() {
         variant="bar"
         className={UNAVAILABLE}
         aria-label="Go forward"
-        title="Go forward"
+        aria-keyshortcuts={ariaKeyShortcut(forwardBinding)}
+        title={titleWithShortcut("Go forward", forwardBinding)}
         aria-disabled={!canGoForward || undefined}
         onClick={() => {
           if (canGoForward) traverse(() => router.history.forward());

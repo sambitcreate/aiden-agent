@@ -35,6 +35,8 @@ export interface ComposerContextChipsInput {
     /** The branch has work that a PR could open (see `branchCanOpenPullRequest`). */
     branchCanOpen: boolean;
   };
+  /** Background jobs run, a pull request is followed, or a done-when check is set. */
+  followThrough?: boolean;
 }
 
 export interface ComposerContextChips {
@@ -44,6 +46,8 @@ export interface ComposerContextChips {
   /** Uncommitted-change count shown on the branch chip; 0 shows nothing. */
   changesBadge: number;
   pullRequest: boolean;
+  /** Background job, followed pull request and done-when chips. */
+  followThrough: boolean;
   barMode: ComposerContextBarMode;
 }
 
@@ -55,8 +59,10 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     branch &&
     input.pullRequestRemote &&
     (linked > 0 || pending > 0 || current || branchCanOpen);
+  const followThrough = input.stage === "started" && input.hasFolder && !input.accessOff && input.followThrough === true;
+  // Running work keeps a summary strip even in a folder without Git.
   const barMode: ComposerContextBarMode =
-    input.stage === "draft" || !input.autoHide ? "full" : branch ? "summary" : "hidden";
+    input.stage === "draft" || !input.autoHide ? "full" : branch || followThrough ? "summary" : "hidden";
   const full = barMode === "full";
   return {
     workspace: full,
@@ -64,6 +70,7 @@ export function composerContextChips(input: ComposerContextChipsInput): Composer
     branch: branch && barMode !== "hidden",
     changesBadge: branch && barMode !== "hidden" ? Math.max(0, input.uncommitted) : 0,
     pullRequest: pullRequest && barMode !== "hidden",
+    followThrough: followThrough && barMode !== "hidden",
     barMode,
   };
 }

@@ -13,7 +13,8 @@ export const SHARE_IMAGE_TOOL_NAME = "share_image";
 
 export interface ShareImageToolDependencies {
   workspaceRoot: string;
-  share(attachment: Attachment): void;
+  /** `toolCallId` is the runtime's raw id for this call, so the image can sit at its row. */
+  share(attachment: Attachment, toolCallId: string): void;
   /** Bot callers use a workspace-only path contract; ordinary callers retain existing behavior. */
   scopeToWorkspace?: boolean;
   expectedWorkspaceIdentity?: { readonly device: string; readonly inode: string };
@@ -117,11 +118,11 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
     name: SHARE_IMAGE_TOOL_NAME,
     label: "Share Image",
     description:
-      "Attach a PNG or JPEG file from this computer to your response so the user can receive it in Aiden on desktop, iPhone, or iPad. This is an outbound sharing tool: it cannot inspect an image or add one to model input. Never call it to view, understand, or analyze an image. Images attached by the user are already supplied in the conversation when the selected model supports vision. Use this tool only when the user asks to see or receive a local image file. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
+      "Attach a PNG or JPEG file from this computer to your response so the user can receive it in Aiden on desktop and on paired iPhone, iPad and Android devices. This is an outbound sharing tool: it cannot inspect an image or add one to model input. Never call it to view, understand, or analyze an image. Images attached by the user are already supplied in the conversation when the selected model supports vision. Use this tool only when the user asks to see or receive a local image file. Relative paths start at the active workspace; absolute paths are accepted after user approval.",
     parameters: Type.Object({
       path: Type.String({ description: "Workspace-relative or absolute path to the PNG or JPEG." }),
     }),
-    execute: async (_toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
+    execute: async (toolCallId, rawParams, signal): Promise<AgentToolResult<null>> => {
       const suppliedPath = (rawParams as { path?: unknown }).path;
       if (typeof suppliedPath !== "string" || suppliedPath.trim().length === 0) {
         throw new Error("An image path is required.");
@@ -145,7 +146,7 @@ export function createShareImageTool(dependencies: ShareImageToolDependencies): 
         size: image.bytes.length,
         data: image.bytes.toString("base64"),
       };
-      dependencies.share(attachment);
+      dependencies.share(attachment, toolCallId);
       return textResult(
         JSON.stringify({ shared: true, name: attachment.name, size: attachment.size }),
       );

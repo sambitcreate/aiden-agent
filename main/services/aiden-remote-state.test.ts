@@ -993,6 +993,27 @@ test("bot:activity is an opt-in any paired device may negotiate and keep", async
   assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
 });
 
+test("bot:handoffs and schedule:cards are opt-ins pairing never issues and any paired device may negotiate and keep", async () => {
+  for (const optIn of ["bot:handoffs", "schedule:cards"] as const) {
+    const state = fixture();
+    const devices = [];
+    for (const type of ["iphone", "android", "mac"] as const) {
+      const issued = await state.registry.issueDevice({ name: type, type, clientVersion: "1.0" });
+      assert.equal(issued.device.capabilities.includes(optIn), false, `${optIn} ${type}: pairing never issues it`);
+      const upgraded = await state.registry.upgradeDeviceCapabilities(issued.device.id, [optIn]);
+      assert.equal(upgraded?.capabilities.includes(optIn), true, `${optIn} ${type}`);
+      devices.push(issued);
+    }
+    const restored = fixture(state.stored());
+    await restored.registry.initialize();
+    for (const issued of devices) {
+      const authenticated = await restored.registry.authenticate(issued.credential);
+      assert.equal(authenticated?.capabilities.has(optIn), true, `${optIn}: the grant is persisted`);
+      assert.equal(authenticated?.acceptsProgressCapabilities, false, "an opt-in is not a progress grant");
+    }
+  }
+});
+
 test("bot:activity survives a restart, dies with revocation, and an older stored state simply lacks it", async () => {
   const state = fixture();
   const issued = await state.registry.issueDevice({ name: "iPhone", type: "iphone", clientVersion: "1.0" });

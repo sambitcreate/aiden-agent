@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createBotSessionService } from "../bot-runtime/bot-session-service.js";
 import { recordingDeps } from "../bot-runtime/test-support/fixtures.js";
@@ -11,6 +12,7 @@ import type { BotReplyOutcome } from "../bot-runtime/bot-session-service.js";
 import {
   createTelegramBotIngress,
   MAY_BE_DUPLICATE_PREFIX,
+  telegramBotPausedLine,
   telegramBotRequestId,
   type BotReplyRow,
   type TelegramBotReply,
@@ -386,6 +388,110 @@ test("a Resume that lands while startup recovery is still settling its paused ob
   }
 });
 
+test("a message to a paused Bot gets one fixed line, no row, and never reaches the Bot", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+  });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file: path.join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void delivered.push(reply),
+    botName: async () => "Ada",
+  });
+  try {
+    await session.pause("bot:a", "mac");
+    const admitted = await ingress.admit({ botId: "bot:a", chatId: 7, threadId: 3, messageId: 60, ownerUserId: 7, text: "hi" });
+    await ingress.idle();
+    assert.deepEqual(admitted, { requestId: "tg:bot:a:7:3:60", deduped: false, paused: true });
+    assert.deepEqual(delivered, [
+      { chatId: 7, threadId: 3, ownerUserId: 7, text: "Ada is paused. Resume it in Aiden to continue." },
+    ]);
+    assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
+    assert.equal(fauxModels.calls(), 0);
+    const view = await (await session.conversation("bot:a")).context(BACKGROUND_CONTEXT);
+    assert.equal(view.entries.some((entry) => entry.kind === "pi.user"), false, "the Bot got no input");
+  } finally {
+    ingress.stop();
+    await session.shutdown();
+  }
+  assert.equal(telegramBotPausedLine(undefined), "This Bot is paused. Resume it in Aiden to continue.");
+});
+
+test("a message to a Bot over its monthly spending limit gets the limit line and never reaches the Bot", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([fauxAssistantMessage("never")]);
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    spendingRefusal: async () => "Ada reached its $20.00 spending limit for this month. Allow more to keep going.",
+  });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file: path.join(dir, "outbox.json"),
+    session,
+    deliver: async (reply) => void delivered.push(reply),
+    botName: async () => "Ada",
+  });
+  try {
+    await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "hi" });
+    await ingress.idle();
+    assert.deepEqual(delivered, [
+      { chatId: 7, ownerUserId: 7, text: "Ada reached its $20.00 spending limit for this month. Allow more to keep going." },
+    ]);
+    assert.deepEqual(await ingress.rows(), [], "nothing waits for an answer");
+    assert.equal(fauxModels.calls(), 0);
+  } finally {
+    ingress.stop();
+    await session.shutdown();
+  }
+});
+
+test("a Telegram turn paused mid-reply is delivered once after unpause and Resume, not before", async () => {
+  const dir = tempDir();
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("finished after the pause")], { tokensPerSecond: 40 });
+  let ingress: ReturnType<typeof createTelegramBotIngress> | undefined;
+  const session = await createBotSessionService({
+    profileDir: dir,
+    models: fauxModels.models,
+    extension: recordingDeps(),
+    resolveModel: async () => FAUX_MODEL_REF,
+    knownBotIds: async () => new Set(["bot:a"]),
+    onStateChange: (botId, state) => ingress?.botStateChanged(botId, state),
+  });
+  const delivered: string[] = [];
+  ingress = createTelegramBotIngress({ file: path.join(dir, "outbox.json"), session, deliver: async (reply) => void delivered.push(reply.text) });
+  try {
+    await ingress.admit({ botId: "bot:a", chatId: 7, messageId: 61, ownerUserId: 7, text: "write it all" });
+    await waitFor(async () => (await session.state("bot:a")).kind === "running" && fauxModels.calls() === 1, {
+      what: "the Telegram turn to stream",
+    });
+    await session.pause("bot:a", "phone");
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "interrupted", { what: "the paused row" });
+    await session.unpause("bot:a");
+    await ingress.idle();
+    assert.deepEqual(delivered, [], "unpausing alone delivers nothing");
+    assert.equal(fauxModels.calls(), 1);
+
+    await session.resume("bot:a", "desk-resume");
+    await waitFor(async () => (await ingress!.rows())[0]?.state === "sent", { what: "the resumed reply to be sent" });
+    await ingress.idle();
+    assert.deepEqual(delivered, ["finished after the pause"]);
+  } finally {
+    ingress.stop();
+    await session.shutdown();
+  }
+});
+
 test("a turn the person dismissed is settled and never delivered", async () => {
   const dir = tempDir();
   const file = path.join(dir, "outbox.json");
@@ -456,6 +562,32 @@ test("a routine result goes to the bound chat once, with the routine name in bol
     { chatId: 7, ownerUserId: 7, text: "**Morning \\*brief\\***\n\nYour first meeting is at 9:30." },
   ]);
   assert.deepEqual((await ingress.rows()).map((row) => [row.kind, row.state]), [["routine", "sent"]]);
+});
+
+test("startup recovery cannot send a newly queued routine result twice", async () => {
+  const file = path.join(tempDir(), "outbox.json");
+  let releaseBinding!: () => void;
+  const bindingChecked = new Promise<void>((resolve) => { releaseBinding = resolve; });
+  let bindingStarted!: () => void;
+  const started = new Promise<void>((resolve) => { bindingStarted = resolve; });
+  const delivered: TelegramBotReply[] = [];
+  const ingress = createTelegramBotIngress({
+    file,
+    session: untouchedSession().session,
+    deliver: async (reply) => void delivered.push(reply),
+    routineTargetEnabled: async () => {
+      bindingStarted();
+      await bindingChecked;
+      return true;
+    },
+  });
+  await ingress.enqueueRoutineDelivery(routineDelivery);
+  await started;
+  await ingress.recover();
+  releaseBinding();
+  await ingress.idle();
+  assert.equal(delivered.length, 1);
+  assert.deepEqual((await ingress.rows()).map((row) => row.state), ["sent"]);
 });
 
 test("a routine result cut off by a crash mid-send is redelivered once with the duplicate label", async () => {

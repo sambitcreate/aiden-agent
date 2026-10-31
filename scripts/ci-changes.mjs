@@ -348,7 +348,7 @@ export function detectChangedAreas(options = {}) {
   const headSha = envValue(environment, options.headSha, "HEAD_SHA");
   const cwd = options.cwd ?? process.cwd();
   const spawn = options.spawn ?? defaultSpawnSync;
-  // A push that creates a branch (the catalog bot's automation branches) has no
+  // A push that creates a branch has no
   // previous tip. Classify it by everything it adds over main instead.
   if (eventName === "push" && typeof baseSha === "string" && /^0+$/u.test(baseSha) && validGitRef(headSha)) {
     const mergeBase = invokeGit(spawn, ["merge-base", "origin/main", headSha], cwd);

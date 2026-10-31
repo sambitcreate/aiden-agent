@@ -123,6 +123,10 @@ object AidenBotSessionWire {
     const val MAX_SUBMISSION_ID_LENGTH = 64
     const val MAX_PLUGIN_ID_LENGTH = 80
     const val MAX_ROUTINE_ID_LENGTH = 160
+    /** Revision 45: a shared image's name, and its largest size (the Mac's inline image limit). */
+    const val MAX_SHARED_IMAGE_NAME_LENGTH = 255
+    const val MAX_SHARED_IMAGE_BYTES = 8 * 1_048_576
+    val SHARED_IMAGE_MIME_TYPES: Set<String> = setOf("image/png", "image/jpeg")
     private val PLUGIN_ID = Regex("^[a-z0-9][a-z0-9._-]*$")
     private val EPOCH = Regex("^[A-Za-z0-9_-]+$")
     private val PROPOSAL_ID = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -305,10 +309,36 @@ sealed class AidenBotSessionEntry {
         }
     }
 
+    /**
+     * Revision 45 (`bot:images` devices only): an image the Bot shared. Its bytes are read from
+     * `GET /bots/{botId}/session/images/{id}`, never sent in the session.
+     */
+    @Serializable
+    @SerialName("shared_image")
+    data class SharedImage(
+        override val id: String,
+        val name: String,
+        /** `image/png` or `image/jpeg`. */
+        val mimeType: String,
+        val size: Int
+    ) : AidenBotSessionEntry() {
+        init {
+            AidenBotWire.validateIdentifier(id, "entry.id")
+            AidenBotWire.validateString(name, "entry.name", AidenBotSessionWire.MAX_SHARED_IMAGE_NAME_LENGTH)
+            if (mimeType !in AidenBotSessionWire.SHARED_IMAGE_MIME_TYPES) throw AidenBotContractException.InvalidField("entry.mimeType")
+            if (size !in 1..AidenBotSessionWire.MAX_SHARED_IMAGE_BYTES) throw AidenBotContractException.InvalidField("entry.size")
+        }
+
+        /** The image as the shared attachment viewer reads it. */
+        val attachment: AidenMessageAttachment
+            get() = AidenMessageAttachment(id = id, name = name, mimeType = mimeType, kind = AidenAttachmentKind.IMAGE, size = size)
+    }
+
     companion object {
         /** The entry types this build reads. Any other `type` is skipped (revision 27). */
         val KNOWN_TYPES: Set<String> = setOf(
-            "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal"
+            "message", "connect_card", "notice", "failed_turn", "memory_update", "routine_proposal",
+            "shared_image"
         )
 
         /**
@@ -475,6 +505,208 @@ data class AidenBotQuestionAnswerReceipt(val waitId: String) {
     }
 }
 
+/** Contract revision 37 (`bot:handoffs`): the bounds and grammars the Mac's hand-off parsers use. */
+object AidenBotHandoffWire {
+    const val MAX_ACTION_LENGTH = 160
+    const val MAX_WHY_LENGTH = 400
+    const val MAX_NOTE_LENGTH = 4_000
+    const val MAX_URL_LENGTH = 2_048
+    private val WAIT_ID = Regex("^[A-Za-z0-9-]{1,64}$")
+    /** What a URL's host may never hold (the WHATWG forbidden host code points, less the delimiters). */
+    private const val FORBIDDEN_HOST_CHARACTERS = " <>^|%"
+
+    /** `^[A-Za-z0-9-]{1,64}$`, the Mac's Bot wait id grammar. */
+    fun validateWaitId(value: String, field: String = "waitId") {
+        if (!WAIT_ID.matches(value)) throw AidenBotContractException.InvalidField(field)
+    }
+
+    /**
+     * An https page with a host and no user name or password, with nothing around it, at most
+     * 2,048 characters: what the Mac's own parser accepts. It errs strict: a control character,
+     * an `@` in the authority, or a scheme without `//` is refused.
+     */
+    fun isOpenUrl(value: String): Boolean {
+        if (value.isEmpty() || value.length > MAX_URL_LENGTH || value.trim() != value) return false
+        if (value.any { it < ' ' || it == '\u007F' }) return false
+        if (!value.startsWith(HTTPS_PREFIX, ignoreCase = true)) return false
+        val rest = value.substring(HTTPS_PREFIX.length)
+        val end = rest.indexOfFirst { it == '/' || it == '\\' || it == '?' || it == '#' }
+        val authority = if (end < 0) rest else rest.substring(0, end)
+        if ('@' in authority) return false
+        val host: String
+        val port: String?
+        if (authority.startsWith("[")) {
+            val close = authority.indexOf(']')
+            if (close < 2) return false
+            host = authority.substring(0, close + 1)
+            val tail = authority.substring(close + 1)
+            if (tail.isNotEmpty() && !tail.startsWith(":")) return false
+            port = if (tail.isEmpty()) null else tail.substring(1)
+        } else {
+            host = authority.substringBefore(':')
+            port = if (':' in authority) authority.substringAfter(':') else null
+            if (host.any { it in FORBIDDEN_HOST_CHARACTERS || it == '[' || it == ']' }) return false
+        }
+        if (host.isEmpty()) return false
+        // An empty port is the default one; any other is decimal and at most 65535.
+        if (port != null && port.isNotEmpty() &&
+            (!port.all { it in '0'..'9' } || port.trimStart('0').length > 5 || (port.trimStart('0').toIntOrNull() ?: 0) > 65_535)
+        ) {
+            return false
+        }
+        return true
+    }
+
+    private const val HTTPS_PREFIX = "https://"
+}
+
+/** What a hand-off asks for: a step the person does, or signing in to a site in the Bot's browser on the Mac. */
+enum class AidenBotHandoffKind(val wireValue: String) {
+    ACTION("action"),
+    SIGN_IN("sign_in");
+
+    companion object {
+        fun fromWire(value: String): AidenBotHandoffKind? = values().firstOrNull { it.wireValue == value }
+    }
+}
+
+/**
+ * Contract revision 37 (`bot:handoffs` devices only): a step the Bot hands back to the person
+ * ("Your turn: …"), on the session's `handoff` and on `handoff` frames. It is answered once by
+ * [waitId] through `POST /bots/{botId}/handoffs/{waitId}/answer` with Done or Skip. A sign-in
+ * is finished in the Bot's own browser on the Mac, so a phone offers Finish on your Mac and Skip.
+ * Revision 40: a card a password-or-code rule opened carries `takesNote: false` ([takesNote]).
+ * Revision 43: a step on the Bot's own browser or computer carries `onMac: true` ([onMac]) and no
+ * `open`, so a phone offers Finish on your Mac beside Skip and Done.
+ */
+data class AidenBotHandoff(
+    val waitId: String,
+    val kind: AidenBotHandoffKind,
+    /** The card's title after "Your turn: ". */
+    val action: String,
+    val why: String? = null,
+    /** The https page the step happens on, opened in the phone's browser. */
+    val openUrl: String? = null,
+    /**
+     * Revision 40: false on a card whose answer may carry no note (a password-or-code rule opened
+     * it), so the composer holds instead of sending a code to the Bot as Done's note.
+     */
+    val takesNote: Boolean = true,
+    /** Revision 43: the step is on the Bot's own screen on the Mac. */
+    val onMac: Boolean = false
+) {
+    init {
+        AidenBotHandoffWire.validateWaitId(waitId, "handoff.waitId")
+        AidenBotWire.validateString(action, "handoff.action", AidenBotHandoffWire.MAX_ACTION_LENGTH)
+        if (action.isBlank()) throw AidenBotContractException.InvalidField("handoff.action")
+        why?.let { AidenBotWire.validateString(it, "handoff.why", AidenBotHandoffWire.MAX_WHY_LENGTH) }
+        openUrl?.let { if (!AidenBotHandoffWire.isOpenUrl(it)) throw AidenBotContractException.InvalidField("handoff.open.url") }
+    }
+
+    fun toJson(): JsonObject = buildJsonObject {
+        put("waitId", JsonPrimitive(waitId))
+        put("kind", JsonPrimitive(kind.wireValue))
+        put("action", JsonPrimitive(action))
+        why?.let { put("why", JsonPrimitive(it)) }
+        openUrl?.let { url -> put("open", buildJsonObject { put("url", JsonPrimitive(url)) }) }
+        if (!takesNote) put("takesNote", JsonPrimitive(false))
+        if (onMac) put("onMac", JsonPrimitive(true))
+    }
+
+    companion object {
+        private val REQUIRED = setOf("waitId", "kind", "action")
+        private val ALLOWED = REQUIRED + setOf("why", "open", "takesNote", "onMac")
+
+        /**
+         * Exact keys, as the Mac's parser reads them: `why`, `open` and `takesNote` may be left
+         * out, never null, and `takesNote` is only ever `false`. `onMac` is only ever `true`, on an
+         * action without `open`.
+         */
+        fun parse(element: JsonElement): AidenBotHandoff {
+            val obj = element as? JsonObject ?: throw AidenBotContractException.InvalidField("handoff")
+            if (!obj.keys.containsAll(REQUIRED) || !ALLOWED.containsAll(obj.keys)) {
+                throw AidenBotContractException.InvalidField("handoff")
+            }
+            fun string(value: JsonElement?, field: String) = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw AidenBotContractException.InvalidField(field)
+            val openUrl = obj["open"]?.let { open ->
+                val body = open as? JsonObject ?: throw AidenBotContractException.InvalidField("handoff.open")
+                if (body.keys != setOf("url")) throw AidenBotContractException.InvalidField("handoff.open")
+                string(body["url"], "handoff.open.url")
+            }
+            val kind = AidenBotHandoffKind.fromWire(string(obj["kind"], "handoff.kind"))
+                ?: throw AidenBotContractException.InvalidField("handoff.kind")
+            val onMac = obj["onMac"]?.let { value ->
+                val flag = value as? JsonPrimitive
+                if (flag == null || flag.isString || flag.content != "true" ||
+                    kind != AidenBotHandoffKind.ACTION || obj.containsKey("open")
+                ) {
+                    throw AidenBotContractException.InvalidField("handoff.onMac")
+                }
+                true
+            } ?: false
+            obj["takesNote"]?.let { value ->
+                val flag = value as? JsonPrimitive
+                if (flag == null || flag.isString || flag.content != "false") {
+                    throw AidenBotContractException.InvalidField("handoff.takesNote")
+                }
+            }
+            return AidenBotHandoff(
+                waitId = string(obj["waitId"], "handoff.waitId"),
+                kind = kind,
+                action = string(obj["action"], "handoff.action"),
+                why = obj["why"]?.let { string(it, "handoff.why") },
+                openUrl = openUrl,
+                takesNote = !obj.containsKey("takesNote"),
+                onMac = onMac
+            )
+        }
+    }
+}
+
+@Serializable
+enum class AidenBotHandoffOutcome {
+    @SerialName("done") DONE,
+    @SerialName("skipped") SKIPPED
+}
+
+/**
+ * The body of `POST /bots/{botId}/handoffs/{waitId}/answer`: Done or Skip, with an optional
+ * note the Bot reads. A note is never blank and at most 4,000 characters; a sign-in can only be
+ * skipped from a phone (the Mac answers Done for it with a 400).
+ */
+@Serializable
+data class AidenBotHandoffAnswerRequest(
+    val outcome: AidenBotHandoffOutcome,
+    val note: String? = null
+) {
+    init {
+        note?.let {
+            AidenBotWire.validateString(it, "note", AidenBotHandoffWire.MAX_NOTE_LENGTH)
+            if (it.isBlank()) throw AidenBotContractException.InvalidField("note")
+        }
+    }
+}
+
+/** The answer's receipt: the same wait id on every repeat. */
+@Serializable
+data class AidenBotHandoffAnswerReceipt(val waitId: String) {
+    init {
+        AidenBotHandoffWire.validateWaitId(waitId)
+    }
+}
+
+/** `POST /bots/{botId}/handoffs/{waitId}/open-on-mac`: whether the Mac brought the Bot's browser forward. */
+@Serializable
+data class AidenBotHandoffOpenOnMacReceipt(
+    val waitId: String,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val opened: Boolean
+) {
+    init {
+        AidenBotHandoffWire.validateWaitId(waitId)
+    }
+}
+
 /**
  * Contract revision 30 (`bot-activity-v1`, `bot:activity`): what a Bot in a running turn is
  * doing. Exactly `phase`, `app` and `startedAt` cross the wire; the strict wire JSON refuses
@@ -508,6 +740,125 @@ object AidenBotSessionActivitySerializer :
     JsonTransformingSerializer<AidenBotSessionActivity>(AidenBotSessionActivity.generatedSerializer()) {
     override fun transformDeserialize(element: JsonElement): JsonElement = element.refusingNullLiterals("activity", "app")
 }
+
+// Contract revision 42 (`bot:issues`): the Bot's host-owned "Needs you" cards.
+
+/** The bounds the Mac's own issue parsers use. */
+object AidenRemoteIssueWire {
+    /** Open cards plus retained settled ones: the most a session may carry. */
+    const val MAX_CARDS = 58
+    const val MAX_TITLE_LENGTH = 80
+    const val MAX_BODY_LENGTH = 280
+    const val MAX_ID_LENGTH = 160
+    const val MAX_ACTIONS = 2
+
+    private val ID = Regex("^[A-Za-z0-9._:-]{1,160}$")
+
+    /** A card, routine or issue id: `^[A-Za-z0-9._:-]{1,160}$`. */
+    fun validateId(value: String, field: String) {
+        if (!ID.matches(value)) throw AidenBotContractException.InvalidField(field)
+    }
+}
+
+/** The four kinds of card the host raises. */
+@Serializable
+enum class AidenBotIssueKind {
+    @SerialName("preflight_failed") PREFLIGHT_FAILED,
+    @SerialName("routine_failed") ROUTINE_FAILED,
+    @SerialName("routine_paused") ROUTINE_PAUSED,
+    @SerialName("run_stalled") RUN_STALLED
+}
+
+/**
+ * What a phone may do with a card. `open_settings` is the Mac's own surface and never crosses
+ * the wire: a card that offered only that arrives with no actions.
+ */
+@Serializable
+enum class AidenBotIssueActionKind {
+    @SerialName("open_chat") OPEN_CHAT,
+    @SerialName("resume_routine") RESUME_ROUTINE,
+    @SerialName("stop_run") STOP_RUN,
+    @SerialName("keep_waiting") KEEP_WAITING
+}
+
+/** One action a card offers, exactly as the host sends it. `routineId` only on RESUME_ROUTINE. */
+@Serializable
+data class AidenBotIssueAction(
+    val kind: AidenBotIssueActionKind,
+    val routineId: String? = null
+) {
+    init {
+        when (kind) {
+            AidenBotIssueActionKind.RESUME_ROUTINE -> {
+                val id = routineId ?: throw AidenBotContractException.InvalidField("issue.action.routineId")
+                AidenRemoteIssueWire.validateId(id, "issue.action.routineId")
+            }
+            else -> if (routineId != null) throw AidenBotContractException.InvalidField("issue.action.routineId")
+        }
+    }
+}
+
+/**
+ * Contract revision 42 (`bot:issues` devices only): one host-owned "Needs you" card. A settled
+ * card (`resolved`) offers nothing a phone may take.
+ */
+@Serializable
+data class AidenBotIssue(
+    val id: String,
+    val kind: AidenBotIssueKind,
+    val title: String,
+    val body: String,
+    val routineId: String? = null,
+    /** In card order, at most two; the last one is primary. */
+    val actions: List<AidenBotIssueAction>,
+    @Serializable(with = InstantIso8601Serializer::class) val createdAt: Instant,
+    @Serializable(with = AidenStrictBooleanSerializer::class) val resolved: Boolean
+) {
+    init {
+        AidenRemoteIssueWire.validateId(id, "issue.id")
+        AidenBotWire.validateString(title, "issue.title", AidenRemoteIssueWire.MAX_TITLE_LENGTH)
+        AidenBotWire.validateString(body, "issue.body", AidenRemoteIssueWire.MAX_BODY_LENGTH, allowEmpty = true)
+        routineId?.let { AidenRemoteIssueWire.validateId(it, "issue.routineId") }
+        if (actions.size > AidenRemoteIssueWire.MAX_ACTIONS) throw AidenBotContractException.InvalidField("issue.actions")
+        if (resolved && actions.isNotEmpty()) {
+            throw AidenBotContractException.InvalidCombination("settled issue with actions")
+        }
+    }
+
+    companion object {
+        /** At most [AidenRemoteIssueWire.MAX_CARDS] cards, each with its own id. */
+        fun validateList(issues: List<AidenBotIssue>) {
+            if (issues.size > AidenRemoteIssueWire.MAX_CARDS || issues.map { it.id }.toSet().size != issues.size) {
+                throw AidenBotContractException.InvalidField("issues")
+            }
+        }
+
+        /** One session's list; present only for a device holding `bot:issues`. */
+        fun parseList(element: JsonElement): List<AidenBotIssue> {
+            val array = element as? JsonArray ?: throw AidenBotContractException.InvalidField("issues")
+            val issues = array.map {
+                AidenBotWireJson.json.decodeFromJsonElement(AidenBotIssue.serializer(), it)
+            }
+            validateList(issues)
+            return issues
+        }
+    }
+}
+
+/** `POST /bots/{botId}/issues/{issueId}/act`: one action the card offers. */
+@Serializable
+data class AidenBotIssueActRequest(val action: AidenBotIssueAction)
+
+@Serializable
+enum class AidenBotIssueActResult {
+    @SerialName("done") DONE,
+    /** Nothing is open under that id: the card should be dropped. */
+    @SerialName("not_open") NOT_OPEN
+}
+
+/** The act route's receipt: `{ result: "done" | "not_open" }`. */
+@Serializable
+data class AidenBotIssueActReceipt(val result: AidenBotIssueActResult)
 
 /** A message waiting for the running turn: STEER joins it, QUEUE runs after it. */
 @Serializable
@@ -552,7 +903,17 @@ data class AidenBotSession(
     /** Revision 30 (`bot:activity` devices only): what the running turn is doing. */
     val activity: AidenBotSessionActivity? = null,
     /** Revision 30 (`bot:activity` devices only): the person's messages still waiting for the turn. */
-    val queued: List<AidenBotQueuedMessage>? = null
+    val queued: List<AidenBotQueuedMessage>? = null,
+    /**
+     * Revision 37 (`bot:handoffs` devices only): the step the Bot handed back, or null. A holder is
+     * always sent the key, as `null` when nothing waits; an older phone never is.
+     */
+    val handoff: AidenBotHandoff? = null,
+    /**
+     * Revision 42 (`bot:issues` devices only): the Bot's "Needs you" cards, oldest first. Null
+     * from an older Mac or a device without the grant; an empty list means no card is open.
+     */
+    val issues: List<AidenBotIssue>? = null
 ) {
     init {
         AidenBotWire.validateIdentifier(botId, "botId", AidenRemoteProtocol.MAX_BOT_IDENTIFIER_LENGTH)
@@ -564,10 +925,11 @@ data class AidenBotSession(
             throw AidenBotContractException.InvalidField("entries")
         }
         queued?.let { AidenBotQueuedMessage.validateList(it) }
+        issues?.let { AidenBotIssue.validateList(it) }
     }
 }
 
-/** Every session field except `question` and `approval`, which the Bot wire's omitted-null rule would drop. */
+/** Every session field except `question`, `approval` and `handoff`, which the Bot wire's omitted-null rule would drop. */
 @Serializable
 private data class AidenBotSessionFields(
     val botId: String,
@@ -594,10 +956,16 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             value.blocked, value.partial, value.entries, value.hasOlder, value.activity, value.queued
         )
         val body = jsonEncoder.json.encodeToJsonElement(AidenBotSessionFields.serializer(), fields).jsonObject
+        // A hand-off is written only when one waits, so an older Mac's session reads back as it came.
+        val handoff = value.handoff?.let { mapOf("handoff" to it.toJson()) } ?: emptyMap()
+        // Revision 42: the list is written only when this session carries one at all.
+        val issues = value.issues?.let {
+            mapOf("issues" to jsonEncoder.json.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), it))
+        } ?: emptyMap()
         jsonEncoder.encodeJsonElement(
             JsonObject(
                 body + ("question" to (value.question?.toJson() ?: JsonNull)) +
-                    ("approval" to (value.approval?.toJson() ?: JsonNull))
+                    ("approval" to (value.approval?.toJson() ?: JsonNull)) + handoff + issues
             )
         )
     }
@@ -613,9 +981,13 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
         val rawEntries = body["entries"] as? JsonArray ?: throw AidenBotContractException.InvalidField("entries")
         if (rawEntries.size > AidenBotSessionWire.MAX_ENTRIES) throw AidenBotContractException.InvalidField("entries")
         val readable = JsonArray(rawEntries.filter { AidenBotSessionEntry.unknownType(it) == null })
+        // Revision 37: `handoff` reaches only `bot:handoffs` devices, as `null` when nothing waits.
+        val handoff = body["handoff"]?.let { if (it is JsonNull) null else AidenBotHandoff.parse(it) }
+        // Revision 42: `issues` reaches only `bot:issues` devices; absent from every other session.
+        val issues = body["issues"]?.let { if (it is JsonNull) null else AidenBotIssue.parseList(it) }
         val fields = jsonDecoder.json.decodeFromJsonElement(
             AidenBotSessionFields.serializer(),
-            JsonObject(body - "question" - "approval" + ("entries" to readable))
+            JsonObject(body - "question" - "approval" - "handoff" - "issues" + ("entries" to readable))
         )
         return AidenBotSession(
             botId = fields.botId,
@@ -630,7 +1002,9 @@ object AidenBotSessionSerializer : KSerializer<AidenBotSession> {
             question = if (question is JsonNull) null else AidenBotQuestion.parse(question),
             approval = if (approval is JsonNull) null else AidenBotApproval.parse(approval),
             activity = fields.activity,
-            queued = fields.queued
+            queued = fields.queued,
+            handoff = handoff,
+            issues = issues
         )
     }
 }
@@ -730,6 +1104,14 @@ sealed class AidenBotSessionEventPayload {
     data class Approval(val approval: AidenBotApproval?) : AidenBotSessionEventPayload()
     /** Revision 30: what the running turn is doing now, or null when none runs. */
     data class Activity(val activity: AidenBotSessionActivity?) : AidenBotSessionEventPayload()
+    /** Revision 37: the step the Bot handed back appeared (non-null) or was settled (null). */
+    data class Handoff(val handoff: AidenBotHandoff?) : AidenBotSessionEventPayload()
+    /** Revision 42: the Bot's issue cards, oldest first; an empty list clears them. */
+    data class Issues(val issues: List<AidenBotIssue>) : AidenBotSessionEventPayload() {
+        init {
+            AidenBotIssue.validateList(issues)
+        }
+    }
     /** Revision 30: the person's messages still waiting for the turn. */
     data class Queued(val queued: List<AidenBotQueuedMessage>) : AidenBotSessionEventPayload() {
         init {
@@ -772,6 +1154,8 @@ data class AidenBotSessionEvent(
             is AidenBotSessionEventPayload.Approval -> "approval"
             is AidenBotSessionEventPayload.Activity -> "activity"
             is AidenBotSessionEventPayload.Queued -> "queued"
+            is AidenBotSessionEventPayload.Handoff -> "handoff"
+            is AidenBotSessionEventPayload.Issues -> "issues"
             AidenBotSessionEventPayload.Closed -> "closed"
         }
 }
@@ -806,6 +1190,12 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
             }
             is AidenBotSessionEventPayload.Queued -> buildJsonObject {
                 put("queued", wire.encodeToJsonElement(ListSerializer(AidenBotQueuedMessage.serializer()), p.queued))
+            }
+            is AidenBotSessionEventPayload.Handoff -> buildJsonObject {
+                put("handoff", p.handoff?.toJson() ?: JsonNull)
+            }
+            is AidenBotSessionEventPayload.Issues -> buildJsonObject {
+                put("issues", wire.encodeToJsonElement(ListSerializer(AidenBotIssue.serializer()), p.issues))
             }
             AidenBotSessionEventPayload.Closed -> JsonObject(emptyMap())
         }
@@ -885,6 +1275,15 @@ object AidenBotSessionEventSerializer : KSerializer<AidenBotSessionEvent> {
                 AidenBotSessionEventPayload.Queued(
                     wire.decodeFromJsonElement(ListSerializer(AidenBotQueuedMessage.serializer()), payload.getValue("queued"))
                 )
+            }
+            "handoff" -> {
+                payload.requireKeys(setOf("handoff"))
+                val element = payload.getValue("handoff")
+                AidenBotSessionEventPayload.Handoff(if (element is JsonNull) null else AidenBotHandoff.parse(element))
+            }
+            "issues" -> {
+                payload.requireKeys(setOf("issues"))
+                AidenBotSessionEventPayload.Issues(AidenBotIssue.parseList(payload.getValue("issues")))
             }
             "closed" -> {
                 payload.requireKeys(emptySet())

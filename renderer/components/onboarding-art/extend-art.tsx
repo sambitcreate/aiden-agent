@@ -643,9 +643,7 @@ export function McpConnectorsArt() {
           justifyItems: "start",
         }}
       >
-        <ArtChip icon={Plug}>
-          <span className="oa-mono">http · stdio</span>
-        </ArtChip>
+        <ArtChip icon={Plug}>Local or hosted</ArtChip>
         <ArtChip icon={Lock}>OAuth sign-in</ArtChip>
       </div>
       <ArtWindow
@@ -675,7 +673,7 @@ export function McpConnectorsArt() {
                   style={index === 1 ? { animationDelay: "0.4s" } : undefined}
                 >
                   {enabled ? <ArtIcon icon={Check} /> : null}
-                  {enabled ? "Connected" : "Disabled"}
+                  {enabled ? "Connected" : "Off"}
                 </span>
               </span>
               <span className="oa-row oa-mcp-meta" style={{ gap: 6 }}>
