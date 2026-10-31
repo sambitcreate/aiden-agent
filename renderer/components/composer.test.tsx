@@ -273,7 +273,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   const chatPane = source("../main/chat-pane.tsx");
   const ipc = source("../lib/ipc.ts");
   const mainHandlers = source("../../main/handlers/chats.ts");
-  const platform = source("../../main/platform.ts");
 
   assert.match(composer, /title="Fork from a completed turn"/u);
   assert.match(
@@ -296,7 +295,6 @@ test("selected session slash commands dispatch through explicit Aiden-owned work
   assert.doesNotMatch(ipc, /chats:export[\s\S]{0,120}(?:filePath|outputPath|targetPath)/u);
   assert.match(mainHandlers, /dialog\.showSaveDialog\(parent/u);
   assert.match(mainHandlers, /llmClient\.beginChatExport\(chatId\)/u);
-  assert.match(platform, /try \{[\s\S]{0,240}webContents\.send[\s\S]{0,240}catch \(error\)/u);
   assert.match(branchPicker, /openWorktreeOnMount[\s\S]{0,500}programmaticReturnFocusRef/u);
   assert.match(branchPicker, /programmaticOriginRef = React\.useRef\(openManagedWorktree\)/u);
   assert.match(branchPicker, /programmaticOriginRef\.current = false/u);

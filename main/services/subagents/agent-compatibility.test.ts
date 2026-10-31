@@ -1341,12 +1341,12 @@ test("main-process shutdown continues to application quit after the subagent dea
   const source = await readFile(new URL("../../index.ts", import.meta.url), "utf-8");
   const parentAbortStart = source.indexOf(
     "llmClient.abortAll();",
-    source.indexOf("async function shutdownAndQuit"),
+    source.indexOf("async function runShutdownAndQuit"),
   );
   const settlementStart = source.indexOf(
-    "const subagentsSettled = await subagentRuntimeRegistry.shutdown();",
+    "subagentRuntimeRegistry.shutdown(),",
   );
-  const parentSettlementStart = source.indexOf("await llmClient.shutdown();", parentAbortStart);
+  const parentSettlementStart = source.indexOf("llmClient.shutdown(),", parentAbortStart);
   const cleanupStart = source.indexOf("cleanupApplication();", settlementStart);
   const receiptFinalizationStart = source.indexOf(
     "await tryFinalizeSubagentPackagedSoakQuitReceipt(",
