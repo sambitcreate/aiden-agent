@@ -18,21 +18,22 @@ fi
 # Run children in the background and wait, so Ctrl-C / a dropped host (SIGINT/TERM/HUP from `exec -i`)
 # stops the whole tree instead of orphaning Electron and Xvfb. Children do not inherit the lock fd, so only this
 # script holds the lock and it is released when the script exits.
-# shellcheck disable=SC2329 # reached through the signal trap below
+# shellcheck disable=SC2317,SC2329 # reached through the signal trap below
 kill_tree() { local child; for child in $(pgrep -P "$1"); do kill_tree "$child"; done; kill "$1" 2>/dev/null; }
-# shellcheck disable=SC2329 # the signal trap
+# shellcheck disable=SC2317,SC2329 # the signal trap
 on_signal() { local child; for child in $(pgrep -P $$); do kill_tree "$child"; done; exit 130; }
 trap on_signal INT TERM HUP
 run_fg() { "$@" 9>&- & wait $!; }
 
 NODE_VERSION=22.23.4
 case "$(uname -m)" in aarch64|arm64) NODE_ARCH=arm64 ;; *) NODE_ARCH=x64 ;; esac
-if ! /opt/node22/bin/node --version 2>/dev/null | grep -qx "v$NODE_VERSION"; then
+NODE_PREFIX="${AIDEN_E2E_NODE_PREFIX:-/opt/node22}"  # override only for tests
+if ! "$NODE_PREFIX/bin/node" --version 2>/dev/null | grep -qx "v$NODE_VERSION"; then
   { curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$NODE_ARCH.tar.xz" -o /tmp/node.tar.xz &&
-    sudo rm -rf /opt/node22 && sudo mkdir -p /opt/node22 &&
-    sudo tar -xJf /tmp/node.tar.xz -C /opt/node22 --strip-components=1; } || { echo "NODE_INSTALL_FAILED"; exit 2; }
+    sudo rm -rf "$NODE_PREFIX" && sudo mkdir -p "$NODE_PREFIX" &&
+    sudo tar -xJf /tmp/node.tar.xz -C "$NODE_PREFIX" --strip-components=1; } || { echo "NODE_INSTALL_FAILED"; exit 2; }
 fi
-export PATH=/opt/node22/bin:$PATH
+export PATH="$NODE_PREFIX/bin:$PATH"
 if [ "$(node --version)" != "v$NODE_VERSION" ]; then echo "NODE_VERSION_MISMATCH: $(node --version)"; exit 2; fi
 
 APT_PACKAGES=(xvfb pkg-config libsecret-1-dev libselinux1-dev gnome-keyring dbus-x11 build-essential python3 libnss3

@@ -219,7 +219,8 @@ test("brings the run's artifacts back and keeps the previous ones when an archiv
   assert.equal(await readFile(path.join(out, "playwright-report", "e2e", "index.html"), "utf8"), "<p>report</p>\n");
 });
 
-// The guest half runs inside the Space; these run it on the host with stand-ins for the Space's tools.
+// The guest half runs inside the Space; these run it on the host with stand-ins for the Space's tools. Node is looked
+// up under an empty prefix and sudo/apt-get fail loudly, so the tests never depend on or provision the host.
 async function guestRun({ flockStatus, curlStatus = 22 }) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-cua-guest-"));
   const home = path.join(root, "home");
@@ -228,8 +229,10 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
   await mkdir(bin);
   await writeFile(path.join(bin, "flock"), `#!/bin/sh\nexit ${flockStatus}\n`);
   await writeFile(path.join(bin, "curl"), `#!/bin/sh\nexit ${curlStatus}\n`);
-  await chmod(path.join(bin, "flock"), 0o755);
-  await chmod(path.join(bin, "curl"), 0o755);
+  for (const tool of ["sudo", "apt-get"]) {
+    await writeFile(path.join(bin, tool), `#!/bin/sh\necho "UNEXPECTED_${tool}" >> "${path.join(root, "provisioning.log")}"\nexit 97\n`);
+  }
+  for (const tool of ["flock", "curl", "sudo", "apt-get"]) await chmod(path.join(bin, tool), 0o755);
   const script = path.join(home, "aiden-run-test.sh");
   const source = path.join(home, "aiden-src-test.tgz");
   await copyFile(guest, script);
@@ -237,13 +240,15 @@ async function guestRun({ flockStatus, curlStatus = 22 }) {
   let result;
   try {
     const { stdout } = await execFileAsync("bash", [script, "test", "lockhash", "--run", "true"], {
-      env: { ...isolatedEnv, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, AIDEN_E2E_LOCK: path.join(root, "lock") },
+      env: { ...isolatedEnv, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}`, AIDEN_E2E_LOCK: path.join(root, "lock"),
+        AIDEN_E2E_NODE_PREFIX: path.join(root, "node") },
     });
     result = { status: 0, stdout };
   } catch (error) {
     result = { status: error.code, stdout: error.stdout };
   }
-  return { root, home, ...result, leftovers: await readdir(home) };
+  const provisioning = await readFile(path.join(root, "provisioning.log"), "utf8").catch(() => "");
+  return { root, home, ...result, leftovers: await readdir(home), provisioning };
 }
 
 test("the guest refuses a busy Space and cleans up its copied files", async (t) => {
@@ -252,6 +257,7 @@ test("the guest refuses a busy Space and cleans up its copied files", async (t) 
   assert.equal(busy.status, 75);
   assert.match(busy.stdout, /SPACE_BUSY/);
   assert.deepEqual(busy.leftovers, [], "the run script and source archive are removed");
+  assert.equal(busy.provisioning, "", "no sudo or apt-get ran");
 });
 
 test("the guest stops at a failed Node install instead of running on", async (t) => {
@@ -261,4 +267,5 @@ test("the guest stops at a failed Node install instead of running on", async (t)
   assert.match(failed.stdout, /NODE_INSTALL_FAILED/);
   assert.doesNotMatch(failed.stdout, /APT_|NPM_|E2E_BUILD/);
   assert.deepEqual(failed.leftovers, [], "the run script and source archive are removed");
+  assert.equal(failed.provisioning, "", "no sudo or apt-get ran");
 });
