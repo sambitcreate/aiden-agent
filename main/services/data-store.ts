@@ -529,7 +529,13 @@ export class DataStore<T> {
         await stagedHandle.close();
       }
       if (!isCurrent()) throw new Error("The renderer document is no longer active.");
-      const previous = this.cache === null ? null : structuredClone(this.cache);
+      // Only the publish hooks read the predecessor, so stores without hooks
+      // skip a deep clone of the whole document on every write.
+      const hasPublishHooks =
+        this.options.beforeWritePublish !== undefined ||
+        this.options.afterWritePublish !== undefined;
+      const previous =
+        !hasPublishHooks || this.cache === null ? null : structuredClone(this.cache);
       this.options.beforeWritePublish?.(previous, data);
       // Publish the in-memory view in the same synchronous turn as the durable
       // replacement, before the post-publication authority fence. Work admitted
