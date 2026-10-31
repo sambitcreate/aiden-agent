@@ -1096,6 +1096,7 @@
         "renderer/main/chat-transition.test.tsx",
         "renderer/components/settings/compaction-budget-settings.test.tsx",
         "renderer/main/remote-bot-chat-view.test.tsx",
+        "renderer/main/remote-chat-images.test.tsx",
         "renderer/main/remote-chat-view.test.tsx",
         "renderer/main/remote-new-chat-view.test.tsx",
         "renderer/main/studio-capability-route.test.tsx",
