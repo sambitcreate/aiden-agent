@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   release:
-    if: vars.RELEASES_ENABLED == 'true'
+    if: ${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
     runs-on: macos-26
     timeout-minutes: 120
     environment: release
@@ -309,7 +309,7 @@ jobs:
           retention-days: 2
 
   publish:
-    if: vars.RELEASES_ENABLED == 'true'
+    if: ${{ vars.RELEASES_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
     name: Publish verified desktop release
     needs:
       - release
