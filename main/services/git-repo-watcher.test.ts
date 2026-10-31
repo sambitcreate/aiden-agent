@@ -80,13 +80,16 @@ test("a commit produces one debounced notification and later changes advance the
 });
 
 test("unstaged working-tree edits do not notify because only Git metadata is watched", async (t) => {
-  const { repo } = await makeRepo(t);
+  const { repo, git } = await makeRepo(t);
   const seen = recorder();
   const watcher = new GitRepoWatcher({ notify: seen.notify, debounceMs: 20 });
   t.after(() => watcher.dispose());
   await watcher.observe("ws-1", repo);
-  // macOS can deliver the setup commit's metadata events just after the watch
-  // starts; only what the edits below cause counts.
+  // macOS can deliver the setup commit's metadata events after the watch
+  // starts. A branch change is delivered after them, so once it notifies the
+  // watch is live and the setup burst is spent; only what the edits cause counts.
+  git(repo, "branch", "drain");
+  await seen.waitFor(1);
   await settle();
   const before = seen.events.length;
   await fs.writeFile(path.join(repo, "src", "a.txt"), "edited\n");
