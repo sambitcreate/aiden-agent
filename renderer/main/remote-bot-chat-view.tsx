@@ -40,6 +40,7 @@ import { BOT_CHAT_COMPOSER_SURFACES } from "./bots/bot-chat-mode";
 import { botReplyQuote } from "./bots/bot-message-actions";
 import { BotPausedNotice, botPausedText } from "./bots/bot-paused-card";
 import { BotStatusLine } from "./bots/bot-status-line";
+import { useChatFind } from "../components/chat-find-bar";
 
 /** Text files ride along in the message, as in a local Bot chat. */
 function attachmentText(attachments: readonly Attachment[]): string {
@@ -123,6 +124,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
   const live = useRemoteBotSession(hostId, botId, shared);
   const { busy, run } = useBusyOperations();
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const findBar = useChatFind(`${hostId}/${botId}`);
   // A question or approval this Mac answered, hidden only while the host's view
   // still holds that same prompt. A Resume asks it again under the same wait
   // id: the host's frame (or a fresh snapshot) for it is a new prompt, and it shows.
@@ -180,6 +182,8 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
 
   const shell = (body: React.ReactNode, footer?: React.ReactNode) => (
     <ScrollArea
+      focusRegion="chat"
+      overlay={findBar}
       scrollRestorationId={`remote-bot-chat:${hostId}:${botId}`}
       className="h-full min-h-0"
       alignFooterToScrollContent
@@ -665,7 +669,7 @@ export function RemoteBotChatView({ hostId, botId }: { hostId: string; botId: st
         />
       </MessageAttachmentPreviewProvider>
       {statusActivity ? (
-        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onStop={stop} onLayoutChange={setStatusLayout} />
+        <BotStatusLine activity={statusActivity} wording={chatActivity.wording} onLayoutChange={setStatusLayout} />
       ) : null}
       {isPaused ? <BotPausedNotice name={name} busy={busy("pause")} onResume={() => void setPaused(false)} /> : null}
       {state?.kind === "interrupted" ? (

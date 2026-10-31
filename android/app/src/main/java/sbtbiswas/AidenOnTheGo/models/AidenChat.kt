@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteContractException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import sbtbiswas.AidenOnTheGo.protocol.InstantIso8601Serializer
 import java.io.File
@@ -2115,6 +2116,15 @@ object AidenTurnRequestBuilder {
 }
 
 object AidenDraftSendReconciliation {
+    /**
+     * A turn the Mac refused without running it: the phone drops the saved attempt and shows the
+     * Mac's reason. A 409 is settled only for `workspace_unavailable` (a moved or deleted folder),
+     * which the Mac sends before anything runs; other conflicts may have an unknown outcome.
+     */
+    fun refusalSettlesSend(statusCode: Int, code: AidenRemoteErrorCode): Boolean =
+        statusCode in setOf(400, 401, 403, 404, 413, 422, 429) ||
+            (statusCode == 409 && code == AidenRemoteErrorCode.WORKSPACE_UNAVAILABLE)
+
     fun failedDraft(submitted: String, current: String): String {
         if (current.isEmpty()) return submitted
         if (current == submitted || (submitted.isNotEmpty() && current.startsWith("$submitted\n\n"))) return current

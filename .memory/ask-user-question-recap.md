@@ -12,7 +12,7 @@ Composer: the dock wrapper uses Composer's `pb-4 pt-3 sm:pb-5`. Key handling:
 - ⌘/Ctrl+Enter commits.
 - Esc skips the current question, which submits on the last one.
 - None of these apply while the custom textarea is open.
-- When the active question changes and focus has left the card (the focused row was replaced), focus moves to the open custom field or the first option. Tab-strip arrow navigation keeps focus on its tab.
+- When the active question changes and focus has left the card (the focused row was replaced), focus moves to the open custom field, the preselected option, or the first option. Tab-strip arrow navigation keeps focus on its tab.
 - In happy-dom tests, compare focused elements by identity inside `assert.ok`. A failing `assert.equal` on two nodes hangs while Node inspects the DOM graph.
 
 Aiden Remote contract revision 29 (main took 28 for inline visuals) adds `questionnaire` to `GenerationToolStep` in `openapi.json`. An Ajv test checks that the schema and the runtime parser agree. The shared fixture's timeline event carries a recap, and desktop, iOS (`AidenRemotePhase0Tests`) and Android (`AidenChatTest`) each decode it.
@@ -34,3 +34,11 @@ Android recap styling is Material 3 Expressive: the cards form one borderless co
 Bot quick-reply questionnaires do not produce a recap yet.
 
 Validation: `npm run test:ask-user-question`; `npx tsx --test renderer/lib/agent-steps.test.ts main/services/generation-timeline.test.ts`; `main/services/aiden-remote-protocol.test.ts` for the openapi schema and revision.
+
+## Recommended options (2026-10-29)
+
+The agent marks a recommended option by ending its label with "(Recommended)" (any case); both tool descriptions (desktop and Bot) say so. No wire change: the full label stays the answer's identity, so `parseAskUserQuestionResponse` still matches it.
+- Shared helpers in `renderer/shared/ask-user-question.ts`: `parseRecommendedOptionLabel`, `askUserOptionDisplayLabel`, `recommendedAskUserAnswer(s)`. Single choice preselects the first marked option; multi-select preselects every marked one.
+- Desktop composer starts `answers` from `recommendedAskUserAnswers` and focuses the preselected row, so Enter accepts it. Esc still skips (no answer is sent). Tab check marks show for preselected questions too: they will be sent.
+- Recaps (`buildAskUserQuestionRecap`) and `summarizeAskUserQuestionResponse` drop the marker, so phones need no recap change. The model-facing `formatAskUserQuestionAnswers` keeps the full label.
+- iOS: `AidenQuestionAnswerDraft.recommendedLabel/recommendedSelections`, `AidenQuestionComposerDraft(questions:)` seeded in `AidenQuestionCard.init` (callers key the card by prompt id). Android: same names on `AidenQuestionAnswerDraft`, seeded in `remember(prompt.id)`.
