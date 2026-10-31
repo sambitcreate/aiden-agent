@@ -53,14 +53,16 @@ When `aiden serve` runs in the foreground in an interactive terminal, it prints 
 
 | Command | What it does |
 | --- | --- |
-| `aiden serve` | Run in the foreground; Ctrl-C stops it after active work settles |
+| `aiden serve` | Run in the foreground; Ctrl-C, SIGTERM or a closed terminal (SIGHUP) stops it after active work settles |
 | `aiden serve --daemon` | Run in the background, logging to `<agentDir>/serve.log` |
 | `aiden serve status` | Report the running server's PID and control socket |
-| `aiden serve stop` | Stop the running server |
+| `aiden serve stop` | Stop the running server; one still running 15 seconds later is force-killed |
 | `aiden remote pair lan\|tailscale` | Open a new ~5-minute pairing window and print its QR and manual code |
 | `aiden remote pair-status`, `remote pair-cancel <session-id>` | Inspect or cancel the pairing window |
 | `aiden remote devices`, `remote revoke <id>` | List or revoke paired devices |
 | `aiden remote roots`, `remote approve-root <path>` | Folders that paired devices may open |
+
+**Stopping.** Once shutdown starts, the server takes no new connections, requests or chat turns, cancels running ones and drains. `aiden serve stop` force-kills a server still running 15 seconds after SIGTERM, after checking the PID is still that server: a `--daemon` server together with its process group (its Remote advertiser), a foreground `aiden serve` on its own so the rest of its shell job (`aiden serve | tee`) survives. Either way, its stdio MCP servers (each in a process group of its own, recorded in the lease directory) are killed too, but only groups that still contain a process the server started. A foreground server logs a stray unhandled rejection instead of exiting. Aiden commands exit 0 quietly when their reader closes early (`aiden schedule list | head -1`).
 
 `remote` and `bots` commands talk to the running server over its control socket and fail if it is not running. `schedule` and `workspace` commands also work without the server, through a one-shot lease. `telegram status` works anytime; `telegram connect|configure|disable|disconnect` take the server's lease, so stop `aiden serve` before changing Telegram configuration.
 

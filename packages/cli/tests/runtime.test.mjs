@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,6 +29,20 @@ test("--version answers before the runtime loads", () => {
 	const result = runCli(["--version"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.stderr, "", "the static answer must not load node:sqlite or anything that warns");
+});
+
+test("an Aiden command whose reader has already closed exits quietly", async () => {
+	const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-epipe-"));
+	try {
+		const child = spawn(process.execPath, [cli, "help"], { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+		// Like `aiden help | true`: the reader is gone before the command writes.
+		child.stdout.destroy();
+		let stderr = "";
+		child.stderr.on("data", (chunk) => { stderr += chunk; });
+		const code = await new Promise((resolve) => child.once("exit", resolve));
+		assert.equal(code, 0, stderr);
+		assert.doesNotMatch(stderr, /EPIPE|Unhandled 'error' event/u);
+	} finally { rmSync(agentDir, { recursive: true, force: true }); }
 });
 
 test("a deleted current folder gets one plain line instead of a crash", { skip: process.platform === "win32" }, () => {
@@ -144,6 +158,44 @@ test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () =>
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^ {2}mcp list\|presets\|add\|preset\|login\|logout\|remove /m);
   assert.doesNotMatch(result.stdout, /pi-mcp/);
+});
+
+test("foreground serve drains and removes its socket when its terminal hangs up", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const child = spawn(process.execPath, [cli, "serve"], {
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
+  });
+  try {
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+    const deadline = Date.now() + 30_000;
+    while (!/listening at (.+)\n/u.test(stderr) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const socket = /listening at (.+)\n/u.exec(stderr)?.[1];
+    assert.ok(socket && existsSync(socket), stderr);
+    // A foreground serve shares its shell job's process group, so it never claims one to force-kill.
+    assert.equal(JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8")).detached, undefined);
+    child.kill("SIGHUP");
+    assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
+    assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
+  } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+});
+
+test("a background daemon records that it leads its own process group and stops on request", { skip: process.platform === "win32" }, async () => {
+  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
+  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" } };
+  try {
+    const started = runCli(["serve", "--daemon"], options);
+    assert.equal(started.status, 0, started.stderr);
+    const owner = JSON.parse(readFileSync(path.join(agentDir, "serve.lock", "owner.json"), "utf8"));
+    assert.equal(owner.detached, true);
+    const stopped = runCli(["serve", "stop"], options);
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(existsSync(path.join(agentDir, "serve.lock")), false);
+  } finally {
+    runCli(["serve", "stop"], options);
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 });
 
 test("a malformed or unreadable native mcp.json never blocks the CLI", () => {
