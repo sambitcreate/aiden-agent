@@ -45,6 +45,15 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
     case "speech": result = await (await import("./speech.ts")).speechCommand(agentDir, rest); break;
     case "bots": result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "bots", rest); break;
     case "remote": {
+      if (rest[0] === "check") {
+        if (rest.length !== 1) throw new Error("Usage: aiden remote check");
+        if (!await (await import("./reachability.ts")).remoteCheckCommand(agentDir)) process.exitCode = 1;
+        return true;
+      }
+      if (rest[0] === "pair" && rest[1] === "tailscale" && rest.length === 2) {
+        // Progress goes to stderr when stdout carries the pairing JSON.
+        await (await import("./reachability.ts")).prepareTailscalePairing(agentDir, new AbortController().signal, process.stdout.isTTY ? process.stdout : process.stderr, process.stderr);
+      }
       result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "remote", rest);
       if (rest[0] === "pair" && !process.stdout.isTTY) {
         process.stderr.write("warning: the pairing payload below contains a single-use secret — keep it out of logs.\n");

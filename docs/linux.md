@@ -97,7 +97,8 @@ sudo tailscale set --operator=$USER
 Aiden changes only its scoped `/api/aiden/v1` HTTPS Serve path and preserves
 unrelated Serve configuration. Without the operator grant, status remains
 readable but Aiden reports the permission requirement instead of claiming an
-uncertain connection.
+uncertain connection. On a headless server, `aiden remote check` lists each
+Tailscale step (including this operator grant) with its fix.
 
 ## Platform behavior
 
