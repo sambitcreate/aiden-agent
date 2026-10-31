@@ -2087,8 +2087,11 @@ export function createChatStore(
         if (chat.messages.length === 0 && chat.forkedFrom === undefined) return false;
         chat.messages = [];
         delete chat.forkedFrom;
+        // Mark first, so a failure or crash after the write still leaves
+        // the dropped images to a later sweep.
+        await markImageSweepNeeded().catch(() => undefined);
         await writeChatAndMeta(chat);
-        await afterChatImagesDropped();
+        scheduleImageSweep();
         return true;
       });
     },
@@ -2101,6 +2104,10 @@ export function createChatStore(
         const chat = await readChat(id, "owner");
         if (assertCurrent) await assertCurrent(chat);
         const payload = await chatPath(id);
+        // Mark first, so a failure or crash after the payload is gone (when a
+        // retried delete no longer finds the chat) still leaves its images to
+        // a later sweep.
+        await markImageSweepNeeded().catch(() => undefined);
         let removedPayload = false;
         try {
           await fs.rm(payload);
@@ -2110,7 +2117,7 @@ export function createChatStore(
         }
         if (removedPayload) await syncDirectoryDurably(path.dirname(payload));
         await removeFromIndexDurably(id);
-        if (chat) await afterChatImagesDropped();
+        scheduleImageSweep();
       });
     },
 

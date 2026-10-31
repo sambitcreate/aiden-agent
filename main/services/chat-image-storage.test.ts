@@ -212,6 +212,28 @@ test("images of a deleted chat are swept while images another chat still uses st
   assert.equal((await quiet.sweepUnusedImages({ onlyWhenNeeded: true })).removed, 0);
 });
 
+test("a delete that fails after the chat file is gone still leaves its images to a later sweep", async (t) => {
+  const directory = await tempDir(t);
+  let failDirectorySync = false;
+  const store = createChatStore(async () => directory, undefined, {
+    syncDirectory: async () => {
+      if (failDirectorySync) throw Object.assign(new Error("No space left"), { code: "ENOSPC" });
+    },
+  });
+  const chat = await store.create({});
+  await store.appendMessage(chat.id, { role: "user", content: "Look", attachments: [image("photo")] });
+
+  failDirectorySync = true;
+  await assert.rejects(store.remove(chat.id), /No space left/);
+  failDirectorySync = false;
+  await assert.rejects(fs.access(path.join(directory, `${chat.id}.json`)), { code: "ENOENT" });
+
+  await ageImageFiles(directory, 2 * DAY);
+  const restarted = createChatStore(async () => directory);
+  assert.equal((await restarted.sweepUnusedImages({ onlyWhenNeeded: true })).removed, 1);
+  assert.deepEqual(await imageFiles(directory), []);
+});
+
 test("storing bytes that are already on disk renews them, so a sweep keeps them", async (t) => {
   const directory = await tempDir(t);
   const images = createChatImageStore(async () => directory);
