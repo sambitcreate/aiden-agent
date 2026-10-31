@@ -310,8 +310,21 @@ export function reachableNetwork(status: { connectionMode?: string; tailscaleCon
   return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
 }
 
+/** What `serviceCommand` talks to once the service is installed; tests swap these for fakes. */
+export interface ServiceCommandOptions {
+  readyTimeoutMs?: number;
+  /** Resolves true once the service's server answers on the control socket. */
+  ready?: (agentDir: string, timeoutMs: number) => Promise<boolean>;
+  /** Sends a `remote` command to the running server. */
+  remote?: (args: string[]) => Promise<unknown>;
+  /** Shows the pairing code for `transport` until it is used, expires or `signal` aborts. */
+  pair?: (transport: "lan" | "tailscale", signal: AbortSignal) => Promise<void>;
+  /** Whether stdout is a terminal that can show a pairing code. */
+  tty?: boolean;
+}
+
 /** `aiden service ...`. Prints its own output. */
-export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost(), options: { readyTimeoutMs?: number } = {}): Promise<void> {
+export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost(), options: ServiceCommandOptions = {}): Promise<void> {
   const [action, ...rest] = args;
   const out = (line: string) => process.stdout.write(`${line}\n`);
   if (action === "status" && rest.length === 0) {
@@ -345,7 +358,7 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     out(`Installed ${installed.file}.`);
     const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
     const readyMs = options.readyTimeoutMs ?? 30_000;
-    if (!await waitForServer(agentDir, readyMs)) throw new Error(`The service did not start the server within ${Math.round(readyMs / 1000)}s. See ${logs}.`);
+    if (!await (options.ready ?? waitForServer)(agentDir, readyMs)) throw new Error(`The service did not start the server within ${Math.round(readyMs / 1000)}s. See ${logs}.`);
   } catch (error) {
     const message = (error instanceof Error ? error.message : String(error)).replace(/\.*$/u, ".");
     // The replacement never served: put back the service it replaced (installService already did when the manager refused).
@@ -369,12 +382,12 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   }
   const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
 
-  const { remoteDaemonCommand } = await import("./daemon-control.ts");
+  const remote = options.remote ?? (async (remoteArgs: string[]) => (await import("./daemon-control.ts")).remoteDaemonCommand(agentDir, "remote", remoteArgs));
   let reachable: RemoteNetwork | undefined = network;
   try {
-    await remoteDaemonCommand(agentDir, "remote", ["network", network]);
+    await remote(["network", network]);
   } catch (error) {
-    const status = await remoteDaemonCommand(agentDir, "remote", ["status"]).catch(() => undefined) as { connectionMode?: string; tailscaleConnected?: boolean } | undefined;
+    const status = await remote(["status"]).catch(() => undefined) as { connectionMode?: string; tailscaleConnected?: boolean } | undefined;
     reachable = reachableNetwork(status);
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
     out(reachable
@@ -388,7 +401,7 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   out(`Logs: ${logs}. Stop it for good with \`aiden service uninstall\`.`);
 
   if (!reachable) return;
-  if (!flags.pair || !process.stdout.isTTY) {
+  if (!flags.pair || !(options.tty ?? process.stdout.isTTY)) {
     out(`Pair a phone with \`aiden remote pair ${reachable === "local" ? "lan" : "tailscale"}\`.`);
     return;
   }
@@ -397,8 +410,8 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   const stop = () => controller.abort();
   process.once("SIGINT", stop);
   try {
-    const { showStartupPairing } = await import("./serve-command.ts");
-    await showStartupPairing(agentDir, reachable === "local" ? "lan" : "tailscale", controller.signal);
+    const pair = options.pair ?? (async (transport: "lan" | "tailscale", signal: AbortSignal) => (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
+    await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
   } finally {
     process.removeListener("SIGINT", stop);
   }
