@@ -45,13 +45,22 @@ export function parseServeFlags(args: readonly string[]): ServeFlags {
   return { remote: remote !== false, daemon, pair: pair ?? "lan", pairRequested };
 }
 
-/** The running daemon's Remote summary, or `{ on: false }` when it is off or unreachable. */
-async function daemonRemoteSummary(agentDir: string): Promise<Record<string, unknown>> {
+/** The running daemon's Remote summary, `{ on: false }` when Remote is off, or `{ on: "unknown" }` when the daemon does not answer. */
+const STATUS_TIMEOUT_MS = 5_000;
+
+export async function daemonRemoteSummary(agentDir: string, timeoutMs = STATUS_TIMEOUT_MS): Promise<Record<string, unknown>> {
+  let timer: NodeJS.Timeout | undefined;
+  // A wedged daemon must not hold `serve status` for the control socket's long command timeout.
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`The server did not answer within ${timeoutMs / 1000}s.`)), timeoutMs);
+  });
   try {
-    const reply = await remoteDaemonCommand(agentDir, "serve", ["status"]) as { remote?: Record<string, unknown> };
+    const reply = await Promise.race([remoteDaemonCommand(agentDir, "serve", ["status"]), timedOut]) as { remote?: Record<string, unknown> };
     return reply.remote ?? { on: false };
   } catch (error) {
-    return { on: false, error: error instanceof Error ? error.message : String(error) };
+    return { on: "unknown", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

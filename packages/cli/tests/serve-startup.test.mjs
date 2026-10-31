@@ -210,3 +210,24 @@ test("aiden serve --pair tailscale without Tailscale says how to set it up and k
   assert.equal(status.connectionMode, "lan");
   assert.deepEqual(json(runCli(["remote", "pair-status"], env)), { state: "none" });
 });
+
+test("serve status reports Remote as unknown instead of waiting on a daemon that never answers", async () => {
+  const api = await import("../dist/parity-test-api.js");
+  const { createServer } = await import("node:net");
+  const dir = mkdtempSync(join(tmpdir(), "aiden-serve-wedged-"));
+  const held = [];
+  const server = createServer((socket) => { held.push(socket); });
+  try {
+    server.listen(join(dir, "serve.sock"));
+    await once(server, "listening");
+    const started = Date.now();
+    const summary = await api.daemonRemoteSummary(dir, 200);
+    assert.equal(summary.on, "unknown");
+    assert.match(summary.error, /did not answer/);
+    assert.ok(Date.now() - started < 5_000, "status returns on its own short deadline");
+  } finally {
+    for (const socket of held) socket.destroy();
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

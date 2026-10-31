@@ -11,6 +11,7 @@ export * from "./telegram.ts";
 export * from "./daemon-chats.ts";
 export * from "./speech.ts";
 export * from "./remote.ts";
+export { daemonRemoteSummary } from "./serve-command.ts";
 export { resolveTailscaleBinary } from "../../../main/services/aiden-remote-tailscale.js";
 export { AidenRemoteSpeechServiceCore } from "../../../main/services/aiden-remote-speech-core.js";
 export * from "./usage-ledger.ts";

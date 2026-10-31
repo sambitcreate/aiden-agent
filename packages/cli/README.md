@@ -10,6 +10,7 @@ Built on [pi](https://github.com/earendil-works/pi) (`@earendil-works/pi-coding-
 
 - macOS or Linux (x64 or arm64).
 - Node.js 22.19 or newer. Keep Node on the newest release of its line: the server's network calls run on the installed Node, and the October 21, 2026 Node.js security release (22.23.4, 24.22.1, 26.12.1) fixed a Brotli decoder flaw and HTTPS hostname-check bypasses that any older Node still has.
+- `openssl` on the `PATH`: the first `aiden serve` uses it to create the server's TLS identity for paired devices.
 - `git`, and for Tailscale pairing the Tailscale CLI on the host.
 
 ## Install from a clone
