@@ -85,10 +85,14 @@ test("unstaged working-tree edits do not notify because only Git metadata is wat
   const watcher = new GitRepoWatcher({ notify: seen.notify, debounceMs: 20 });
   t.after(() => watcher.dispose());
   await watcher.observe("ws-1", repo);
+  // macOS can deliver the setup commit's metadata events just after the watch
+  // starts; only what the edits below cause counts.
+  await settle();
+  const before = seen.events.length;
   await fs.writeFile(path.join(repo, "src", "a.txt"), "edited\n");
   await fs.writeFile(path.join(repo, "src", "new.txt"), "new\n");
   await settle();
-  assert.deepEqual(seen.events, []);
+  assert.deepEqual(seen.events.slice(before), []);
 });
 
 test("a linked worktree is told when another checkout moves a shared branch", async (t) => {
