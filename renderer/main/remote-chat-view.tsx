@@ -42,7 +42,7 @@ import {
   type HostChatLineage,
   type HostChatTurnReceipt,
 } from "../lib/hosts/host-chat-adapter";
-import { remoteAttachmentUploads } from "../lib/hosts/remote-attachments";
+import { prepareRemoteAttachmentUploads } from "../lib/hosts/remote-attachments";
 import type { HostModelCatalog } from "../lib/hosts/host-resources";
 import {
   REMOTE_QUEUE_FENCE_STALL_MS,
@@ -64,7 +64,7 @@ import { RemoteChatSession, type RemoteChatSnapshot } from "../lib/hosts/remote-
 import { remoteRunTranscript } from "../lib/hosts/remote-stream-translator";
 import { useChatSession, type ChatSession } from "../lib/hosts/use-chat-session";
 import { sidebarHosts, type SidebarHost } from "../lib/sidebar-remote-groups";
-import type { Attachment } from "../lib/types";
+import type { Attachment, ChatMessage } from "../lib/types";
 import type { AskUserQuestionPromptV1, AskUserQuestionResponseV1 } from "../shared/ask-user-question";
 import {
   FORK_SUMMARY_HOLD_MESSAGE,
@@ -83,6 +83,8 @@ import {
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
 import type { SkillInvocationV1 } from "../shared/slash-commands";
 import { isToolStep } from "../shared/generation-timeline";
+import { useChatFind } from "../components/chat-find-bar";
+import { useRemoteChatImages } from "../lib/hosts/remote-images";
 
 /**
  * `/host/$hostId/chat/$chatId`: a chat that lives on a paired host, read,
@@ -95,6 +97,7 @@ import { isToolStep } from "../shared/generation-timeline";
  */
 
 const NO_SUBAGENTS: [] = [];
+const NO_MESSAGES: ChatMessage[] = [];
 const NO_HOST_RUNS: readonly PeerRunState[] = [];
 const noop = () => {};
 const subscribeNothing = () => noop;
@@ -130,7 +133,7 @@ export function remoteComposerActions(
   const sendTurn: RemoteComposerActions["sendTurn"] = async (text, attachments = [], skill) => {
     if (!control) throw new Error(`Connecting to ${hostLabel}…`);
     // Files are read on this Mac and uploaded to the chat's host before the turn starts.
-    const uploads = remoteAttachmentUploads(attachments);
+    const uploads = await prepareRemoteAttachmentUploads(attachments);
     try {
       return await control.send(text, {
         ...(uploads.length > 0 ? { attachments: uploads } : {}),
@@ -358,7 +361,14 @@ export function RemoteChatPane({
   modelsLoading = false,
   hostRuns,
 }: RemoteChatPaneProps) {
-  const messages = snapshot?.transcript.messages ?? [];
+  const control = chat?.control ?? null;
+  // The host lists images without their bytes; they draw once read from it.
+  const messages = useRemoteChatImages(
+    control?.adapter,
+    snapshot?.chatId ?? "",
+    snapshot?.transcript.messages ?? NO_MESSAGES,
+    Boolean(snapshot) && host.availability === "online",
+  );
   const run = snapshot?.run;
   const row = snapshot ? remoteRunTranscript(snapshot.run, messages) : null;
   const stale = host.availability !== "online";
@@ -368,8 +378,8 @@ export function RemoteChatPane({
   const approvals = live && run ? run.approvals : [];
   const questions = live && run ? run.questions : [];
   const runId = live ? (run?.runId ?? null) : null;
+  const findBar = useChatFind(snapshot ? `${snapshot.hostId}/${snapshot.chatId}` : `${host.id}/pending`);
 
-  const control = chat?.control ?? null;
   const state: ChatSessionSnapshot | null = chat?.snapshot ?? null;
   const capabilities = control?.adapter.capabilities();
   // Until the session control exists every action waits for the host.
@@ -680,6 +690,8 @@ export function RemoteChatPane({
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -1002,6 +1014,8 @@ export function RemoteChatPane({
             <MessageList
               chatId={snapshot.chatId}
               messages={messages}
+              // Save and Copy read this Mac's stored chats; this chat is stored on its host.
+              storedImageActions={false}
               streamingText={row!.streamingText}
               streamingReasoning={row!.streamingReasoning}
               streamComplete={row!.streamComplete}

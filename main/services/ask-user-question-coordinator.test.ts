@@ -194,3 +194,39 @@ test("prompts without a timeout wait for their owner and carry no deadline", asy
   );
   assert.equal((await pending).timedOut, undefined);
 });
+
+test("a withdrawn prompt says whether its owner settled it or the host ended it", async () => {
+  const published: AskUserQuestionPromptV1[] = [];
+  const withdrawn: Array<[string, string]> = [];
+  const coordinator = new AskUserQuestionCoordinator(
+    (prompt) => published.push(prompt),
+    (promptId, _response, settledBy) => withdrawn.push([promptId, settledBy]),
+  );
+  const answered = coordinator.request({ streamId: "s-owner", toolCallId: "call-owner", questions }, "document-one");
+  const closed = coordinator.request({ streamId: "s-closed", toolCallId: "call-closed", questions }, "document-one");
+  const quit = coordinator.request({ streamId: "s-quit", toolCallId: "call-quit", questions }, "document-one");
+  const [answerPrompt, closePrompt, quitPrompt] = published;
+  coordinator.respond(
+    answerPrompt!.promptId,
+    {
+      version: ASK_USER_QUESTION_VERSION,
+      promptId: answerPrompt!.promptId,
+      cancelled: false,
+      answers: [{ questionIndex: 0, kind: "option", answer: "Guided" }],
+    },
+    "document-one",
+  );
+  // Closing the card is the owner's choice too.
+  coordinator.respond(
+    closePrompt!.promptId,
+    { version: ASK_USER_QUESTION_VERSION, promptId: closePrompt!.promptId, cancelled: true, answers: [] },
+    "document-one",
+  );
+  coordinator.shutdown();
+  await Promise.all([answered, closed, quit]);
+  assert.deepEqual(withdrawn, [
+    [answerPrompt!.promptId, "owner"],
+    [closePrompt!.promptId, "owner"],
+    [quitPrompt!.promptId, "host"],
+  ]);
+});

@@ -34,7 +34,7 @@ export interface AidenPairingRequestSettingsStore {
 }
 
 /**
- * A missing file is the first-run default: requests are accepted. A file that
+ * A missing file is the first-run default: requests are disabled. A file that
  * exists but is unreadable, malformed or from a future version fails closed,
  * so a damaged "off" never silently turns back on.
  */
@@ -43,7 +43,7 @@ export function createAidenPairingRequestSettingsStore(
 ): AidenPairingRequestSettingsStore {
   const store = new DataStore<AidenPairingRequestSettingsDocument>(
     PAIRING_REQUEST_SETTINGS_FILE,
-    { version: 1, acceptPairingRequests: true },
+    { version: 1, acceptPairingRequests: false },
     directory,
     {
       maxBytes: MAX_SETTINGS_BYTES,

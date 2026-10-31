@@ -85,6 +85,7 @@ import {
 } from "./bot-images.js";
 import { BOT_COMPUTER_TOOL_NAME } from "../bot-computers/types.js";
 import { withheldUntilDisclosed } from "./bot-tool-disclosure.js";
+import { LOAD_TOOLS_TOOL_NAME, createOnDemandTools, withheldUntilLoaded } from "../on-demand-tools.js";
 import { adaptAidenTool, type BotToolCall, type DurableTool, type ToolReplay } from "./tool-adapter.js";
 import { isPiCodemodeCallable } from "../pi-runtime-tool.js";
 
@@ -386,6 +387,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   }
 
   let installedToolNames = new Set<string>();
+  /** Offered tools whose declarations wait until the model loads or calls them. */
+  let onDemandNames: ReadonlySet<string> = new Set();
 
   /** A conversation as a rule hand-off row target: read and appended through this harness, never the host. */
   function rowTarget(conversation: Conversation, context: Context): BotRuleHandoffRowTarget {
@@ -485,6 +488,7 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           messages = withoutTools(messages, (name) => !turnAllows(name, requestIds));
         }
         messages = withoutTools(messages, withheldUntilDisclosed(messages));
+        if (onDemandNames.size > 0) messages = withoutTools(messages, withheldUntilLoaded(messages, onDemandNames));
         messages = withNewestToolImages(messages, "browser_snapshot", BOT_BROWSER_SNAPSHOT_IMAGES_KEPT);
         messages = withNewestToolImages(messages, BOT_COMPUTER_TOOL_NAME, BOT_COMPUTER_CAPTURE_IMAGES_KEPT, BOT_OLDER_COMPUTER_CAPTURE_NOTE);
         if (deps.imageInput !== undefined && !(await deps.imageInput(botId))) messages = withImageReferences(messages);
@@ -535,6 +539,8 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
         }
         // Codemode itself does nothing; every call its script makes is checked on its own.
         if (call.name === BOT_CODEMODE_TOOL_NAME && scriptable.length > 0) return undefined;
+        // Loading only declares installed tools; each loaded tool is checked when called.
+        if (call.name === LOAD_TOOLS_TOOL_NAME && onDemandNames.size > 0) return undefined;
         const decision = await deps.checkPolicy(botId, call.name, {
           callId: call.id,
           args: call.arguments,
@@ -657,7 +663,11 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
   return Object.assign(registry, {
     async refresh(turn: BotTurnContext = {}) {
       const bot = await deps.loadBot(botId);
-      const offered = await deps.currentTools(bot, turn);
+      const current = await deps.currentTools(bot, turn);
+      // Rarely used tools are installed but declared only once loaded (see `on-demand-tools.ts`).
+      const loading = createOnDemandTools(current.map(({ tool }) => tool));
+      onDemandNames = new Set(loading?.onDemand.map(({ name }) => name) ?? []);
+      const offered: BotToolEntry[] = loading ? [...current, { tool: loading.loader, replay: "safe" }] : [...current];
       // The sections describe the Bot's own tools; connection tools stay declared, so their guidance stays in the prompt.
       const nextSections = await deps.systemSections(bot, { toolNames: offered.map(({ tool }) => tool.name) });
       // The memory section renders per request; the rest are fixed per refresh.

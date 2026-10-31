@@ -20,7 +20,7 @@ Aiden combines a native-feeling desktop workspace with Pi-based agent extensibil
 
 ## Operating Context
 
-The primary application is an Electron desktop app for macOS and Linux. People work in folder-backed workspaces, use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired desktop for remote access.
+The primary application is an Electron desktop app for macOS and Linux. People work in folder-backed workspaces or in No workspace chats (global settings, with a hidden per-chat folder Aiden manages), use chats and Bots, review files and Git changes, run tools with explicit permissions, and may connect native iOS or Android clients to a paired desktop for remote access.
 
 ## Capabilities and Constraints
 

@@ -91,6 +91,8 @@ export interface ChatApplicationDependencies {
   attachments?: Pick<AidenRemoteAttachmentStore, "beginChatDeletion" | "revokeChat">;
   /** Release ambient per-chat caches (context-pressure projections). */
   releaseChatContext?: (chatId: string) => void;
+  /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
+  afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -372,6 +374,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
+        await deps.afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId)).catch((error: unknown) => {
+          deps.logError("workspace", "Could not release the deleted chat's folder.", error);
+        });
       } finally {
         if (!releaseAdmission) {
           try {

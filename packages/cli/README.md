@@ -24,6 +24,8 @@ Or from this directory: `npm install && npm run build`. During development, `npm
 | `aiden --mode rpc` | JSONL request/response + event protocol over stdio for embedding (see pi's `docs/rpc.md`, vendored into the bundle) |
 | `aiden --list-models`, `aiden --help`, `aiden --version` | Metadata commands |
 
+Started from a folder that has since been deleted, `aiden` prints one line asking you to change to an existing folder and exits with status 1 (the static `aiden --version` and `aiden help` answers still work).
+
 Credentials use `aiden auth login <provider>` (printed browser/device-code OAuth or validated API keys), the native `/login` command, or standard provider environment variables. `auth.json` is encrypted with an owner-private local wrapping key; legacy plaintext entries migrate atomically on first access. Keep the whole agent directory private: this protects against accidental disclosure of the credential file, but does not provide OS-keychain protection against someone who can read the wrapping key. MCP OAuth and benchmark keys have separate credential namespaces.
 
 ## Aiden features in the terminal
@@ -111,6 +113,8 @@ Aiden feature parity landed in phases (todo, btw, advisor, memory, subagents, `a
 
 `aiden --help` lists the complete command surface. Register a directory with
 `aiden workspace add /absolute/project`, then use `aiden workspace access <id> full|ask|none`.
+Model-originated schedule saves, pauses, resumes and removals require a separate foreground confirmation even in Full access. Save confirmation shows the effective prompt, cadence, timezone, workspace, provider/model, permission, enabled state, notifications and connector/Web Search scope, including defaults. Resume confirmation also shows the stored instructions or script and the scope being re-enabled. Oversized saves or resumes are refused before confirmation; long existing prompts can still be shortened, paused or removed. Tasks owned by a specialized feature must be edited through that feature or direct schedule administration. Denial, cancellation, expired approval or a changed workspace/provider/task prevents publication; without an interactive UI the mutation is refused. Listing, previewing and inspecting runs remain read-only. Direct user-invoked schedule administration remains available.
+
 Ask mode requires one approval per tool call; unattended Telegram and schedule execution
 require explicit Full workspace access. Schedules also retain their own read-only/Full tool
 selection and exact MCP connection bindings.

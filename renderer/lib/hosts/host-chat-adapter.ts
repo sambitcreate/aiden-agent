@@ -10,6 +10,7 @@ import type {
   PeerRunSubscription,
 } from "../../shared/peer-host";
 import type { GenerationThinkingLevel } from "../../shared/generation-thinking";
+import type { PeerAttachmentContent } from "../../shared/peer-operation";
 import type { SkillInvocationV1 } from "../../shared/slash-commands";
 import type { ToolApprovalScope } from "../../shared/tool-approval-scope";
 import type { RemoteMessagesWindow } from "./remote-chat-mapper";
@@ -285,6 +286,11 @@ export interface HostChatAdapter {
    */
   onChatChanged(listener: (chatId: string) => void): () => void;
   getMessagesWindow(chatId: string, request?: HostChatWindowRequest): Promise<HostChatResult<RemoteMessagesWindow>>;
+  /**
+   * One listed image's bytes. Only a paired host's adapter has it: a remote
+   * transcript lists images without their bytes, a local one carries them.
+   */
+  attachmentContent?(chatId: string, attachmentId: string): Promise<HostChatResult<PeerAttachmentContent>>;
   /** Follows the chat's current run, wherever it was started. */
   observe(chatId: string, observer: HostChatObserver): () => void;
   markRead(chatId: string, throughMessageId?: string): Promise<HostChatResult<void>>;

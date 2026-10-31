@@ -91,6 +91,9 @@ export function PairingRequestSheetBody({
           Expires in {formatCountdown(secondsLeft)}
         </span>
       </div>
+      <Text variant="small" color="secondary" className="block">
+        This device name is supplied by the requester. Allow grants access to your workspaces, chats, Bots and available run controls.
+      </Text>
       {waiting > 0 ? (
         <Text variant="small" color="secondary" className="block">
           {waiting === 1 ? "1 more request is waiting." : `${waiting} more requests are waiting.`}
@@ -212,7 +215,7 @@ export function PairingRequestSheet() {
           {shown.deviceName} wants to control this {hostLabel}
         </span>
       )}
-      description={`Allow only if ${shown.deviceName} shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Remote Access settings.`}
+      description={`Allow only if you started this connection and the intended computer shows the same code. It will be able to use Aiden on this ${hostLabel} until you remove it in Remote Access settings.`}
       cancelLabel="Deny"
       confirmLabel={busyAllowing ? "Allowing…" : "Allow"}
       onConfirm={() => respond("allow")}

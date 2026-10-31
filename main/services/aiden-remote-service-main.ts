@@ -10,6 +10,7 @@ import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
 import { workspaceMutationGate } from "./workspace-mutation-gate.js";
+import { workspaceFolderMissing } from "./workspace-folder-presence.js";
 import { AidenRemoteTtsService } from "./aiden-remote-tts.js";
 import { generativeUiArtifactStore } from "./generative-ui-artifact-store.js";
 import { buildVisualViewerDocument, type VisualViewerAppearance, type VisualViewerSource } from "./visual-viewer-document.js";
@@ -54,6 +55,7 @@ import {
   createSystemTailscaleCommandRunner,
 } from "./aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "./aiden-remote-tls-identity.js";
+import { aidenRemoteLanHostnames } from "./aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "./aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "./aiden-remote-workspaces.js";
 import { AidenRemoteMemorySettingsService } from "./aiden-remote-memory-settings.js";
@@ -310,7 +312,7 @@ let activeRuntime: AidenRemoteRuntime | null = null;
 async function createRuntime(): Promise<AidenRemoteRuntime> {
   const runtimeProfile = currentRuntimeProfile();
   const userData = app.getPath("userData");
-  const hostname = os.hostname();
+  const lanHostnames = await aidenRemoteLanHostnames();
   const defaultDisplayName = defaultAidenRemoteDisplayName(await computerDisplayName());
   const store = new DataStore<AidenRemoteStateDocument>(
     STATE_FILE,
@@ -460,7 +462,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     state,
     appVersion: app.getVersion(),
     botCapabilitiesSupported: () => hostPlatformCapabilities().bots,
-    hostname,
+    hostname: lanHostnames.endpoint,
     tailscale,
     portCandidates: (preferredPort) => aidenRemotePortCandidatesForProfile(
       runtimeProfile.id,
@@ -608,6 +610,10 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
                 device.acceptsProgressCapabilities === true &&
                 device.capabilities.includes("questions:respond")
               );
+            },
+            workspaceFolderMissing: async (workspaceId) => {
+              const workspace = await configStore.getWorkspace(workspaceId);
+              return workspace !== undefined && (await workspaceFolderMissing(workspace));
             },
             deviceSupportsSkillInvocation: async (deviceId) => {
               const device = (await state.snapshot()).devices.find(
@@ -1146,7 +1152,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
     },
     loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({
       directory: path.join(userData, "aiden-remote-identity"),
-      hostnames: [hostname],
+      hostnames: lanHostnames.certificate,
     }),
     log: writeRemoteLog,
   });
