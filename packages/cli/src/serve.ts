@@ -2,7 +2,7 @@ import { createServer } from "node:net";
 import { chmodSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { acquireLease } from "./state.ts";
-import { recoverStaleServeLease } from "./serve-lifecycle.ts";
+import { DETACHED_SERVE_ENV, recordServeMcpGroups, recoverStaleServeLease } from "./serve-lifecycle.ts";
 import { createCliScheduler, daemonSocket } from "./schedules.ts";
 import { createDaemonChats } from "./daemon-chats.ts";
 import { createCliTelegram } from "./telegram.ts";
@@ -29,8 +29,13 @@ async function serveStatus(remote: CliRemote | undefined, args: string[]) {
 /** Local control socket is private to the agent directory's owner. */
 export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
   recoverStaleServeLease(agentDir);
-  const release = acquireLease(join(agentDir, "serve"));
-  try { await serveOwned(agentDir, signal, options); } finally { release(); }
+  // startDaemon marks the background daemon so `serve stop` may force-kill its
+  // whole process group; a foreground serve shares its group with the shell job.
+  const detached = process.env[DETACHED_SERVE_ENV] === "1";
+  delete process.env[DETACHED_SERVE_ENV];
+  const release = acquireLease(join(agentDir, "serve"), detached ? { detached: true } : undefined);
+  const stopRecording = recordServeMcpGroups(agentDir);
+  try { await serveOwned(agentDir, signal, options); } finally { stopRecording(); release(); }
 }
 async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void }) {
   // Hooks first, so every surface below already sees the person's approved hooks.
@@ -46,8 +51,9 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
   let remote: CliRemote | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
+  let closing = false;
   const server = createServer((socket) => {
-    if (clients.size >= 64) { socket.destroy(); return; }
+    if (closing || clients.size >= 64) { socket.destroy(); return; }
     clients.add(socket); socket.on("close", () => clients.delete(socket)); socket.on("error", () => {});
     let buffer = "", handled = false;
     socket.setEncoding("utf8");
@@ -61,6 +67,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
       socket.setTimeout(610_000, () => socket.destroy());
       void (async () => {
         try {
+          if (closing) throw new Error("The Aiden daemon is shutting down.");
           const request = JSON.parse(buffer);
           if (!["schedule", "remote", "bots", "workspace", "serve", "hooks"].includes(request.command) || !Array.isArray(request.args) || request.args.some((arg: unknown) => typeof arg !== "string")) throw new Error("Invalid daemon command.");
           if (request.command === "hooks" && !hooks) throw new Error("Hooks are off on this server: they run only on macOS and Linux, and the hook store must be readable.");
@@ -89,9 +96,14 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     options.onReady?.();
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {
-    const settled = await Promise.allSettled([bots.stop(),telegram.stopAndSettle(), chats.stop(), remote?.stop(), runtime.service.stopAndSettle()]);
+    // Refuse new control requests and stop accepting connections before draining.
+    closing = true;
+    const closed = server.listening ? new Promise<void>((resolve) => server.close(() => resolve())) : Promise.resolve();
+    // chats.stop() runs first and synchronously closes turn admission, so no ingress stopped
+    // alongside it can begin a turn that exit would cut short.
+    const settled = await Promise.allSettled([chats.stop(), bots.stop(), telegram.stopAndSettle(), remote?.stop(), runtime.service.stopAndSettle()]);
     for (const client of clients) client.destroy();
-    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closed;
     rmSync(path, { force: true });
     await stopCliHooks(hooks).catch((error: unknown) => process.stderr.write(`aiden: Could not save hook state: ${String(error)}\n`));
     for (const result of settled) if (result.status === "rejected") process.stderr.write(`aiden: Daemon shutdown cleanup failed: ${String(result.reason)}\n`);

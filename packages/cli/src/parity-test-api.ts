@@ -33,10 +33,11 @@ export { createCliAuthCoordinator } from "./auth.ts";
 
 export { createCliBotAvatars } from "./bot-avatars.ts";
 export { createCliMcpPool } from "./mcp.ts";
+export { createMcpStdioTransport } from "../../../main/services/mcp-stdio-transport.js";
 
 export { createCliProviderCredentials } from "./provider-credentials.ts";
 
-export { runScheduledInference } from "./scheduled-inference.ts";
+export { createReplyMeter, runScheduledInference } from "./scheduled-inference.ts";
 
 export { createBotSubagentTool } from "./bot-subagents.ts";
 
