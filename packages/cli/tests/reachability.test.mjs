@@ -173,24 +173,44 @@ test("remote check prints both sections and fails when the Tailscale address doe
   }
 });
 
-test("the Tailscale QR waits for the address to answer and says so when it does not", async () => {
+test("Tailscale pairing warms the address before the window opens, and says so when it does not answer", async () => {
   const endpoint = "https://box.tail1234.ts.net/api/aiden/v1";
   const pairing = { sessionId: "pairing_test", qrPayload: "aiden-pair:test", manualCode: "ABCD-1234", bootstrap: { expiresAt: new Date(Date.now() + 60_000).toISOString() } };
   const daemon = await fakeDaemon((command, args) => {
     if (args[0] === "pair") return pairing;
-    if (args[0] === "status") return { connectionMode: "tailscale", tailscaleEndpoint: endpoint, tailscaleConnected: true };
+    if (args[0] === "status" || args[0] === "tailscale-prepare") return { connectionMode: "tailscale", tailscaleEndpoint: endpoint, tailscaleConnected: true };
     return { sessionId: "pairing_test", state: "failed" };
   });
-  const waited = [];
   try {
     for (const answers of [true, false]) {
+      daemon.asked.length = 0;
       const out = sink(), err = sink();
-      await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async (value) => { waited.push(value); return answers; });
-      assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Manual code: ABCD-1234/, "the check runs before the code is shown");
+      let pairedBeforeWait;
+      await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async (value) => {
+        assert.equal(value, endpoint);
+        pairedBeforeWait = daemon.asked.includes("remote pair tailscale");
+        return answers;
+      });
+      // Pairing reads the address's certificate with a short timeout, so the slow first request must come first.
+      assert.equal(pairedBeforeWait, false);
+      assert.deepEqual(daemon.asked.slice(0, 3), ["remote tailscale-prepare", "remote status", "remote pair tailscale"]);
+      assert.match(out.text, /Checking that https:\/\/box\.tail1234\.ts\.net\/api\/aiden\/v1 answers[^]*Manual code: ABCD-1234/);
       if (answers) assert.doesNotMatch(err.text, /did not answer/);
       else assert.match(err.text, /did not answer yet.*aiden remote check/);
     }
-    assert.deepEqual(waited, [endpoint, endpoint]);
+  } finally {
+    daemon.close();
+  }
+});
+
+test("a Tailscale setup problem found while preparing opens no pairing window and names the fix", async () => {
+  const daemon = await fakeDaemon((command, args) => args[0] === "tailscale-prepare" ? new Error("Tailscale is not signed in. Run `sudo tailscale up`, then `aiden remote pair tailscale`") : new Error(`unexpected ${args.join(" ")}`));
+  const out = sink(), err = sink();
+  try {
+    await api.showStartupPairing(daemon.dir, "tailscale", new AbortController().signal, out, err, async () => assert.fail("nothing to wait for"));
+    assert.deepEqual(daemon.asked, ["remote tailscale-prepare"]);
+    assert.match(err.text, /Could not open a Tailscale pairing window\. Tailscale is not signed in.*sudo tailscale up/);
+    assert.equal(out.text, "");
   } finally {
     daemon.close();
   }
@@ -203,6 +223,30 @@ test("waiting for the Tailscale address retries until it answers or the time run
   const started = Date.now();
   assert.equal(await api.waitForTailscaleAddress("https://x/api/aiden/v1", new AbortController().signal, 1_500, async () => false), false);
   assert.ok(Date.now() - started < 5_000);
+});
+
+test("stopping the server ends a Tailscale check that is still waiting on the address", async (t) => {
+  // Accepts the connection but never answers the TLS handshake, like a Serve name whose certificate is still on its way.
+  const sockets = new Set();
+  const silent = createNetServer((socket) => { sockets.add(socket); socket.on("close", () => sockets.delete(socket)); });
+  silent.listen(0, "127.0.0.1");
+  await once(silent, "listening");
+  t.after(() => { for (const socket of sockets) socket.destroy(); silent.close(); });
+  const endpoint = `https://127.0.0.1:${silent.address().port}/api/aiden/v1`;
+
+  const stop = new AbortController();
+  setTimeout(() => stop.abort(), 100);
+  let started = Date.now();
+  assert.equal(await api.waitForTailscaleAddress(endpoint, stop.signal, 30_000), false);
+  assert.ok(Date.now() - started < 2_000, `a probe in flight ends with the stop, took ${Date.now() - started}ms`);
+
+  let probes = 0;
+  const pausing = new AbortController();
+  setTimeout(() => pausing.abort(), 100);
+  started = Date.now();
+  assert.equal(await api.waitForTailscaleAddress(endpoint, pausing.signal, 30_000, async () => { probes += 1; return false; }), false);
+  assert.ok(Date.now() - started < 600, `the pause between tries ends with the stop, took ${Date.now() - started}ms`);
+  assert.equal(probes, 1, "no try after the stop");
 });
 
 test("the health probe accepts only Aiden's own answer over HTTPS", async (t) => {

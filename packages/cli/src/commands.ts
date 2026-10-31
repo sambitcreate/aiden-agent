@@ -50,12 +50,15 @@ export async function dispatchCommand(agentDir: string, cwd: string, args: strin
         if (!await (await import("./reachability.ts")).remoteCheckCommand(agentDir)) process.exitCode = 1;
         return true;
       }
+      if (rest[0] === "pair" && rest[1] === "tailscale" && rest.length === 2) {
+        // Progress goes to stderr when stdout carries the pairing JSON.
+        await (await import("./reachability.ts")).prepareTailscalePairing(agentDir, new AbortController().signal, process.stdout.isTTY ? process.stdout : process.stderr, process.stderr);
+      }
       result = await (await import("./schedules.ts")).remoteDaemonCommand(agentDir, "remote", rest);
       if (rest[0] === "pair" && !process.stdout.isTTY) {
         process.stderr.write("warning: the pairing payload below contains a single-use secret — keep it out of logs.\n");
       }
       if (rest[0] === "pair" && process.stdout.isTTY) {
-        if (rest[1] === "tailscale") await (await import("./reachability.ts")).checkTailscaleAddress(agentDir, new AbortController().signal, process.stdout, process.stderr);
         const rendered = await (await import("./pairing-display.ts")).renderPairingTerminal(result as AidenRemoteDesktopPairing).catch(() => undefined);
         if (rendered) { process.stdout.write(rendered + "\n"); return true; }
       }

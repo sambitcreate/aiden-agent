@@ -52,7 +52,7 @@ The owner asked how t3code and opencode handle Tailscale and what would make Aid
 
 - **A. Smarter install question.** `aiden service install` reads Tailscale's state and probes the cloud metadata address, shows a one-line Tailscale status, and suggests Tailscale only on a cloud server, Both when Tailscale is ready, else Local network only. Without a terminal it uses the suggestion only when Tailscale is ready.
 - **B. `aiden remote check`.** A ✓/✗ list of every Tailscale and server step with its fix, including the Linux operator grant, a Funnel on 443, an exit node without LAN access, and a live request to the Tailscale address.
-- **C. Test before the QR.** Tailscale pairing in a terminal waits (up to 45 s) for the Tailscale address to answer before showing the code, which also warms the new HTTPS certificate.
+- **C. Test before the QR.** Tailscale pairing connects the route, then waits (up to 45 s) for the Tailscale address to answer before it opens the pairing window, which warms the new HTTPS certificate before pairing reads it (daemon command `remote tailscale-prepare`). Stopping the server cancels the wait.
 - **D. Tidy uninstall.** `aiden service uninstall` takes down Aiden's Serve route before removing the service.
 - **Not done (E).** Reaching the server over the tailnet IP without HTTPS certificates needs phone app and protocol changes.
 

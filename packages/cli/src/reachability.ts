@@ -200,12 +200,21 @@ export function formatChecklist(title: string, items: CheckItem[]): string {
   return [title, ...items.map((item) => `  ${MARK[item.state]} ${item.text}`)].join("\n");
 }
 
-/** GET `<endpoint>/health` and accept only Aiden's own answer. Never rejects. */
-export function probeAidenHealth(endpoint: string, timeoutMs: number, options: { ca?: string | Buffer } = {}): Promise<boolean> {
+/** GET `<endpoint>/health` and accept only Aiden's own answer. Never rejects; an abort ends it at once. */
+export function probeAidenHealth(endpoint: string, timeoutMs: number, options: { ca?: string | Buffer; signal?: AbortSignal } = {}): Promise<boolean> {
   return new Promise((resolveProbe) => {
+    if (options.signal?.aborted) { resolveProbe(false); return; }
     let settled = false;
-    const finish = (healthy: boolean) => { if (!settled) { settled = true; clearTimeout(deadline); request.destroy(); resolveProbe(healthy); } };
-    const deadline = setTimeout(() => finish(false), timeoutMs);
+    const finish = (healthy: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      options.signal?.removeEventListener("abort", aborted);
+      request.destroy();
+      resolveProbe(healthy);
+    };
+    const aborted = () => finish(false);
+    const deadline = setTimeout(aborted, timeoutMs);
     const request = httpsGet(`${endpoint.replace(/\/+$/u, "")}/health`, { headers: { accept: "application/json" }, ...(options.ca ? { ca: options.ca } : {}) }, (response) => {
       let body = "";
       response.setEncoding("utf8");
@@ -214,6 +223,16 @@ export function probeAidenHealth(endpoint: string, timeoutMs: number, options: {
       response.on("error", () => finish(false));
     });
     request.on("error", () => finish(false));
+    options.signal?.addEventListener("abort", aborted, { once: true });
+  });
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolvePause) => {
+    if (signal.aborted) { resolvePause(); return; }
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolvePause(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
   });
 }
 
@@ -221,20 +240,20 @@ export function probeAidenHealth(endpoint: string, timeoutMs: number, options: {
  * Wait until the Tailscale address answers, retrying for up to `budgetMs`.
  * The first HTTPS request to a new Serve name makes Tailscale fetch its
  * certificate, which can take a while; doing it here keeps the phone's first
- * connection from stalling.
+ * connection from stalling. An abort stops the request in flight and the pause.
  */
 export async function waitForTailscaleAddress(endpoint: string, signal: AbortSignal, budgetMs = 45_000, probe: typeof probeAidenHealth = probeAidenHealth): Promise<boolean> {
   const deadline = Date.now() + budgetMs;
   while (!signal.aborted) {
     const left = deadline - Date.now();
     if (left <= 0) return false;
-    if (await probe(endpoint, Math.min(15_000, left))) return true;
-    await new Promise((resolveWait) => setTimeout(resolveWait, Math.min(1_000, Math.max(0, deadline - Date.now()))));
+    if (await probe(endpoint, Math.min(15_000, left), { signal })) return !signal.aborted;
+    await pause(Math.min(1_000, Math.max(0, deadline - Date.now())), signal);
   }
   return false;
 }
 
-/** Before a Tailscale QR: confirm the address answers, and say so when it does not. */
+/** Confirm the Tailscale address answers, and say so when it does not. */
 export async function checkTailscaleAddress(agentDir: string, signal: AbortSignal, out: NodeJS.WritableStream, err: NodeJS.WritableStream, wait: typeof waitForTailscaleAddress = waitForTailscaleAddress): Promise<void> {
   const status = await remoteServerStatus(agentDir);
   const endpoint = status?.tailscaleConnected ? status.tailscaleEndpoint : undefined;
@@ -242,6 +261,23 @@ export async function checkTailscaleAddress(agentDir: string, signal: AbortSigna
   out.write(`Checking that ${endpoint} answers. The first time can take up to a minute while Tailscale gets its HTTPS certificate.\n`);
   if (await wait(endpoint, signal)) return;
   if (!signal.aborted) err.write(`aiden: ${endpoint} did not answer yet. The code below still works once it does; \`aiden remote check\` shows what is missing.\n`);
+}
+
+/**
+ * Before a Tailscale pairing window: connect the route, then warm its HTTPS
+ * certificate. Pairing reads the address's certificate with a short timeout,
+ * so it must not be the first request to a new Serve name. Setup problems
+ * throw with the same fix pairing would name.
+ */
+export async function prepareTailscalePairing(agentDir: string, signal: AbortSignal, out: NodeJS.WritableStream, err: NodeJS.WritableStream, wait: typeof waitForTailscaleAddress = waitForTailscaleAddress): Promise<void> {
+  try {
+    await remoteDaemonCommand(agentDir, "remote", ["tailscale-prepare"]);
+  } catch (error) {
+    // A server started from an older build has no prepare step; pairing connects the route itself.
+    if (!/^Usage: remote /u.test(error instanceof Error ? error.message : String(error))) throw error;
+    return;
+  }
+  if (!signal.aborted) await checkTailscaleAddress(agentDir, signal, out, err, wait);
 }
 
 export interface RemoteCheckDependencies {

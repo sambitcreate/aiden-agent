@@ -90,6 +90,11 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
   if (signal.aborted) return;
   let pairing: AidenRemoteDesktopPairing;
   try {
+    if (transport === "tailscale") {
+      const { prepareTailscalePairing, waitForTailscaleAddress } = await import("./reachability.ts");
+      await prepareTailscalePairing(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
+      if (signal.aborted) return;
+    }
     pairing = await remoteDaemonCommand(agentDir, "remote", ["pair", transport]) as AidenRemoteDesktopPairing;
   } catch (error) {
     // Tailscale failures already name the setup step and the command to retry with.
@@ -99,11 +104,6 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
     return;
   }
   if (signal.aborted) return;
-  if (transport === "tailscale") {
-    const { checkTailscaleAddress, waitForTailscaleAddress } = await import("./reachability.ts");
-    await checkTailscaleAddress(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
-    if (signal.aborted) return;
-  }
   const { renderPairingTerminal } = await import("./pairing-display.ts");
   const rendered = await renderPairingTerminal(pairing).catch(() => undefined);
   if (!rendered || signal.aborted) return;

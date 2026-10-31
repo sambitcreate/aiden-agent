@@ -233,11 +233,12 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
         case "network": { if (!REMOTE_NETWORKS.includes(value as RemoteNetwork)) throw new Error("Usage: remote network local|tailscale|both"); return setRemoteNetwork(service, tailscale, value as RemoteNetwork); }
         case "mode": { if (!["lan", "tailscale", "both"].includes(value)) throw new Error("Usage: remote mode lan|tailscale|both"); await service.setConnectionMode(value as "lan" | "tailscale" | "both"); return service.status(); }
         case "tailscale-connect": await service.connectTailscale(); return service.status();
+        case "tailscale-prepare": await connectTailscaleTransport(service, tailscale); return service.status();
         case "tailscale-disconnect": await service.disconnectTailscale(); return service.status();
         case "tailscale-review": return service.reviewTailscaleTakeover();
         case "tailscale-takeover": await service.takeOverTailscale(value); return service.status();
         case "tailscale-reconcile": await service.reconcileTailscale(); return service.status();
-        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
+        default: throw new Error("Usage: remote status|devices|revoke <id>|pair lan|tailscale|pair-status|pair-cancel <session-id>|roots|approve-root <path>|remove-root <id>|network local|tailscale|both|mode lan|tailscale|both|tailscale-connect|tailscale-prepare|tailscale-disconnect|tailscale-review|tailscale-takeover <token>|tailscale-reconcile");
       }
     },
   };
