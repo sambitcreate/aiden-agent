@@ -225,6 +225,13 @@ function certificateNeedsRenewal(
   return current < validFrom || validTo - current <= renewBeforeMs;
 }
 
+/** True when the certificate is valid for every name, without wildcards. */
+function certificateCoversHostnames(certificatePem: string, hostnames: string[]): boolean {
+  const certificate = new X509Certificate(certificatePem);
+  return hostnames.every((hostname) =>
+    certificate.checkHost(hostname, { subject: "never", wildcards: false }) !== undefined);
+}
+
 async function secureFile(target: string): Promise<void> {
   await fs.chmod(target, 0o600);
 }
@@ -378,15 +385,19 @@ export async function loadOrCreateAidenRemoteTlsIdentity(
       certificate = null;
     }
   }
+  const hostnames = validatedHostnames(options.hostnames ?? []);
+  // A renamed computer reissues the certificate for its new name. The server
+  // key is kept, so the SPKI pin paired phones hold does not change.
   if (
     !certificate ||
-    certificateNeedsRenewal(certificate, now, renewBeforeMs)
+    certificateNeedsRenewal(certificate, now, renewBeforeMs) ||
+    !certificateCoversHostnames(certificate, hostnames)
   ) {
     await issueServerCertificate(
       options.directory,
       paths,
       opensslPath,
-      validatedHostnames(options.hostnames ?? []),
+      hostnames,
     );
     certificate = await fs.readFile(paths.serverCertificate, "utf8");
   }
