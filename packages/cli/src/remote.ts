@@ -37,41 +37,65 @@ import { scheduledSettingsPatch } from "../../../main/services/scheduled-setting
 import { createCliGitService } from "./git-commands.ts";
 import { createCliRemoteWorktrees } from "./remote-worktrees.ts";
 
+const BONJOUR_RETRY_MS = 30_000;
+
 /**
- * Linux discovery is best effort: a missing or exiting publisher only logs a
- * warning and never stops the Remote listeners. It is not harmless for LAN
+ * Linux discovery is best effort: a missing publisher only logs a warning, one
+ * that exits (avahi-daemon not up yet, as at boot) is retried every
+ * `retryMs`, and neither stops the Remote listeners. It is not harmless for LAN
  * pairing, though. The pairing payload seals `<host>.local` as the endpoint
  * and the phone apps require that exact endpoint, so the name must resolve on
  * the phone's network (an mDNS responder such as avahi-daemon), or the person
  * pairs over Tailscale instead.
  */
-function bonjourPublisher() {
-  if (process.platform === "darwin") return new DnsSdAidenRemoteBonjourPublisher();
+export function bonjourPublisher(retryMs = BONJOUR_RETRY_MS, platform: NodeJS.Platform = process.platform) {
+  if (platform === "darwin") return new DnsSdAidenRemoteBonjourPublisher();
   let child: ChildProcess | undefined;
+  let retry: NodeJS.Timeout | undefined;
+  let generation = 0;
   const warn = (line: string) => process.stderr.write(`aiden: ${line}\n`);
   return {
     async start(input: { instanceId: string; displayName: string; port: number; hostname?: string }) {
       const host = input.hostname ?? `${hostname()}.local`;
-      const current = spawn("avahi-publish-service", [input.displayName, "_aiden-agent._tcp", String(input.port), "v=1", `instance=${input.instanceId}`], { stdio: "ignore" });
-      child = current;
-      const started = await new Promise<boolean>((resolve) => {
-        current.once("spawn", () => resolve(true));
-        current.once("error", (error: NodeJS.ErrnoException) => {
-          warn(error.code === "ENOENT"
-            ? `avahi-publish-service is not installed, so phones will not discover this server. LAN pairing still needs ${host} to resolve on the phone's network; if no mDNS responder answers for it, install one (\`sudo apt install avahi-daemon avahi-utils\`) or pair over Tailscale with \`aiden remote pair tailscale\`.`
-            : `Local network discovery could not start (${error.message}). LAN pairing needs ${host} to resolve on the phone's network; otherwise pair over Tailscale with \`aiden remote pair tailscale\`.`);
-          resolve(false);
+      const ours = ++generation;
+      let warnedExit = false;
+      // At boot a service can start before avahi-daemon; keep trying so discovery comes up once the daemon does.
+      const launch = async () => {
+        retry = undefined;
+        if (ours !== generation) return;
+        const current = spawn("avahi-publish-service", [input.displayName, "_aiden-agent._tcp", String(input.port), "v=1", `instance=${input.instanceId}`], { stdio: "ignore" });
+        child = current;
+        const started = await new Promise<boolean>((resolve) => {
+          current.once("spawn", () => resolve(true));
+          current.once("error", (error: NodeJS.ErrnoException) => {
+            warn(error.code === "ENOENT"
+              ? `avahi-publish-service is not installed, so phones will not discover this server. LAN pairing still needs ${host} to resolve on the phone's network; if no mDNS responder answers for it, install one (\`sudo apt install avahi-daemon avahi-utils\`) or pair over Tailscale with \`aiden remote pair tailscale\`.`
+              : `Local network discovery could not start (${error.message}). LAN pairing needs ${host} to resolve on the phone's network; otherwise pair over Tailscale with \`aiden remote pair tailscale\`.`);
+            resolve(false);
+          });
         });
-      });
-      current.on("error", () => undefined);
-      if (!started) { if (child === current) child = undefined; return; }
-      current.once("exit", (code) => {
-        if (child !== current) return;
-        child = undefined;
-        warn(`avahi-publish-service exited (code ${code}), usually because avahi-daemon is not running, so ${host} may not resolve and phones cannot pair over LAN. Start it (\`sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon\`) and restart \`aiden serve\`, or pair over Tailscale with \`aiden remote pair tailscale\`.`);
-      });
+        current.on("error", () => undefined);
+        if (!started) { if (child === current) child = undefined; return; }
+        current.once("exit", (code) => {
+          if (child !== current) return;
+          child = undefined;
+          if (!warnedExit) {
+            warnedExit = true;
+            warn(`avahi-publish-service exited (code ${code}), usually because avahi-daemon is not running, so ${host} may not resolve and phones cannot pair over LAN. Aiden keeps retrying every ${Math.round(retryMs / 1000)}s. Start it (\`sudo apt install avahi-daemon && sudo systemctl enable --now avahi-daemon\`), or pair over Tailscale with \`aiden remote pair tailscale\`.`);
+          }
+          if (ours === generation) retry = setTimeout(() => void launch(), retryMs).unref();
+        });
+      };
+      await launch();
     },
-    stop() { const current = child; child = undefined; current?.kill(); },
+    stop() {
+      generation += 1;
+      if (retry) clearTimeout(retry);
+      retry = undefined;
+      const current = child;
+      child = undefined;
+      current?.kill();
+    },
   };
 }
 

@@ -62,8 +62,6 @@ export function systemdUnit(launch: ServiceLaunch): string {
   return [
     "[Unit]",
     "Description=Aiden server (aiden serve)",
-    "After=network-online.target",
-    "Wants=network-online.target",
     "",
     "[Service]",
     "Type=simple",
@@ -303,8 +301,9 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
   return false;
 }
 
-/** Which networks really reach the server: the local network in LAN modes, Tailscale only while its route is connected. */
-export function reachableNetwork(status: { connectionMode?: string; tailscaleConnected?: boolean } | undefined): RemoteNetwork | undefined {
+/** Which networks really reach the server: none while Remote is off or not listening, the local network in LAN modes, Tailscale only while its route is connected. */
+export function reachableNetwork(status: { enabled?: boolean; running?: boolean; connectionMode?: string; tailscaleConnected?: boolean } | undefined): RemoteNetwork | undefined {
+  if (status?.enabled === false || status?.running === false) return undefined;
   const lan = status?.connectionMode === "lan" || status?.connectionMode === "both";
   const tailscale = (status?.connectionMode === "tailscale" || status?.connectionMode === "both") && status.tailscaleConnected === true;
   return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
@@ -317,8 +316,8 @@ export interface ServiceCommandOptions {
   ready?: (agentDir: string, timeoutMs: number) => Promise<boolean>;
   /** Sends a `remote` command to the running server. */
   remote?: (args: string[]) => Promise<unknown>;
-  /** Shows the pairing code for `transport` until it is used, expires or `signal` aborts. */
-  pair?: (transport: "lan" | "tailscale", signal: AbortSignal) => Promise<void>;
+  /** Shows the pairing code for `transport` until it is used, expires or `signal` aborts; resolves the window's session id when one opened. */
+  pair?: (transport: "lan" | "tailscale", signal: AbortSignal) => Promise<string | undefined>;
   /** Whether stdout is a terminal that can show a pairing code. */
   tty?: boolean;
 }
@@ -387,7 +386,7 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   try {
     await remote(["network", network]);
   } catch (error) {
-    const status = await remote(["status"]).catch(() => undefined) as { connectionMode?: string; tailscaleConnected?: boolean } | undefined;
+    const status = await remote(["status"]).catch(() => undefined) as Parameters<typeof reachableNetwork>[0];
     reachable = reachableNetwork(status);
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
     out(reachable
@@ -411,7 +410,11 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   process.once("SIGINT", stop);
   try {
     const pair = options.pair ?? (async (transport: "lan" | "tailscale", signal: AbortSignal) => (await import("./serve-command.ts")).showStartupPairing(agentDir, transport, signal));
-    await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
+    const session = await pair(reachable === "local" ? "lan" : "tailscale", controller.signal);
+    // Unlike foreground `serve`, the server keeps running after Ctrl+C here, so close the code it was showing.
+    if (controller.signal.aborted && session) {
+      await remote(["pair-cancel", session]).then(() => out("Closed the pairing code."), () => undefined);
+    }
   } finally {
     process.removeListener("SIGINT", stop);
   }

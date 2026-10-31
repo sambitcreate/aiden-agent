@@ -38,6 +38,8 @@ test("the systemd unit runs serve --no-pair with every value quoted and escaped 
   assert.ok(unit.includes('Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/sam/$bin"'), "Environment= does not expand $");
   assert.match(unit, /^Restart=on-failure$/m);
   assert.match(unit, /^WantedBy=default\.target$/m);
+  // A user manager cannot order against system units such as network-online.target, so the unit names none.
+  assert.doesNotMatch(unit, /^(After|Wants|Requires)=/m);
   assert.throws(() => api.systemdUnit({ ...launch, entry: "/tmp/a\nExecStartPre=/bin/evil" }), /line breaks/);
 });
 
@@ -139,7 +141,7 @@ test("an install that starts its server applies the chosen network and pairs ove
   process.env.AIDEN_CLI_ENTRY = entry;
   t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
   /** Installs on a fake Linux host whose server is ready at once, and records what reaches the server. */
-  const install = async (flags, { failNetwork, status, tty = true } = {}) => {
+  const install = async (flags, { failNetwork, status, tty = true, interrupt = false } = {}) => {
     const { host, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
     const sent = [];
     const paired = [];
@@ -148,7 +150,13 @@ test("an install that starts its server applies the chosen network and pairs ove
       if (args[0] === "network" && failNetwork) throw new Error("Tailscale is not signed in.");
       return args[0] === "status" ? status : {};
     };
-    const pair = async (transport) => { paired.push(transport); };
+    const pair = async (transport) => {
+      paired.push(transport);
+      if (!interrupt) return "session-1";
+      // The person presses Ctrl+C while the code is on screen.
+      process.emit("SIGINT", "SIGINT");
+      return "session-1";
+    };
     let output = "";
     const write = process.stdout.write;
     const writeErr = process.stderr.write;
@@ -183,6 +191,12 @@ test("an install that starts its server applies the chosen network and pairs ove
   assert.match(unreachable.output, /For now no phone can reach the server\./);
   assert.doesNotMatch(unreachable.output, /reachable over/);
 
+  // Ctrl+C skips pairing but the service keeps running, so the code on screen is closed; a finished window is left alone.
+  const skipped = await install(["--network", "local"], { interrupt: true });
+  assert.deepEqual(skipped.sent, ["network local", "pair-cancel session-1"]);
+  assert.match(skipped.output, /Closed the pairing code\./);
+  assert.ok(!(await install(["--network", "local"])).sent.some((line) => line.startsWith("pair-cancel")), "no cancel without Ctrl+C");
+
   // --no-pair, or no terminal to show a code in, names the pair command instead.
   for (const [flags, tty] of [[["--network", "both", "--no-pair"], true], [["--network", "both"], false]]) {
     const { paired, output } = await install(flags, { tty });
@@ -197,6 +211,9 @@ test("the server is called reachable over Tailscale only while its route is conn
   assert.equal(api.reachableNetwork({ connectionMode: "both", tailscaleConnected: false }), "local");
   assert.equal(api.reachableNetwork({ connectionMode: "tailscale", tailscaleConnected: true }), "tailscale");
   assert.equal(api.reachableNetwork({ connectionMode: "tailscale", tailscaleConnected: false }), undefined);
+  assert.equal(api.reachableNetwork({ enabled: true, running: false, connectionMode: "both", tailscaleConnected: true }), undefined, "Remote that is not listening reaches no one");
+  assert.equal(api.reachableNetwork({ enabled: false, running: false, connectionMode: "lan" }), undefined, "Remote that is off reaches no one");
+  assert.equal(api.reachableNetwork({ enabled: true, running: true, connectionMode: "lan" }), "local");
   assert.equal(api.reachableNetwork(undefined), undefined, "a server that does not answer is not called reachable");
 });
 
