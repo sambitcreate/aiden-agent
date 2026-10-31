@@ -192,6 +192,25 @@ test("Tailscale pairing leaves foreign routes alone and names the setup step ins
   await assert.rejects(api.beginTailscalePairing(conflict.service, conflict.tailscale), /left it unchanged.*aiden remote mode both.*aiden remote tailscale-review.*aiden remote tailscale-takeover <token>/s);
   assert.deepEqual(conflict.calls, [["node"], ["mode", "both"], ["connect"], ["mode", "lan"]], "no pairing window, and the added mode is put back");
 
+  // Codes from an interrupted or contested route change each name their next step, and an unknown one never shows bare.
+  for (const [code, message] of [
+    ["tailscale_route_outcome_unknown", /did not confirm.*aiden remote tailscale-reconcile.*aiden remote pair tailscale/s],
+    ["tailscale_route_verification_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
+    ["tailscale_route_recovery_failed", /did not confirm.*aiden remote tailscale-reconcile/s],
+    ["tailscale_route_busy", /changing the Tailscale route right now.*aiden remote pair tailscale/s],
+    ["tailscale_ownership_commit_failed", /could not save.*writable.*aiden remote pair tailscale/s],
+    ["tailscale_status_invalid_response", /could not read.*tailscale status/s],
+    ["tailscale_something_new", /did not finish \(tailscale_something_new\).*aiden remote check.*aiden remote pair lan/s],
+  ]) {
+    const failed = tailscalePairingDouble({ connectError: code });
+    await assert.rejects(api.beginTailscalePairing(failed.service, failed.tailscale), (error) => {
+      assert.match(error.message, message, code);
+      assert.notEqual(error.message, code);
+      return true;
+    });
+    assert.equal(failed.mode(), "lan", `${code}: the added mode is put back`);
+  }
+
   const denied = tailscalePairingDouble({ deniedAfterConnect: true });
   await assert.rejects(api.beginTailscalePairing(denied.service, denied.tailscale), /sudo tailscale set --operator=\$USER.*aiden remote pair tailscale/s);
   assert.equal(denied.mode(), "lan");

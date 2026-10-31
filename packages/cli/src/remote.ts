@@ -113,13 +113,22 @@ export function tailscaleSetupMessage(code: string): string | undefined {
     case "tailscale_route_conflict": return "The Tailscale Serve path /api/aiden/v1 on this machine already points somewhere else, so Aiden left it unchanged. If it belongs to another Aiden install that is no longer running, run `aiden remote mode both`, then `aiden remote tailscale-review`, then `aiden remote tailscale-takeover <token>` with the token it prints; otherwise remove that route yourself (`tailscale serve status` shows it). Then run `aiden remote pair tailscale`.";
     case "tailscale_route_live": return "Another running Aiden install owns the Tailscale Serve path /api/aiden/v1 on this machine. Stop it (or pair through it) before pairing this server over Tailscale.";
     case "tailscale_reconciliation_required": return `A previous Tailscale route change did not report its outcome. Run \`aiden remote tailscale-reconcile\`, ${PAIR_TAILSCALE_AGAIN}`;
+    case "tailscale_route_outcome_unknown":
+    case "tailscale_route_verification_failed":
+    case "tailscale_route_recovery_failed": return `Tailscale did not confirm Aiden's route change, so Aiden saved nothing. Run \`aiden remote tailscale-reconcile\` to check what Tailscale did, ${PAIR_TAILSCALE_AGAIN}`;
+    case "tailscale_route_busy": return `Another Aiden install on this machine is changing the Tailscale route right now. Wait a moment, ${PAIR_TAILSCALE_AGAIN}`;
+    case "tailscale_ownership_commit_failed": return `Aiden could not save its Tailscale route settings, so it put the route back as it was. Check that Aiden's data folder is writable, ${PAIR_TAILSCALE_AGAIN}`;
+    case "tailscale_status_invalid":
+    case "tailscale_status_invalid_response": return `Tailscale gave an answer Aiden could not read. Check that \`tailscale status\` works and Tailscale is up to date, ${PAIR_TAILSCALE_AGAIN}`;
     default: return undefined;
   }
 }
 
 function withTailscaleSetupMessage(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
-  const setup = tailscaleSetupMessage(message);
+  // A Tailscale code without its own fix still gets a next step rather than the bare code.
+  const setup = tailscaleSetupMessage(message)
+    ?? (/^tailscale_[a-z_]+$/u.test(message) ? `Tailscale setup did not finish (${message}). \`aiden remote check\` shows which step is missing; pairing over the local network (\`aiden remote pair lan\`) still works.` : undefined);
   return setup ? new Error(setup, { cause: error }) : error instanceof Error ? error : new Error(message);
 }
 
