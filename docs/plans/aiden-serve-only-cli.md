@@ -43,7 +43,7 @@ Bare `aiden` prints the command list (with `serve` first). The old flags (`-p`, 
 The owner asked for service install after the serve-only change, with a choice between local only and Tailscale.
 
 - `aiden service install` writes a systemd user unit on Linux (`~/.config/systemd/user/aiden.service`, plus `loginctl enable-linger` so it starts at boot) or a LaunchAgent on macOS (`com.sambitcreate.aiden-agent.serve`), both running `<node> <dist/app/cli.js> serve --no-pair` with the install's agent directory and `PATH`. A server already running is stopped first. `service status` and `service uninstall` complete the set; other systems are told to use `serve --daemon`.
-- The install asks who can reach the server: local network only, Tailscale only, or both (`--network local|tailscale|both`; `local` without a terminal). The choice goes through a new `remote network` command on the running server: local sets the `lan` mode, which also removes Aiden's own Serve route; Tailscale and both run the same ownership-safe setup as Tailscale pairing and put the previous mode back when the route can't be connected.
+- The install asks who can reach the server: local network only, Tailscale only, or both (`--network local|tailscale|both`; without a terminal, the suggested network when Tailscale is ready and `local` otherwise, see A below). The choice goes through a new `remote network` command on the running server: local sets the `lan` mode, which also removes Aiden's own Serve route; Tailscale and both run the same ownership-safe setup as Tailscale pairing and put the previous mode back when the route can't be connected.
 - In a terminal, the install then shows a pairing code over the chosen network (Tailscale for both); `--no-pair` skips it.
 
 ## Tailscale ease of use (follow-up, 2026-10-31)
@@ -53,7 +53,7 @@ The owner asked how t3code and opencode handle Tailscale and what would make Aid
 - **A. Smarter install question.** `aiden service install` reads Tailscale's state and probes the cloud metadata address, shows a one-line Tailscale status, and suggests Tailscale only on a cloud server, Both when Tailscale is ready, else Local network only. Without a terminal it uses the suggestion only when Tailscale is ready.
 - **B. `aiden remote check`.** A ✓/✗ list of every Tailscale and server step with its fix, including the Linux operator grant, a Funnel on 443, an exit node without LAN access, and a live request to the Tailscale address.
 - **C. Test before the QR.** Tailscale pairing connects the route, then waits (up to 45 s) for the Tailscale address to answer before it opens the pairing window, which warms the new HTTPS certificate before pairing reads it (daemon command `remote tailscale-prepare`). Stopping the server cancels the wait.
-- **D. Tidy uninstall.** `aiden service uninstall` takes down Aiden's Serve route before removing the service.
+- **D. Tidy uninstall.** `aiden service uninstall` stops and removes the service first, then takes down Aiden's Serve route; when the service can't be stopped, the route stays with the running server.
 - **Not done (E).** Reaching the server over the tailnet IP without HTTPS certificates needs phone app and protocol changes.
 
 ## Deferred
