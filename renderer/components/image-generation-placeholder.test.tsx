@@ -4,6 +4,7 @@ import { afterEach, test } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { MessageList } from "./message-list";
+import { APPEARANCE_CHANGE_EVENT } from "../lib/appearance-runtime";
 import type { ChatMessage } from "../lib/types";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import type { AgentToolStep, GenerationTimeline } from "../shared/generation-timeline";
@@ -140,6 +141,20 @@ test("Reduce Motion renders the still pose", () => {
   cleanup();
   render(list({ timeline: timeline(generateStep("running", { detail: "3:4" })) }));
   assert.equal(document.querySelector(".image-scan")?.getAttribute("data-motion"), "animate");
+});
+
+test("turning Reduce Motion on or off while an image generates switches the pose in place", () => {
+  render(list({ timeline: timeline(generateStep("running", { detail: "3:4" })) }));
+  const motion = () => document.querySelector(".image-scan")?.getAttribute("data-motion");
+  assert.equal(motion(), "animate");
+  const applyReduceMotion = (on: boolean) => act(() => {
+    document.documentElement.dataset.reduceMotion = String(on);
+    window.dispatchEvent(new Event(APPEARANCE_CHANGE_EVENT));
+  });
+  applyReduceMotion(true);
+  assert.equal(motion(), "still");
+  applyReduceMotion(false);
+  assert.equal(motion(), "animate");
 });
 
 test("an arriving image is revealed in the placeholder, then shown as an ordinary attachment", async () => {

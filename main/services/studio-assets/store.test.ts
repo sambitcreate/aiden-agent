@@ -49,6 +49,9 @@ async function fixture(t: TestContext, limits: Partial<StudioAssetLimits> = {}) 
 
 test("put stores validated bytes once and deduplicates identical content", async (t) => {
   const f = await fixture(t);
+  const raw = new DatabaseSync(path.join(f.root, "assets-v1.sqlite"));
+  assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+  raw.close();
   const bytes = pngBytes(640, 480, 1);
   const first = await f.store.put({ bytes, declaredMimeType: "image/png" });
   const second = await f.store.put({ bytes });

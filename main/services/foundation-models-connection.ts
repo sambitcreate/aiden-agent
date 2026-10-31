@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -9,7 +9,9 @@ import {
   FOUNDATION_MODELS_PROTOCOL_VERSION,
   FoundationModelsConnectionError,
   createFoundationModelsConnection,
+  createPendingHelperStops,
   parseFoundationModelsResponse,
+  stopRecordedHelperProcess,
   type NativeFoundationModelsRequest,
   type NativeFoundationModelsResponse,
   type NativeFoundationModelsRunOptions,
@@ -21,6 +23,7 @@ const MAX_STDOUT_BYTES = 64 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
 const activeHelperRequests = new Set<{ dispose: () => void }>();
 let isDisposingFoundationModelsConnection = false;
+const pendingHelperStops = createPendingHelperStops();
 
 function helperEnvironment(): NodeJS.ProcessEnv {
   const safeNames = ["HOME", "LANG", "LC_ALL", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING"];
@@ -30,6 +33,17 @@ function helperEnvironment(): NodeJS.ProcessEnv {
     if (value) env[name] = value;
   }
   return env;
+}
+
+function readProcessExecutable(pid: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "/bin/ps",
+      ["-o", "comm=", "-p", String(pid)],
+      { env: helperEnvironment(), timeout: 1_000, maxBuffer: 16 * 1024 },
+      (error, stdout) => resolve(error ? null : stdout.trim() || null),
+    );
+  });
 }
 
 function defaultHelperPath(): string {
@@ -113,13 +127,21 @@ async function runHelperRequest(
       } catch {
         // Removing the request below still prevents a late launch from generating.
       }
-      try {
-        if (existsSync(processPath)) {
-          const processId = Number.parseInt(readFileSync(processPath, "utf8"), 10);
-          if (Number.isSafeInteger(processId) && processId > 1) process.kill(processId, "SIGTERM");
+      // `open -W` exits with the helper, so once it is gone the recorded PID
+      // may already belong to another process.
+      if (child.exitCode === null && child.signalCode === null) {
+        try {
+          if (existsSync(processPath)) {
+            pendingHelperStops.track(
+              stopRecordedHelperProcess(readFileSync(processPath, "utf8"), defaultHelperPath(), {
+                readExecutable: readProcessExecutable,
+                kill: (pid, signal) => process.kill(pid, signal),
+              }),
+            );
+          }
+        } catch {
+          // The helper may already have exited between reading its pid and signalling it.
         }
-      } catch {
-        // The helper may already have exited between reading its pid and signalling it.
       }
       if (!child.killed) child.kill("SIGTERM");
     };
@@ -230,6 +252,11 @@ export const foundationModelsConnection = createFoundationModelsConnection({
 export function disposeFoundationModelsConnection(): void {
   isDisposingFoundationModelsConnection = true;
   for (const request of [...activeHelperRequests]) request.dispose();
+}
+
+/** Wait, bounded, for helper stops still validating the recorded PID before signalling it. */
+export function settleFoundationModelsHelperStops(budgetMs: number): Promise<boolean> {
+  return pendingHelperStops.settleWithin(budgetMs);
 }
 
 export { FOUNDATION_MODELS_PROTOCOL_VERSION };

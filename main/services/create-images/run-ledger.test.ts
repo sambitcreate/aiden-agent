@@ -16,6 +16,9 @@ async function directory(t: TestContext): Promise<string> {
 function open(root: string, t: TestContext): ImageRunLedger {
   let clock = 1_000;
   const ledger = ImageRunLedger.open({ directory: root, now: () => (clock += 1) });
+  const raw = new DatabaseSync(path.join(root, "runs-v1.sqlite"));
+  assert.equal(raw.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum, 2);
+  raw.close();
   t.after(() => ledger.close());
   return ledger;
 }

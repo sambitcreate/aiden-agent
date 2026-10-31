@@ -261,6 +261,8 @@ export interface AssemblyDepsOptions {
   /** Answers rule hand-off cards. Absent: no one to ask (rule hand-offs block). */
   requestHandoff?: (request: BotRuleHandoffRequest) => Promise<BotHandoffAnswer>;
   botName?: string;
+  /** Settings → Bots: routine runs go ahead without asking, read on every call. Absent: no port. */
+  routinesGoAhead?: () => boolean;
 }
 
 export interface AssemblyDeps extends BotExtensionDeps {
@@ -298,6 +300,7 @@ export function assemblyDeps(state: AssemblyState, options: AssemblyDepsOptions)
     },
     ...(options.rules === undefined ? {} : { rules: async () => options.rules!() }),
     ...(options.botName === undefined ? {} : { botName: async () => options.botName }),
+    ...(options.routinesGoAhead === undefined ? {} : { routinesGoAhead: async () => options.routinesGoAhead!() }),
   });
   const deps: AssemblyDeps = {
     approvals: [],

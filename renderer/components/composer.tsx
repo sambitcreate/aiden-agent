@@ -18,6 +18,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
@@ -2981,6 +2982,7 @@ export function Composer({
                   setLogoutConfirmOpen(true);
                 }}
               >
+                <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
                 <span>
                   <span className="block text-small-strong">{provider.label}</span>
                   <span className="block text-small text-tertiary">{provider.detail}</span>

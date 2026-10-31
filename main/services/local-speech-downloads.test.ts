@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SpeechModelSpec } from "./local-speech-catalog.js";
-import { createSpeechModelManager, diskFailureMessage, partialDownloadBytes } from "./local-speech-downloads.js";
+import { createSpeechModelManager, diskFailureMessage, extractFailureMessage, partialDownloadBytes } from "./local-speech-downloads.js";
 
 type Mode = "normal" | "ignore-range" | "wrong-offset" | "cut-after-half" | "stall" | "oversize" | "unsatisfiable" | "short";
 
@@ -419,4 +419,25 @@ test("a body that ends cleanly but short keeps the partial and resumes later", a
   await manager.downloadModel("fixture");
   assert.equal(state.requests[state.requests.length - 1], `bytes=${partial}-`);
   assert.equal(manager.isModelInstalled("fixture"), true);
+});
+
+test("an archive that tar cannot unpack reports retry advice, not the raw tar command", async (t) => {
+  const bytes = Buffer.from("this is not a bzip2 archive");
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const { server, url } = await serve(bytes, { mode: "normal", requests: [] });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const root = mkdtempSync(join(tmpdir(), "speech-root-"));
+  const manager = createSpeechModelManager({ root: () => root, catalog: [spec(url, bytes.length, sha256)] });
+  const error = await manager.downloadModel("fixture").then(() => undefined, (reason: unknown) => reason as Error);
+  assert.ok(error instanceof Error);
+  assert.doesNotMatch(error.message, /Command failed|tar /);
+  assert.match(error.message, /try again/i);
+  assert.equal(manager.isModelInstalled("fixture"), false);
+});
+
+test("a tar failure from a full disk or a timeout is reported as a disk problem", () => {
+  const full = extractFailureMessage(Object.assign(new Error("Command failed: tar -xjf"), { stderr: "tar: model.onnx: Write failed: No space left on device\n" }));
+  assert.equal(full, diskFailureMessage({ code: "ENOSPC" }));
+  assert.match(extractFailureMessage(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" })), /took too long.*free space/i);
+  assert.doesNotMatch(extractFailureMessage(new Error("Command failed: tar: Unrecognized archive format")), /free up space/i);
 });

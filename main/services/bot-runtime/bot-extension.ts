@@ -125,6 +125,11 @@ export interface BotApprovalRequirement {
   onAllow?(): void | Promise<void>;
   /** The rule that made (or also covers) this ask. */
   rule?: BotHandoffRule;
+  /**
+   * The person's Settings → Bots lets this routine run go ahead: no card,
+   * `onAllow` still runs before the tool.
+   */
+  preapproved?: true;
 }
 
 /** A rule handed this call to the person: the call never runs. */
@@ -585,6 +590,14 @@ export function createBotRegistry(botId: string, deps: BotExtensionDeps): BotReg
           return applyHandoffAnswer(api, context, call.id, stored);
         }
         if (decision.approval === undefined) return undefined;
+        if (decision.approval.preapproved === true) {
+          try {
+            await decision.approval.onAllow?.();
+          } catch (error) {
+            return { block: error instanceof Error ? error.message : "This action can no longer run." };
+          }
+          return undefined;
+        }
         const memo = await api.memo<ApprovalMemo>(
           APPROVAL_MEMO,
           {

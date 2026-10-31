@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "../lib/ui-utils";
 import { latestReasoningLine, reduceReasoningDisclosure } from "../lib/reasoning-disclosure";
 import { useStickySectionCollapse } from "../lib/sticky-section";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 interface ReasoningBlockProps {
   content: string;
@@ -81,7 +82,7 @@ export function ReasoningBlock({
         }}
         className="transcript-sticky-header flex h-9 w-full items-center gap-2.5 rounded-card px-3 text-left text-small-strong text-secondary outline-none transition-[background-color,color,box-shadow] duration-150 ease-out enabled:hover:text-primary focus-visible:outline-none disabled:cursor-default"
       >
-        <span className={cn("shrink-0", active && "agent-thinking-shimmer")}>{label}</span>
+        <span ref={active ? pauseWhenUnseen : undefined} className={cn("shrink-0", active && "agent-thinking-shimmer")}>{label}</span>
         <span
           aria-hidden="true"
           className={cn(

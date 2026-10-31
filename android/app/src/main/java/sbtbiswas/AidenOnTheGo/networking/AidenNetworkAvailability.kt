@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import sbtbiswas.AidenOnTheGo.models.AidenTerminalReconciliation
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 
 /**
  * The device's network reachability as stream recovery sees it.
@@ -143,6 +144,12 @@ class AidenStreamNetworkRecovery(
 
     fun recordHealthy() = policy.recordHealthy()
 
+    companion object {
+        /** The wait a 429 asked for, clamped, or 0 for any other failure. */
+        fun serverRequestedDelayMilliseconds(error: Throwable): Long =
+            (error as? AidenRemoteClientException.Server)?.retryAfterSeconds?.let { it * 1_000L } ?: 0L
+    }
+
     /**
      * After the event stream fails. Returns true when the caller should probe
      * status, or false after parking offline until the network returned, in
@@ -158,16 +165,20 @@ class AidenStreamNetworkRecovery(
 
     /**
      * After the status probe fails. [onBackoff] runs before an online backoff
-     * delay (the caller's warning); offline parking never calls it.
+     * delay (the caller's warning); offline parking never calls it. A server
+     * that asked for a longer wait (a 429's `Retry-After`) passes it as
+     * [minimumDelayMilliseconds], so the reconnect never comes sooner.
      */
     suspend fun recoverAfterProbeFailure(
+        minimumDelayMilliseconds: Long = 0,
         onBackoff: () -> Unit,
         onWaiting: (Boolean) -> Unit
     ): ProbeFailureOutcome {
         return when (val decision = policy.afterProbeFailure(availability.isAvailable.value)) {
             is AidenStreamRecoveryDecision.Backoff -> {
                 onBackoff()
-                val lost = withTimeoutOrNull(delayMilliseconds(decision.attempt)) {
+                val delay = maxOf(delayMilliseconds(decision.attempt), minimumDelayMilliseconds)
+                val lost = withTimeoutOrNull(delay) {
                     availability.isAvailable.first { !it }
                 }
                 if (lost == null) return ProbeFailureOutcome.BACKOFF_ELAPSED

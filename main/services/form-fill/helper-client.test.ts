@@ -202,6 +202,65 @@ test("helper crash rejects in-flight requests", async () => {
   }
 });
 
+test("a stdin EPIPE after the helper dies fails in-flight work instead of crashing main", async () => {
+  const { client, spawned, root } = makeClient();
+  const uncaught: unknown[] = [];
+  const onUncaught = (error: unknown) => uncaught.push(error);
+  process.on("uncaughtException", onUncaught);
+  try {
+    const promise = client.score("c", ["a", "b"]);
+    // The helper died and the next write hit a closed pipe before its exit
+    // event arrived.
+    spawned[0].stdin.destroy(
+      Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    );
+    await assert.rejects(promise, (error: unknown) => {
+      assert.ok(error instanceof FormFillHelperError);
+      assert.equal(error.code, "transport");
+      return true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(uncaught, []);
+    assert.equal(client.isPoisoned, true);
+  } finally {
+    process.off("uncaughtException", onUncaught);
+    client.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an unattributable helper failure fails in-flight work without waiting for the timeout", async () => {
+  const { client, spawned, root } = makeClient();
+  try {
+    const promise = client.score("c", ["a", "b"]);
+    // The helper could not parse a line, so it cannot name the request.
+    spawned[0].stdout.write(
+      `${JSON.stringify({
+        version: 1,
+        id: "",
+        ok: false,
+        error: { code: "invalid_request", message: "Malformed form-fill request." },
+      })}\n`,
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      promise.then(
+        () => "resolved",
+        (error: unknown) => error,
+      ),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve("still waiting"), 1_000);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    assert.ok(settled instanceof FormFillHelperError, String(settled));
+    assert.equal(settled.code, "transport");
+    assert.equal(client.isPoisoned, true);
+  } finally {
+    client.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("helper error responses map to typed codes", async () => {
   const { client, spawned, requestsByChild, root } = makeClient();
   try {
