@@ -60,6 +60,9 @@ export function SidebarOrganizeMenuItems({
   machines,
 }: SidebarOrganizeMenuItemsProps) {
   const id = React.useId();
+  // Nothing offers the Inbox yet (Phase 1b), and a stored `inbox` lays out like
+  // Needs attention, so the menu shows it as that.
+  const shownView = view === "inbox" ? "attention" : view;
   const showMachines = machines !== undefined && machines.hosts.length > 0;
   const machineFilters: SidebarMachineFilter[] = showMachines
     ? ["all", "local", ...machines.hosts.map((host) => `host:${host.id}` as const)]
@@ -69,7 +72,7 @@ export function SidebarOrganizeMenuItems({
       <DropdownMenuLabel id={`${id}-view`}>View</DropdownMenuLabel>
       <DropdownMenuRadioGroup
         aria-labelledby={`${id}-view`}
-        value={view}
+        value={shownView}
         onValueChange={pick(SIDEBAR_VIEWS, onViewChange)}
       >
         <DropdownMenuRadioItem value="projects">
@@ -85,7 +88,7 @@ export function SidebarOrganizeMenuItems({
           Needs attention
         </DropdownMenuRadioItem>
       </DropdownMenuRadioGroup>
-      {view !== "attention" ? (
+      {shownView !== "attention" ? (
         <>
           <DropdownMenuSeparator />
           <DropdownMenuLabel id={`${id}-chat-sort`}>Sort chats</DropdownMenuLabel>

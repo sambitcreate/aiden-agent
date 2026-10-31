@@ -113,7 +113,9 @@ export interface InboxOrganization<Row extends InboxRow> {
   working: Row[];
   /** Rows on no shelf (done, snoozed, or older than the recent window). */
   hiddenCount: number;
-  /** Earlier rows beyond the cap, reached through Show more. */
+  /** Earlier rows beyond the cap, newest first, reached through Show more. */
+  earlierOverflow: Row[];
+  /** `earlierOverflow.length`. */
   earlierMoreCount: number;
   /** Needs you rows from online hosts: the count and badge total. */
   needsYouCount: number;
@@ -168,8 +170,7 @@ export function organizeInbox<Row extends InboxRow>(
         compareKeys(a.row.key, b.row.key))
       .map((entry) => entry.row);
   };
-  const earlierAll = sorted("earlier");
-  const earlier = options.showAllEarlier ? earlierAll : earlierAll.slice(0, earlierLimit);
+  const { shown: earlier, overflow: earlierOverflow } = capEarlier(sorted("earlier"), options.showAllEarlier ? Infinity : earlierLimit);
   return {
     needsYou: sorted("needs_you"),
     pinned: sorted("pinned"),
@@ -177,9 +178,25 @@ export function organizeInbox<Row extends InboxRow>(
     earlier,
     working: sorted("working"),
     hiddenCount,
-    earlierMoreCount: earlierAll.length - earlier.length,
+    earlierOverflow,
+    earlierMoreCount: earlierOverflow.length,
     needsYouCount,
   };
+}
+
+/**
+ * The first `limit` Earlier rows. An open chat that would fall past the cap
+ * takes the last visible slot instead, so the list never hides the chat in the
+ * main pane and never grows past the cap. It is the oldest row shown, so the
+ * newest-first order holds.
+ */
+function capEarlier<Row extends InboxRow>(all: Row[], limit: number): { shown: Row[]; overflow: Row[] } {
+  if (all.length <= limit) return { shown: all, overflow: [] };
+  const openPastCap = limit > 0 ? all.slice(limit).filter((row) => row.signals.isOpen) : [];
+  const kept = Math.max(0, limit - openPastCap.length);
+  const shown = [...all.slice(0, kept), ...openPastCap];
+  const listed = new Set(shown);
+  return { shown, overflow: all.filter((row) => !listed.has(row)) };
 }
 
 /** Row keys per section, in display order. */
@@ -230,6 +247,17 @@ export interface FreezeInboxInput {
    * was deleted (or its workspace removed) and goes at once.
    */
   present: ReadonlySet<string>;
+  /**
+   * Live Earlier rows past the cap (`earlierOverflow` keys). A held row that
+   * merely fell past the cap is still in Earlier: it keeps its slot, not dimmed.
+   */
+  earlierOverflow?: readonly string[];
+  /**
+   * The cap `organizeInbox` used; omit when Show more lists every row. The
+   * frozen Earlier stays within it by leaving new arrivals, then rows past the
+   * cap, for Show more (see `heldEarlierMoreCount`).
+   */
+  earlierLimit?: number;
 }
 
 /**
@@ -238,7 +266,9 @@ export interface FreezeInboxInput {
  * person touched move to their live place, and deleted rows go at once.
  */
 export function freezeInboxOrder(input: FreezeInboxInput): HeldInboxOrder {
+  const overflow = new Set(input.earlierOverflow ?? []);
   const liveSection = new Map<string, InboxSection>();
+  for (const key of overflow) liveSection.set(key, "earlier");
   for (const section of INBOX_SECTIONS) {
     for (const key of input.next[section]) liveSection.set(key, section);
   }
@@ -280,6 +310,36 @@ export function freezeInboxOrder(input: FreezeInboxInput): HeldInboxOrder {
       held.add(key);
     });
     list.push(...appended);
+    if (section === "earlier" && input.earlierLimit !== undefined) {
+      const limit = Math.max(0, input.earlierLimit);
+      const arrived = new Set(appended.map((row) => row.key));
+      dropFromEnd(list, limit, (row) => arrived.has(row.key));
+      dropFromEnd(list, limit, (row) => overflow.has(row.key) && !input.touched.has(row.key));
+    }
   }
   return lists;
+}
+
+function dropFromEnd(list: HeldInboxRow[], limit: number, droppable: (row: HeldInboxRow) => boolean): void {
+  for (let index = list.length - 1; index >= 0 && list.length > limit; index -= 1) {
+    if (droppable(list[index]!)) list.splice(index, 1);
+  }
+}
+
+/**
+ * Show more's count while frozen: live Earlier rows (shown and past the cap)
+ * that the held order does not show anywhere. Without a freeze it equals
+ * `earlierMoreCount`.
+ */
+export function heldEarlierMoreCount(
+  held: HeldInboxOrder,
+  live: { earlier: readonly string[]; earlierOverflow: readonly string[] },
+): number {
+  const shown = new Set<string>();
+  for (const section of INBOX_SECTIONS) {
+    for (const row of held[section]) if (!row.leaving) shown.add(row.key);
+  }
+  let count = 0;
+  for (const key of [...live.earlier, ...live.earlierOverflow]) if (!shown.has(key)) count += 1;
+  return count;
 }

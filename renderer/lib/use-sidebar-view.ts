@@ -83,6 +83,31 @@ export function writeSidebarPreferences(
   for (const listener of listeners) listener();
 }
 
+/**
+ * Calls `onChange` with the stored preferences each time another window writes
+ * them. A window that keeps its own copy of a stored field (the sidebar's sorts,
+ * manual order and expanded groups) refreshes it here, so its next write builds
+ * on the other window's change instead of overwriting it. This window's own
+ * writes raise no `storage` event and do not call it.
+ */
+export function useSidebarPreferencesFromOtherWindows(
+  onChange: (preferences: SidebarPreferences) => void,
+): void {
+  const latest = React.useRef(onChange);
+  React.useEffect(() => {
+    latest.current = onChange;
+  });
+  React.useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== SIDEBAR_PREFERENCES_KEY) return;
+      stale = true;
+      latest.current(snapshot());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+}
+
 /** The sidebar view, shared by every place that switches it. */
 export function useSidebarView(): { view: SidebarView; setView: (view: SidebarView) => void } {
   const view = React.useSyncExternalStore(subscribe, () => snapshot().view, () => snapshot().view);

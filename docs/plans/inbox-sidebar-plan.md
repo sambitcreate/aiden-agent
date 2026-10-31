@@ -98,7 +98,7 @@ Times come from main, not the window. `chats:pendingAttention` reads `HostRunReg
 7. **Unread** → Updates.
 8. **Read and idle, active within `recentWindowMs`** (default 7 days) → Earlier. Earlier shows 20 chats, then **Show more**. Anything older is reached through search or the other views.
 
-The open chat never counts as unread (existing rule). It keeps its place while it is open.
+The open chat never counts as unread (existing rule). It keeps its place while it is open. If it would fall past Earlier's cap, it takes the last of the 20 slots instead, so Earlier never hides the chat in the main pane and never grows past the cap.
 
 A remote row whose host isn't online keeps its last state but never counts toward Needs you totals or the badge (see Phase 1 edge cases).
 
@@ -118,9 +118,9 @@ Ties fall back to the host-qualified key `projectOrderKey(hostId, chatId)`, so t
 
 The list freezes while the pointer is over it, `:focus-visible` is inside it, or a row's ••• menu or a dialog opened from a row is open. It releases on window blur or when the window is hidden. While frozen:
 
-- New rows still appear, added to the end of their section.
+- New rows still appear, added to the end of their section. Earlier stays within its cap: a new arrival that would push it past 20 waits behind **Show more**, whose count includes it.
 - State changes update a row's status and the section counts but don't move the row.
-- A row that leaves the list (Done or read on another device, a host dropping out) holds its slot, dimmed, until the freeze releases.
+- A row that leaves the list (Done or read on another device, a host dropping out) holds its slot, dimmed, until the freeze releases. A row that only fell past Earlier's cap has not left: it keeps its slot, not dimmed.
 - Deletes and workspace removal apply at once. Focus moves to the next row, as in BotSidebar's `deleteReturnFocus`.
 - A full reset (host reconnect, view switch) waits for the release and then applies without animation.
 - An action the person takes, such as opening a row or Mark read, places that row at once.
@@ -159,14 +159,15 @@ The existing sidebar Playwright specs must pass unchanged.
 **1a. The model.**
 
 - `renderer/lib/sidebar-inbox.ts` with `inboxState` and `organizeInbox`.
-- `"inbox"` added to `SIDEBAR_VIEWS`, and the `"attention"` migration in `parseSidebarPreferences`. The migration maps `"attention"` before the `oneOf(SIDEBAR_VIEWS, …)` check (`sidebar-organization.ts:492`); only then is `"attention"` removed from `SIDEBAR_VIEWS`.
+- `"inbox"` added to `SIDEBAR_VIEWS`. The `"attention"` migration waits for 1b.
 - The `useSidebarView()` store, plus `useWorkingShelfCollapsed()` for the shelf's stored state (`SidebarPreferences.workingShelfCollapsed`).
-- Until 1b renders it, a stored `inbox` lays out like Needs attention; it is serialized with the legacy `organization: "workspace"`, so an older build falls back to By workspace.
+- Until 1b renders it, a stored `inbox` lays out like Needs attention, and the sidebar title and Organize menu show it as Needs attention; it is serialized with the legacy `organization: "workspace"`, so an older build falls back to By workspace.
 - `chats:pendingAttention` (see 1c) lands with 1a as data only.
 - Fixture-based tests in `renderer/lib/sidebar-inbox.test.ts`. Each placement and ordering rule gets its own hand-written expected order (an independent oracle). The tests also cover snooze wake-ups, Done coming back on new output, detached and interrupted rows, offline hosts, and tie stability.
 
 **1b. The Inbox view.**
 
+- The `"attention"` migration in `parseSidebarPreferences`, landing with the view that replaces it. The migration maps `"attention"` before the `oneOf(knownViews, …)` check in `parseSidebarPreferences`; only then is `"attention"` removed from `SIDEBAR_VIEWS`.
 - Sections: Needs you, Updates, Earlier, plus the Working shelf. The shelf is collapsible, takes at most 40% of the sidebar height, scrolls on its own, and remembers whether it is collapsed.
 - Compact two-line rows, sized like OpenCode's Inbox: the whole row is one button with 6 px block padding and a 2 px gap; line 1 is 16 px tall in 12 px quaternary text (`project · {host}`, then the status or age at the end); line 2 is the title, 13 px on a 16 px line, medium weight when unread. Rows come out about 46 px. Section headers are 24 px. The host part appears only when paired hosts exist, and uses the host's name from `sidebarHosts` (fallback "Paired Mac"), never a literal "Mac". Working rows dim their status icon (not the text, to keep contrast) and show `Working {duration}`.
 - Status text in Needs you uses the soft semantic colours: Approval and Question in warning, Failed in danger, Interrupted and Unavailable in warning. The tooltip carries the pending command, question or failure reason:
@@ -180,6 +181,8 @@ The existing sidebar Playwright specs must pass unchanged.
 **1c. Opening from a row.**
 
 New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, summary, since, runStartedAt, count }`, read from `HostRunRegistry` plus the detached and interrupted records. `kind` is `approval`, `question`, `detached`, `interrupted` or `working` (a live run with nothing to answer, so Working-shelf rows get `runStartedAt`; its summary is empty and `count` is 0). Precedence is that order. The summary is the registry's bounded approval summary or the first question's text, collapsed to one line and capped at 200 characters; tool details and file contents never appear. Chats this host doesn't have, and chats waiting on nothing, are left out; malformed ids or more than 2,000 are refused. A second channel, `chats:dismissDetachedAttention(chatId)`, clears a chat's Unavailable prompts. Shape: `renderer/shared/chat-pending-attention.ts`; handler: `main/handlers/chat-pending-attention.ts`. Rows never send an approval or an answer.
+
+`detached` covers prompts raised while the chat's renderer was detached as well as prompts open when it detached: a prompt the coordinators refuse because the renderer has gone is recorded with `since` set to the refusal, except on unattended runs (scheduled, Remote, routines), which have no window to come back to. An interrupted wait from a run older than the chat's live run is ignored, so a chat that is working again shows as Working. Deleting a chat clears its Unavailable prompts. Each call reads the saved interrupted waits once; a read failure is logged as a warning and the chats show no interrupted rows. The Inbox refreshes on change events (chat, run and prompt events), not by polling.
 
 - **Open.** Clicking a row, Enter on a focused row, or ⌘1–9 opens the chat or Bot. The approval card is docked above the composer (`chat-pane.tsx:3540-3570`), so there is nothing to scroll. Opening focuses its Deny button, the existing default (`chat-pane.tsx:3128-3143`), but only when the person isn't typing and no overlay is open. With several approvals the card shows `approvals[0]` and `pendingCount` (`:3065`). A question replaces the composer (`:3667-3680`) and its answer field takes focus. When both wait, the approval comes first. Once the prompt resolves, focus goes to the composer. Approve, Deny and Always allow keep their existing rules in the chat, for local and remote chats alike.
 - **Mark read** uses `chats:markRead` for local chats and `POST /chats/{chatId}/read` with `throughMessageId` for remote chats. It is available on Updates rows and from the ••• menu.
@@ -210,7 +213,7 @@ New desktop-only IPC, `chats:pendingAttention`, returns for each chat `{ kind, s
   - there is no archived state (`types.ts:666-684`), so the Inbox adds no Archive; Done (Phase 2) is the way to put a chat away;
   - child-stream prompts are ignored (`chat-activity-core.ts:15-19`, `:62-63`). Phase 1 keeps that; rolling child prompts into the parent is a follow-up.
 - *Search.* Search reaches past `recentWindowMs` and the Earlier cap, and respects the machine filter (`sidebar-organization.ts:254-325`).
-- *Stored state.* The shelf's collapsed state lives in `SidebarPreferences`, not a new key. Preferences used to be written as a whole blob from `chat-sidebar.tsx`, so a second window could clobber the first. 1a moved the write into `writeSidebarPreferences(patch)`, which re-reads storage and writes only the changed fields, and the store listens for `storage` events, as `use-bot-sidebar-preferences.ts:72` does.
+- *Stored state.* The shelf's collapsed state lives in `SidebarPreferences`, not a new key. Preferences used to be written as a whole blob from `chat-sidebar.tsx`, so a second window could clobber the first. 1a moved the write into `writeSidebarPreferences(patch)`, which re-reads storage and writes only the changed fields, and the store listens for `storage` events, as `use-bot-sidebar-preferences.ts:72` does. The sidebar's own copies of stored fields (sorts, manual order, expanded groups, machine filter and grouping) refresh on another window's write (`useSidebarPreferencesFromOtherWindows`), so a later drag or collapse builds on that change instead of restoring the old list.
 - *Bot routes.* On a Bot route the sidebar swaps to `BotSidebar` (`chat-sidebar.tsx:484`), chats with a `botId` redirect to `/bots/$botId/chat` (`chat-pane.tsx:317-321`), and `BotSidebar` registers its own ⌘1–9. When `view` is `inbox`, the Inbox stays on Bot routes and owns ⌘1–9 there. Bot Mark read writes the Bot preferences.
 - *Accessibility.* Each row's `aria-description` (the pattern at `chat-sidebar.tsx:1248`) carries the request text, and the tooltip also opens on keyboard focus. Each section is a `role="group"` with its label. The shelf sits inside the one `useRovingRows` container (`roving-rows.ts:90-120`), so arrow keys move between sections and the shelf. Status colours meet text contrast on both themes.
 - *Clock.* Durations use `max(0, now - since)`. Remote clock skew waits for Phase 2.

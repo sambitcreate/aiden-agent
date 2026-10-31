@@ -76,6 +76,11 @@ export interface PendingAttentionRecorder {
    * prompt it waits on as unavailable. Call before they settle.
    */
   runDetached(runId: string): void;
+  /**
+   * The run asked for an approval or answer after its window had left, so the
+   * host refused it unpublished and told the model it was unavailable.
+   */
+  promptShortCircuited(runId: string, prompt: HostRunPendingPrompt & { id: string }): void;
   /** A new run started in the chat: what was left unanswered is moot. */
   runBegan(chatId: string): void;
 }
@@ -107,6 +112,18 @@ export function createPendingAttentionRecorder(input: {
         promptDetached(id);
       }
     },
+    promptShortCircuited(runId, prompt) {
+      const run = input.runs.summary(runId);
+      if (!run) return;
+      input.log.record({
+        chatId: run.chatId,
+        promptId: prompt.id,
+        kind: prompt.type === "approval_required" ? "approval" : "question",
+        summary: promptSummary(prompt),
+        since: now(),
+        runStartedAt: epoch(run.startedAt) ?? now(),
+      });
+    },
     runBegan(chatId) {
       input.log.clearChat(chatId);
     },
@@ -120,32 +137,35 @@ export interface InterruptedRunWaits {
 
 /**
  * Saved waits from each listed chat's interrupted run, read only for chats
- * that hold a wait at all. Unreadable history yields none, as
- * `chats:interruptedWaits` does: it only hides the Unavailable rows.
+ * that hold a wait at all. The wait file is read once per call. Unreadable
+ * history yields none, as `chats:interruptedWaits` does: it only hides the
+ * Interrupted rows; `onError` hears why.
  */
 export async function readInterruptedRunWaits(
   chatIds: readonly string[],
   sources: {
-    waits: Pick<InterruptedWaitStore, "chatIds" | "forRun">;
+    waits: Pick<InterruptedWaitStore, "snapshot">;
     operations: {
       initialize(): Promise<void>;
       listOperationsByChat(chatId: string): Promise<DurablePiRuntimeOperation[]>;
     };
+    onError?: (error: unknown) => void;
   },
 ): Promise<Map<string, InterruptedRunWaits>> {
   const result = new Map<string, InterruptedRunWaits>();
   try {
-    const holders = await sources.waits.chatIds();
-    const candidates = chatIds.filter((id) => holders.has(id));
+    const saved = await sources.waits.snapshot();
+    const candidates = chatIds.filter((id) => saved.chatIds.has(id));
     if (candidates.length === 0) return result;
     await sources.operations.initialize();
     for (const chatId of candidates) {
       const run = await latestInterruptedRun(sources.operations, chatId);
       if (!run) continue;
-      const waits = await sources.waits.forRun(chatId, run.startedAt);
+      const waits = saved.forRun(chatId, run.startedAt);
       if (waits.length > 0) result.set(chatId, { runStartedAt: run.startedAt, waits });
     }
-  } catch {
+  } catch (error) {
+    sources.onError?.(error);
     return new Map();
   }
   return result;
@@ -158,7 +178,8 @@ function isLive(run: HostRunSummary | undefined): run is HostRunSummary {
 /**
  * One chat's attention, most pressing first: a live approval, a live question,
  * a detached prompt (its run may still be working), an interrupted wait, then
- * a run with nothing to answer.
+ * a run with nothing to answer. An interrupted wait from a run older than the
+ * live one is moot: the chat is working again.
  * Undefined when the chat is waiting on nothing.
  */
 export function pendingAttentionForChat(
@@ -203,7 +224,10 @@ export function pendingAttentionForChat(
     };
   }
 
-  const waits = sources.interrupted?.waits ?? [];
+  const interrupted = sources.interrupted;
+  const superseded =
+    interrupted !== undefined && runStartedAt !== undefined && interrupted.runStartedAt < runStartedAt;
+  const waits = superseded ? [] : (interrupted?.waits ?? []);
   if (waits.length > 0) {
     const oldest = waits.reduce((left, right) => (right.askedAt < left.askedAt ? right : left));
     return {
@@ -211,7 +235,7 @@ export function pendingAttentionForChat(
       kind: "interrupted",
       summary: clipPendingAttentionSummary(oldest.kind === "approval" ? oldest.summary : oldest.questions[0]?.question),
       since: oldest.askedAt,
-      runStartedAt: sources.interrupted?.runStartedAt,
+      runStartedAt: interrupted?.runStartedAt,
       count: waits.length,
     };
   }

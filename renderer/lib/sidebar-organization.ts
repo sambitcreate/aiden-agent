@@ -469,10 +469,13 @@ function oneOf<T extends string>(values: readonly T[], value: unknown): T | null
  * `{ organization, expandedWorkspaceIds }` shape. When `validLocalProjectIds`
  * is supplied, local entries for removed workspaces are pruned; keys for other
  * hosts are kept because their projects may simply be offline.
+ * `knownViews` is the views this build offers; an older build knows fewer, and
+ * a view it doesn't know falls back to the legacy `organization`.
  */
 export function parseSidebarPreferences(
   value: string | null,
   validLocalProjectIds?: readonly string[],
+  knownViews: readonly SidebarView[] = SIDEBAR_VIEWS,
 ): SidebarPreferences {
   const valid = validLocalProjectIds ? new Set(validLocalProjectIds) : null;
   const isLocalProject = (id: string) =>
@@ -489,7 +492,7 @@ export function parseSidebarPreferences(
   }
 
   const view =
-    oneOf(SIDEBAR_VIEWS, record.view) ?? (record.organization === "recent" ? "recent" : "projects");
+    oneOf(knownViews, record.view) ?? (record.organization === "recent" ? "recent" : "projects");
   const expandedWorkspaceIds = Array.isArray(record.expandedWorkspaceIds)
     ? Array.from(
         new Set(

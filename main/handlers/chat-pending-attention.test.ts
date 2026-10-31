@@ -176,6 +176,50 @@ test("prompts a window left behind stay as Unavailable until the chat runs again
   assert.deepEqual(await pending(["chat-a"]), []);
 });
 
+test("a prompt the run raises after its window left shows as Unavailable from when it was refused", async () => {
+  const { clock, registry, recorder, pending } = harness({ chats: ["chat-a"] });
+  registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
+  // The person switches chats while the run works; nothing was waiting yet.
+  clock.now = T0 + 2_000;
+  recorder.runDetached("run-a");
+  assert.equal((await pending(["chat-a"]))[0]?.kind, "working");
+
+  // Later the run asks for an approval; the host refuses it unpublished.
+  clock.now = T0 + 30_000;
+  recorder.promptShortCircuited("run-a", {
+    id: "approval-late",
+    type: "approval_required",
+    payload: { summary: "Run   npm\n publish" },
+  });
+  clock.now = T0 + 31_000;
+  recorder.promptShortCircuited("run-a", {
+    id: "prompt-late",
+    type: "question_required",
+    payload: { questions: [question] },
+  });
+  assert.deepEqual(await pending(["chat-a"]), [
+    {
+      chatId: "chat-a",
+      kind: "detached",
+      summary: "Run npm publish",
+      since: T0 + 30_000,
+      runStartedAt: T0,
+      count: 2,
+    },
+  ]);
+
+  // A run the registry never heard of leaves nothing behind.
+  recorder.promptShortCircuited("run-unknown", { id: "x", type: "approval_required", payload: { summary: "x" } });
+  assert.equal((await pending(["chat-a"]))[0]?.count, 2);
+});
+
+test("summaries drop control and bidirectional formatting characters", async () => {
+  const { registry, pending } = harness({ chats: ["chat-a"] });
+  registry.begin({ runId: "run-a", chatId: "chat-a", origin: "renderer" });
+  registry.publish("run-a", "chat:approval", approval("approval-1", "rm \u202Etxt.exe\u202C\u0007 -f\u200B now"));
+  assert.equal((await pending(["chat-a"]))[0]?.summary, "rm txt.exe -f now");
+});
+
 test("unknown chats are left out and malformed requests are refused", async () => {
   const { registry, pending, invoke } = harness({ chats: ["chat-a"] });
   registry.begin({ runId: "run-x", chatId: "chat-unlisted", origin: "renderer" });
@@ -191,11 +235,14 @@ test("unknown chats are left out and malformed requests are refused", async () =
   await assert.rejects(invoke("chats:dismissDetachedAttention", { id: "chat-a" }), /Invalid chat identifier/);
 });
 
-function memoryWaits(now: () => number) {
+function memoryWaits(now: () => number, reads = { count: 0 }) {
   let database: InterruptedWaitDatabase = emptyInterruptedWaits();
   return createInterruptedWaitStore(
     {
-      load: async () => structuredClone(database),
+      load: async () => {
+        reads.count += 1;
+        return structuredClone(database);
+      },
       update: async (mutation) => {
         const draft = structuredClone(database);
         const result = mutation(draft);
@@ -224,7 +271,8 @@ function operation(chatId: string, startedAt: number, state: DurablePiRuntimeOpe
 
 test("waits saved during a run a quit cut short come back as interrupted, oldest first", async () => {
   const now = T0 + 120_000;
-  const waits = memoryWaits(() => now);
+  const reads = { count: 0 };
+  const waits = memoryWaits(() => now, reads);
   const operations = new Map<string, DurablePiRuntimeOperation[]>([
     ["chat-a", [operation("chat-a", T0, "interrupted")]],
     // A later run settled normally, so its older waits are not offered.
@@ -247,6 +295,7 @@ test("waits saved during a run a quit cut short come back as interrupted, oldest
     chats: ["chat-a", "chat-b", "chat-c"],
     interrupted: (chatIds) => readInterruptedRunWaits(chatIds, { waits, operations: reader }),
   });
+  reads.count = 0;
   assert.deepEqual(await pending(["chat-a", "chat-b", "chat-c"]), [
     {
       chatId: "chat-a",
@@ -258,15 +307,42 @@ test("waits saved during a run a quit cut short come back as interrupted, oldest
     },
   ]);
   assert.equal(initialized, 1);
+  // One read of the wait file however many chats hold waits.
+  assert.equal(reads.count, 1);
 
-  // Unreadable history hides the rows rather than failing the request.
+  // Unreadable history hides the rows rather than failing the request, and says why.
+  const failures: unknown[] = [];
   const broken = harness({
     chats: ["chat-a"],
     interrupted: (chatIds) =>
       readInterruptedRunWaits(chatIds, {
         waits,
         operations: { ...reader, initialize: async () => Promise.reject(new Error("locked")) },
+        onError: (error) => failures.push(error),
       }),
   });
   assert.deepEqual(await broken.pending(["chat-a"]), []);
+  assert.deepEqual(
+    failures.map((error) => (error as Error).message),
+    ["locked"],
+  );
+});
+
+test("a chat working again leaves the Interrupted shelf for Working", async () => {
+  const interrupted: InterruptedRunWaits = {
+    runStartedAt: T0,
+    waits: [{ kind: "approval", waitId: "approval-1", askedAt: T0 + 7_000, summary: "Run npm test" }],
+  };
+  const { clock, registry, pending } = harness({
+    chats: ["chat-a"],
+    interrupted: async () => new Map([["chat-a", interrupted]]),
+  });
+  assert.equal((await pending(["chat-a"]))[0]?.kind, "interrupted");
+
+  // The person sends again; the new run has nothing to answer yet.
+  clock.now = T0 + 90_000;
+  registry.begin({ runId: "run-b", chatId: "chat-a", origin: "renderer" });
+  assert.deepEqual(await pending(["chat-a"]), [
+    { chatId: "chat-a", kind: "working", summary: "", runStartedAt: T0 + 90_000, count: 0 },
+  ]);
 });

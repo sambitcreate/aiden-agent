@@ -114,7 +114,12 @@ import {
   type SidebarPreferences,
   type SidebarProjectSort,
 } from "../lib/sidebar-organization";
-import { readSidebarPreferences, useSidebarView, writeSidebarPreferences } from "../lib/use-sidebar-view";
+import {
+  readSidebarPreferences,
+  useSidebarPreferencesFromOtherWindows,
+  useSidebarView,
+  writeSidebarPreferences,
+} from "../lib/use-sidebar-view";
 import { SidebarOrganizeMenuItems } from "./sidebar-organize-menu";
 import {
   combineSidebarRows,
@@ -556,7 +561,8 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       }),
     [chatSort, combined, projectOrder, projectSort, search, view],
   );
-  const chatViewTitle = view === "attention" ? "Needs attention" : "Recents";
+  // Phase 1b renders the Inbox; until then a stored "inbox" view shows as Needs attention.
+  const chatViewTitle = view === "attention" || view === "inbox" ? "Needs attention" : "Recents";
   const manualReorderEnabled = view === "projects" && projectSort === "manual" && !searching;
   const displayOptions = React.useMemo(
     () => ({
@@ -796,6 +802,28 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // Writes only the fields this window changed, so another window's change to a
   // different field survives. The view writes itself through `useSidebarView`.
   const writtenPreferences = React.useRef<Partial<SidebarPreferences>>(initialPreferences);
+  // Another window's write replaces this window's copies, so a later local
+  // change (a drag, a collapse) merges into it rather than restoring old values.
+  useSidebarPreferencesFromOtherWindows((stored) => {
+    writtenPreferences.current = {
+      chatSort: stored.chatSort,
+      projectSort: stored.projectSort,
+      projectOrder: stored.projectOrder,
+      expandedWorkspaceIds: stored.expandedWorkspaceIds,
+      machineFilter: stored.machineFilter,
+      projectGrouping: stored.projectGrouping,
+    };
+    const sameList = (current: readonly string[], next: readonly string[]) =>
+      current.length === next.length && current.every((value, index) => value === next[index]);
+    setChatSort(stored.chatSort);
+    setProjectSort(stored.projectSort);
+    setProjectOrder((current) => (sameList(current, stored.projectOrder) ? current : stored.projectOrder));
+    setExpandedWorkspaceIds((current) =>
+      sameList([...current], stored.expandedWorkspaceIds) ? current : new Set(stored.expandedWorkspaceIds),
+    );
+    setMachineFilter(stored.machineFilter);
+    setProjectGrouping(stored.projectGrouping);
+  });
   React.useEffect(() => {
     if (!workspaceRegistryReady) return;
     const own: Partial<SidebarPreferences> = {

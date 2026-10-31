@@ -27,10 +27,20 @@ export const CHAT_PENDING_ATTENTION_SUMMARY_MAX = 200;
 /** Ids per request: a host lists at most 2,000 chats. */
 export const CHAT_PENDING_ATTENTION_MAX_IDS = 2_000;
 
-/** One line, at most 200 characters, ending in an ellipsis when cut. */
+/**
+ * One line, at most 200 characters, ending in an ellipsis when cut. Line
+ * breaks become spaces; other control and invisible formatting characters
+ * (bidi overrides, zero-width spaces) are dropped so a tooltip shows the text
+ * as it reads.
+ */
 export function clipPendingAttentionSummary(text: unknown): string {
   if (typeof text !== "string") return "";
-  const characters = Array.from(text.replace(/\s+/gu, " ").trim());
+  const oneLine = text
+    .replace(/\s+/gu, " ")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/ {2,}/gu, " ")
+    .trim();
+  const characters = Array.from(oneLine);
   return characters.length <= CHAT_PENDING_ATTENTION_SUMMARY_MAX
     ? characters.join("")
     : `${characters.slice(0, CHAT_PENDING_ATTENTION_SUMMARY_MAX - 1).join("")}…`;

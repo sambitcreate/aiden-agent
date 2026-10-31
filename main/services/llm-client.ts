@@ -112,6 +112,7 @@ import {
   recordRunSettled,
 } from "./host-runs-main.js";
 import { pendingAttentionRecorder } from "./chat-pending-attention-main.js";
+import type { HostRunPendingPrompt } from "./host-run-registry.js";
 import {
   botManagedWorkspace,
   resolveBotRuntimeMcpConnectionIdentities,
@@ -607,6 +608,8 @@ interface ActiveGeneration {
   cancelRequested: boolean;
   cancellationOrigin?: GenerationCancellationOrigin;
   rendererDetached: boolean;
+  /** Nobody attends this run's prompts, so a refused one is not left for the Inbox. */
+  promptsUnattended: boolean;
   computerUse?: ComputerUseController;
   /** Set when a computer_use or fill_form call first reaches the access gate. */
   computerUseActivated?: boolean;
@@ -635,6 +638,7 @@ const initializing = new Map<
     cancelRequested: boolean;
     cancellationOrigin?: GenerationCancellationOrigin;
     rendererDetached: boolean;
+    promptsUnattended: boolean;
     controller: AbortController;
     computerUse?: ComputerUseController;
     formFill?: FormFillService;
@@ -904,6 +908,18 @@ function forgetInterruptedWait(waitId: string): void {
   });
 }
 
+/**
+ * A prompt asked after its window left the chat is refused unpublished. Keep
+ * it for the Inbox's Unavailable row, unless nobody was ever going to attend
+ * the run or Aiden is quitting.
+ */
+function recordShortCircuitedPrompt(streamId: string, prompt: HostRunPendingPrompt & { id: string }): void {
+  if (quitInProgress) return;
+  const runtime = active.get(streamId) ?? initializing.get(streamId);
+  if (!runtime?.rendererDetached || runtime.promptsUnattended) return;
+  pendingAttentionRecorder.promptShortCircuited(streamId, prompt);
+}
+
 const approvals = new ToolApprovalCoordinator(
   (prompt) => {
     if (!sendGeneration(prompt.streamId, "chat:approval", prompt)) {
@@ -930,6 +946,12 @@ const approvals = new ToolApprovalCoordinator(
       decision: outcome === "allowed" ? "allow" : outcome === "denied" ? "deny" : "cancelled",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.approvalId,
+      type: "approval_required",
+      payload: { summary: prompt.summary },
+    }),
 );
 const questionnaires = new AskUserQuestionCoordinator(
   (prompt) => {
@@ -957,6 +979,12 @@ const questionnaires = new AskUserQuestionCoordinator(
       outcome: response.timedOut ? "expired" : response.cancelled ? "cancelled" : "answered",
     });
   },
+  (prompt) =>
+    recordShortCircuitedPrompt(prompt.streamId, {
+      id: prompt.promptId,
+      type: "question_required",
+      payload: { questions: prompt.questions },
+    }),
 );
 // A parent can be waiting for a child that is still constructing its tools.
 // Give the child's own bounded cancellation drain time to report a cleanup
@@ -2349,6 +2377,7 @@ export const llmClient = {
       cancelRequested: false,
       cancellationOrigin: undefined as GenerationCancellationOrigin | undefined,
       rendererDetached: false,
+      promptsUnattended: Boolean(options.unattended),
       controller: new AbortController(),
       computerUse: undefined as ComputerUseController | undefined,
       loadMonitor: undefined as LoadMonitorState | undefined,
@@ -4707,6 +4736,7 @@ export const llmClient = {
       cancelRequested: initialization.cancelRequested,
       cancellationOrigin: initialization.cancellationOrigin,
       rendererDetached: initialization.rendererDetached,
+      promptsUnattended: initialization.promptsUnattended,
       computerUse,
       formFill,
       inputClosed: designWiring?.inputClosed ?? false,

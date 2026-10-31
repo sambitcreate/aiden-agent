@@ -69,6 +69,11 @@ test("sort groups appear only for the views they affect", () => {
     renderMenu({ view: "attention" }).map((group) => [group.label, group.checked]),
     [["View", ["Needs attention"]]],
   );
+  // A stored Inbox view lays out like Needs attention until the Inbox ships.
+  assert.deepEqual(
+    renderMenu({ view: "inbox" }).map((group) => [group.label, group.checked]),
+    [["View", ["Needs attention"]]],
+  );
 });
 
 const machines = {

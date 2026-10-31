@@ -1,4 +1,4 @@
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import { readInterruptedRunWaits } from "../services/chat-pending-attention.js";
 import { detachedPromptLog } from "../services/chat-pending-attention-main.js";
 import { chatStore } from "../services/chat-store.js";
@@ -21,6 +21,10 @@ export function registerChatPendingAttentionIpc(): void {
       return known;
     },
     interruptedWaits: (chatIds) =>
-      readInterruptedRunWaits(chatIds, { waits: interruptedWaits, operations: piRuntimeEffectStore }),
+      readInterruptedRunWaits(chatIds, {
+        waits: interruptedWaits,
+        operations: piRuntimeEffectStore,
+        onError: (error) => logger.warn("chats", "Could not read interrupted waits for the Inbox.", error),
+      }),
   });
 }

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   freezeInboxOrder,
+  heldEarlierMoreCount,
   inboxDisplayOrder,
   inboxState,
   organizeInbox,
@@ -162,6 +163,26 @@ test("Earlier is capped with a Show more count, and hidden rows are counted", ()
   assert.equal(organizeInbox(rows, NOW, { earlierLimit: 5 }).earlierMoreCount, 18);
 });
 
+test("the open chat keeps a slot in a full Earlier without growing it", () => {
+  const rows = Array.from({ length: 25 }, (_, index) => row(`chat-${String(index).padStart(2, "0")}`, {
+    updatedAt: NOW - (index + 1) * MINUTE,
+  }));
+  rows.push(row("open", { isOpen: true, updatedAt: NOW - 30 * DAY }));
+  const organized = organizeInbox(rows, NOW);
+  assert.equal(organized.earlier.length, 20);
+  assert.deepEqual(ids(organized.earlier).slice(-2), ["chat-18", "open"]);
+  assert.equal(organized.earlierMoreCount, 6);
+  assert.deepEqual(ids(organized.earlierOverflow), ["chat-19", "chat-20", "chat-21", "chat-22", "chat-23", "chat-24"]);
+  // Shown plus Show more is every Earlier row, each once.
+  assert.equal(new Set([...organized.earlier, ...organized.earlierOverflow]).size, 26);
+
+  const recentOpen = organizeInbox(rows.map((entry) => entry.key === "local:open"
+    ? row("open", { isOpen: true, updatedAt: NOW })
+    : entry), NOW);
+  assert.equal(ids(recentOpen.earlier)[0], "open");
+  assert.equal(recentOpen.earlierMoreCount, 6);
+});
+
 test("rows from an offline host keep their place but leave the Needs you count", () => {
   const organized = organizeInbox([
     row("local-approval", { rowState: "needs_approval" }),
@@ -246,6 +267,44 @@ test("a freeze places a touched row at its live position", () => {
   });
   assert.deepEqual(shown(top, "updates"), ["c"]);
   assert.deepEqual(shown(top, "earlier"), ["b", "e1", "e2"]);
+});
+
+test("a freeze keeps a full Earlier within its cap and counts the rest into Show more", () => {
+  const LIMIT = 3;
+  const before = organizeInbox(["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE })), NOW, { earlierLimit: LIMIT });
+  const previous = releasedInboxOrder(inboxDisplayOrder(before));
+  const liveRows = [row("new", { updatedAt: NOW - MINUTE }), ...["a", "b", "c", "d"].map((id, index) => row(id, { updatedAt: NOW - (index + 2) * MINUTE }))];
+  const live = organizeInbox(liveRows, NOW, { earlierLimit: LIMIT });
+  const keys = (rows: readonly InboxRow[]) => rows.map((entry) => entry.key);
+  const held = freezeInboxOrder({
+    previous,
+    next: inboxDisplayOrder(live),
+    touched: NOTHING,
+    present: new Set(keys(liveRows)),
+    earlierOverflow: keys(live.earlierOverflow),
+    earlierLimit: LIMIT,
+  });
+  // `c` only fell past the cap: it keeps its slot, not dimmed; `new` waits behind Show more.
+  assert.deepEqual(shown(held, "earlier"), ["local:a", "local:b", "local:c"]);
+  assert.equal(heldEarlierMoreCount(held, { earlier: keys(live.earlier), earlierOverflow: keys(live.earlierOverflow) }), 2);
+
+  // Released, the live order and its own count take over again.
+  const released = releasedInboxOrder(inboxDisplayOrder(live));
+  assert.equal(heldEarlierMoreCount(released, { earlier: keys(live.earlier), earlierOverflow: keys(live.earlierOverflow) }), live.earlierMoreCount);
+});
+
+test("a frozen row moving into Earlier past the cap is not shown as leaving", () => {
+  const previous = releasedInboxOrder(order({ updates: ["u"], earlier: ["a", "b"] }));
+  const held = freezeInboxOrder({
+    previous,
+    next: order({ earlier: ["a", "b"] }),
+    touched: NOTHING,
+    present: new Set(["u", "a", "b"]),
+    earlierOverflow: ["u"],
+    earlierLimit: 2,
+  });
+  assert.deepEqual(shown(held, "updates"), ["u(→earlier)"]);
+  assert.deepEqual(shown(held, "earlier"), ["a", "b"]);
 });
 
 test("the display order follows the organized sections", () => {

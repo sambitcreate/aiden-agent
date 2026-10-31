@@ -113,3 +113,26 @@ test("a storage that refuses writes still switches the view for this session", a
   assert.equal(result.current.view, "attention");
   assert.equal(stub.data.has(KEY), false);
 });
+
+test("a window's own copies of stored fields hear another window's write, and only that", async () => {
+  const { useSidebarPreferencesFromOtherWindows, writeSidebarPreferences } = await loadStore();
+  const heard: { projectOrder: string[]; expandedWorkspaceIds: string[]; chatSort: string }[] = [];
+  const { unmount } = renderHook(() =>
+    useSidebarPreferencesFromOtherWindows(({ projectOrder, expandedWorkspaceIds, chatSort }) =>
+      heard.push({ projectOrder, expandedWorkspaceIds, chatSort })),
+  );
+  // This window's own write raises no storage event here.
+  act(() => writeSidebarPreferences({ projectOrder: ["local:alpha"] }));
+  assert.equal(heard.length, 0);
+
+  otherWindowWrites({ ...stored(), projectOrder: ["studio:p", "local:alpha"], expandedWorkspaceIds: ["alpha"] });
+  assert.deepEqual(heard, [{ projectOrder: ["studio:p", "local:alpha"], expandedWorkspaceIds: ["alpha"], chatSort: "last_activity" }]);
+
+  // Another key's event is not a sidebar write; after unmount nothing is heard.
+  act(() => {
+    window.dispatchEvent(new window.StorageEvent("storage", { key: "aiden-agent.other" }));
+  });
+  unmount();
+  otherWindowWrites({ ...stored(), chatSort: "created" });
+  assert.equal(heard.length, 1);
+});

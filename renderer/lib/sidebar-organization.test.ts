@@ -13,6 +13,7 @@ import {
   parseSidebarPreferences,
   projectOrderKey,
   serializeSidebarPreferences,
+  SIDEBAR_VIEWS,
   sidebarAttention,
   type SidebarChatSummary,
   type SidebarOrganizeInput,
@@ -365,8 +366,11 @@ test("the machine filter and cross-machine grouping tolerate older and malformed
 test("the Inbox view and its shelf state are stored, and a downgrade falls back to workspaces", () => {
   const stored = serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "inbox" });
   assert.equal(parseSidebarPreferences(stored).view, "inbox");
-  // An older build that doesn't know `inbox` reads the legacy organization instead.
-  assert.equal(JSON.parse(stored).organization, "workspace");
+  // An older build that doesn't know `inbox` reads the legacy organization: By workspace.
+  const olderBuildViews = SIDEBAR_VIEWS.filter((view) => view !== "inbox");
+  assert.equal(parseSidebarPreferences(stored, undefined, olderBuildViews).view, "projects");
+  const storedRecent = serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" });
+  assert.equal(parseSidebarPreferences(storedRecent, undefined, olderBuildViews).view, "recent");
   // `attention` is still its own view until the Inbox UI migrates it.
   assert.equal(parseSidebarPreferences(JSON.stringify({ view: "attention" })).view, "attention");
   for (const workingShelfCollapsed of ["true", 1, null, {}]) {

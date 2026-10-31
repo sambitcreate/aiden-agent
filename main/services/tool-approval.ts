@@ -87,7 +87,20 @@ export class ToolApprovalCoordinator {
     private readonly publish: (prompt: ToolApprovalPrompt) => void,
     /** Called once when a published prompt settles, with how it settled. */
     private readonly withdraw?: (approvalId: string, outcome: ToolApprovalOutcome) => void,
+    /**
+     * Called when a prompt is refused unpublished because its stream was
+     * detached first: nobody saw it, and the model is told it is unavailable.
+     */
+    private readonly onShortCircuited?: (prompt: ToolApprovalPrompt) => void,
   ) {}
+
+  private shortCircuited(prompt: ToolApprovalPrompt): void {
+    try {
+      this.onShortCircuited?.(prompt);
+    } catch {
+      // Advisory bookkeeping; the request still settles.
+    }
+  }
 
   /**
    * `approvalId` may be supplied by a caller whose approvals outlive this
@@ -102,11 +115,12 @@ export class ToolApprovalCoordinator {
     if (this.stopped || signal?.aborted) {
       return Promise.resolve("cancelled");
     }
+    const approvalId = descriptor.approvalId ?? `a-${randomUUID()}`;
     const closedOutcome = this.closedStreams.get(descriptor.streamId);
     if (closedOutcome) {
+      if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
       return Promise.resolve(closedOutcome);
     }
-    const approvalId = descriptor.approvalId ?? `a-${randomUUID()}`;
     this.pending.get(approvalId)?.settle("cancelled");
     return new Promise<ToolApprovalOutcome>((resolve) => {
       let settled = false;
@@ -141,6 +155,7 @@ export class ToolApprovalCoordinator {
       }
       const closedOutcome = this.closedStreams.get(descriptor.streamId);
       if (closedOutcome) {
+        if (closedOutcome === "detached") this.shortCircuited({ ...descriptor, approvalId });
         finish(closedOutcome);
         return;
       }
