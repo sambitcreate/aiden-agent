@@ -761,6 +761,9 @@ async function armRendererUnload(
   window: BrowserWindow,
   revision: number,
 ): Promise<boolean> {
+  // The hook and the beforeunload guard both live in the app chunk. A page
+  // without the hook (app chunk not loaded yet, or a failed load) has no guard
+  // to arm, so the unload is approved rather than refused.
   // executeJavaScript cannot be cancelled, so the renderer refuses an arm call
   // that runs after main has given up on it (a second short of the deadline,
   // leaving room for the answer to arrive) and lets any approval expire.
@@ -773,7 +776,7 @@ async function armRendererUnload(
         window,
         `(() => {
         const arm = window.__aidenArmUnloadApproval;
-        return typeof arm === "function" && arm(${revision}, ${armBy}, ${expiresAt}) === true;
+        return typeof arm === "function" ? arm(${revision}, ${armBy}, ${expiresAt}) === true : true;
       })()`,
       )) === true
     );
