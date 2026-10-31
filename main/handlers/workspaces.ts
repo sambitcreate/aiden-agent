@@ -229,6 +229,10 @@ export function registerWorkspaceHandlers(): void {
     workspaceApplicationService.createScratch(),
   );
 
+  ipcMain.handle("workspaces:createNoWorkspace", async () =>
+    workspaceApplicationService.createNoWorkspace(),
+  );
+
   ipcMain.handle("workspaces:update", async (_event, id: unknown, patch: unknown) =>
     workspaceApplicationService.update(asString(id, "id"), patch),
   );

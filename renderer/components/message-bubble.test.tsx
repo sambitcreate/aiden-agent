@@ -631,7 +631,8 @@ test("an in-flight render_artifact call stays at its tool row", () => {
     />,
   );
   assert.doesNotMatch(reasoningMarkup, />Visualizing</u);
-  assert.match(reasoningMarkup, /Earlier reasoning/u);
+  // The earlier reasoning keeps its own disclosure, closed until the reader opens it.
+  assert.match(reasoningMarkup, /data-disclosure-layout="collapsed"/u);
   assert.equal(reasoningMarkup.match(/reasoning-surface/gu)?.length, 1);
   // Once the turn settles the shimmer is gone.
   const settledMarkup = renderToStaticMarkup(

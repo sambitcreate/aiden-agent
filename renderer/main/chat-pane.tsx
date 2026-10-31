@@ -109,7 +109,17 @@ import {
   AskUserQuestionCountdown,
   AskUserQuestionExpiryNotice,
 } from "../components/ask-user-question-expiry-notice";
-import { TodoPanel, todoPanelHasVisibleChrome } from "../components/todo-panel";
+import {
+  ComposerFloatingRow,
+  composerFloatingRowOffsets,
+  TodoPanel,
+  todoPanelHasVisibleChrome,
+} from "../components/todo-panel";
+import { revealSubagentRunInTranscript } from "../components/subagent-chips";
+import {
+  SubagentComposerPill,
+  useSubagentComposerPill,
+} from "../components/subagent-composer-pill";
 import { BtwCard, reduceBtwView, type BtwLiveView } from "../components/btw-card";
 import { ModelPicker } from "../components/model-picker";
 import { RemoteMachinePicker } from "../components/remote-new-chat-pickers";
@@ -146,6 +156,8 @@ import {
   type ApprovalPrompt,
   type GenerationHandle,
 } from "../lib/ipc";
+import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
   installAppendedChatSnapshot,
@@ -186,7 +198,11 @@ import {
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
-import { INTERRUPTED_REPLY_FOLLOW_UP } from "../shared/interrupted-reply";
+import {
+  formatRecoveredAskUserQuestionAnswers,
+  INTERRUPTED_REPLY_FOLLOW_UP,
+  type InterruptedWaitV1,
+} from "../shared/interrupted-reply";
 import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
@@ -248,6 +264,7 @@ import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
+  ASK_USER_QUESTION_VERSION,
   askUserQuestionMsUntilExpiry,
   formatLateAskUserQuestionFollowUp,
   retainExpiredAskUserQuestionForLateAnswer,
@@ -263,6 +280,7 @@ import {
   isAcpHarnessProvider,
   type AcpHarnessBlockedSurface,
 } from "../shared/acp-harness";
+import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -773,6 +791,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const findBar = useChatFind(chatId);
   // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
   // the draft's composer for focus; it may mount a few frames after navigation.
   React.useEffect(() => {
@@ -1045,6 +1064,32 @@ export function ChatPane({ chatId }: { chatId: string }) {
     () => visibleSubagentReferences(messages, environmentPanel.subagentsEnabled),
     [environmentPanel.subagentsEnabled, messages],
   );
+  const subagentPill = useSubagentComposerPill(
+    chatId,
+    environmentPanel.subagents.chatId === chatId ? environmentPanel.subagentViews : null,
+    environmentPanel.subagentsEnabled,
+  );
+  const [subagentTrayOpen, setSubagentTrayOpen] = React.useState(false);
+  const [floatingRowHeight, setFloatingRowHeight] = React.useState(0);
+  const subagentTrayShortcut = useShortcutBinding("subagents.toggleTray");
+  const subagentPillVisible = subagentPill.model !== null;
+  React.useEffect(() => {
+    if (!subagentPillVisible) setSubagentTrayOpen(false);
+  }, [subagentPillVisible]);
+  React.useEffect(() => setSubagentTrayOpen(false), [chatId]);
+  useCommandHandler(
+    "subagents.toggleTray",
+    () => setSubagentTrayOpen((open) => !open),
+    subagentPillVisible,
+  );
+  const transcriptStreamingRef = React.useRef(false);
+  transcriptStreamingRef.current = displayedStreamingText !== null;
+  const showSubagentsInChat = React.useCallback((runIds: readonly string[]) => {
+    // While text streams the transcript pins itself each frame, which would cut a smooth scroll short.
+    const instant =
+      transcriptStreamingRef.current || document.documentElement.dataset.reduceMotion === "true";
+    return runIds.some((runId) => revealSubagentRunInTranscript(runId, { instant }));
+  }, []);
   const imageArtifactRecoveryPending =
     hasUnpersistedResponse || chat.data?.imageArtifactRecoveryPending === true;
   const imageArtifactRecoveryUnavailable = chat.data?.imageArtifactRecoveryUnavailable === true;
@@ -1964,12 +2009,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
+        /** Set when this No workspace draft is saved in a fresh hidden folder. */
+        let separateNoWorkspaceId: string | undefined;
         try {
+          if (firstDraft && !worktreeRequest) {
+            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
+            if (isNoWorkspace(draftWorkspace)) {
+              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
+                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+                draftWorkspace!.id,
+              );
+              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+            }
+          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: firstDraft.chat.workspaceId!,
+                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2086,7 +2143,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // into an unsent composer payload.
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
-        if (worktreeRequest) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        // A No workspace draft that needed its own folder was saved in a fresh one.
+        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2114,6 +2172,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      workspaces,
     ],
   );
 
@@ -2555,11 +2614,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(effectiveWorkspace.id, { permission });
+      let targetId = effectiveWorkspace.id;
+      // A No workspace draft shares its folder with an existing chat until it
+      // is sent. Give it its own folder now so that chat keeps its access.
+      if (getChatDraft(chatId) && isNoWorkspace(effectiveWorkspace)) {
+        const separateId = await noWorkspaceFolderForFirstSend(
+          { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+          effectiveWorkspace.id,
+        );
+        if (separateId) {
+          updateChatDraft(chatId, { workspaceId: separateId });
+          selectWorkspace(separateId);
+          targetId = separateId;
+        }
+      }
+      await workspacesApi.update(targetId, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
-          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+          queryKey: queryKeys.skillCatalog(targetId),
         }),
       ]);
     },
@@ -2572,6 +2645,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
       qc,
+      selectWorkspace,
     ],
   );
 
@@ -2802,6 +2876,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     qc,
     workspaceChangeBusy,
   ]);
+
+  // The workspace menu's No workspace: the draft joins the Chats group. It
+  // gets its own hidden folder when sent (see noWorkspaceFolderForFirstSend).
+  const chooseNoWorkspace = React.useCallback(async () => {
+    let home = noWorkspaceHome(workspaces);
+    if (!home) {
+      home = await workspacesApi.createNoWorkspace();
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    }
+    await moveNewChatToWorkspace(home.id);
+  }, [moveNewChatToWorkspace, qc, workspaces]);
 
   // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
   // picker registers the folder, then this draft (text, attachments and model
@@ -3260,13 +3345,84 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     }
   }, [chatId, handleSend]);
-  const interruptedReply = React.useMemo(
+  const replyInterrupted = transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
+  // What the interrupted reply was waiting on. A question is offered again in
+  // place of Resume; an approval is only named on the Resume card.
+  const interruptedWaitsQuery = useQuery({
+    queryKey: ["chat-interrupted-waits", chatId, messages.length],
+    queryFn: () => chatsApi.interruptedWaits(chatId),
+    enabled: replyInterruptedQuery.data === true,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const interruptedWaits = React.useMemo(
     () =>
-      transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true
-        ? { busy: resumeBusy, onResume: () => void resumeInterruptedReply() }
-        : undefined,
-    [draft, failedReplyId, replyInterruptedQuery.data, resumeBusy, resumeInterruptedReply, transcriptIdle],
+      replyInterrupted ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId)) : [],
+    [dismissedWaitIds, interruptedWaitsQuery.data, replyInterrupted],
   );
+  const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(() => {
+    const wait = interruptedWaits.find((item) => item.kind === "question");
+    return wait?.kind === "question" && !questionnaire
+      ? {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: wait.waitId,
+          streamId: "s-recovered",
+          toolCallId: "recovered",
+          questions: wait.questions,
+        }
+      : undefined;
+  }, [interruptedWaits, questionnaire]);
+  // Like Resume, sending a recovered answer is busy only in its own chat.
+  const recoveredAnswerTokenRef = React.useRef(0);
+  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const recoveredAnswerSending = recoveredAnswerOwners[chatId] !== undefined;
+  const answerRecoveredQuestion = React.useCallback(
+    async (response: AskUserQuestionResponseV1) => {
+      if (!recoveredQuestion || recoveredAnswerSending) return;
+      const waitId = recoveredQuestion.promptId;
+      const token = ++recoveredAnswerTokenRef.current;
+      setRecoveredAnswerOwners((owners) => ({ ...owners, [chatId]: token }));
+      try {
+        // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
+        if (!response.cancelled) {
+          await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
+        }
+        setDismissedWaitIds((ids) => new Set(ids).add(waitId));
+        // Once the host forgets the wait, drop it from the cached reads too, so
+        // the card stays gone when the pane opens this chat again.
+        void chatsApi
+          .dismissInterruptedWait(chatId, waitId)
+          .then(() =>
+            qc.setQueriesData<InterruptedWaitV1[]>({ queryKey: ["chat-interrupted-waits", chatId] }, (waits) =>
+              waits?.filter((wait) => wait.waitId !== waitId),
+            ),
+          )
+          .catch(() => undefined);
+      } catch (answerError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(userFacingErrorMessage(answerError, "Couldn’t send your answers."));
+      } finally {
+        setRecoveredAnswerOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
+      }
+    },
+    [chatId, handleSend, qc, recoveredAnswerSending, recoveredQuestion],
+  );
+  // Held until the saved waits are read, so Resume never shows in front of a question it would orphan.
+  const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;
+  const interruptedReply = React.useMemo(() => {
+    if (!replyInterrupted || !interruptedWaitsRead || recoveredQuestion) return undefined;
+    const approvalSummaries = interruptedWaits.flatMap((wait) => (wait.kind === "approval" ? [wait.summary] : []));
+    return {
+      busy: resumeBusy,
+      onResume: () => void resumeInterruptedReply(),
+      ...(approvalSummaries.length ? { approvalSummaries } : {}),
+    };
+  }, [interruptedWaits, interruptedWaitsRead, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply]);
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -3316,7 +3472,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         },
       }
     : undefined;
-  const todoPanelVisible = todoPanelHasVisibleChrome(todoSnapshot);
+  const floatingChromeVisible = todoPanelHasVisibleChrome(todoSnapshot) || subagentPillVisible;
 
   // A Bot chat redirects to its Bot route above; render nothing while it leaves.
   if (botChatId) return null;
@@ -3346,6 +3502,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3387,6 +3545,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         }
         actions={
           <WorkspaceToolButtons
+            chatId={chatId}
             hasWorkspace={Boolean(effectiveWorkspace)}
             hasFolder={Boolean(effectiveWorkspace?.folderPath)}
             hasFolderAccess={Boolean(
@@ -3434,8 +3593,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
         ]}
         showScrollToBottomButton
         streaming={displayedStreamingText !== null}
-        scrollToBottomButtonOffset={todoPanelVisible ? 44 : 0}
-        scrollContentBottomOffset={todoPanelVisible ? 56 : 0}
+        {...composerFloatingRowOffsets(floatingChromeVisible, floatingRowHeight)}
         footer={
           <ScrollAreaFooterStack>
             <EventPresence
@@ -3468,7 +3626,28 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 />
               ) : null}
             </EventPresence>
-            <TodoPanel snapshot={todoSnapshot} />
+            <ComposerFloatingRow onHeightChange={setFloatingRowHeight}>
+              <TodoPanel snapshot={todoSnapshot} floating={false} />
+              {subagentPill.model ? (
+                <SubagentComposerPill
+                  model={subagentPill.model}
+                  open={subagentTrayOpen}
+                  onOpenChange={setSubagentTrayOpen}
+                  stopPendingRunIds={environmentPanel.subagentStopPendingRunIds}
+                  stopErrors={environmentPanel.subagentStopErrorsByRunId}
+                  onOpenRun={environmentPanel.openSubagent}
+                  onOpenPanel={(returnTarget) => environmentPanel.showTools("subagents", returnTarget)}
+                  onStop={environmentPanel.stopSubagent}
+                  onShowInChat={showSubagentsInChat}
+                  shortcut={subagentTrayShortcut}
+                  onDismiss={() => {
+                    setSubagentTrayOpen(false);
+                    subagentPill.dismiss();
+                  }}
+                  returnFocus={() => composerRef.current}
+                />
+              ) : null}
+            </ComposerFloatingRow>
             {spending.status ? (
               <SpendingLimitNotice
                 status={spending.status}
@@ -3517,6 +3696,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 expiresAt={questionnaire.expiresAt}
               />
             ) : null}
+            {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
             {missingWorkspaceFolder && !questionnaire ? (
               <WorkspaceFolderMissingNotice
                 workspaceName={missingWorkspaceFolder.name}
@@ -3538,6 +3718,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 prompt={questionnaire}
                 submitting={questionnaireSubmitting}
                 onRespond={answerQuestionnaire}
+              />
+            ) : recoveredQuestion ? (
+              <AskUserQuestionComposer
+                key={recoveredQuestion.promptId}
+                prompt={recoveredQuestion}
+                submitting={recoveredAnswerSending}
+                onRespond={answerRecoveredQuestion}
               />
             ) : (
               <Composer
@@ -3640,6 +3827,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onChooseNoWorkspace={chooseNoWorkspace}
                 onOpenFolderAsWorkspace={openFolderForDraft}
                 workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}

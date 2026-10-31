@@ -230,8 +230,9 @@ test("a new answer to a prompt that already has one starts with its own sections
 
   // The saved answer is replaced by a fresh one streaming in its place.
   view.rerender(transcript({ messages: [prompt], streamingText: "", reasoning: "Fresh thinking." }));
-  const live = screen.getByText("Fresh thinking.").closest("section");
-  assert.equal(live?.dataset.disclosureLayout, "preview", "the new reasoning opens as a live preview");
+  const live = view.container.querySelector<HTMLButtonElement>("section > button[aria-expanded]");
+  assert.equal(live?.getAttribute("aria-expanded"), "false", "the new reasoning starts closed");
+  assert.equal(live?.closest("section")?.dataset.disclosureLayout, "collapsed");
 });
 
 function previews(container: HTMLElement): number {
@@ -337,6 +338,34 @@ test("tool-closed text keeps its release slot when follow-up prose starts", asyn
   // The end of the turn shows every row in full.
   view.rerender(transcript({ messages: [prompt], streamingText: both, timeline: closed, streamComplete: true }));
   assert.ok(view.container.textContent?.includes("The follow-up"));
+});
+
+test("a streaming reply keeps one hidden action row after its last row, so new paragraphs never move it", () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const first = "Checked the config.\n\n";
+  const timeline: GenerationTimeline = {
+    version: 3,
+    generationId: "generation-1",
+    status: "running",
+    startedAt: 1,
+    steps: [toolStep(first.length)],
+  };
+  const view = render(transcript({ messages: [prompt], streamingText: first, timeline }));
+  const copy = replyCopyButton();
+  assert.ok(copy.closest('[aria-hidden="true"]'), "laid out but hidden while streaming");
+  const tool = view.container.querySelector(".activity-feed");
+  assert.ok(tool, "the tool step shows");
+  assert.ok(
+    tool.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    "the row sits after the tool step, not under the paragraph above it",
+  );
+
+  const both = `${first}The follow-up paragraph.\n\n`;
+  view.rerender(transcript({ messages: [prompt], streamingText: both, timeline }));
+  const followUp = screen.getByText("The follow-up paragraph.");
+  assert.equal(replyCopyButton(), copy, "the same row stays put as a new paragraph starts");
+  assert.ok(followUp.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.equal(copy.closest("p, .streaming-reveal"), null, "it belongs to the turn, not a paragraph");
 });
 
 test("max-wait timeout releases pending heading and prose tails while turn still runs", async () => {
@@ -473,6 +502,41 @@ test("subagent chips show on live and saved replies only while subagents are ena
 
   view.rerender(transcript(frame(false)));
   assert.deepEqual(chipRunIds(view.container), [], "a disabled capability hides every chip");
+});
+
+test("keyboard focus on a subagent group's header follows the group when it moves under its tool row", async () => {
+  document.documentElement.dataset.reduceMotion = "true";
+  const text = "Splitting the work.\n\n";
+  const live = { ...liveRun("focus-run"), generationId: "generation-focus" };
+  const timeline = (steps: AgentToolStep[]): GenerationTimeline => ({
+    version: 3,
+    generationId: "generation-focus",
+    status: "running",
+    startedAt: 1,
+    steps,
+  });
+  const frame = (steps: AgentToolStep[]): Frame => ({
+    messages: [prompt],
+    streamingText: text,
+    timeline: timeline(steps),
+    liveSubagents: [live],
+    subagentsEnabled: true,
+  });
+  const view = render(transcript(frame([])));
+  const before = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  await act(async () => {
+    before.focus();
+  });
+
+  // The subagent tool call's row arrives, and the group moves beneath it.
+  await act(async () => {
+    view.rerender(
+      transcript(frame([{ ...toolStep(text.length), toolName: "subagent", label: "Subagent" }])),
+    );
+  });
+  const after = screen.getByRole("button", { name: /^Kicked off 1 subagent\./u });
+  assert.equal(after === before, false, "the group remounted in its new place");
+  assert.equal(document.activeElement === after, true, "focus moved with it instead of dropping to the page");
 });
 
 test("a reply steered mid-run stays the same reply through guidance, handoff and settlement", () => {

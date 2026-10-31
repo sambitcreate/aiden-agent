@@ -67,11 +67,13 @@ export const MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL =
 
 /**
  * Which workspaces the check covers. A No Access workspace never touches its
- * folder. An Aiden-managed worktree is checked at its checkout's root.
+ * folder, and a No workspace chat's hidden folder is made again when the chat
+ * next runs. An Aiden-managed worktree is checked at its checkout's root.
  */
 export function workspaceFolderCheckApplies(workspace: {
   folderPath?: string;
   permission?: string;
+  noWorkspace?: true;
 }): boolean {
-  return Boolean(workspace.folderPath) && workspace.permission !== "none";
+  return Boolean(workspace.folderPath) && !workspace.noWorkspace && workspace.permission !== "none";
 }

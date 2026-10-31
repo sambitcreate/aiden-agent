@@ -93,6 +93,15 @@ test("does not steal commands from editable controls except explicit commands", 
     resolveCommandForKeyEvent(event("b", "KeyB"), bindings, { ...base, editable: true }),
     "sidebar.toggle",
   );
+  // Switching chats works from the message box, where focus usually is.
+  assert.equal(
+    resolveCommandForKeyEvent(event("3", "Digit3"), bindings, { ...base, editable: true }),
+    "chat.jump.3",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("}", "BracketRight", true), bindings, { ...base, editable: true }),
+    "chat.next",
+  );
   assert.equal(
     resolveCommandForKeyEvent(event("s", "KeyS"), bindings, {
       ...base,
@@ -203,4 +212,17 @@ test("studio commands never reserve a shortcut", () => {
   const bindings = effectiveBindings(undefined);
   assert.equal(bindings["design.open"], null);
   assert.equal(bindings["images.open"], null);
+});
+
+test("⌘/ opens the keyboard list from the message box too", () => {
+  const bindings = effectiveBindings(undefined);
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, editable: true }, "darwin"),
+    "shortcuts.show",
+  );
+  assert.equal(
+    resolveCommandForKeyEvent(event("/", "Slash"), bindings, { ...base, terminal: true }, "darwin"),
+    null,
+    "the terminal keeps it",
+  );
 });

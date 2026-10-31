@@ -5,6 +5,7 @@ import {
   ASK_USER_QUESTION_VERSION,
   ASK_USER_RECAP_MAX_CUSTOM_LENGTH,
   askUserQuestionMsUntilExpiry,
+  formatAskUserQuestionAnswers,
   buildAskUserQuestionRecap,
   parseAskUserQuestionRecap,
   formatLateAskUserQuestionFollowUp,
@@ -12,6 +13,8 @@ import {
   parseAskUserQuestionPrompt,
   parseAskUserQuestionResponse,
   parseAskUserQuestions,
+  parseRecommendedOptionLabel,
+  recommendedAskUserAnswers,
   retainExpiredAskUserQuestionForLateAnswer,
   summarizeAskUserQuestionResponse,
 } from "./ask-user-question.js";
@@ -259,4 +262,45 @@ test("stored recaps are rejected unless every item is well formed", () => {
   ]) {
     assert.equal(parseAskUserQuestionRecap(invalid), undefined, JSON.stringify(invalid));
   }
+});
+
+test("an option the agent marks as recommended starts as the answer", () => {
+  assert.deepEqual(parseRecommendedOptionLabel("Postgres (Recommended)"), { text: "Postgres", recommended: true });
+  assert.deepEqual(parseRecommendedOptionLabel("Postgres(recommended)"), { text: "Postgres", recommended: true });
+  // Only a trailing marker counts, and a bare marker is just a label.
+  assert.deepEqual(parseRecommendedOptionLabel("(Recommended) Postgres"), { text: "(Recommended) Postgres", recommended: false });
+  assert.deepEqual(parseRecommendedOptionLabel("(Recommended)"), { text: "(Recommended)", recommended: false });
+
+  const marked = [
+    { question: "Which database?", header: "Database", multiSelect: false, options: [{ label: "SQLite", description: "s" }, { label: "Postgres (Recommended)", description: "p" }, { label: "MySQL (recommended)", description: "m" }] },
+    { question: "Which sizes?", header: "Sizes", multiSelect: true, options: [{ label: "S (Recommended)", description: "s" }, { label: "M", description: "m" }, { label: "L (Recommended)", description: "l" }] },
+    { question: "Ship it?", header: "Ship", multiSelect: false, options: [{ label: "Now", description: "n" }, { label: "Later", description: "l" }] },
+  ];
+  const answers = recommendedAskUserAnswers(marked);
+  // A single choice takes the first marked option, a multi-select every one, and an unmarked question none.
+  assert.deepEqual([...answers.values()], [
+    { questionIndex: 0, kind: "option", answer: "Postgres (Recommended)" },
+    { questionIndex: 1, kind: "multi", selected: ["S (Recommended)", "L (Recommended)"] },
+  ]);
+  // The preselected answers are valid wire answers for the prompt they came from.
+  const prompt = parseAskUserQuestionPrompt({ version: ASK_USER_QUESTION_VERSION, promptId: "q-1", streamId: "s-1", toolCallId: "tool-1", questions: marked });
+  assert.ok(prompt);
+  const response = parseAskUserQuestionResponse({ version: ASK_USER_QUESTION_VERSION, promptId: "q-1", cancelled: false, answers: [...answers.values()] }, prompt);
+  assert.deepEqual(response?.answers, [...answers.values()]);
+
+  // Two options that read the same once the marker is dropped, or a marked
+  // reserved word, are not a valid questionnaire.
+  const twin = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Now (Recommended)", description: "r" }] };
+  assert.equal(parseAskUserQuestions([twin]), undefined);
+  const reserved = { ...marked[2]!, options: [{ label: "Now", description: "n" }, { label: "Other (Recommended)", description: "o" }] };
+  assert.equal(parseAskUserQuestions([reserved]), undefined);
+
+  // What the person sees afterwards drops the marker; the model keeps the label it wrote.
+  assert.match(formatLateAskUserQuestionFollowUp(marked, response!.answers) ?? "", /Answer: Postgres\n/u);
+  assert.match(formatAskUserQuestionAnswers(marked, response!.answers), /Answer: Postgres \(Recommended\)\n/u);
+  assert.equal(summarizeAskUserQuestionResponse(marked, response!), "Database: Postgres\nSizes: S, L\nShip: Skipped");
+  assert.deepEqual(
+    buildAskUserQuestionRecap(marked, response!)?.items.map((item) => item.answers),
+    [["Postgres"], ["S", "L"], []],
+  );
 });

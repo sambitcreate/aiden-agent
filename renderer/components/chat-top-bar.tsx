@@ -11,8 +11,10 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
+  MessageCircle,
   Pencil,
   SquareTerminal,
+  Users,
 } from "lucide-react";
 import * as React from "react";
 import { workspacesApi } from "../lib/ipc";
@@ -21,6 +23,7 @@ import type { GitInfo, Workspace } from "../lib/types";
 import { cn } from "../lib/ui-utils";
 import { githubRepositoryUrl } from "../lib/workspace-chip";
 import type { EnvironmentPanelTab } from "../lib/environment-panel-state";
+import { isSubagentRunViewStateActive, type SubagentRunView } from "../lib/subagent-view-state";
 import { useEnvironmentPanel } from "./environment-panel";
 import { useLinkOpener } from "../lib/link-opener";
 import {
@@ -195,7 +198,7 @@ export function WorkspaceChip({
     menuOpen && isRepo && git?.hasRemote === true,
   );
   const githubUrl = identity.data ? githubRepositoryUrl(identity.data.canonicalKey) : null;
-  const Icon = isRepo ? FolderGit2 : Folder;
+  const Icon = isRepo ? FolderGit2 : workspace.noWorkspace ? MessageCircle : Folder;
 
   if (!folderPath) {
     return (
@@ -341,6 +344,100 @@ function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean
 }
 
 /**
+ * Shown only while this chat has subagents at work: how many, in the soft
+ * status fill the sidebar uses for a working chat, and the way to the
+ * Subagents tool. Waiting on the person turns it to the warning fill.
+ */
+function SubagentsRunningButton({
+  runs,
+  pressed,
+  disabled,
+  onActivate,
+}: {
+  runs: readonly SubagentRunView[];
+  pressed: boolean;
+  disabled: boolean;
+  onActivate: () => void;
+}) {
+  const active = runs.filter((run) => isSubagentRunViewStateActive(run.state));
+  if (active.length === 0) return null;
+  return (
+    <SubagentsRunningBadge
+      count={active.length}
+      attention={active.filter((run) => run.state === "needs_attention").length}
+      pressed={pressed}
+      disabled={disabled}
+      onActivate={onActivate}
+    />
+  );
+}
+
+function SubagentsRunningBadge({
+  count,
+  attention,
+  pressed,
+  disabled,
+  onActivate,
+}: {
+  count: number;
+  attention: number;
+  pressed: boolean;
+  disabled: boolean;
+  onActivate: () => void;
+}) {
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  // The badge leaves when the work it was opened to watch ends, often while it
+  // still has keyboard focus. Hand focus to the overflow menu beside it (or,
+  // without a usable menu, another toolbar button) rather than dropping it on
+  // the document, unless the whole toolbar is going too.
+  React.useLayoutEffect(() => {
+    const button = buttonRef.current;
+    return () => {
+      if (!button || document.activeElement !== button) return;
+      const toolbar = button.closest<HTMLElement>("[data-workspace-tool-buttons]");
+      queueMicrotask(() => {
+        if (!toolbar?.isConnected) return;
+        if (document.activeElement && document.activeElement !== document.body) return;
+        (
+          toolbar.querySelector<HTMLElement>("[data-workspace-tools-menu]:not(:disabled)") ??
+          toolbar.querySelector<HTMLElement>("button:not(:disabled)")
+        )?.focus();
+      });
+    };
+  }, []);
+  const label = `${count} subagent${count === 1 ? "" : "s"} running${
+    attention > 0 ? `, ${attention} waiting on you` : ""
+  }`;
+  return (
+    <Button
+      ref={buttonRef}
+      size="small"
+      variant="bar"
+      data-subagents-running={attention > 0 ? "attention" : "active"}
+      aria-label={`${pressed ? "Hide" : "Show"} Subagents. ${label}.`}
+      aria-pressed={pressed}
+      aria-controls="environment-panel"
+      title={label}
+      disabled={disabled}
+      onClick={onActivate}
+      className="px-1.5"
+    >
+      <span
+        className={cn(
+          "inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-mini font-medium tabular-nums",
+          attention > 0
+            ? "bg-status-warning-surface text-status-warning"
+            : "bg-status-accent-surface text-status-accent",
+        )}
+      >
+        <Users aria-hidden="true" className="size-3.5" />
+        {count}
+      </span>
+    </Button>
+  );
+}
+
+/**
  * One quiet button per workspace tool. Each opens the Environment panel on its
  * tab and shows as pressed while that tab is visible; pressing it again hides
  * the panel. Tools a workspace cannot use are left out rather than disabled:
@@ -349,6 +446,7 @@ function useToolbarCompact(anchor: React.RefObject<HTMLElement | null>): boolean
  * overflow menu; both stay visible when the tools fold into that menu.
  */
 export function WorkspaceToolButtons({
+  chatId,
   hasWorkspace,
   hasFolder,
   hasFolderAccess,
@@ -358,6 +456,8 @@ export function WorkspaceToolButtons({
   trailing,
   end,
 }: {
+  /** The chat this header belongs to; the running-subagents badge counts only its runs. */
+  chatId: string;
   hasWorkspace: boolean;
   hasFolder: boolean;
   hasFolderAccess: boolean;
@@ -445,6 +545,15 @@ export function WorkspaceToolButtons({
           {trailing}
         </>
       ) : null}
+      {available("subagents") ? (
+        <SubagentsRunningButton
+          // The panel rebuilds its views for a new chat after the switch renders.
+          runs={panel.subagents.chatId === chatId ? panel.subagentViews : []}
+          pressed={showing("subagents")}
+          disabled={panel.gitOperationBusy}
+          onActivate={() => activate("subagents")}
+        />
+      ) : null}
       {menuTools.length > 0 ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -454,6 +563,7 @@ export function WorkspaceToolButtons({
               variant="bar"
               aria-label="More workspace tools"
               title="More workspace tools"
+              data-workspace-tools-menu
               disabled={panel.gitOperationBusy}
             >
               <Ellipsis />

@@ -46,7 +46,7 @@ export function displayWorkspaceFolder(folderPath: string, home = os.homedir()):
   return folderPath;
 }
 
-type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree">;
+type CheckedWorkspace = Pick<Workspace, "name" | "folderPath" | "permission" | "managedWorktree" | "noWorkspace">;
 
 /** The folder whose absence counts: an Aiden-managed worktree's checkout root, else the workspace folder. */
 export function checkedWorkspaceFolder(workspace: Pick<Workspace, "folderPath" | "managedWorktree">): string | undefined {
@@ -68,6 +68,19 @@ export class WorkspaceFolderMissingError extends Error {
     super(workspaceFolderMissingText(workspace));
     this.name = "WorkspaceFolderMissingError";
   }
+}
+
+/**
+ * A No workspace chat's folder is Aiden's own, so a missing one (cleared app
+ * data, a manual delete) is made again empty instead of stopping the chat.
+ */
+export async function restoreNoWorkspaceFolder(
+  workspace: Pick<Workspace, "folderPath" | "noWorkspace">,
+  mkdir: (target: string, options: { recursive: true; mode: number }) => Promise<unknown> = fs.mkdir,
+): Promise<void> {
+  if (!workspace.noWorkspace || !workspace.folderPath) return;
+  if ((await workspaceFolderPresence(workspace.folderPath)) !== "missing") return;
+  await mkdir(workspace.folderPath, { recursive: true, mode: 0o700 });
 }
 
 /** Whether this workspace's folder is checked and gone. */

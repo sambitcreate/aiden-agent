@@ -704,6 +704,31 @@ final class AidenChatTests: XCTestCase {
         XCTAssertFalse(AidenAgentActivityPresentation.showsLiveToolRows([], timeline: nil, reasoningVisible: true))
     }
 
+    func testLiveReasoningLineIsTheLatestFinishedSentenceNeverTheUnfinishedTail() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line(""), "")
+        XCTAssertEqual(line("Still forming the first thought"), "")
+        XCTAssertEqual(line("Read the diff. Then group the"), "Read the diff.")
+        XCTAssertEqual(line("Read the diff. Group the hunks by story! Check the style? "), "Check the style?")
+        // A sentence is finished only once whitespace follows its punctuation.
+        XCTAssertEqual(line("Read the diff. Group by story."), "Read the diff.")
+        XCTAssertEqual(line(#"He said "stage it first." Then "#), #"He said "stage it first.""#)
+        // Decimals and versions do not end a sentence.
+        XCTAssertEqual(line("Pin v4.1 before 2.5 ships. And"), "Pin v4.1 before 2.5 ships.")
+    }
+
+    func testLiveReasoningLineCountsFinishedLinesAndDropsMarkdownMarkers() {
+        let line = AidenAgentActivityPresentation.latestReasoningLine
+        XCTAssertEqual(line("**Mapping hunk boundaries**\n\nREADME has"), "Mapping hunk boundaries")
+        XCTAssertEqual(line("## Plan the split\nStart"), "Plan the split")
+        XCTAssertEqual(line("- Stage `hunk 1` with the fix\n"), "Stage hunk 1 with the fix")
+        XCTAssertEqual(line("1. Check   the build\n\n\n"), "Check the build")
+        // Blank lines and bare markers never become the line.
+        XCTAssertEqual(line("Read the diff.\n\n**\n\n"), "Read the diff.")
+        // A Windows line break ends a line like a bare newline does.
+        XCTAssertEqual(line("Plan the split\r\nStart"), "Plan the split")
+    }
+
     private func extractStepJSON(
         id: Int,
         toolName: String = "web_fetch",
@@ -1563,6 +1588,40 @@ final class AidenChatTests: XCTestCase {
         XCTAssertEqual(Array(AidenChatProgressLifecycleURLProtocol.postPaths.dropFirst(writesBeforeStop.count)), [
             "/api/aiden/v1/streams/stream-control/cancel"
         ])
+    }
+
+    @MainActor
+    func testAppStartupMigratesExistingDraftStorageWithoutOpeningAConversation() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "launch-draft-migration-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let drafts = AidenChatDraftStore(root: root)
+        let session = await drafts.beginSession(instanceId: "mac", chatId: "chat")
+        _ = try await drafts.save("Draft from an earlier app version", session: session)
+        var existingRoot = root
+        var legacyValues = URLResourceValues()
+        legacyValues.isExcludedFromBackup = false
+        try existingRoot.setResourceValues(legacyValues)
+        let coordinator = AidenRemoteCoordinator(
+            installationStore: AidenInstallationStore(keychain: AidenChatProgressMemoryKeychain()),
+            chatDraftStore: drafts,
+            clientFactory: { _, _ in XCTFail("Unpaired startup migration must be offline"); throw AidenRemoteClientError.installationChanged }
+        )
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, false)
+        await coordinator.start()
+        XCTAssertEqual(coordinator.connectionState, .needsPairing)
+        XCTAssertEqual(try URL(filePath: root.path).resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        let retained = await drafts.load(session: session)
+        XCTAssertEqual(retained, "Draft from an earlier app version")
+    }
+
+    @MainActor
+    func testDictationLaunchCannotRecordAfterPairingRemoval() async throws {
+        var coordinator: AidenRemoteCoordinator!
+        let model = try await makeProgressLifecycleModel(mode: .denied, onCoordinator: { coordinator = $0 })
+        await coordinator.removeInstallation("instance-progress-lifecycle")
+        var recordings = 0
+        await model.startVoiceForLaunch(if: true) { recordings += 1 }
+        XCTAssertEqual(recordings, 0)
     }
 
     @MainActor
@@ -12307,6 +12366,33 @@ extension AidenChatTests {
         XCTAssertEqual(draft.answers(for: questions), [
             .custom(questionIndex: 0, answer: "Make it 2 mm"),
             .multi(questionIndex: 1, selected: ["0.5 mm", "1.0 mm"]),
+        ])
+    }
+
+    func testRecommendedOptionsStartSelectedAndShowWithoutTheMarker() {
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres (Recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("Postgres(recommended)") == ("Postgres", true))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended)") == ("(Recommended)", false))
+        XCTAssertTrue(AidenQuestionAnswerDraft.recommendedLabel("(Recommended) Postgres") == ("(Recommended) Postgres", false))
+
+        let questions = [
+            questionFixture(options: [
+                AidenRemoteQuestionOption(label: "0.5 mm", description: "Standard."),
+                AidenRemoteQuestionOption(label: "1.0 mm (Recommended)", description: "Heavy."),
+                AidenRemoteQuestionOption(label: "2.0 mm (Recommended)", description: "Heavier."),
+            ]),
+            questionFixture(multiSelect: true, options: [
+                AidenRemoteQuestionOption(label: "Top (Recommended)", description: "Top edge."),
+                AidenRemoteQuestionOption(label: "Side", description: "Side edge."),
+                AidenRemoteQuestionOption(label: "Bottom (Recommended)", description: "Bottom edge."),
+            ]),
+            questionFixture(),
+        ]
+        let draft = AidenQuestionComposerDraft(questions: questions)
+        // Accepting them sends the full labels, which are the options' identities.
+        XCTAssertEqual(draft.answers(for: questions), [
+            .option(questionIndex: 0, answer: "1.0 mm (Recommended)"),
+            .multi(questionIndex: 1, selected: ["Top (Recommended)", "Bottom (Recommended)"]),
         ])
     }
 

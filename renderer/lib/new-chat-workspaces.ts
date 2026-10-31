@@ -11,7 +11,8 @@ export interface NewChatWorkspaceChoice {
 /**
  * Workspaces the New chat in… palette offers, most recent activity first.
  * Managed worktrees are left out: they belong to their repository's branch
- * menu, not to the list of places a chat can start.
+ * menu, not to the list of places a chat can start. So are the hidden folders
+ * behind No workspace chats, which the menus offer as one No workspace row.
  */
 export function newChatWorkspaceChoices(
   workspaces: readonly Workspace[],
@@ -27,7 +28,7 @@ export function newChatWorkspaceChoices(
     );
   }
   return workspaces
-    .filter((workspace) => !workspace.managedWorktree)
+    .filter((workspace) => !workspace.managedWorktree && !workspace.noWorkspace)
     .map((workspace) => ({
       workspace,
       current: workspace.id === currentWorkspaceId,
