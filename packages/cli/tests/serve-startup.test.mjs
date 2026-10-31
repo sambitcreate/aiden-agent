@@ -271,7 +271,7 @@ test("startup pairing on a Tailscale-only server pairs over Tailscale and report
   try {
     const started = Date.now();
     await api.showStartupPairing(daemon.dir, undefined, new AbortController().signal, out, err);
-    assert.deepEqual(daemon.asked, ["serve status", "remote pair tailscale", "remote pair-status"]);
+    assert.deepEqual(daemon.asked, ["serve status", "remote pair tailscale", "remote status", "remote pair-status"]);
     assert.match(out.text, /Manual code: ABCD-1234/);
     assert.match(err.text, /Pairing failed\. Run `aiden remote pair tailscale` to try again/);
     assert.doesNotMatch(out.text, /expired/);

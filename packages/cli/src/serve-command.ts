@@ -82,7 +82,7 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * With no transport named, a server that serves only over Tailscale pairs
  * over Tailscale and every other server pairs over LAN.
  */
-export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr): Promise<void> {
+export async function showStartupPairing(agentDir: string, requested: PairTransport | undefined, signal: AbortSignal, out: NodeJS.WritableStream = process.stdout, err: NodeJS.WritableStream = process.stderr, waitForAddress?: typeof import("./reachability.ts").waitForTailscaleAddress): Promise<void> {
   const mode = requested ? undefined : (await daemonRemoteSummary(agentDir)).connectionMode;
   // An unanswered status leaves the mode unknown; LAN is then a guess, and a failure names both commands.
   const guessed = !requested && mode === undefined;
@@ -99,6 +99,11 @@ export async function showStartupPairing(agentDir: string, requested: PairTransp
     return;
   }
   if (signal.aborted) return;
+  if (transport === "tailscale") {
+    const { checkTailscaleAddress, waitForTailscaleAddress } = await import("./reachability.ts");
+    await checkTailscaleAddress(agentDir, signal, out, err, waitForAddress ?? waitForTailscaleAddress);
+    if (signal.aborted) return;
+  }
   const { renderPairingTerminal } = await import("./pairing-display.ts");
   const rendered = await renderPairingTerminal(pairing).catch(() => undefined);
   if (!rendered || signal.aborted) return;

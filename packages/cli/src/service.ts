@@ -231,25 +231,51 @@ export function parseInstallFlags(args: readonly string[]): { network?: RemoteNe
   return { ...(network ? { network } : {}), pair };
 }
 
-async function askNetwork(): Promise<RemoteNetwork> {
+const CHOICE: Record<RemoteNetwork, string> = { local: "1", tailscale: "2", both: "3" };
+
+async function askNetwork(question: { text: string; recommended: RemoteNetwork }): Promise<RemoteNetwork> {
   const { createInterface } = await import("node:readline/promises");
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    process.stdout.write([
-      "Who should be able to reach this server?",
-      "  1) Local network only: phones on the same Wi-Fi or LAN",
-      "  2) Tailscale only: your devices from anywhere (needs Tailscale on this server)",
-      "  3) Both",
-      "",
-    ].join("\n"));
+    process.stdout.write(question.text);
     for (;;) {
-      const answer = (await prompt.question("Choose 1, 2 or 3 [1]: ")).trim();
-      if (answer === "" || answer === "1") return "local";
+      const answer = (await prompt.question(`Choose 1, 2 or 3 [${CHOICE[question.recommended]}]: `)).trim() || CHOICE[question.recommended];
+      if (answer === "1") return "local";
       if (answer === "2") return "tailscale";
       if (answer === "3") return "both";
     }
   } finally {
     prompt.close();
+  }
+}
+
+/** Ask what is ready on this machine, then the person (or, without a terminal, use Tailscale only when it is ready). */
+async function chooseNetwork(host: ServiceHost, interactive: boolean): Promise<RemoteNetwork> {
+  const { looksLikeCloudServer, networkQuestion, readTailscaleFacts, tailscaleReady } = await import("./reachability.ts");
+  const { createSystemTailscaleCommandRunner } = await import("../../../main/services/aiden-remote-tailscale.js");
+  const [facts, cloud] = await Promise.all([
+    createSystemTailscaleCommandRunner().then((runner) => readTailscaleFacts(runner, { platform: host.platform, uid: host.uid, user: host.user })),
+    looksLikeCloudServer(),
+  ]);
+  const question = networkQuestion(facts, cloud, host.platform);
+  if (interactive) return askNetwork(question);
+  return tailscaleReady(facts) ? question.recommended : "local";
+}
+
+/**
+ * Before the service goes away, take Aiden's Tailscale Serve route down with
+ * it, so the tailnet name does not keep pointing at a server that no longer
+ * runs. Returns the line to print, if any.
+ */
+export async function releaseTailscaleRoute(agentDir: string): Promise<string | undefined> {
+  const { remoteServerStatus } = await import("./reachability.ts");
+  if (!(await remoteServerStatus(agentDir))?.tailscaleConnected) return undefined;
+  const { remoteDaemonCommand } = await import("./daemon-control.ts");
+  try {
+    await remoteDaemonCommand(agentDir, "remote", ["tailscale-disconnect"]);
+    return "Removed Aiden's Tailscale route. `aiden remote network tailscale` (or `both`) adds it back later.";
+  } catch (error) {
+    return `Could not remove Aiden's Tailscale route (${error instanceof Error ? error.message : String(error)}). \`tailscale serve status\` shows it.`;
   }
 }
 
@@ -275,6 +301,10 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
     return;
   }
   if (action === "uninstall" && rest.length === 0) {
+    if (serviceStatus(host).installed) {
+      const released = await releaseTailscaleRoute(agentDir);
+      if (released) out(released);
+    }
     out(uninstallService(host) ? "Removed the Aiden service. The server no longer starts on its own." : "The Aiden service was not installed.");
     return;
   }
@@ -283,7 +313,7 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   manager(host);
   const entry = realpathSync(process.env.AIDEN_CLI_ENTRY || process.argv[1] || "");
   if (!entry.endsWith(".js")) throw new Error("Build the CLI first (`npm run cli:build`); the service runs the built dist/app/cli.js.");
-  const network = flags.network ?? (process.stdin.isTTY && process.stdout.isTTY ? await askNetwork() : "local");
+  const network = flags.network ?? await chooseNetwork(host, !!(process.stdin.isTTY && process.stdout.isTTY));
 
   // The service takes over the server's lease, so stop a server started by hand.
   const { daemonStatus, stopDaemon } = await import("./serve-lifecycle.ts");
