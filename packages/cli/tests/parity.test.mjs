@@ -636,6 +636,15 @@ test("Remote HTTPS serves private workspaces, persists turns once, replays SSE a
   const chat = await request(`/chats/${created.data.id}`); assert.equal(chat.data.messages.at(-1).text, "Remote succeeded");
   const events = await request(`/streams/${turn.data.streamId}/events`);
   assert.equal(events.status, 200); assert.match(events.data, /event: done/); assert.match(events.data, /event: timeline/); assert.match(events.data, /Remote succeeded/);
+  // The finished stream reaches the daemon's journal, so a restarted daemon can still replay it.
+  let journaled;
+  for (let attempt = 0; attempt < 50 && !journaled; attempt += 1) {
+    const archive = existsSync(join(dir, "remote-streams.json")) ? JSON.parse(readFileSync(join(dir, "remote-streams.json"), "utf8")) : { streams: [] };
+    journaled = archive.streams.find((stream) => stream.streamId === turn.data.streamId);
+    if (!journaled) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.equal(journaled?.state, "done");
+  assert.equal(journaled.events.at(-1).type, "done");
   // The daemon forks without summaries, and the fork's next turn carries the copied history to the model.
   const features = (await request("/server")).data.features;
   assert.ok(features.includes("chat-fork-v1")); assert.ok(!features.includes("chat-fork-summary-v1"));

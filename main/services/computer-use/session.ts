@@ -280,20 +280,31 @@ export class AuthenticatedBridgeTransport implements McpTransport {
     }
     const payload = `${line}\n`;
     await new Promise<void>((resolve, reject) => {
-      const failed = (error: Error) => {
+      const settle = () => {
+        stdin.removeListener("error", failed);
         stdin.removeListener("drain", drained);
+        stdin.removeListener("close", closed);
+      };
+      const failed = (error: Error) => {
+        settle();
         reject(error);
       };
       const drained = () => {
-        stdin.removeListener("error", failed);
+        settle();
         resolve();
+      };
+      // Teardown destroys stdin without an error, which emits only `close`.
+      const closed = () => {
+        settle();
+        reject(new Error("Authenticated bridge closed before the message was written."));
       };
       stdin.once("error", failed);
       if (stdin.write(payload)) {
-        stdin.removeListener("error", failed);
+        settle();
         resolve();
       } else {
         stdin.once("drain", drained);
+        stdin.once("close", closed);
       }
     });
   }

@@ -593,6 +593,9 @@ jobs:
 
       - name: Build, install, and verify Linux distributions
         if: ${{ needs.changes.outputs.linux == 'true' }}
+        env:
+          # dist:linux is a distribution build and the checks below launch it.
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           npm run dist:linux
@@ -637,6 +640,8 @@ jobs:
       - name: Smoke the installed GUI without a keyring session
         if: ${{ needs.changes.outputs.linux == 'true' }}
         shell: bash
+        env:
+          AIDEN_ANALYTICS: "0"
         run: |
           set -euo pipefail
           smoke_root="$RUNNER_TEMP/aiden-linux-smoke-${{ matrix.arch }}"

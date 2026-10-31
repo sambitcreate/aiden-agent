@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
-import { PcmRecorder } from "./pcm-recorder.js";
+import { MAX_PCM_SAMPLES } from "../../main/services/local-speech-protocol.js";
+import { pcm16FromIpc } from "../../main/handlers/voice-codec.js";
+import { PCM_MAX_RECORDING_SAMPLES, PcmRecorder } from "./pcm-recorder.js";
 
 type PortMessage = Float32Array | { type: string };
 
@@ -128,4 +130,42 @@ test("a discarded recording never reports a stop, even if the drain lands late",
   assert.equal(FakeAudioContext.closed, 1);
   subject.recorder.dispose();
   assert.equal(FakeAudioContext.closed, 1);
+});
+
+test("a recording that reaches the on-device limit keeps exactly the limit and asks to stop once", async () => {
+  FakeWorkletNode.tail = new Float32Array(800).fill(0.25);
+  const recorder = await PcmRecorder.create({} as MediaStream, 4_000);
+  const worklet = FakeWorkletNode.latest!;
+  let limits = 0;
+  let stops = 0;
+  const live: number[] = [];
+  recorder.onlimit = () => {
+    limits += 1;
+  };
+  recorder.onstop = () => {
+    stops += 1;
+  };
+  recorder.onchunk = (chunk) => live.push(chunk.byteLength / 2);
+  recorder.start();
+
+  worklet.emit(new Float32Array(3_200).fill(0.5));
+  assert.equal(limits, 0);
+  worklet.emit(new Float32Array(3_200).fill(0.5));
+  worklet.emit(new Float32Array(3_200).fill(0.5));
+  assert.equal(limits, 1);
+  // Live text only sees the kept audio, never samples past the limit.
+  assert.equal(live.reduce((total, samples) => total + samples, 0), 4_000);
+
+  recorder.stop();
+  await untilStopped({ stops: () => stops });
+  const pcm = recorder.takePcm();
+  assert.equal(pcm.length, 4_000);
+  assert.equal(pcm[3_999], 16_384);
+  assert.equal(limits, 1);
+});
+
+test("the renderer's recording limit never exceeds what main accepts for on-device transcription", () => {
+  assert.ok(PCM_MAX_RECORDING_SAMPLES > 0);
+  assert.ok(PCM_MAX_RECORDING_SAMPLES <= MAX_PCM_SAMPLES);
+  assert.doesNotThrow(() => pcm16FromIpc(new ArrayBuffer(PCM_MAX_RECORDING_SAMPLES * 2)));
 });

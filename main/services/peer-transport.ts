@@ -207,11 +207,25 @@ export type PeerTransportErrorCode =
   | "identity_changed"
   | "unsupported_protocol";
 
+/** Only fixed categories leave the transport, never OS messages or endpoint text. */
+export type PeerConnectionFailure = "timeout" | "dns" | "refused" | "network" | "tls" | "unreachable" | "invalid_response";
+
+export function peerConnectionFailure(error: unknown): PeerConnectionFailure {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "dns";
+  if (code === "ECONNREFUSED") return "refused";
+  if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timeout";
+  if (code === "ENETUNREACH" || code === "EHOSTUNREACH" || code === "ENETDOWN") return "network";
+  if (typeof code === "string" && (code.startsWith("ERR_TLS_") || code.startsWith("ERR_SSL_") || code.startsWith("CERT_"))) return "tls";
+  return "unreachable";
+}
+
 export class PeerTransportError extends Error {
   constructor(
     readonly code: PeerTransportErrorCode,
     readonly status?: number,
     readonly remote?: PeerRemoteError,
+    readonly failure?: PeerConnectionFailure,
   ) {
     super(
       code === "authentication_required"
@@ -506,7 +520,7 @@ export class PeerTransport {
           const frames = streaming ? new PeerEventFrames() : undefined;
           const frameBoundary = () => {
             clearTimeout(deadline);
-            deadline = setTimeout(abort, DEADLINE_MS);
+            deadline = setTimeout(timedOut, DEADLINE_MS);
           };
           if (streaming) {
             // The quiet time before the first frame starts once the stream is accepted,
@@ -581,15 +595,22 @@ export class PeerTransport {
         request.destroy();
       };
       input.signal?.addEventListener("abort", abort, { once: true });
+      const timedOut = () => {
+        finish(new PeerTransportError("unavailable", undefined, undefined, "timeout"));
+        request.destroy();
+      };
       request.on("error", (error: Error & { code?: unknown }) =>
         finish(
           new PeerTransportError(
             isPeerIdentityTlsError(error) ? "identity_changed" : "unavailable",
+            undefined,
+            undefined,
+            peerConnectionFailure(error),
           ),
         ),
       );
-      request.setTimeout(streaming ? 60_000 : deadlineMs, abort);
-      deadline = setTimeout(abort, deadlineMs);
+      request.setTimeout(streaming ? 60_000 : deadlineMs, timedOut);
+      deadline = setTimeout(timedOut, deadlineMs);
       if (streaming) sessionDeadline = setTimeout(capped, PEER_STREAM_SESSION_MS);
       request.end(body);
     });

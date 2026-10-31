@@ -18,6 +18,7 @@ import {
   type AidenRemoteApprovalSchedule,
 } from "./aiden-remote-approval-schedule.js";
 import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { openCursorSse, type CursorSseHandle } from "./aiden-remote-sse.js";
 import {
   AIDEN_REMOTE_PROTOCOL_VERSION,
   parseAidenRemoteStreamEvent,
@@ -58,11 +59,10 @@ import {
 import type { DataStoreOptions } from "./data-store.js";
 
 const MAX_STREAMS = 256;
-const STREAM_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_EVENTS_PER_STREAM = 4_096;
 const MAX_STREAM_EVENT_BYTES = 8 * 1_024 * 1_024;
 const TERMINAL_RETENTION_MS = 24 * 60 * 60 * 1_000;
-const DEFAULT_PERSIST_COALESCE_MS = 250;
+const DEFAULT_PERSIST_COALESCE_MS = 1_000;
 // Prompts and structural transcript changes are written at once; only text,
 // reasoning and timeline progress wait for the coalescing window.
 const IMMEDIATE_PERSIST_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -448,6 +448,54 @@ export function removeRevokedDeviceStreams(
 }
 
 /**
+ * One journal write. Finished streams change rarely (they only expire, get
+ * trimmed by the aggregate budget or are evicted after delivery), so they
+ * live in an archive part that is rewritten only when that set changes;
+ * every streaming write carries just the unfinished streams and the turn
+ * index. Both parts are owned copies the callback may keep.
+ */
+export interface AidenRemoteStreamJournalWrite {
+  live: AidenRemoteStreamSnapshot;
+  /** Present only when the finished streams changed since the last write. */
+  archive?: AidenRemoteStreamSnapshot;
+}
+
+function lastSequence(stream: AidenRemoteStreamSnapshot["streams"][number]): number {
+  return stream.events[stream.events.length - 1]?.sequence ?? 0;
+}
+
+/**
+ * Rebuilds one snapshot from the two journal parts. A stream present in both
+ * (a crash between the archive and the live write, or a legacy single-file
+ * journal) keeps the copy with more events, preferring the archive's
+ * finished copy on a tie.
+ */
+export function mergeAidenRemoteStreamJournal(
+  archiveValue: unknown,
+  liveValue: unknown,
+): AidenRemoteStreamSnapshot {
+  const archive = parseSnapshot(archiveValue);
+  const live = parseSnapshot(liveValue);
+  const streams = new Map(archive.streams.map((stream) => [stream.streamId, stream]));
+  for (const stream of live.streams) {
+    const archived = streams.get(stream.streamId);
+    if (!archived || lastSequence(stream) > lastSequence(archived)) {
+      streams.set(stream.streamId, stream);
+    }
+  }
+  const turnIndex = new Map<string, { streamId: string; chatId: string; turnId: string }>();
+  for (const entry of [...(archive.turnIndex ?? []), ...(live.turnIndex ?? [])]) {
+    turnIndex.delete(entry.streamId);
+    turnIndex.set(entry.streamId, entry);
+  }
+  return parseSnapshot({
+    version: 1,
+    streams: [...streams.values()].slice(-MAX_STREAMS),
+    turnIndex: [...turnIndex.values()].slice(-MAX_STREAMS * 4),
+  });
+}
+
+/**
  * DataStore options for the durable stream journal. The journal is
  * machine-owned, replaced wholesale on every write and disposable across
  * restarts, so a file this build cannot read (another build's event
@@ -498,6 +546,8 @@ export class AidenRemoteStreamService {
   private persistDirty = false;
   private persistRunning = false;
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Fingerprint of the finished streams last written to the archive part. */
+  private archiveKey: string | undefined;
   private persistenceError: unknown;
   private readonly idempotency: AidenIdempotencyLedger;
 
@@ -530,10 +580,10 @@ export class AidenRemoteStreamService {
       notifyChatChanged?: (chatId: string) => void;
       notifyApprovalChanged?: (chatId: string) => void;
       snapshot?: AidenRemoteStreamSnapshot;
-      persist?: (snapshot: AidenRemoteStreamSnapshot) => Promise<void>;
+      persist?: (write: AidenRemoteStreamJournalWrite) => Promise<void>;
       /**
        * Streaming content (text and reasoning deltas, timeline, status) is
-       * journaled at most this many milliseconds (default 250) after it
+       * journaled at most this many milliseconds (default 1000) after it
        * arrives; terminal, prompt, cancel, snapshot, tool start/finish and
        * state-change events are written at once. A crash can therefore lose
        * up to this window of non-boundary events; restart still recovers the
@@ -693,6 +743,47 @@ export class AidenRemoteStreamService {
     };
   }
 
+  /**
+   * Splits the journal into its live and archive parts. Only the parts that
+   * are written are copied: the finished streams are cloned again only when
+   * their identity, state, update time or retained event range changed, so a
+   * streaming turn no longer re-clones and rewrites every finished stream.
+   */
+  private journalWrite(): { write: AidenRemoteStreamJournalWrite; archiveKey: string } {
+    const envelope = this.snapshotEnvelope();
+    const live: AidenRemoteStreamSnapshot["streams"] = [];
+    const archive: AidenRemoteStreamSnapshot["streams"] = [];
+    const keys: string[] = [];
+    for (const entry of envelope.streams) {
+      const record = this.streams.get(entry.streamId)!;
+      if (terminal(record.state)) {
+        archive.push(entry);
+        keys.push(
+          `${entry.streamId}:${entry.state}:${entry.updatedAt}:${record.events.length}:` +
+            `${record.events[0]?.sequence ?? 0}:${record.events[record.events.length - 1]?.sequence ?? 0}`,
+        );
+      } else {
+        live.push(entry);
+      }
+    }
+    const archiveKey = keys.join("|");
+    const withEvents = (streams: AidenRemoteStreamSnapshot["streams"]) => {
+      for (const stream of streams) {
+        stream.events = structuredClone(this.streams.get(stream.streamId)!.events);
+      }
+      return streams;
+    };
+    return {
+      write: {
+        live: { version: 1, streams: withEvents(live), turnIndex: envelope.turnIndex },
+        ...(archiveKey === this.archiveKey
+          ? {}
+          : { archive: { version: 1, streams: withEvents(archive), turnIndex: [] } }),
+      },
+      archiveKey,
+    };
+  }
+
   snapshot(): AidenRemoteStreamSnapshot {
     const snapshot = this.snapshotEnvelope();
     for (const stream of snapshot.streams) {
@@ -767,7 +858,9 @@ export class AidenRemoteStreamService {
     this.persistTail = (async () => {
       while (this.persistDirty) {
         this.persistDirty = false;
-        await this.options.persist!(this.snapshot());
+        const { write, archiveKey } = this.journalWrite();
+        await this.options.persist!(write);
+        this.archiveKey = archiveKey;
         this.persistenceError = undefined;
       }
     })()
@@ -1896,115 +1989,44 @@ export class AidenRemoteStreamService {
       );
       after = snapshot.sequence - 1;
     }
-    // The retained journal is also the pending-output queue. Never duplicate
-    // it into Node's writable buffer while a client is waiting for drain.
-    let closed = false;
-    let blocked = false;
-    let ending = false;
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
-    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(heartbeat);
-      clearTimeout(drainTimeout);
-      response.off("close", cleanup);
-      response.off("error", abort);
-      response.off("drain", onDrain);
-      response.off("finish", onFinish);
-      stream.subscribers.delete(subscriber);
+    // The retained journal is also the pending-output queue: the shared pump
+    // pulls one event at a time and stops while Node's writable buffer is
+    // blocked, so a slow client holds at most one frame past the high-water
+    // mark and never duplicates the journal into memory.
+    let handle: CursorSseHandle | undefined;
+    const subscriber: StreamSubscriber = {
+      flush: () => handle?.wake(),
+      close: () => handle?.close(),
     };
-    const abort = () => {
-      cleanup();
-      response.destroy();
-    };
-    const onFinish = () => {
-      cleanup();
-      // Only fully flushed terminal delivery can satisfy deferred eviction.
-      // Disconnect/error/timeout cleanup must leave replay available.
-      if (stream.evictAfterDelivery && stream.subscribers.size === 0 && this.streams.get(streamId) === stream) {
-        stream.owner.invalidate();
-        this.streams.delete(streamId);
-        this.persist();
-      }
-    };
-    const close = () => {
-      if (closed || ending) return;
-      ending = true;
-      response.once("finish", onFinish);
-      drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
-      drainTimeout.unref?.();
-      try {
-        response.end();
-      } catch {
-        abort();
-      }
-    };
-    const write = (frame: string): boolean => {
-      try {
-        if (response.destroyed || response.writableEnded) {
-          cleanup();
-          return false;
-        }
-        if (!response.write(frame)) {
-          blocked = true;
-          drainTimeout = setTimeout(abort, STREAM_DRAIN_TIMEOUT_MS);
-          drainTimeout.unref?.();
-        }
-      } catch {
-        abort();
-        return false;
-      }
-      return !blocked && !closed;
-    };
-    const flush = () => {
-      if (closed || blocked || ending) return;
-      const firstSequence = stream.events[0]?.sequence ?? 1;
-      if (after < firstSequence - 1) {
+    stream.subscribers.add(subscriber);
+    handle = openCursorSse(response, {
+      pull: () => {
+        const firstSequence = stream.events[0]?.sequence ?? 1;
         // The client fell behind retention. Reconnect uses the existing
         // snapshot recovery path instead of silently skipping events.
-        abort();
-        return;
-      }
-      for (let index = Math.max(0, after - firstSequence + 1); index < stream.events.length; index++) {
-        const event = stream.events[index]!;
+        if (after < firstSequence - 1) return { abort: true };
+        const event = stream.events[Math.max(0, after - firstSequence + 1)];
+        if (!event) return { frames: [], end: terminal(stream.state) };
         after = event.sequence;
         // Once sent, an event is final; later deltas take a new sequence.
         if (stream.openDelta?.sequence === event.sequence) stream.openDelta = undefined;
-        if (!write(sseFrame(event))) return;
-      }
-      if (terminal(stream.state)) close();
-    };
-    const onDrain = () => {
-      if (closed || ending) return;
-      blocked = false;
-      clearTimeout(drainTimeout);
-      drainTimeout = undefined;
-      flush();
-    };
-    const subscriber: StreamSubscriber = { flush, close: abort };
-    stream.subscribers.add(subscriber);
-    response.once("close", cleanup);
-    response.once("error", abort);
-    response.on("drain", onDrain);
-    try {
-      response.writeHead(200, {
-        "aiden-protocol-version": String(AIDEN_REMOTE_PROTOCOL_VERSION),
-        "cache-control": "no-store",
-        connection: "keep-alive",
-        "content-type": "text/event-stream; charset=utf-8",
-        "x-accel-buffering": "no",
-        "x-content-type-options": "nosniff",
-      });
-      flush();
-      if (!closed) {
-        heartbeat = setInterval(() => {
-          if (!closed && !blocked && !ending) write(": heartbeat\n\n");
-        }, 15_000);
-        heartbeat.unref?.();
-      }
-    } catch {
-      abort();
-    }
+        return { frames: [sseFrame(event)] };
+      },
+      onClose: (finished) => {
+        stream.subscribers.delete(subscriber);
+        // Only fully flushed terminal delivery can satisfy deferred eviction.
+        // Disconnect/error/timeout cleanup must leave replay available.
+        if (
+          finished &&
+          stream.evictAfterDelivery &&
+          stream.subscribers.size === 0 &&
+          this.streams.get(streamId) === stream
+        ) {
+          stream.owner.invalidate();
+          this.streams.delete(streamId);
+          this.persist();
+        }
+      },
+    });
   }
 }
