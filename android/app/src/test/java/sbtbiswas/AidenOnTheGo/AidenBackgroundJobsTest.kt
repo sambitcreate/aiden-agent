@@ -8,22 +8,30 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import sbtbiswas.AidenOnTheGo.features.remote.aidenProgressCapabilitiesToRequest
+import sbtbiswas.AidenOnTheGo.features.remote.aidenRequestChatJobs
+import sbtbiswas.AidenOnTheGo.features.remote.aidenShouldRequestChatJobs
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJob
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobCopy
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobTransport
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobs
 import sbtbiswas.AidenOnTheGo.models.AidenBackgroundJobsState
+import sbtbiswas.AidenOnTheGo.models.AidenInstallation
+import sbtbiswas.AidenOnTheGo.models.AidenServer
 import sbtbiswas.AidenOnTheGo.networking.AidenRemoteClient
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
@@ -161,6 +169,72 @@ class AidenBackgroundJobsTest {
 
         state.refresh("chat-1", null)
         assertEquals(emptyList<AidenBackgroundJob>(), state.jobs)
+    }
+
+    private fun mac(capabilities: List<AidenRemoteCapability>, offers: List<AidenRemoteCapability>) = AidenServer(
+        instanceId = "test_instance",
+        name = "Mac",
+        capabilities = capabilities,
+        serverCapabilities = (capabilities + offers).distinct()
+    )
+
+    private fun installationHolding(held: List<AidenRemoteCapability>) = AidenInstallation(
+        instanceId = "test_instance",
+        deviceId = "test_device",
+        name = "Mac",
+        endpoint = "https://aiden.test/api/aiden/v1",
+        serverSpkiSha256 = "sha256/test",
+        deviceCapabilities = held,
+        serverCapabilities = held,
+        createdAt = Instant.parse("2026-10-31T09:00:00Z")
+    )
+
+    private val base = listOf(AidenRemoteCapability.CHAT_READ, AidenRemoteCapability.CHAT_WRITE)
+
+    private fun serverBody(capabilities: List<String>) = """
+        {"protocolVersion":1,"instanceId":"test_instance","name":"Mac","appVersion":"1.0.0","connectionMode":"lan",
+         "serverTime":"2026-10-31T09:00:00.000Z",
+         "capabilities":${JsonArray(capabilities.map(::JsonPrimitive))},
+         "serverCapabilities":${JsonArray(capabilities.map(::JsonPrimitive))}}
+    """.trimIndent()
+
+    @Test
+    fun theJobsGrantIsAskedForAloneOnlyFromAMacThatOffersIt() = runBlocking {
+        val offering = mac(base, offers = listOf(AidenRemoteCapability.CHAT_JOBS))
+        assertFalse("offered is not held", offering.supportsBackgroundJobs)
+        assertTrue(aidenShouldRequestChatJobs(offering, installationHolding(base)))
+        assertFalse(
+            "it never rides along with the progress grants",
+            aidenProgressCapabilitiesToRequest(offering, installationHolding(base)).contains(AidenRemoteCapability.CHAT_JOBS)
+        )
+        assertFalse("not offered", aidenShouldRequestChatJobs(mac(base, emptyList()), installationHolding(base)))
+        assertFalse(
+            "already held",
+            aidenShouldRequestChatJobs(offering, installationHolding(base + AidenRemoteCapability.CHAT_JOBS))
+        )
+
+        val names = base.map { it.rawValue }
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"capabilities":${JsonArray((names + "chat:jobs").map(::JsonPrimitive))}}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(serverBody(names + "chat:jobs")))
+        val granted = requireNotNull(aidenRequestChatJobs(client, offering, installationHolding(base)))
+        val ask = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertEquals("/api/aiden/v1/device/capabilities", ask.path)
+        assertEquals(
+            listOf("chat:jobs"),
+            Json.parseToJsonElement(ask.body.readUtf8()).jsonObject.getValue("accepts").jsonArray.map { it.jsonPrimitive.content }
+        )
+        assertEquals(base + AidenRemoteCapability.CHAT_JOBS, granted.granted)
+        assertTrue("the chat now lists its jobs", granted.server.supportsBackgroundJobs)
+        server.takeRequest(5, TimeUnit.SECONDS)
+
+        // An older Mac that does not know the name refuses it; the pairing keeps what it had.
+        for (status in listOf(400, 404)) {
+            server.enqueue(MockResponse().setResponseCode(status).setBody(
+                """{"error":{"code":"${if (status == 404) "not_found" else "invalid_request"}","message":"Nope.","requestId":"req_1","retryable":false}}"""
+            ))
+            assertNull("$status leaves the pairing as it was", aidenRequestChatJobs(client, offering, installationHolding(base)))
+            server.takeRequest(5, TimeUnit.SECONDS)
+        }
     }
 
     private inner class FakeJobsMac(val jobs: MutableList<AidenBackgroundJob>) : AidenBackgroundJobTransport {
