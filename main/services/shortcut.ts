@@ -80,6 +80,11 @@ export function initShortcutBindingsChanged(
   onBindingsChanged = listener;
 }
 
+/** Whether a global dictation shortcut (or the Linux portal hold shortcut) is live. */
+export function isDictationShortcutActive(): boolean {
+  return registered.has("dictation.toggle") || activeLinuxDictationHoldShortcut();
+}
+
 /** Whether the exact requested Aiden accelerator is currently registered. */
 export function isAssistantShortcutActive(accelerator?: string): boolean {
   const active = registered.get("assistant.open")?.accelerator;

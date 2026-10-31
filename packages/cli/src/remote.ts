@@ -3,7 +3,6 @@ import { selectedMcpServers } from "../../../main/services/mcp-selection.js";
 import { createCliBots } from "./bots.ts";
 import { createCliRemoteBots } from "./remote-bots.ts";
 import { join } from "node:path";
-import { hostname } from "node:os";
 import { spawn, type ChildProcess } from "node:child_process";
 import { VERSION } from "@earendil-works/pi-coding-agent";
 import { AidenRemoteService, DnsSdAidenRemoteBonjourPublisher, type AidenRemoteBonjourPublisher } from "../../../main/services/aiden-remote-service.js";
@@ -11,6 +10,7 @@ import { AidenRemoteStateRegistry, createDefaultAidenRemoteState } from "../../.
 import { AidenRemoteApprovedRootService } from "../../../main/services/aiden-remote-approved-roots.js";
 import { AidenRemoteTailscaleController, createSystemTailscaleCommandRunner } from "../../../main/services/aiden-remote-tailscale.js";
 import { loadOrCreateAidenRemoteTlsIdentity } from "../../../main/services/aiden-remote-tls-identity.js";
+import { aidenRemoteLanHostnames } from "../../../main/services/aiden-remote-lan-hostname.js";
 import { AidenRemoteWorkspaceBrowserService } from "../../../main/services/aiden-remote-workspace-browser.js";
 import { AidenRemoteWorkspaceService } from "../../../main/services/aiden-remote-workspaces.js";
 import { AidenRemoteWorkspaceOwnerRegistry } from "../../../main/services/aiden-remote-workspace-owners.js";
@@ -57,6 +57,7 @@ function bonjourPublisher() {
 export async function createCliRemote(agentDir: string, chats: ReturnType<typeof createDaemonChats>, scheduler: ReturnType<typeof createCliScheduler>, options: { port?: number; discovery?: AidenRemoteBonjourPublisher; bots?: Awaited<ReturnType<typeof createCliBots>> } = {}) {
   const bots = options.bots ?? await createCliBots(agentDir, chats);
   chats.setBots(bots);
+  bots.setScheduler(scheduler);
   const stateStore = new JsonStore(join(agentDir, "remote.json"), createDefaultAidenRemoteState(undefined, "Aiden CLI", options.port ?? 49320));
   const state = new AidenRemoteStateRegistry(stateStore);
   await state.initialize();
@@ -89,18 +90,23 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
     listScripts: listScheduledScripts, nextRuns: nextScheduledRuns, systemTimezone, validateTimezone,
     settingsPatch: (input) => scheduledSettingsPatch(input, validateTimezone), notifyChanged: () => {},
   });
+  let botSessions: import("../../../main/services/aiden-remote-bot-session.js").AidenRemoteBotSessionService | undefined;
   let chatApi: Awaited<ReturnType<typeof createCliRemoteChats>> | undefined;
   const tailscale = new AidenRemoteTailscaleController(await createSystemTailscaleCommandRunner(), { outcomeStore: {
     begin: (outcome) => state.beginTailscalePendingOutcome(outcome), snapshot: async () => (await state.snapshot()).tailscalePendingOutcome,
     commit: (ownership) => state.commitTailscaleOutcome(ownership), clear: () => state.clearTailscalePendingOutcome(),
   } });
-  const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: hostname(), tailscale, bonjour: options.discovery ?? bonjourPublisher(),
-    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: [hostname()], opensslPath: "openssl" }),
+  const lanHostnames = await aidenRemoteLanHostnames();
+  const service = new AidenRemoteService({ state, appVersion: VERSION, hostname: lanHostnames.endpoint, tailscale, bonjour: options.discovery ?? bonjourPublisher(),
+    loadTlsIdentity: () => loadOrCreateAidenRemoteTlsIdentity({ directory: join(agentDir, "remote-tls"), hostnames: lanHostnames.certificate, opensslPath: "openssl" }),
     workspaceApi: async (instanceId) => {
       const browser = new AidenRemoteWorkspaceBrowserService({ instanceId, state, approvalStore: agentDir });
       chatApi ??= await createCliRemoteChats(agentDir, chats, workspaces, state, idempotency, persistIdempotency, bots);
+      await botSessions?.close();
+      const botApi = createCliRemoteBots(agentDir, instanceId, bots, chats, chatApi, idempotency, persistIdempotency);
+      botSessions = botApi.botSessions;
       return {
-        ...createCliRemoteBots(agentDir, instanceId, bots, chats, chatApi, idempotency, persistIdempotency),
+        ...botApi,
         chats: chatApi.chats, streams: chatApi.streams, models: chatApi.models,
         schedules: new AidenRemoteScheduleService({ application: scheduleApplication, models: chatApi.models, idempotency, persistIdempotency }),
         workspaceBrowser: browser,
@@ -119,7 +125,7 @@ export async function createCliRemote(agentDir: string, chats: ReturnType<typeof
   });
   return { service, state, workspaces, roots, bots,
     async start() { await service.initialize(); await service.setEnabled(true); const status = await service.status(); if (!status.running) throw new Error(status.error ?? "Remote listeners could not start."); },
-    async stop() { await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
+    async stop() { await botSessions?.close(); await chats.stop(); await service.stopAndSettle(); await speech.stop(); await scheduledMcp.close(); if (!options.bots) await bots.stop(); },
     async command(args: string[]) {
       const [action = "status", value] = args;
       switch (action) {

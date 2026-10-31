@@ -19,63 +19,26 @@ function isJsonRpcBody(body: BodyInit | null | undefined): boolean {
   }
 }
 
-/** Pi 1.0 accepts absent optional token values some OAuth servers encode as null or empty strings. */
-async function normalizeOAuthTokenResponse(response: Response): Promise<Response> {
-  if (!response.ok) return response;
-  const value: unknown = await response.json();
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid OAuth token response.");
-  const tokens = value as Record<string, unknown>;
-  if (typeof tokens.access_token !== "string" || !tokens.access_token || typeof tokens.token_type !== "string" || !tokens.token_type) throw new Error("OAuth token response is missing required credentials.");
-  for (const key of ["scope", "refresh_token", "id_token", "expires_in"]) {
-    if (tokens[key] === null || tokens[key] === "") delete tokens[key];
-  }
-  if (tokens.expires_in !== undefined) {
-    if ((typeof tokens.expires_in !== "string" && typeof tokens.expires_in !== "number") || !Number.isFinite(Number(tokens.expires_in)) || Number(tokens.expires_in) < 0) throw new Error("Invalid OAuth token lifetime.");
-    tokens.expires_in = Number(tokens.expires_in);
-  }
-  const headers = new Headers(response.headers);
-  headers.delete("content-length"); headers.delete("content-encoding");
-  return new Response(JSON.stringify(tokens), { status: response.status, statusText: response.statusText, headers });
-}
+/** Most same-origin redirects an OAuth metadata GET follows. */
+const MAX_METADATA_REDIRECTS = 3;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /**
- * Dynamic client registration responses and authorization-server metadata
- * from some providers encode absent optional members as `null` or `""`, which
- * the SDK's schemas reject (or, for URL fields, treat as invalid). Drop those
- * optional members; required members stay untouched so they still fail closed.
+ * A network failure as a `TypeError` (Pi's discovery treats `TypeError` as a
+ * network failure and reports it rather than falling back) whose message
+ * names the host and the real cause instead of undici's bare "fetch failed".
  */
-const OAUTH_REGISTRATION_REQUIRED = new Set(["client_id", "redirect_uris"]);
-const OAUTH_METADATA_REQUIRED = new Set(["issuer", "authorization_endpoint", "token_endpoint", "response_types_supported"]);
-const OAUTH_METADATA_PATH = /\/\.well-known\/(?:oauth-authorization-server|openid-configuration)(?:\/|$)/u;
-
-async function normalizeOptionalOAuthFields(response: Response, required: ReadonlySet<string>): Promise<Response> {
-  if (!response.ok) return response;
-  const text = await response.text();
-  const rebuild = (body: string) => {
-    const headers = new Headers(response.headers);
-    headers.delete("content-length"); headers.delete("content-encoding");
-    return new Response(body, { status: response.status, statusText: response.statusText, headers });
-  };
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { return rebuild(text); }
-  if (!value || typeof value !== "object" || Array.isArray(value)) return rebuild(text);
-  const document = value as Record<string, unknown>;
-  for (const [key, member] of Object.entries(document)) {
-    if (!required.has(key) && (member === null || member === "")) delete document[key];
-  }
-  return rebuild(JSON.stringify(document));
-}
-
-/**
- * SDK 1.30 reads `scope=""` in a challenge as the two-character scope `""`
- * (and `scope=" "` as whitespace), which then wins over scopes_supported.
- * Remove empty scope parameters so discovery falls back as the spec intends.
- */
-export function withoutEmptyChallengeScope(header: string): string {
-  return header
-    .replace(/(^|[\s,])scope=(?:"\s*"|'\s*'|(?=,|\s|$))\s*,?/giu, "$1")
-    .replace(/[\s,]+$/u, "")
-    .replace(/\s{2,}/gu, " ");
+function networkFailure(url: URL, error: TypeError): TypeError {
+  const cause = (error as { cause?: unknown }).cause;
+  const code = cause && typeof cause === "object" && typeof (cause as { code?: unknown }).code === "string"
+    ? (cause as { code: string }).code : undefined;
+  const detail = cause instanceof Error && cause.message ? cause.message : error.message;
+  const reason = /redirect/iu.test(detail)
+    ? "it answered with a redirect, which Aiden does not follow for sign-in requests"
+    : code ? `${code}${detail && !detail.includes(code) ? ` (${detail})` : ""}` : detail || "network error";
+  const failure = new TypeError(`Could not reach ${url.host}: ${reason}.`);
+  Object.defineProperty(failure, "cause", { value: error, configurable: true, writable: true });
+  return failure;
 }
 
 function challengeParameter(header: string, name: string): string | undefined {
@@ -288,12 +251,12 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     const requestHeaders = new Headers(init?.headers ?? request?.headers);
     const headers = new Headers(url.origin === service.origin ? configuredHeaders : undefined);
     requestHeaders.forEach((value, name) => headers.set(name, value));
-    // MCP calls already have SDK request deadlines; SSE notifications may stay
+    // MCP calls already have client request deadlines; SSE streams may stay
     // idle indefinitely. OAuth metadata/registration/token requests do not.
     const acceptsSse = (requestHeaders.get("accept") ?? "").includes("text/event-stream");
     const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
     const contentType = (requestHeaders.get("content-type") ?? "").split(";", 1)[0].trim().toLowerCase();
-    // Metadata GETs also carry MCP-Protocol-Version. SSE initialize sends a
+    // Metadata GETs also carry MCP-Protocol-Version. Initialize sends a
     // JSON-RPC body before that header is available, while OAuth registration
     // is JSON without a JSON-RPC envelope and token requests are form POSTs.
     const mcpRequest = acceptsSse || (method === "POST" && contentType === "application/json" &&
@@ -327,12 +290,46 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
     };
     if (!mcpRequest) timer = setTimeout(() => controller.abort(new Error(TIMED_OUT)), timeoutMs);
     signal.addEventListener("abort", aborted, { once: true });
+    // Network failures carry their real cause (still as a TypeError, which
+    // transports and discovery read as "network"). Only OAuth metadata GETs
+    // follow redirects, and only same-origin ones, without credentials.
+    const followsRedirects = !mcpRequest && method === "GET";
+    const send = async (target: Parameters<typeof fetch>[0], sendHeaders: Headers): Promise<Response> => {
+      try {
+        return await fetchImpl(target, { ...init, headers: sendHeaders, signal, redirect: followsRedirects ? "manual" : "error" });
+      } catch (error) {
+        if (signal.aborted || !(error instanceof TypeError)) throw error;
+        throw networkFailure(new URL(target instanceof Request ? target.url : String(target)), error);
+      }
+    };
     try {
       assertCurrent();
-      const response = await fetchImpl(input, { ...init, headers, signal, redirect: "error" });
+      let response = await send(input, headers);
+      let location = url;
+      for (let hops = 0; followsRedirects && REDIRECT_STATUSES.has(response.status); hops += 1) {
+        const target = response.headers.get("location");
+        void response.body?.cancel().catch(() => undefined);
+        assertCurrent();
+        if (!target) throw new TypeError(`OAuth metadata at ${location.host} answered with a redirect without a destination.`);
+        const next = new URL(target, location);
+        if (next.origin !== location.origin) {
+          // Not followed. To discovery this is a miss at that URL ("not
+          // here"), so it tries the next candidate instead of failing.
+          response = new Response(null, { status: 404, statusText: `Redirect to another origin (${next.origin}) not followed` });
+          break;
+        }
+        if (hops >= MAX_METADATA_REDIRECTS) throw new TypeError(`OAuth metadata at ${url.host} redirected more than ${MAX_METADATA_REDIRECTS} times.`);
+        // Redirect hops carry the request's own headers, never configured
+        // service headers or an Authorization header.
+        const hopHeaders = new Headers(requestHeaders);
+        hopHeaders.delete("authorization");
+        hopHeaders.delete("cookie");
+        location = next;
+        response = await send(next, hopHeaders);
+      }
       assertCurrent();
       // OAuth consumes JSON regardless of a server's advertised MIME type.
-      // Only successful SDK SSE requests get a per-frame (not total) budget.
+      // Only successful MCP SSE responses get a per-frame (not total) budget.
       const sse = acceptsSse && response.ok && (response.headers.get("content-type") ?? "")
         .split(";", 1)[0].trim().toLowerCase() === "text/event-stream";
       const declared = response.headers.get("content-length");
@@ -341,26 +338,17 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
         void response.body?.cancel(OVERSIZED).catch(() => undefined);
         throw new Error(OVERSIZED);
       }
-      let responseHeaders = response.headers;
       const challenge = response.headers.get("www-authenticate");
-      if ((response.status === 401 || response.status === 403) && challenge) {
-        // Legacy SSE servers take JSON-RPC POSTs at a separate message path
-        // (e.g. /messages), so any MCP request to the server's origin counts.
-        if (response.status === 403 && mcpRequest && url.origin === service.origin &&
-            challengeParameter(challenge, "error") === "insufficient_scope") {
-          const scope = challengeParameter(challenge, "scope");
-          if (scope) recordMcpStepUpScope(options.serviceUrl, scope);
-        }
-        const rewritten = withoutEmptyChallengeScope(challenge);
-        if (rewritten !== challenge) {
-          responseHeaders = new Headers(response.headers);
-          responseHeaders.set("www-authenticate", rewritten);
-        }
+      // A server may take JSON-RPC at another path of its origin, so any
+      // MCP request to the server's origin counts.
+      if (response.status === 403 && challenge && mcpRequest && url.origin === service.origin &&
+          challengeParameter(challenge, "error") === "insufficient_scope") {
+        const scope = challengeParameter(challenge, "scope");
+        if (scope) recordMcpStepUpScope(options.serviceUrl, scope);
       }
       if (!response.body) {
         cleanup();
-        return responseHeaders === response.headers ? response
-          : new Response(null, { status: response.status, statusText: response.statusText, headers: responseHeaders });
+        return response;
       }
       reader = response.body.getReader();
       const checkFrame = frameCounter(maximumBytes);
@@ -396,20 +384,11 @@ export function createMcpFetchPolicy(options: McpFetchPolicyOptions): typeof fet
           return reader!.cancel(reason);
         },
       });
-      const boundedResponse = new Response(body, {
+      return new Response(body, {
         status: response.status,
         statusText: response.statusText,
-        headers: responseHeaders,
+        headers: response.headers,
       });
-      const grant = formGrant(method, contentType, init?.body);
-      if (grant === "authorization_code" || grant === "refresh_token") return await normalizeOAuthTokenResponse(boundedResponse);
-      if (!mcpRequest && method === "GET" && OAUTH_METADATA_PATH.test(url.pathname)) {
-        return await normalizeOptionalOAuthFields(boundedResponse, OAUTH_METADATA_REQUIRED);
-      }
-      if (!mcpRequest && method === "POST" && contentType === "application/json") {
-        return await normalizeOptionalOAuthFields(boundedResponse, OAUTH_REGISTRATION_REQUIRED);
-      }
-      return boundedResponse;
     } catch (error) {
       cleanup();
       throw error;

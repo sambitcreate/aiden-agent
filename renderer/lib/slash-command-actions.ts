@@ -22,6 +22,8 @@ export interface SlashCommandActionContext {
   sideQuestionBlockedReason?: string;
   chatCloneBlockedReason?: string;
   worktreeBlockedReason?: string;
+  /** Why `/until` and `/follow` cannot run here (folder access off, a Bot, a phone-hosted chat). */
+  followThroughBlockedReason?: string;
   payloadAfterToken: boolean;
   hasAttachmentsOrSelectedSkill?: boolean;
 }
@@ -55,6 +57,8 @@ export interface SlashCommandActionHandlers {
     instruction: "visualize" | "btw",
     prompt: string,
   ) => boolean | Promise<boolean>;
+  /** `/until <check>` and `/follow`; false when the chat cannot take them. */
+  followThrough?: (action: "until" | "follow", argument: string) => boolean | Promise<boolean>;
 }
 
 const unavailable = (reason: string): SlashCommandAvailabilityResult => ({
@@ -127,6 +131,11 @@ export function slashCommandAvailability(
     case "workspace-environment":
     case "workspace-worktree":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
+      break;
+    case "workspace-chat":
+      if (!context.hasWorkspace) return unavailable("Open a workspace first.");
+      if (!context.hasChat) return unavailable("Send a message first, then add this.");
+      if (context.followThroughBlockedReason) return unavailable(context.followThroughBlockedReason);
       break;
     case "idle-workspace":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");
@@ -313,6 +322,10 @@ export function executeSlashCommandAction(
     case "composer-instruction": {
       if (!handlers.submitComposerInstruction) return false;
       return handlers.submitComposerInstruction(command.action.instruction, argument.trim());
+    }
+    case "follow-through": {
+      if (!handlers.followThrough) return false;
+      return handlers.followThrough(command.action.action, argument.trim());
     }
   }
 }

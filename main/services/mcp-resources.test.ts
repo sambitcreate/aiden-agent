@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { JSON_RPC_ERROR_CODES, LATEST_PROTOCOL_VERSION, McpClient, McpError, type JsonRpcMessage } from "@earendil-works/pi-mcp";
+import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpError, ErrorCode, LATEST_PROTOCOL_VERSION, ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
-import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, mcpResourceToolName, MCP_RESOURCE_LIMITS } from "./mcp-resources.js";
+import { ListResourcesRequestSchema, ListResourceTemplatesRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpResourceTool, listMcpResourcesPage, listMcpResourceTemplatesPage, mcpResourceToolName, MCP_RESOURCE_LIMITS, readMcpResource } from "./mcp-resources.js";
+import { connectSdkServer } from "./mcp-test-support.js";
 import { McpConfigurationLeaseRegistry } from "./mcp-config-lease.js";
 import { mcpAgentToolName } from "./mcp-tool-identity.js";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -25,12 +26,20 @@ async function invoke(tool: AgentTool, args: Record<string, unknown>, signal?: A
   assert.equal(content.type, "text");
   return JSON.parse((content as { text: string }).text);
 }
+/** The resource port the MCP manager builds over a live client. */
+function clientPort(client: McpClient): Port {
+  return {
+    listResources: (params, options) => listMcpResourcesPage(client, params, options),
+    listResourceTemplates: (params, options) => listMcpResourceTemplatesPage(client, params, options),
+    readResource: (params, options) => readMcpResource(client, params, options),
+  };
+}
 function fixture(client = port(), id = identity.id) {
   const registry = new McpConfigurationLeaseRegistry();
   return { registry, tool: createMcpResourceTool({ ...identity, id }, client, registry.acquire(id)) };
 }
 
-test("real resources-only SDK server lists pages/templates and reads only expanded handles", async (t) => {
+test("real resources-only server lists pages/templates and reads only expanded handles", async (t) => {
   const server = new Server({ name: "resources-only", version: "1" }, { capabilities: { resources: {} } });
   const requests: string[] = [];
   server.setRequestHandler(ListResourcesRequestSchema, async ({ params }) => ({
@@ -42,11 +51,10 @@ test("real resources-only SDK server lists pages/templates and reads only expand
     requests.push(params.uri);
     return { contents: [{ uri: params.uri, text: "read" }] };
   });
-  const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  await server.connect(b); await client.connect(a);
+  const client = new McpClient({ name: "test", version: "1" });
+  await client.connect(await connectSdkServer(server));
   t.after(async () => { await client.close(); await server.close(); });
-  const { tool } = fixture(client);
+  const { tool } = fixture(clientPort(client));
   const { resources } = await invoke(tool, { action: "list" });
   assert.equal(resources.length, 3);
   await invoke(tool, { action: "read", handle: resources[0].handle });
@@ -79,11 +87,11 @@ test("inventory is frozen for a generation despite subsequent remote list change
 });
 
 for (const end of [null, ""]) {
-  test(`real SDK resource lists ending with nextCursor ${JSON.stringify(end)} publish every page`, async (t) => {
+  test(`real resource lists ending with nextCursor ${JSON.stringify(end)} publish every page`, async (t) => {
     // Wire-level fixture: the SDK Server would not emit these legal end markers itself.
-    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const { client: clientSide, server: serverSide } = createInMemoryTransportPair();
     const methods: string[] = [];
-    serverSide.onmessage = (message: JSONRPCMessage) => {
+    serverSide.onMessage((message: JsonRpcMessage) => {
       if (!("method" in message) || !("id" in message)) return;
       methods.push(message.method);
       const cursor = (message.params as { cursor?: string } | undefined)?.cursor;
@@ -93,16 +101,12 @@ for (const end of [null, ""]) {
           ? { resources: [{ name: cursor ? "Second" : "First", uri: cursor ? "memo://two" : "memo://one" }], nextCursor: cursor ? end : "page-two" }
           : { resourceTemplates: [{ name: "Query", uriTemplate: "memo://query/{q}" }], nextCursor: end };
       void serverSide.send({ jsonrpc: "2.0", id: message.id, result });
-    };
+    });
     await serverSide.start();
-    const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
+    const client = new McpClient({ name: "test", version: "1" });
     await client.connect(clientSide);
     t.after(async () => { await client.close(); });
-    const { tool } = fixture({
-      listResources: (params, options) => listMcpResourcesPage(client, params, options),
-      listResourceTemplates: (params, options) => listMcpResourceTemplatesPage(client, params, options),
-      readResource: (params, options) => client.readResource(params, options),
-    });
+    const { tool } = fixture(clientPort(client));
     const { resources } = await invoke(tool, { action: "list" });
     assert.deepEqual(resources.map(({ name }: { name: string }) => name), ["First", "Second", "Query"]);
     assert.deepEqual(methods.filter((method) => method !== "initialize"), ["resources/list", "resources/list", "resources/templates/list"]);
@@ -212,7 +216,7 @@ test("oversized resource text keeps its start and end with the full size; URI me
 });
 
  test("optional discovery methods may be absent, but other errors are never treated as empty inventories", async () => {
-  const { tool } = fixture(port({ listResourceTemplates: async () => { throw new McpError(ErrorCode.MethodNotFound, "unsupported"); } }));
+  const { tool } = fixture(port({ listResourceTemplates: async () => { throw new McpError(JSON_RPC_ERROR_CODES.methodNotFound, "unsupported"); } }));
   assert.equal((await invoke(tool, { action: "list" })).resources.length, 1);
   const { tool: failing } = fixture(port({ listResourceTemplates: async () => { throw new Error("unauthorized"); } }));
   await assert.rejects(invoke(failing, { action: "list" }), /unauthorized/);

@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { validateScheduledMcpServerBindings } from "./schedule-mcp-binding.js";
 import { acpHarnessUnavailableReason } from "../../renderer/shared/acp-harness.js";
+import { parseBotRoutineFailure } from "../../renderer/shared/bot-routine-failure.js";
 import {
   botRoutineCron,
   parseBotRoutineDate,
@@ -36,6 +37,15 @@ interface Persistence<T> {
 
 function finiteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isWakeUpMarker(value: unknown): value is { setAt: number } {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    finiteTimestamp((value as { setAt?: unknown }).setAt) !== undefined
+  );
 }
 
 function nextTaskRevision(timestamp: number, previous?: number): number {
@@ -295,6 +305,9 @@ function normalizeInput(
     cron,
     timezone,
     nextRunAt,
+    ...(botId !== undefined && existing?.pendingRoutineFires?.length
+      ? { pendingRoutineFires: existing.pendingRoutineFires }
+      : {}),
     lastRunAt: existing?.lastRunAt,
     workspaceId,
     providerId,
@@ -309,9 +322,16 @@ function normalizeInput(
     webSearchEnabled,
     chatId: workspaceId === existing?.workspaceId ? existing?.chatId : undefined,
     ...(botId !== undefined ? { botId, routineSchedule } : {}),
+    ...(botId !== undefined && (existing && !existing.enabled && enabled ? now : existing?.enabledAt) !== undefined
+      ? { enabledAt: existing && !existing.enabled && enabled ? now : existing!.enabledAt }
+      : {}),
     // Set once, when a Bot proposal is accepted; never changed by an edit.
     ...(botId !== undefined && (existing?.sourceProposalId ?? input.sourceProposalId) !== undefined
       ? { sourceProposalId: existing?.sourceProposalId ?? input.sourceProposalId }
+      : {}),
+    // Set once, when the Bot sets a wake-up; an edit never adds or removes it.
+    ...(botId !== undefined && isWakeUpMarker(existing ? existing.wakeUp : input.wakeUp)
+      ? { wakeUp: { setAt: (existing ? existing.wakeUp : input.wakeUp)!.setAt } }
       : {}),
     notify: input.notify ?? existing?.notify ?? true,
     lastResult: existing?.lastResult,
@@ -332,7 +352,37 @@ function isRunResult(value: unknown): value is ScheduledRunResult {
 }
 
 function isSkipReason(value: unknown): value is ScheduledRunSkipReason {
-  return value === "bot_paused" || value === "duplicate";
+  return value === "bot_paused" || value === "duplicate" || value === "paused_by_person";
+}
+
+/** The request id of a failed fire's delayed retry. */
+export function botRoutineRetryRequestId(failedRunId: string, attempt: 1 | 2): string {
+  return `${failedRunId.replace(/:retry-[12]$/u, "")}:retry-${attempt}`;
+}
+
+function storedRoutineRetry(value: unknown, requestId: unknown, taskId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const retry = value as Record<string, unknown>;
+  return Object.keys(retry).length === 2 &&
+    (retry.attempt === 1 || retry.attempt === 2) &&
+    typeof retry.failedRunId === "string" && retry.failedRunId.length <= 200 &&
+    retry.failedRunId.startsWith(`routine:${taskId}:`) &&
+    requestId === botRoutineRetryRequestId(retry.failedRunId, retry.attempt);
+}
+
+function storedRoutineFires(value: unknown, taskId: string): ScheduledTask["pendingRoutineFires"] {
+  if (!Array.isArray(value)) return undefined;
+  const fires = value.filter((item): item is NonNullable<ScheduledTask["pendingRoutineFires"]>[number] => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const fire = item as Record<string, unknown>;
+    return Number.isSafeInteger(fire.fireTime) && (fire.fireTime as number) >= 0 &&
+      (fire.retry === undefined
+        ? fire.requestId === `routine:${taskId}:${fire.fireTime}`
+        : storedRoutineRetry(fire.retry, fire.requestId, taskId)) &&
+      typeof fire.prompt === "string" && fire.prompt.length <= 32 * 1024 &&
+      typeof fire.name === "string" && fire.name.length <= 120;
+  });
+  return fires.length ? fires.slice(0, RUNS_PER_TASK) : undefined;
 }
 
 function normalizeStoredTask(value: unknown): ScheduledTask | null {
@@ -443,6 +493,7 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     cron: task.cron,
     timezone: task.timezone,
     nextRunAt: scheduleError ? undefined : finiteTimestamp(task.nextRunAt),
+    ...(botId !== undefined ? { pendingRoutineFires: storedRoutineFires(task.pendingRoutineFires, task.id) } : {}),
     lastRunAt: finiteTimestamp(task.lastRunAt),
     workspaceId,
     // Resolve aliases only after config has had a chance to protect an edited
@@ -460,9 +511,11 @@ function normalizeStoredTask(value: unknown): ScheduledTask | null {
     webSearchEnabled,
     chatId: typeof task.chatId === "string" ? task.chatId : undefined,
     ...(botId !== undefined ? { botId, ...(routineSchedule ? { routineSchedule } : {}) } : {}),
+    ...(botId !== undefined && typeof task.enabledAt === "number" && Number.isFinite(task.enabledAt) ? { enabledAt: task.enabledAt } : {}),
     ...(botId !== undefined && typeof task.sourceProposalId === "string" && /^[0-9a-f-]{36}$/u.test(task.sourceProposalId)
       ? { sourceProposalId: task.sourceProposalId }
       : {}),
+    ...(botId !== undefined && isWakeUpMarker(task.wakeUp) ? { wakeUp: { setAt: task.wakeUp.setAt } } : {}),
     notify: task.notify !== false,
     lastResult: scheduleError
       ? "error"
@@ -492,6 +545,8 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
   ) {
     return null;
   }
+  const failure = parseBotRoutineFailure(run.failure);
+  const claimCheck = parseRunClaimCheck(run.claimCheck);
   return {
     id: run.id,
     taskId: run.taskId,
@@ -501,8 +556,24 @@ function normalizeStoredRun(value: unknown): ScheduledRun | null {
     ...(run.result === "skipped" && isSkipReason(run.reason) ? { reason: run.reason } : {}),
     output: run.output.slice(0, STORED_OUTPUT_LIMIT),
     error: typeof run.error === "string" ? run.error.slice(0, STORED_ERROR_LIMIT) : undefined,
+    ...(failure ? { failure } : {}),
+    ...(claimCheck ? { claimCheck } : {}),
+    ...(typeof run.fingerprint === "string" && /^[a-f0-9]{64}$/u.test(run.fingerprint) ? { fingerprint: run.fingerprint } : {}),
     chatId: typeof run.chatId === "string" ? run.chatId : undefined,
   };
+}
+
+/** A run's claim-check summary, bounded; anything malformed is dropped. */
+function parseRunClaimCheck(value: unknown): ScheduledRun["claimCheck"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const check = value as Record<string, unknown>;
+  const strings = (list: unknown) =>
+    Array.isArray(list) && list.every((item) => typeof item === "string" && item.length <= 200)
+      ? (list as string[]).slice(0, 20)
+      : undefined;
+  const stepIds = strings(check.stepIds);
+  const toolNames = strings(check.toolNames);
+  return stepIds?.length && toolNames ? { stepIds, toolNames } : undefined;
 }
 
 export function createScheduleStore(
@@ -682,6 +753,101 @@ export function createScheduleStore(
 
     updateRuntime,
 
+    /** Claim and advance one Bot fire in the same durable task-file write. */
+    async claimRoutineFire(
+      id: string,
+      fireTime: number,
+      nextRunAt: number | undefined,
+      isCurrent: () => boolean = () => true,
+    ): Promise<ScheduledTask> {
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.botId || !existing.enabled || existing.nextRunAt !== fireTime)
+          throw new Error("This routine fire is no longer due.");
+        const pending = existing.pendingRoutineFires ?? [];
+        if (pending.length >= RUNS_PER_TASK) throw new Error("This routine has too many unsettled fires.");
+        const claimed: ScheduledTask = {
+          ...existing,
+          enabled: existing.routineSchedule?.kind === "once" ? false : existing.enabled,
+          nextRunAt: existing.routineSchedule?.kind === "once" ? undefined : nextRunAt,
+          pendingRoutineFires: [...pending, {
+            fireTime,
+            requestId: `routine:${id}:${fireTime}`,
+            prompt: existing.prompt ?? "",
+            name: existing.name,
+          }],
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+        draft[index] = claimed;
+        return structuredClone(claimed);
+      }, isCurrent);
+    },
+
+    /**
+     * Queue a delayed retry of a failed Bot routine fire as a pending fire due
+     * at `at`. It survives restarts and is replayed like any claimed fire.
+     * Returns false when the routine is gone or the retry is already queued.
+     */
+    async addRoutineRetry(
+      id: string,
+      retry: { failedRunId: string; attempt: 1 | 2; at: number },
+    ): Promise<boolean> {
+      return tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.botId) return false;
+        const requestId = botRoutineRetryRequestId(retry.failedRunId, retry.attempt);
+        const pending = existing.pendingRoutineFires ?? [];
+        if (pending.some((fire) => fire.requestId === requestId)) return false;
+        if (pending.length >= RUNS_PER_TASK) return false;
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: [...pending, {
+            fireTime: retry.at,
+            requestId,
+            prompt: existing.prompt ?? "",
+            name: existing.name,
+            retry: { failedRunId: retry.failedRunId, attempt: retry.attempt },
+          }],
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+        return true;
+      });
+    },
+
+    /** Drop every queued retry of a routine, for example when it is paused. */
+    async clearRoutineRetries(id: string): Promise<void> {
+      await tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.pendingRoutineFires?.some((fire) => fire.retry)) return;
+        const remaining = existing.pendingRoutineFires.filter((fire) => !fire.retry);
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: remaining.length ? remaining : undefined,
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+      });
+    },
+
+    async settleRoutineFire(id: string, requestId: string): Promise<void> {
+      await tasks.update((draft) => {
+        const index = draft.map(normalizeStoredTask).findIndex((task) => task?.id === id);
+        const existing = index >= 0 ? normalizeStoredTask(draft[index]) : null;
+        if (!existing?.pendingRoutineFires?.some((fire) => fire.requestId === requestId)) return;
+        draft[index] = {
+          ...existing,
+          pendingRoutineFires: existing.pendingRoutineFires.filter((fire) => fire.requestId !== requestId),
+          updatedAt: nextTaskRevision(now(), existing.updatedAt),
+        };
+      });
+    },
+
+    async runById(taskId: string, runId: string): Promise<ScheduledRun | undefined> {
+      return (await runs.load()).map(normalizeStoredRun).find((run) => run?.taskId === taskId && run.id === runId) ?? undefined;
+    },
+
     async ensureChatId(
       id: string,
       create: (claimedChatId: string) => Promise<{ id: string }>,
@@ -728,6 +894,14 @@ export function createScheduleStore(
       });
     },
 
+    /** Drop every run recorded under `taskId` (an event routine that is gone). */
+    async removeRuns(taskId: string): Promise<void> {
+      await runs.update((draft) => {
+        const kept = draft.filter((value) => normalizeStoredRun(value)?.taskId !== taskId);
+        draft.splice(0, draft.length, ...kept);
+      });
+    },
+
     async remove(id: string): Promise<void> {
       await tasks.update((draft) => {
         const index = draft.findIndex((value) => normalizeStoredTask(value)?.id === id);
@@ -744,21 +918,32 @@ export function createScheduleStore(
       run: Omit<ScheduledRun, "id"> & { id?: string },
       isCurrent: () => boolean = () => true,
     ): Promise<ScheduledRun> {
+      const pendingIds = new Set((await get(run.taskId))?.pendingRoutineFires?.map((fire) => fire.requestId) ?? []);
+      // Bounded and fail-closed here too: a run handed in by a caller is not
+      // trusted to respect the failure contract's limits. The untrusted value is
+      // dropped from the copy, so an invalid one cannot ride along in the spread.
+      const { failure: untrustedFailure, claimCheck: untrustedClaimCheck, ...rest } = run;
+      const failure = parseBotRoutineFailure(untrustedFailure);
+      const claimCheck = parseRunClaimCheck(untrustedClaimCheck);
       const stored: ScheduledRun = {
-        ...run,
+        ...rest,
         id: run.id ?? randomUUID(),
         output: run.output.slice(0, STORED_OUTPUT_LIMIT),
         error: run.error?.slice(0, STORED_ERROR_LIMIT),
+        ...(failure ? { failure } : {}),
+        ...(claimCheck ? { claimCheck } : {}),
       };
       await runs.update((draft) => {
         const normalized = draft
           .map(normalizeStoredRun)
           .filter((value): value is ScheduledRun => value !== null);
+        const previous = normalized.findIndex((value) => value.taskId === stored.taskId && value.id === stored.id);
+        if (previous >= 0) normalized.splice(previous, 1);
         normalized.push(stored);
-        const retained = normalized
+        const sorted = normalized
           .filter((value) => value.taskId === stored.taskId)
-          .sort((a, b) => b.startedAt - a.startedAt)
-          .slice(0, RUNS_PER_TASK);
+          .sort((a, b) => b.startedAt - a.startedAt);
+        const retained = sorted.filter((value, index) => index < RUNS_PER_TASK || pendingIds.has(value.id));
         const other = normalized.filter((value) => value.taskId !== stored.taskId);
         draft.splice(0, draft.length, ...other, ...retained);
       }, isCurrent);

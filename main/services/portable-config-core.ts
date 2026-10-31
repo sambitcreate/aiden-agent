@@ -1,5 +1,6 @@
 import { validateLocalClassifierPreference } from "../../renderer/shared/local-classifier.js";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
+import { withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 import { parseCustomModelOptions } from "../../renderer/shared/custom-model-options.js";
 import { compactionEngineFrom, parseCompactionModelOverrides } from "../../renderer/shared/compaction.js";
 import { parseDictationDictionary } from "../../renderer/shared/dictation-dictionary.js";
@@ -59,7 +60,10 @@ import { GOOGLE_PROVIDER_ID } from "../../renderer/shared/google-provider.js";
 import { normalizeProviderArtwork } from "../../renderer/shared/provider-artwork.js";
 import { parseOnboardingState } from "../../renderer/shared/onboarding.js";
 import { parseWebSearchSettings } from "./web-search-provider-registry-core.js";
+import { parseWebFetchSettings } from "../../renderer/shared/web-fetch-settings.js";
 import { parseTtsSettingsDocument } from "./tts/settings.js";
+import { isUsageLimitWaitHours } from "../../renderer/shared/usage-limits.js";
+import { parseSpendingLimitsSettings } from "../../renderer/shared/spending.js";
 
 /** A provider minus the caches that model discovery refills. */
 export type PortableProvider = Omit<StoredProvider, "models" | "modelMetadata">;
@@ -314,7 +318,7 @@ export function isMcpServer(value: unknown): value is McpServer {
     value.id.trim().length > 0 &&
     value.id.length <= MAX_CONFIG_ID_LENGTH &&
     typeof value.name === "string" &&
-    (value.transport === "stdio" || value.transport === "http" || value.transport === "sse") &&
+    (value.transport === "stdio" || value.transport === "http") &&
     typeof value.enabled === "boolean" &&
     (value.command === undefined || typeof value.command === "string") &&
     (value.args === undefined ||
@@ -330,6 +334,8 @@ export function isMcpServer(value: unknown): value is McpServer {
 export function isSkill(value: unknown): value is Skill {
   return isConfiguredSkill(value);
 }
+
+export { retiredMcpServerIds, withoutRetiredMcpServers } from "../../renderer/shared/mcp-retired-servers.js";
 
 export function isMcpServerList(value: unknown): value is McpServer[] {
   return Array.isArray(value) && value.every(isMcpServer) && hasUniqueIds(value);
@@ -639,6 +645,7 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     "dictationSounds",
     "voiceTranslateToEnglish",
     "voiceTrimSilence",
+    "localVoicePreload",
     "showLocalModelReasoning",
     "memoryEnabled",
     "skillsEnabled",
@@ -698,6 +705,10 @@ function normalizeSettingsShape(value: unknown): SettingsShape {
     // this raw document.
     normalized.webSearch = webSearch ?? structuredClone(settings.webSearch);
   }
+  if (Object.prototype.hasOwnProperty.call(settings, "webFetch")) {
+    // Like Web Search: a future document stays on disk for the build that wrote it.
+    normalized.webFetch = parseWebFetchSettings(settings.webFetch) ?? structuredClone(settings.webFetch);
+  }
   const onboarding = parseOnboardingState(settings.onboarding);
   if (onboarding) normalized.onboarding = onboarding;
   else delete normalized.onboarding;
@@ -724,6 +735,12 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
   const runtime = structuredClone(settings);
   runtime.compactionEngine = compactionEngineFrom(settings.compactionEngine);
   if (settings.cacheWarmingEnabled !== undefined) runtime.cacheWarmingEnabled = settings.cacheWarmingEnabled === true;
+  if (settings.usageLimitWaitHours !== undefined && !isUsageLimitWaitHours(settings.usageLimitWaitHours)) delete runtime.usageLimitWaitHours;
+  if (settings.spendingLimits !== undefined) {
+    const spendingLimits = parseSpendingLimitsSettings(settings.spendingLimits);
+    if (spendingLimits === undefined) delete runtime.spendingLimits;
+    else runtime.spendingLimits = spendingLimits;
+  }
   if (settings.compactionModelOverrides !== undefined) {
     try { runtime.compactionModelOverrides = parseCompactionModelOverrides(settings.compactionModelOverrides); }
     catch { delete runtime.compactionModelOverrides; }
@@ -735,6 +752,11 @@ export function runtimeSettingsFrom(settings: AppSettings): AppSettings {
     const webSearch = parseWebSearchSettings(settings.webSearch);
     if (webSearch) runtime.webSearch = webSearch;
     else delete runtime.webSearch;
+  }
+  if (settings.webFetch !== undefined) {
+    const webFetch = parseWebFetchSettings(settings.webFetch);
+    if (webFetch) runtime.webFetch = webFetch;
+    else delete runtime.webFetch;
   }
   if (settings.tts !== undefined) {
     const tts = parseTtsSettingsDocument(settings.tts);
@@ -1089,7 +1111,7 @@ you.
 | --- | --- |
 | \`providers\` | Custom provider connections: \`id\`, \`kind\`, \`label\`, \`baseUrl\`, \`needsKey\`, \`defaultModel\`, \`deployment\`. |
 | \`providerIdAliases\` | Append-only record of provider IDs Aiden has renamed. Leave it alone unless you know why it exists. |
-| \`mcpServers\` | MCP server definitions. Environment and header values are not stored here: each name keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Plugins. |
+| \`mcpServers\` | MCP server definitions. Environment and header values, and a custom server's OAuth client secret, are not stored here: each keeps an \`aiden-secret:v1:…\` marker and the value lives in the keychain. A value typed here by hand moves to the keychain the next time Aiden reads the file. Local commands added by hand run only after you approve them in Settings → Connectors. |
 | \`skills\` | Inline skills: \`name\`, \`description\`, \`instructions\`, \`enabled\`. |
 
 Aiden rewrites this file when you change those settings in the UI, so it round
@@ -1332,8 +1354,9 @@ export function createPortableConfigStores(
       await ensureReadme();
       return false;
     }
-    const safeExistingMcpServers = isMcpServerList(existingPortable.mcpServers)
-      ? existingPortable.mcpServers
+    const existingMcpServers = withoutRetiredMcpServers(existingPortable.mcpServers);
+    const safeExistingMcpServers = isMcpServerList(existingMcpServers)
+      ? existingMcpServers
       : undefined;
     if (has("mcpServers") && !safeExistingMcpServers) {
       await ensureReadme();

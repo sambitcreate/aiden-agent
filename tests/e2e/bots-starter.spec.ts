@@ -7,13 +7,15 @@ import { E2E_PROFILE_NAME, expect, finishLmStudioOnboarding, test } from "./fixt
 // navigation, carousel, chat route and composer are the shipped renderer.
 // The turn streams back as live events from main, then the Bot asks a
 // quick-reply question the way the durable runtime publishes a waiting
-// ask_user_question card.
-test("an empty Bots list opens a starter Bot chat, sends to it, and answers its quick-reply card", async ({ aiden }) => {
+// ask_user_question card, and then hands the person a step the way it
+// publishes a waiting hand_off card, and last asks the person to sign in the
+// way it publishes a waiting sign_in card.
+test("an empty Bots list opens a starter Bot chat, sends to it, and answers its quick-reply, hand-off and sign-in cards", async ({ aiden }) => {
   const { page } = aiden;
   const bot = botFixture({ id: "bot-chief", name: "Chief of Staff", description: "Keeps your week on track" });
   await finishLmStudioOnboarding(page);
   await aiden.app.evaluate(({ ipcMain }, fixture) => {
-    const state = { created: false, sends: [] as unknown[], answers: [] as unknown[] };
+    const state = { created: false, sends: [] as unknown[], answers: [] as unknown[], handoffs: [] as unknown[], opened: [] as unknown[] };
     (globalThis as unknown as { botStarterE2e: typeof state }).botStarterE2e = state;
     for (const channel of [
       "bots:list",
@@ -25,6 +27,8 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       "bots:pendingApprovals",
       "bots:send",
       "bots:answerQuestion",
+      "bots:answerHandoff",
+      "bots:openHandoff",
     ]) ipcMain.removeHandler(channel);
     const idle = { botId: fixture.id, preview: null, updatedAt: null, state: { kind: "idle" } };
     ipcMain.handle("bots:list", () => (state.created ? [fixture] : []));
@@ -59,6 +63,14 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
     ipcMain.handle("bots:answerQuestion", (_event, input: unknown) => {
       state.answers.push(input);
       return { answered: true };
+    });
+    ipcMain.handle("bots:answerHandoff", (_event, input: unknown) => {
+      state.handoffs.push(input);
+      return { answered: true };
+    });
+    ipcMain.handle("bots:openHandoff", (_event, input: unknown) => {
+      state.opened.push(input);
+      return { opened: "browser" };
     });
   }, bot);
 
@@ -134,6 +146,92 @@ test("an empty Bots list opens a starter Bot chat, sends to it, and answers its 
       },
     },
   ]);
+
+  // The question settles, and the Bot hands the person a step: the card sits above the composer.
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 8, type: "question", question: null });
+      window.webContents.send("bots:live:event", {
+        botId,
+        epoch: "e1",
+        seq: 9,
+        type: "handoff",
+        handoff: {
+          botId,
+          waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+          toolCallId: "call-2",
+          kind: "action",
+          action: "Approve the calendar invite from Sam",
+          why: "Only you can accept invites on your work account.",
+          source: "tool",
+        },
+      });
+    }
+  }, bot.id);
+  const card = page.getByRole("group", { name: "Chief of Staff needs you" });
+  await expect(card.getByText("Your turn: Approve the calendar invite from Sam")).toBeVisible();
+  await expect(page.getByPlaceholder("Add a note and send to mark it done")).toBeVisible();
+  await card.getByRole("button", { name: "Done", exact: true }).click();
+  await expect
+    .poll(() =>
+      aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),
+    )
+    .toEqual([{ botId: "bot-chief", waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", outcome: "done" }]);
+
+  // The Bot asks the person to sign in to a site in its own browser. At this
+  // width the Bot panel docks beside the chat, so the card stays in view.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1280, 800));
+  await aiden.app.evaluate(({ BrowserWindow }, botId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send("bots:live:event", { botId, epoch: "e1", seq: 10, type: "handoff", handoff: null });
+      window.webContents.send("bots:live:event", {
+        botId,
+        epoch: "e1",
+        seq: 11,
+        type: "handoff",
+        handoff: {
+          botId,
+          waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          toolCallId: "call-3",
+          kind: "sign_in",
+          action: "Sign in to github.com",
+          why: "I need your GitHub account to read your issues.",
+          open: { url: "https://github.com" },
+          origin: "https://github.com",
+          target: "browser",
+          source: "tool",
+        },
+      });
+    }
+  }, bot.id);
+  const signIn = page.getByRole("group", { name: "Chief of Staff needs you" });
+  await expect(signIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
+  await expect(signIn.getByText("Chief of Staff never sees your password.", { exact: false })).toBeVisible();
+  // The answer is on the card: the composer takes no note while a sign-in waits.
+  await expect(page.getByText("Sign in for Chief of Staff with Open sign-in above, then choose I’m signed in.")).toBeVisible();
+  await expect(page.getByPlaceholder("Add a note and send to mark it done")).toHaveCount(0);
+  await signIn.getByRole("button", { name: "Open sign-in" }).click();
+  await expect
+    .poll(() => aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { opened: unknown[] } }).botStarterE2e.opened))
+    .toEqual([{ botId: "bot-chief", waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d" }]);
+  const botPanel = page.locator("#bot-panel");
+  await expect(botPanel).toHaveAttribute("data-state", "open");
+  await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-pinned");
+  await expect(botPanel.getByRole("group", { name: "Chief of Staff needs you" })).toHaveCount(0);
+  // Narrower, the panel floats over the chat and its card, so it carries the card's buttons.
+  await aiden.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(900, 720));
+  await expect(botPanel).toHaveAttribute("data-surface-mode", "tools-floating");
+  const panelSignIn = botPanel.getByRole("group", { name: "Chief of Staff needs you" });
+  await expect(panelSignIn.getByText("Sign in to github.com for Chief of Staff")).toBeVisible();
+  await panelSignIn.getByRole("button", { name: "I’m signed in" }).click();
+  await expect
+    .poll(() =>
+      aiden.app.evaluate(() => (globalThis as unknown as { botStarterE2e: { handoffs: unknown[] } }).botStarterE2e.handoffs),
+    )
+    .toEqual([
+      { botId: "bot-chief", waitId: "7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d", outcome: "done" },
+      { botId: "bot-chief", waitId: "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", outcome: "done" },
+    ]);
 });
 
 // Onboarding decides whether to offer "Meet your first Bot" when it loads, so
@@ -188,6 +286,8 @@ test("onboarding Start Chat creates the starter Bot and opens its chat when setu
   await expect(onboarding).toBeHidden();
 
   await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeVisible();
+  // Ready to type in the Bot's chat straight away.
+  await expect(page.getByPlaceholder("Ask Chief of Staff")).toBeFocused();
   await expect(page.getByRole("button", { name: "Chief of Staff profile" })).toBeVisible();
   expect(
     await aiden.app.evaluate(() => (globalThis as unknown as { botOnboardingE2e: { created: number } }).botOnboardingE2e.created),

@@ -1,3 +1,4 @@
+import { createBotRoutineExecutor, type BotRoutineExecutorPorts } from "../../../main/services/scheduled-bot-routines.js";
 import { scheduledMcpServerBinding } from "../../../main/services/schedule-mcp-binding.js";
 import { storeFor } from "./mcp.ts";
 import { runScheduledInference } from "./scheduled-inference.ts";
@@ -12,6 +13,8 @@ import { JsonStore, acquireLease, readJson } from "./state.ts";
 import { workspaceStore, accessFor } from "./workspaces.ts";
 import { resolveScheduledScript, runScheduledScript } from "../../../main/services/schedule-script.js";
 import { createCliModelRuntime } from "./providers.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { assertScheduleApproval, isScheduleMutation, type ScheduleToolApproval } from "./schedule-tool-approval.ts";
 
 async function providerFingerprint(agentDir: string, providerId?: string, modelId?: string): Promise<string> {
   if (!providerId || !modelId) throw new Error("Select an explicit provider and model for unattended inference.");
@@ -22,19 +25,49 @@ async function providerFingerprint(agentDir: string, providerId?: string, modelI
 }
 
 export function createCliScheduler(agentDir: string) {
-  const store = createScheduleStore(new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []), new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
+  const approvedMutation = new AsyncLocalStorage<{ approval: ScheduleToolApproval; active: boolean; firstWrite: boolean; cancellation: AbortController }>();
+  const persistence = new JsonStore<unknown[]>(join(agentDir, "schedules.json"), []);
+  const tasks = {
+    load: () => persistence.load(),
+    update<R>(mutation: (draft: unknown[]) => R | Promise<R>, isCurrent?: () => boolean): Promise<R> {
+      return persistence.update(mutation, () => {
+        if (isCurrent && !isCurrent()) return false;
+        const current = approvedMutation.getStore();
+        if (current?.active) {
+          try {
+            assertScheduleApproval(agentDir, current.approval, current.firstWrite);
+          } catch (error) {
+            // A rejected mutation may rearm/restore the unchanged task, never reuse its consent.
+            // Aborting lets the shared lifecycle roll back writes this mutation already made.
+            current.active = false;
+            current.cancellation.abort();
+            throw error;
+          }
+          current.firstWrite = false;
+        }
+        return true;
+      });
+    },
+  };
+  const store = createScheduleStore(tasks, new JsonStore<unknown[]>(join(agentDir, "schedule-runs.json"), []));
   const active = new Map<string, AbortController>();
+  let botPorts: BotRoutineExecutorPorts | undefined;
+  const routineExecutor = createBotRoutineExecutor({ store, ports: () => {
+    if (!botPorts) throw new Error("Durable Bot routines are unavailable on this host.");
+    return botPorts;
+  }, broadcast: () => {} });
   const service = createScheduleServiceCore({ store,
     globallyEnabled: async () => readJson<{ scheduledTasksEnabled?: boolean }>(join(agentDir, "aiden.json"), {}).scheduledTasksEnabled !== false,
     broadcast: () => {}, warn: (message) => process.stderr.write(message + "\n"), error: (message, error) => process.stderr.write(`${message} ${String(error)}\n`),
     execution: {
       cancel(id) { const controller = active.get(id); controller?.abort(); return !!controller; },
       cancelAll() { for (const controller of active.values()) controller.abort(); },
-      async run(task): Promise<ScheduledRun> {
+      async run(task, runId, trigger): Promise<ScheduledRun> {
         const startedAt = Date.now();
         const controller = new AbortController(); active.set(task.id, controller);
         let output = "", error: string | undefined;
         try {
+          if (task.botId) return await routineExecutor.run(task, { runId, trigger, signal: controller.signal });
           const workspace = (await workspaceStore(agentDir).load()).find((entry) => entry.id === task.workspaceId);
           if (!workspace) throw new Error("Register and select a workspace before running a schedule.");
           if (accessFor(agentDir, workspace.folderPath) !== "full") throw new Error("Unattended work requires the workspace's explicit full access tier.");
@@ -59,6 +92,7 @@ export function createCliScheduler(agentDir: string) {
   });
   async function saveInput(input: ScheduledTaskInput, options?: { expectedUpdatedAt?: number; signal?: AbortSignal }) {
     input = structuredClone(input);
+    if (input.botId) return service.save(input, options);
         if (input.mode === "script" && input.permission !== "full") throw new Error("Script schedules require explicit full permission.");
         const servers = await storeFor(agentDir).load();
         input.mcpServerBindings = (input.mcpServerIds ?? []).map((id) => {
@@ -73,10 +107,41 @@ export function createCliScheduler(agentDir: string) {
         }
     return service.save(input, options);
   }
-  async function command(args: string[]) {
+  async function command(args: string[]): Promise<unknown> {
     const [action = "list", value, timezone] = args;
+    if (isScheduleMutation(action) && timezone !== undefined) {
+      const approval = JSON.parse(timezone) as ScheduleToolApproval;
+      if (approval.action !== action) throw new Error("The approved schedule action changed.");
+      assertScheduleApproval(agentDir, approval);
+      const current = { approval, active: true, firstWrite: true, cancellation: new AbortController() };
+      try {
+        return await approvedMutation.run(current, () => command(args.slice(0, 2)));
+      } finally {
+        // Cron callbacks can inherit this async context, but never its one-shot consent.
+        current.active = false;
+      }
+    }
+    const currentApproval = approvedMutation.getStore();
+    const revision = currentApproval?.active
+      ? (JSON.parse(currentApproval.approval.snapshot) as { task?: { updatedAt?: number } }).task?.updatedAt
+      : undefined;
+    // A new task has no revision to pin, but its receipt can still be cancelled.
+    const mutationOptions = currentApproval?.active
+      ? { ...(revision === undefined ? {} : { expectedUpdatedAt: revision }), signal: currentApproval.cancellation.signal }
+      : undefined;
     switch (action) {
       case "list": return store.list();
+      case "status": {
+        const now = Date.now();
+        const tasks = (await store.list()).filter((task) => task.enabled || task.pendingRoutineFires?.length);
+        const nextRunAt = tasks.flatMap((task) => task.enabled && task.nextRunAt !== undefined ? [task.nextRunAt] : []).sort((a, b) => a - b)[0];
+        return {
+          checkedAt: now,
+          nextRunAt: nextRunAt ?? null,
+          overdueTaskIds: tasks.filter((task) => task.enabled && task.nextRunAt !== undefined && task.nextRunAt < now - 15 * 60_000).map((task) => task.id),
+          pendingRoutineFires: tasks.reduce((count, task) => count + (task.pendingRoutineFires?.length ?? 0), 0),
+        };
+      }
       case "runs": if (!value) throw new Error("Provide a task id."); return store.runs(value);
       case "notifications": {
         const since = value === undefined ? undefined : Number(value);
@@ -116,16 +181,16 @@ export function createCliScheduler(agentDir: string) {
       case "save": {
         if (!value) throw new Error("Provide a JSON file containing ScheduledTaskInput.");
         const input = JSON.parse(readFileSync(value, "utf8")) as ScheduledTaskInput;
-        return saveInput(input);
+        return saveInput(input, mutationOptions);
       }
-      case "remove": await service.remove(value); return { removed: value };
-      case "pause": return service.pause(value);
-      case "resume": return service.resume(value);
+      case "remove": await service.remove(value, mutationOptions); return { removed: value };
+      case "pause": return service.pause(value, mutationOptions);
+      case "resume": return service.resume(value, mutationOptions);
       case "run": return service.runNow(value);
-      default: throw new Error("Usage: schedule list | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
+      default: throw new Error("Usage: schedule list|status | save <json-file> | preview <cron> [timezone] | runs|notifications [since-ms]|run|pause|resume|remove <id>");
     }
   }
-  return { store, service: { ...service, save: saveInput }, command };
+  return { store, service: { ...service, save: saveInput }, command, setBotPorts(ports: BotRoutineExecutorPorts) { botPorts = ports; } };
 }
 
 export { daemonSocket, remoteDaemonCommand } from "./daemon-control.ts";

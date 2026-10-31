@@ -6,12 +6,14 @@ import {
   setChatDraftGitMode,
   type ChatDraftGitMode,
 } from "../lib/chat-draft";
-import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
+import { historyNavigationAvailability } from "../lib/history-navigation";
 import { PairingRequestSheet } from "../components/remote-pairing-request-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 import { appControlsApi } from "../lib/ipc";
 import * as React from "react";
-import { appApi, chatsApi, localRunsApi, onNotification, workspacesApi } from "../lib/ipc";
+import { appApi, chatsApi, localRunsApi, onNotification, settingsApi, workspacesApi } from "../lib/ipc";
+import { mirrorNewChatModelToHost, subscribeHostNewChatModel } from "../lib/use-model-selection";
 import { useTheme } from "../lib/use-theme";
 import { useActiveWorkspace, WorkspaceProvider } from "../lib/workspace-context";
 import { WorkspaceTerminalProvider, useWorkspaceTerminal } from "../components/terminal-drawer";
@@ -22,6 +24,7 @@ import { environmentToggleTarget, isBotsPath } from "../lib/bot-routes";
 import { AssistantDock } from "../components/assistant/assistant-dock";
 import { queryKeys } from "../lib/queries";
 import { subscribeGitQuerySync } from "../lib/git-query-sync";
+import { subscribeWorkspaceFilesSync } from "../lib/workspace-files-sync";
 import {
   consumeRendererLifecycleUnloadApproval,
   rendererLifecycleGuarded,
@@ -30,6 +33,8 @@ import { CommandSystemProvider, useCommandHandler, useCommandSystem } from "../l
 import { NewChatActionsProvider, type NewChatActions } from "../lib/new-chat-actions";
 import { chatIdFromPath, draftWorkspaceMenu, requestDraftWorkspaceMenu } from "../lib/draft-workspace-menu";
 import { AppCommandPalette } from "../components/command-palette";
+import { KeyboardRegions } from "../components/keyboard-regions";
+import { KeyboardShortcutsDialog } from "../components/keyboard-shortcuts-dialog";
 import { OnboardingFlow } from "../components/onboarding-flow";
 import { BotConnectionSetupHost } from "./bots/bot-connection-setup-host";
 import { workspaceCommandVisibility } from "../lib/command-system-core";
@@ -201,6 +206,41 @@ function RootContent() {
   );
   useCommandHandler("design.open", () => openStudio("/design"), capabilities.designStudio);
   useCommandHandler("images.open", () => openStudio("/images"), capabilities.createImages);
+  const goTo = React.useCallback(
+    (to: "/bots" | "/scheduled" | "/profile") => {
+      if (navigationBlockedReason) {
+        toast.info(navigationBlockedReason);
+        return;
+      }
+      void navigate({ to });
+    },
+    [navigate, navigationBlockedReason],
+  );
+  useCommandHandler("bots.open", () => goTo("/bots"), capabilities.bots);
+  useCommandHandler("scheduled.open", () => goTo("/scheduled"));
+  useCommandHandler("profile.open", () => goTo("/profile"));
+  // ⌘[ and ⌘] walk the same in-app history as the title bar's arrows.
+  const router = useRouter();
+  const historyEntryIndex = useRouterState({
+    select: (state) => (state.location.state as { __TSR_index?: number }).__TSR_index,
+  });
+  const { canGoBack, canGoForward } = historyNavigationAvailability(
+    historyEntryIndex,
+    router.history.length,
+  );
+  const traverseHistory = (go: () => void) => {
+    if (navigationBlockedReason) {
+      toast.info(navigationBlockedReason);
+      return;
+    }
+    go();
+  };
+  useCommandHandler("navigate.back", () => traverseHistory(() => router.history.back()), canGoBack);
+  useCommandHandler(
+    "navigate.forward",
+    () => traverseHistory(() => router.history.forward()),
+    canGoForward,
+  );
   // Every new-chat entry point lands here: an empty draft already open in the
   // workspace is reused and focused; otherwise a fresh draft opens there.
   const openNewChatIn = React.useCallback(
@@ -388,6 +428,11 @@ function RootContent() {
   }, [queryClient]);
 
   React.useEffect(() => subscribeGitQuerySync(queryClient, onNotification), [queryClient]);
+  React.useEffect(() => subscribeHostNewChatModel(onNotification), []);
+  React.useEffect(() => {
+    void mirrorNewChatModelToHost(settingsApi).catch(() => undefined);
+  }, []);
+  React.useEffect(() => subscribeWorkspaceFilesSync(queryClient, onNotification), [queryClient]);
 
   React.useEffect(() => {
     return onNotification("chats:changed", () => {
@@ -395,6 +440,16 @@ function RootContent() {
         queryClient.invalidateQueries({ queryKey: queryKeys.chats }),
         queryClient.invalidateQueries({ queryKey: ["bot-chats"] }),
       ]);
+    });
+  }, [queryClient]);
+
+  React.useEffect(() => {
+    return onNotification("chats:follow-through-changed", (payload: unknown) => {
+      const update = payload && typeof payload === "object" ? (payload as { chatId?: unknown; transcript?: unknown }) : {};
+      const chatId = typeof update.chatId === "string" && update.chatId ? update.chatId : undefined;
+      void queryClient.invalidateQueries({ queryKey: ["chat-follow-through", ...(chatId ? [chatId] : [])] });
+      // A follow-up notice was saved without a turn to stream it: re-read the transcript.
+      if (chatId && update.transcript === true) void queryClient.invalidateQueries({ queryKey: queryKeys.chat(chatId) });
     });
   }, [queryClient]);
 
@@ -508,6 +563,8 @@ function RootContent() {
     void Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.settings }),
       queryClient.invalidateQueries({ queryKey: queryKeys.webSearch }),
+      // The Web pages row reads whether Web Search is on from its own snapshot.
+      queryClient.invalidateQueries({ queryKey: queryKeys.webFetch }),
       queryClient.invalidateQueries({ queryKey: queryKeys.workspaces }),
       queryClient.invalidateQueries({ queryKey: queryKeys.skills }),
       queryClient.invalidateQueries({ queryKey: ["skillCatalog"] }),
@@ -569,6 +626,8 @@ function RootContent() {
         />
         <AssistantDock rightInset={environmentPanel.dockRightInset} />
         <AppCommandPalette navigationBlockedReason={navigationBlockedReason} />
+        <KeyboardRegions />
+        <KeyboardShortcutsDialog />
         <PairingRequestSheet />
         {capabilities.bots ? <BotConnectionSetupHost /> : null}
       </div>

@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
-import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
+import { DEFAULT_CHAT_WORKSPACE_ID, persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { sharedWorkspaceScopeId } from "./memory-shared.js";
 import type { PiAgentRuntimeExtension } from "./pi-agent-runtime-harness.js";
 import { declarePiRuntimeReplay } from "./pi-runtime-tool.js";
@@ -29,9 +29,12 @@ export interface MemoryProposal {
   supersedesId?: string;
 }
 
-export function memoryScopeForChat(chat: Chat, workspaceFolderPath?: string): MemoryScope {
+export function memoryScopeForChat(chat: Chat, workspaceFolderPath?: string, noWorkspace = false): MemoryScope {
   // Bots keep their own memory files (`bot-memory/`), never this store.
   if (chat.botId) throw new Error("Bot chats do not use workspace memory.");
+  // No workspace chats each have a hidden folder but share one memory: the
+  // scope the folderless default workspace always used, so its facts carry on.
+  if (noWorkspace) return { kind: "workspace", id: DEFAULT_CHAT_WORKSPACE_ID };
   // Workspaces with a known folder share one scope with the CLI's identical
   // folder hash; a removed/unresolved workspace keeps its legacy id scope.
   return workspaceFolderPath
@@ -70,6 +73,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         id: metadataId(chat.id, "message", message.id),
         kind: "transcript",
         text: boundedMetadataText(message.content),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: message.id,
       });
@@ -81,6 +85,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         text: boundedMetadataText(
           `Attachment ${attachment.name}; type ${attachment.mimeType}; ${attachment.size} bytes.`,
         ),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: attachment.id,
       });
@@ -90,6 +95,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         id: metadataId(chat.id, "ui-visual", visual.id),
         kind: "artifact",
         text: boundedMetadataText(`Visual ${visual.title}. ${visual.fallbackText}`),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: visual.id,
       });
@@ -101,6 +107,7 @@ export function memoryMetadataForChat(chat: Chat): MemoryMetadataInput[] {
         text: boundedMetadataText(
           `HTML artifact ${artifact.title}; type ${artifact.mimeType}; ${artifact.size} bytes.`,
         ),
+        createdAt: message.createdAt,
         chatId: chat.id,
         sourceId: artifact.id,
       });

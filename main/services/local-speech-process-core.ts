@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { voiceSetupMessage } from "../../renderer/shared/voice-provider.js";
 import { LOAD_DEADLINE_MS, STATUS_DEADLINE_MS, transcribeDeadlineMs } from "../../renderer/shared/local-speech-budget.js";
-import type { SpeechModelSpec } from "./local-speech-catalog.js";
+import type { SpeechModelFamily, SpeechModelSpec } from "./local-speech-catalog.js";
 import {
   isLocalSpeechWorkerMessage,
   LOCAL_SPEECH_PROTOCOL_VERSION,
@@ -165,8 +165,10 @@ export class LocalSpeechProcessClient {
     return result;
   }
 
-  async status(): Promise<{ ready: boolean; error: string | null }> {
-    const result = LocalSpeechProcessClient.unwrap(await this.request({ kind: "status" }, this.deadlines.status));
+  async status(family?: SpeechModelFamily): Promise<{ ready: boolean; error: string | null }> {
+    const result = LocalSpeechProcessClient.unwrap(
+      await this.request({ kind: "status", ...(family ? { family } : {}) }, this.deadlines.status),
+    );
     return { ready: result.ready === true, error: result.error ?? null };
   }
 

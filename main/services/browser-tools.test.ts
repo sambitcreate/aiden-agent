@@ -5,7 +5,10 @@ import {
   BUILT_IN_BROWSER_PROFILES, DEFAULT_BROWSER_SETTINGS,
   type BrowserCommand, type BrowserCommandResult, type BrowserState, type BrowserTab,
 } from "../../renderer/shared/browser.js";
-import { BROWSER_TOOL_NAMES, canUseBrowserTools, createBrowserAgentTools, normalizeBrowserToolUrl } from "./browser-tools.js";
+import {
+  BROWSER_AGENT_GUIDANCE, BROWSER_TOOL_NAMES, canUseBrowserTools, createBrowserAgentTools, normalizeBrowserToolUrl,
+} from "./browser-tools.js";
+import { estimateStaticContextTokens } from "./generation-context.js";
 
 test("native browser tools require a foreground ordinary workspace rather than a Bot adapter or headless owner", () => {
   const input = { permission: "full", rendererOwner: true, assistantMode: false, bot: false };
@@ -20,7 +23,7 @@ function tab(id: string): BrowserTab {
     viewport: { mode: "fill", width: 1280, height: 720 }, appearance: "system", zoom: 1, recording: false,
     agentControlling: false, floating: false, visible: true };
 }
-function harness(options: { supportsImages?: boolean; empty?: boolean } = {}) {
+function harness(options: { supportsImages?: boolean; empty?: boolean; profile?: "workspace" | "bot" } = {}) {
   const abort = new AbortController();
   let state: BrowserState = { workspaceId: "workspace", revision: 1, agentAccessOverride: "inherit", agentAccessAllowed: true,
     tabs: options.empty ? [] : [tab("first"), tab("second")], activeTabId: options.empty ? null : "first",
@@ -29,6 +32,7 @@ function harness(options: { supportsImages?: boolean; empty?: boolean } = {}) {
   let handler: ((command: BrowserCommand, signal: AbortSignal) => Promise<BrowserCommandResult>) | undefined;
   const tools = createBrowserAgentTools({ workspaceId: "workspace", chatId: "chat", generationId: "generation",
     signal: abort.signal, supportsImages: options.supportsImages ?? true,
+    ...(options.profile ? { profile: options.profile } : {}),
     port: {
       getState: () => state,
       command: async (command, signal) => {
@@ -75,7 +79,42 @@ test("workspace browser access overrides global defaults and inherit follows the
 test("exposes the complete 14-operation reference browser surface", () => {
   const h = harness();
   assert.deepEqual(h.tools.map(({ name }) => name), BROWSER_TOOL_NAMES);
+  assert.equal(h.tools.length, 14);
   for (const tool of h.tools) assert.equal((tool.parameters as { additionalProperties?: boolean }).additionalProperties, false);
+  assert.deepEqual(harness({ profile: "workspace" }).tools.map(({ name }) => name), BROWSER_TOOL_NAMES);
+});
+
+test("the loaded browser tools stay small, and the limits left out of them still hold", async () => {
+  const h = harness();
+  // About 2,950 estimated tokens before the descriptions and schemas were trimmed.
+  assert.ok(estimateStaticContextTokens({ contextWindow: 128_000, systemPrompt: BROWSER_AGENT_GUIDANCE, tools: h.tools }) < 1_800);
+  // The model is not shown length and range limits, but a call past one is refused before it reaches the browser.
+  await assert.rejects(h.call("browser_resize", { mode: "freeform", width: 100, height: 800 }), /width/u);
+  await assert.rejects(h.call("browser_click", { locator: "" }), /locator/u);
+  await assert.rejects(h.call("browser_navigate", { url: `https://example.test/${"a".repeat(2_100)}` }), /url/u);
+  await assert.rejects(h.call("browser_wait_for", { text: "Done", timeoutMs: 120_000 }), /timeoutMs/u);
+  await assert.rejects(h.call("browser_resize", { mode: "zoomed" }), /mode/u);
+  assert.equal(h.calls.length, 0);
+  await h.call("browser_resize", { mode: "freeform", width: 390, height: 844 });
+  assert.deepEqual(h.calls.map(({ action }) => action), ["viewport"]);
+});
+
+test("a Bot's browser has no page scripts or recording, and opens web pages only", async () => {
+  const h = harness({ profile: "bot" });
+  assert.deepEqual(h.tools.map(({ name }) => name), [
+    "browser_status", "browser_open", "browser_navigate", "browser_resize", "browser_set_appearance", "browser_snapshot",
+    "browser_click", "browser_type", "browser_press", "browser_scroll", "browser_wait_for",
+  ]);
+  const open = h.tools.find(({ name }) => name === "browser_open")!;
+  assert.equal("path" in (open.parameters as { properties: Record<string, unknown> }).properties, false);
+  for (const args of [{ url: "file:///tmp/sample.html" }, { url: "/tmp/sample.html" }]) {
+    await assert.rejects(h.call("browser_open", args), /web pages only/u);
+  }
+  await assert.rejects(h.call("browser_open", { path: "/tmp/sample.html" }));
+  await assert.rejects(h.call("browser_navigate", { url: "file:///tmp/sample.html" }), /web pages only/u);
+  assert.equal(h.calls.length, 0);
+  await h.call("browser_navigate", { url: "https://example.test/next" });
+  assert.deepEqual(h.calls.map(({ action }) => action), ["navigate"]);
 });
 
 test("pins default tab per generation and only changes it after a successful explicit target", async () => {
@@ -276,3 +315,17 @@ test("local documents use managed previews, preserve tab reuse and reject ambigu
   }
   assert.equal(h.calls.length, 4);
 });
+
+test("stopping a recording gives the model the saved file and the step only a playable recap", async () => {
+  const browser = harness();
+  const recording = { id: "recording-0f1e2d3c-4b5a-4678-9abc-def012345678", path: "/private/aiden/recording.mp4", mimeType: "video/mp4", durationMs: 4_200, sizeBytes: 90_000 };
+  browser.setHandler(async (command) => ({ state: browser.state, ...(command.action === "record_stop" ? { recording } : {}) }));
+  const result = await browser.call("browser_recording_stop");
+  assert.deepEqual(JSON.parse((result.content[0] as { text: string }).text), { tabId: "first", ...recording });
+  assert.deepEqual(result.details, { recording: { id: recording.id, mimeType: "video/mp4", durationMs: 4_200, sizeBytes: 90_000 } });
+
+  // A result the transcript can't play carries no recap; the model still gets it.
+  browser.setHandler(async () => ({ state: browser.state, recording: { ...recording, mimeType: "video/quicktime" } }));
+  assert.equal((await browser.call("browser_recording_stop")).details, null);
+});
+

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient } from "@earendil-works/pi-mcp";
 import { createMcpStdioTransport } from "./mcp-stdio-transport.js";
 
 /**
@@ -78,9 +78,9 @@ test("stdio servers get only the safe default plus declared environment, and clo
     env: { DECLARED_SETTING: "declared", REPORT_FILE: reportFile },
     closeGraceMs: 500,
   });
-  const client = new Client({ name: "stdio-regression", version: "1" });
+  const client = new McpClient({ name: "stdio-regression", version: "1" });
   await client.connect(transport);
-  assert.equal(client.getServerVersion()?.name, "wrapper", "SDK framing round-trips over the custom transport");
+  assert.equal(client.serverInfo?.name, "wrapper", "framing round-trips over the transport");
   const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number; inherited: unknown; declared: unknown; hasPath: boolean };
   assert.equal(report.inherited, null, "Aiden's own environment is not forwarded");
   assert.equal(report.declared, "declared");
@@ -104,9 +104,9 @@ test("a wrapper that exits on its own does not leave its server running after th
     env: { REPORT_FILE: reportFile, EXIT_WHEN_INITIALIZED: "1" },
     closeGraceMs: 500,
   });
-  const client = new Client({ name: "stdio-natural-exit", version: "1" });
+  const client = new McpClient({ name: "stdio-natural-exit", version: "1" });
   let closed = false;
-  client.onclose = () => { closed = true; };
+  client.onClose(() => { closed = true; });
   await client.connect(transport);
   const report = JSON.parse(await readFile(reportFile, "utf8")) as { grandchild: number };
   t.after(() => { try { process.kill(report.grandchild, "SIGKILL"); } catch { /* already gone */ } });
@@ -115,4 +115,103 @@ test("a wrapper that exits on its own does not leave its server running after th
   for (let attempt = 0; attempt < 150 && alive(report.grandchild); attempt += 1) await delay(20);
   assert.equal(alive(report.grandchild), false, "the server the wrapper left behind was terminated without client.close()");
   await client.close();
+});
+
+/** A newline-framed MCP server with one tool, `echo`, that returns its input as text and structured content. */
+const TOOL_SERVER = `
+let buffer = "";
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, index));
+    buffer = buffer.slice(index + 1);
+    if (message.method === "initialize") reply(message.id, {
+      protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "echo", version: "1" },
+    });
+    if (message.method === "tools/list") reply(message.id, { tools: [{
+      name: "echo", inputSchema: { type: "object", properties: { text: { type: "string" } } },
+      outputSchema: { type: "object", required: ["echoed"], properties: { echoed: { type: "string" } } },
+    }] });
+    if (message.method === "tools/call") reply(message.id, {
+      content: [{ type: "text", text: message.params.arguments.text }], structuredContent: { echoed: message.params.arguments.text },
+    });
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+`;
+
+test("a stdio server's tools are listed and called end to end through the guarded inventory", { timeout: 15_000 }, async (t) => {
+  const { listMcpToolInventory, listMcpToolPage, createMcpToolCallGuard, guardedMcpToolCall } = await import("./mcp-tool-inventory.js");
+  const client = new McpClient({ name: "stdio-tools", version: "1" });
+  t.after(() => client.close());
+  await client.connect(createMcpStdioTransport({ command: process.execPath, args: ["-e", TOOL_SERVER], closeGraceMs: 500 }));
+  const tools = await listMcpToolInventory({ assertCurrent() {}, listPage: (cursor, signal) => listMcpToolPage(client, cursor, { signal }) });
+  assert.deepEqual(tools.map(({ name }) => name), ["echo"]);
+  const guard = createMcpToolCallGuard(tools);
+  const result = await guardedMcpToolCall(guard, client, { name: "echo", arguments: { text: "hello" } }, { timeoutMs: 5_000 });
+  assert.deepEqual(result.content, [{ type: "text", text: "hello" }]);
+  assert.deepEqual(result.structuredContent, { echoed: "hello" });
+  await assert.rejects(guardedMcpToolCall(guard, client, { name: "missing", arguments: {} }), /no longer offered/u);
+});
+
+/**
+ * A wrapper that starts a server in its own session (`setsid`, outside the
+ * wrapper's process group) which inherits the wrapper's stdout, so the pipe
+ * stays open after the wrapper exits.
+ */
+const ESCAPED_SERVER = `
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const escaped = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+writeFileSync(process.env.REPORT_FILE, JSON.stringify({ escaped: escaped.pid }));
+let buffer = "";
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const message = JSON.parse(buffer.slice(0, index));
+    buffer = buffer.slice(index + 1);
+    if (message.method === "initialize") {
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {
+        protocolVersion: message.params.protocolVersion, capabilities: {}, serverInfo: { name: "escaped", version: "1" },
+      } }) + "\\n");
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+`;
+
+test("close is bounded when a process outside the server's group holds its stdout", {
+  skip: process.platform === "win32" ? "POSIX sessions" : false,
+  timeout: 15_000,
+}, async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aiden-mcp-stdio-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const reportFile = join(directory, "report.json");
+  const client = new McpClient({ name: "stdio-escaped", version: "1" });
+  await client.connect(createMcpStdioTransport({
+    command: process.execPath, args: ["-e", ESCAPED_SERVER], env: { REPORT_FILE: reportFile }, closeGraceMs: 300,
+  }));
+  const { escaped } = JSON.parse(await readFile(reportFile, "utf8")) as { escaped: number };
+  t.after(() => { try { process.kill(escaped, "SIGKILL"); } catch { /* already gone */ } });
+  const started = Date.now();
+  await client.close();
+  assert.ok(Date.now() - started < 5_000, `close settled after ${Date.now() - started} ms`);
+});
+
+test("an oversized stdio message fails the pending call at once instead of at its timeout", { timeout: 15_000 }, async (t) => {
+  const server = TOOL_SERVER.replace(
+    "content: [{ type: \"text\", text: message.params.arguments.text }]",
+    "content: [{ type: \"text\", text: \"x\".repeat(4096) }]",
+  );
+  assert.notEqual(server, TOOL_SERVER);
+  const { callMcpTool } = await import("./mcp-tool-inventory.js");
+  const client = new McpClient({ name: "stdio-oversized", version: "1" });
+  t.after(() => client.close());
+  await client.connect(createMcpStdioTransport({ command: process.execPath, args: ["-e", server], maxBufferSize: 1024, closeGraceMs: 300 }));
+  const started = Date.now();
+  await assert.rejects(callMcpTool(client, { name: "echo", arguments: { text: "hi" } }, { timeoutMs: 10_000 }), /closed/iu);
+  assert.ok(Date.now() - started < 5_000, "the call failed when the oversized reply arrived");
 });

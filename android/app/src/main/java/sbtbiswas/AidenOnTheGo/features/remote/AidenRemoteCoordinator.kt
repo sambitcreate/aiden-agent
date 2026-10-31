@@ -29,6 +29,7 @@ import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceArchiveStore
 import sbtbiswas.AidenOnTheGo.persistence.AidenWorkspaceEnvironmentCache
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteProtocol
 import kotlinx.serialization.builtins.ListSerializer
 import okhttp3.OkHttpClient
 import java.io.File
@@ -89,6 +90,150 @@ internal fun aidenProgressCapabilitiesToRequest(
         .distinct()
 
 /**
+ * Revision 37: a Mac that offers `bot:handoffs` in `serverCapabilities` is asked for it, in a
+ * call of its own after the progress grants, unless [installation] already holds it. Revision 40:
+ * `bot:handoff-notes` joins that call only when the Mac offers it too, so a Mac on an earlier
+ * revision still grants hand-offs, and a phone that holds them asks for the notes alone once its Mac updates.
+ * Revision 43's `bot:handoff-on-mac` joins the same way.
+ */
+internal fun aidenBotHandoffGrantsToRequest(server: AidenServer, installation: AidenInstallation): List<AidenRemoteCapability> {
+    if (!server.offersBotHandoffs) return emptyList()
+    val offered = listOfNotNull(
+        AidenRemoteCapability.BOT_HANDOFFS,
+        AidenRemoteCapability.BOT_HANDOFF_NOTES.takeIf { server.offersBotHandoffNotes },
+        AidenRemoteCapability.BOT_HANDOFF_ON_MAC.takeIf { server.offersBotHandoffOnMac }
+    )
+    return offered.filterNot { server.capabilities.contains(it) || installation.hasNegotiatedAccess(it) }
+}
+
+internal fun aidenShouldRequestBotHandoffs(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenBotHandoffGrantsToRequest(server, installation).isNotEmpty()
+
+/**
+ * Revision 39: a Mac that offers `schedule:cards` in `serverCapabilities` is asked
+ * for it, in a call of its own after every other negotiation, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestScheduleCards(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.SCHEDULE_CARDS, server, installation)
+
+/**
+ * Revision 45: a Mac that offers `bot:images` in `serverCapabilities` is asked for it, in a call
+ * of its own after `schedule:cards`, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotImages(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_IMAGES, server, installation)
+
+/**
+ * Revision 42: a Mac that offers `bot:issues` in `serverCapabilities` is asked for it,
+ * in a call of its own after every other negotiation, unless [installation] already holds it.
+ */
+internal fun aidenShouldRequestBotIssues(server: AidenServer, installation: AidenInstallation): Boolean =
+    aidenShouldRequestSoloCapability(AidenRemoteCapability.BOT_ISSUES, server, installation)
+
+private fun aidenShouldRequestSoloCapability(
+    capability: AidenRemoteCapability,
+    server: AidenServer,
+    installation: AidenInstallation
+): Boolean =
+    server.serverCapabilities?.contains(capability) == true &&
+        !server.capabilities.contains(capability) &&
+        !installation.hasNegotiatedAccess(capability)
+
+/** What asking a Mac for one solo grant came to: its fresh `/server`, and the grants to keep once it lists them all. */
+internal data class AidenSoloCapabilityNegotiation(val server: AidenServer, val granted: List<AidenRemoteCapability>?)
+
+/**
+ * Revision 37: asks [server] for `bot:handoffs` (and, revision 40, `bot:handoff-notes` when it
+ * offers them) in a call of its own (`accepts` names nothing else), then reads `/server` again. Returns null when nothing was asked, the Mac refused (a 400
+ * or 404 only means it can't grant it), the read failed, or the pairing changed while it ran
+ * ([stillCurrent]). [AidenSoloCapabilityNegotiation.granted] is set only once the Mac's own
+ * `serverCapabilities` lists every grant it returned. A 401 or a revoked credential is rethrown.
+ */
+internal suspend fun aidenRequestBotHandoffs(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(aidenBotHandoffGrantsToRequest(server, installation), client, stillCurrent)
+
+/**
+ * Revision 39: asks [server] for `schedule:cards` alone, exactly as
+ * [aidenRequestBotHandoffs] asks for `bot:handoffs`. A Mac that refuses it (400 or 404) leaves
+ * the pairing as it was; scheduled-task approvals then show the plain summary card.
+ */
+internal suspend fun aidenRequestScheduleCards(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestScheduleCards(server, installation)) listOf(AidenRemoteCapability.SCHEDULE_CARDS) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 45: asks [server] for `bot:images` alone, exactly as [aidenRequestScheduleCards] asks
+ * for `schedule:cards`. A Mac that refuses it (400 or 404) leaves the pairing as it was; its Bots'
+ * shared images then read as a line that says to open the chat on the Mac.
+ */
+internal suspend fun aidenRequestBotImages(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotImages(server, installation)) listOf(AidenRemoteCapability.BOT_IMAGES) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+/**
+ * Revision 42: asks [server] for `bot:issues` alone, exactly as
+ * [aidenRequestScheduleCards] asks for `schedule:cards`. A Mac that refuses it (400 or 404)
+ * leaves the pairing as it was; the Bot chat then shows no issue cards.
+ */
+internal suspend fun aidenRequestBotIssues(
+    client: AidenRemoteClient,
+    server: AidenServer,
+    installation: AidenInstallation,
+    stillCurrent: () -> Boolean = { true }
+): AidenSoloCapabilityNegotiation? =
+    aidenRequestCapabilitiesAlone(
+        if (aidenShouldRequestBotIssues(server, installation)) listOf(AidenRemoteCapability.BOT_ISSUES) else emptyList(),
+        client,
+        stillCurrent
+    )
+
+private suspend fun aidenRequestCapabilitiesAlone(
+    missing: List<AidenRemoteCapability>,
+    client: AidenRemoteClient,
+    stillCurrent: () -> Boolean
+): AidenSoloCapabilityNegotiation? {
+    if (!stillCurrent() || missing.isEmpty()) return null
+    return try {
+        val complete = client.updateDeviceCapabilities(missing)
+        if (!stillCurrent()) return null
+        val refreshed = client.server()
+        if (!stillCurrent()) return null
+        val listed = refreshed.serverCapabilities
+        AidenSoloCapabilityNegotiation(refreshed, complete.takeIf { listed != null && listed.containsAll(complete) })
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: AidenRemoteClientException.Server) {
+        if (error.statusCode == 401 ||
+            error.body.code == sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode.CREDENTIAL_REVOKED
+        ) throw error
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/**
  * One pairing: the Mac, this phone's device id there, and when it was made. Unpairing and
  * pairing the same Mac again is another pairing, so nothing started for the old one lands in
  * the new one.
@@ -118,7 +263,9 @@ class AidenRemoteCoordinator(
     /** Runs the Bot outbox's disk work in order; null uses its own thread. Tests hold it to order a read against a switch. */
     botOutboxIo: java.util.concurrent.Executor? = null,
     /** Saved visual viewer documents; the app passes a directory under `cacheDir`. */
-    visualDocumentDir: File = File(storageDir, "visual_documents")
+    visualDocumentDir: File = File(storageDir, "visual_documents"),
+    /** Where a browser recording waits while it plays (revision 46); the app passes a directory under `cacheDir`. */
+    val browserRecordingDir: File = File(storageDir, "browser_recordings")
 ) {
     /** Visual viewer documents (revision 35), purged whenever a pairing is removed or revoked. */
     val visualDocumentCache = AidenVisualDocumentCache(visualDocumentDir)
@@ -151,6 +298,19 @@ class AidenRemoteCoordinator(
 
     private val _client = MutableStateFlow<AidenRemoteClient?>(null)
     val client: StateFlow<AidenRemoteClient?> = _client.asStateFlow()
+
+    /**
+     * The Mac's feature tokens: this connection's `/server` answer, else those the active pairing
+     * saved from its last answer, else null for a pairing that never heard `/server`. Gates read
+     * these so a connecting or cold open behaves like the last connected one instead of falling
+     * to a legacy path.
+     */
+    fun knownServerFeatures(server: AidenServer? = _serverInfo.value): List<String>? =
+        server?.features ?: installationStore.activeInstallation?.serverFeatures
+
+    /** Revision 25: Bots open their durable session, read from [knownServerFeatures]. */
+    fun supportsBotDurableSession(server: AidenServer? = _serverInfo.value): Boolean =
+        knownServerFeatures(server)?.contains(AidenRemoteProtocol.BOT_DURABLE_SESSION_FEATURE) == true
     /** The client [refreshClient] last made, with the pairing it was made for. */
     @Volatile
     private var clientOwner: Pair<AidenPairingIdentity, AidenRemoteClient>? = null
@@ -352,11 +512,47 @@ class AidenRemoteCoordinator(
                     deviceCapabilities = server.capabilities,
                     serverFeatures = server.features
                 )
-                val negotiatedServer = negotiateProgressCapabilities(
+                val progressServer = negotiateProgressCapabilities(
                     generation = generation,
                     installation = installation,
                     client = newClient,
                     server = server
+                )
+                // Revision 37: `bot:handoffs` goes in a call of its own, after the others. A Mac
+                // that doesn't know a name refuses the whole batch, so asking for it with the
+                // progress grants could cost this phone those grants on an older Mac.
+                val handoffsServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = progressServer,
+                    request = ::aidenRequestBotHandoffs
+                )
+                // Revision 39: `schedule:cards` likewise goes alone, last. A Mac that refuses it
+                // leaves every other grant in place; its approvals show the plain summary card.
+                val scheduleCardsServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = handoffsServer,
+                    request = ::aidenRequestScheduleCards
+                )
+                // Revision 45: `bot:images` goes alone too, after the schedule card.
+                val imagesServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = scheduleCardsServer,
+                    request = ::aidenRequestBotImages
+                )
+                // Revision 42: `bot:issues` goes alone too, so an older Mac that refuses the
+                // name never costs this phone its other grants.
+                val negotiatedServer = negotiateSoloCapability(
+                    generation = generation,
+                    installation = installation,
+                    client = newClient,
+                    server = imagesServer,
+                    request = ::aidenRequestBotIssues
                 )
                 if (!isCurrent(generation, installation.id, newClient)) return@launch
                 installationStore.updateServerCapabilities(
@@ -438,6 +634,34 @@ class AidenRemoteCoordinator(
         }
     }
 
+    /**
+     * Asks a Mac that offers one solo grant (revision 37 `bot:handoffs`, revision 39
+     * `schedule:cards`, revision 45 `bot:images`) for it, alone, when this pairing doesn't hold it yet. A 400 or 404 means
+     * only that the Mac can't grant it; the pairing carries on with what it has.
+     */
+    private suspend fun negotiateSoloCapability(
+        generation: Long,
+        installation: AidenInstallation,
+        client: AidenRemoteClient,
+        server: AidenServer,
+        request: suspend (AidenRemoteClient, AidenServer, AidenInstallation, () -> Boolean) -> AidenSoloCapabilityNegotiation?
+    ): AidenServer {
+        val outcome = request(client, server, installation) {
+            isCurrent(generation, installation.id, client)
+        } ?: return server
+        val granted = outcome.granted ?: return outcome.server
+        val refreshed = outcome.server
+        installationStore.updateServerCapabilities(
+            instanceId = installation.instanceId,
+            serverCapabilities = refreshed.serverCapabilities ?: refreshed.capabilities,
+            serverName = refreshed.name,
+            deviceCapabilities = refreshed.capabilities,
+            serverFeatures = refreshed.features
+        )
+        installationStore.updateDeviceCapabilities(installation.instanceId, granted)
+        return refreshed
+    }
+
     fun refreshWorkspaces(expectedGeneration: Long = activationGeneration) {
         val currentClient = _client.value ?: return
         val instanceId = activeInstanceId
@@ -493,8 +717,17 @@ class AidenRemoteCoordinator(
         modelPreferenceStore.purge(installation.instanceId)
         navigationStore.purge(installation.instanceId)
         visualDocumentCache.purgeAll()
+        purgeBrowserRecordings()
         installationStore.removeInstallation(id)
         if (!wasActive) refreshIntentCatalog()
+    }
+
+    /** Drops every recording saved for playback; none outlives the pairing that served it. */
+    fun purgeBrowserRecordings() {
+        try {
+            browserRecordingDir.listFiles()?.forEach { if (it.isFile) it.delete() }
+        } catch (_: Exception) {
+        }
     }
 
     private fun refreshIntentCatalog() {

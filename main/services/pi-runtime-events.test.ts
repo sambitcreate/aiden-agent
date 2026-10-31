@@ -44,7 +44,7 @@ test("canonical Pi runtime events keep monotonic run, attempt, and turn identity
     },
     durable: true,
   });
-  channel.emit({ type: "retry", attempt: 2, reason: "provider", delayMs: 5 });
+  channel.emit({ type: "retry", attempt: 2, maxAttempts: 6, reason: "provider", delayMs: 5 });
   channel.setAttempt(2);
   channel.emit({ type: "run_end", outcome: "completed", attempts: 2 });
   await channel.settleObservers();

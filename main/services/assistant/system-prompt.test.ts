@@ -8,8 +8,14 @@ import {
 
 const base = {
   settingsSections: ["providers", "appearance"],
-  settingsPermission: "ask" as const,
-  availableTools: ["get_settings", "set_setting", "list_projects", "list_mcp_servers"],
+  availableTools: [
+    "aiden_help",
+    "aiden_get_state",
+    "aiden_show_controls",
+    "aiden_set_preference",
+    "list_projects",
+    "list_mcp_servers",
+  ],
   mcpServers: [{ id: "preset-composio", name: "Composio" }],
   unattended: false,
 };
@@ -40,16 +46,17 @@ test("grounds the prompt in settings sections without disclosing workspace inven
   assert.doesNotMatch(prompt, /The user's projects are:/u);
 });
 
-test("states the approval posture for settings mutations", () => {
-  assert.match(buildAssistantSystemPrompt(base), /must approve/u);
-  assert.match(
-    buildAssistantSystemPrompt({ ...base, settingsPermission: "full" }),
-    /without asking/u,
-  );
-  assert.match(
-    buildAssistantSystemPrompt({ ...base, settingsPermission: "none" }),
-    /cannot change settings/u,
-  );
+test("says what the dock can change and sends everything else to Settings", () => {
+  const prompt = buildAssistantSystemPrompt(base);
+  assert.match(prompt, /only settings you can change are the rows aiden_get_state returns/u);
+  assert.match(prompt, /name the Settings page/u);
+  // Help and panels only (as on a phone): no claim that it can read or change values.
+  const panelsOnly = buildAssistantSystemPrompt({
+    ...base,
+    availableTools: ["aiden_help", "aiden_show_controls"],
+  });
+  assert.match(panelsOnly, /cannot read live values or change settings yourself/u);
+  assert.doesNotMatch(panelsOnly, /aiden_set_preference|aiden_get_state/u);
 });
 
 test("without live-state tools it is told not to claim live state", () => {
@@ -58,8 +65,7 @@ test("without live-state tools it is told not to claim live state", () => {
   assert.match(prompt, /Never state what a setting is currently set to/u);
   // The instruction to consult tools must not survive without the tools.
   assert.doesNotMatch(prompt, /read settings before describing them/u);
-  // And an approval posture is meaningless with no tool to approve.
-  assert.doesNotMatch(prompt, /must approve/u);
+  assert.doesNotMatch(prompt, /aiden_set_preference/u);
 });
 
 test("with tools it is told to consult them instead of guessing", () => {
@@ -106,7 +112,7 @@ test("the host snapshot distinguishes unsafe omitted identities from no enabled 
 test("each grounding clause tracks its own tool", () => {
   const settingsOnly = buildAssistantSystemPrompt({
     ...base,
-    availableTools: ["get_settings"],
+    availableTools: ["aiden_get_state"],
   });
   assert.match(settingsOnly, /read settings before describing them/u);
   assert.doesNotMatch(settingsOnly, /check project status/u);
@@ -226,17 +232,3 @@ test("an unattended MCP automation must use approved tools and report only verif
   }
 });
 
-test("an unrecognised settings permission falls back to requiring approval", () => {
-  // settings.json is not schema-validated, so this value can be anything. A bare
-  // record lookup failed open (no instruction at all) and reached Object
-  // prototype keys like "toString".
-  for (const bogus of ["bogus", "toString", "constructor", "__proto__"]) {
-    const prompt = buildAssistantSystemPrompt({
-      ...base,
-      settingsPermission: bogus as "ask",
-    });
-    assert.match(prompt, /must approve/u, bogus);
-    assert.doesNotMatch(prompt, /native code/u, bogus);
-    assert.doesNotMatch(prompt, /\[object Object\]/u, bogus);
-  }
-});

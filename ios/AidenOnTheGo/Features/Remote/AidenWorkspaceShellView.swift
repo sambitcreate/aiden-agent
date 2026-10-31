@@ -2105,8 +2105,8 @@ struct AidenWorkspaceShellView: View {
                 coordinator.presentedError = String(localized: "Aiden returned a conversation that is unavailable in Workspaces.")
                 return
             }
-            await homeModel.load(coordinator: coordinator)
-            guard coordinator.isCurrent(context) else { return }
+            // The chat opens from the create receipt; Home's full reload
+            // (chats, tasks, catalog, usage) runs behind it.
             homeModel.accept(chat)
             openChat(chat)
             coordinator.haptics.play(
@@ -2114,6 +2114,12 @@ struct AidenWorkspaceShellView: View {
                 scope: hapticScope,
                 dedupeKey: "new-agent:\(workspace.id):\(chat.id):\(chat.revision)"
             )
+            let homeModel = homeModel
+            let coordinator = coordinator
+            Task { @MainActor in
+                guard coordinator.isCurrent(context) else { return }
+                await homeModel.load(coordinator: coordinator)
+            }
         } catch let error where aidenIsCancellation(error) {
             return
         } catch {

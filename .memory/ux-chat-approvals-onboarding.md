@@ -39,7 +39,7 @@ Branch `ux/chat-approvals-onboarding`. The finding IDs refer to the audit's rend
 - **UI-49 shortcuts:** the ⌘↩ / ⌘⌫ approval shortcuts could collide with composer chords.
 - **UI-41 Retry/Regenerate and UI-43 `role=log` and speaker labels:** these sit inside transcript rows, which belong to the streaming-render branch.
 - **UI-42/52/53, model-picker parts:** the picker file belongs to the renderer-bundle branch.
-- **UI-54:** per-chat model needs an owner decision (L effort).
+- **UI-54:** per-chat model. Done 2026-10-27; see mobile-model-preference-remediation.md.
 - **UI-26:** the shared e2e onboarding fixture and the plan J01 product decision.
 - **UI-28:** copy consolidation across the Pi 1.0 PRs (X-6).
 - **UI-29:** moving the TTS disclosure, low impact.
@@ -48,3 +48,7 @@ Branch `ux/chat-approvals-onboarding`. The finding IDs refer to the audit's rend
 - **UI-69 and UI-70:**
   - UI-69's hover-hold and Settings action are not done.
   - UI-70 needs a cancel path in `use-voice-recorder` and a pill binding.
+
+## Question countdown follow-up, 2026-10-26
+
+The chat footer's countdown and questionnaire card shared `questionnaire.promptId` as sibling React keys. With optional footer slots, parent updates could orphan countdown nodes and their timers, leaving repeated rows even after answering. The countdown now uses a distinct `countdown:` key. The mounted routed ChatPane test in `renderer/main/chat-transition.test.tsx` covers repeated prompt refreshes, selected-answer and custom-draft preservation, answering, active prompt replacement, and dismissal. No server, transcript, CLI or native-client contract changes.

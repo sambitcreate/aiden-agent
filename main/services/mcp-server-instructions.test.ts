@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { McpClient } from "@earendil-works/pi-mcp";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { connectSdkServer } from "./mcp-test-support.js";
 import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Type, createInitialSystemMessage, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import { markMcpAgentTool, mcpAgentToolNames, mcpServerToolPrefix } from "./mcp-tool-identity.js";
@@ -40,19 +40,18 @@ function serverTools(server: FixtureServer, toolNames: readonly string[], config
 const deferred = new Set(["codemode", "tool_search"]);
 const sectionOf = (prompt: string) => prompt.slice(prompt.indexOf("<mcp_servers>"));
 
-test("with codemode, real SDK initialize instructions stay a one-line summary behind describeNamespace; without it they ride in full", async (t) => {
+test("with codemode, real initialize instructions stay a one-line summary behind describeNamespace; without it they ride in full", async (t) => {
   const remote = new Server({ name: "fixture", version: "1" }, {
     capabilities: { tools: {} },
     instructions: "Use read before write.\nSECOND_LINE_DETAIL",
   });
   remote.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{ name: "read", inputSchema: { type: "object" as const } }] }));
-  const client = new Client({ name: "test", version: "1" }, { capabilities: {} });
-  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new McpClient({ name: "test", version: "1" });
   t.after(async () => { await client.close(); await remote.close(); });
-  await remote.connect(b); await client.connect(a);
-  const inventory = (await client.listTools()).tools.map(({ name }) => name);
+  await client.connect(await connectSdkServer(remote));
+  const inventory = (await client.listTools()).map(({ name }) => name);
   const server = { id: "docs", name: "Docs" };
-  const snapshot = snapshotMcpServerInstructions(server, serverTools(server, inventory), client.getInstructions())!;
+  const snapshot = snapshotMcpServerInstructions(server, serverTools(server, inventory), client.instructions)!;
   const section = renderMcpServersSection(serverTools({ ...server, instructions: snapshot.instructions }, inventory), { declared: deferred });
   assert.match(section, /- docs: Docs \(via codemode or tool_search\) — service says "Use read before write\."/u);
   assert.doesNotMatch(section, /SECOND_LINE_DETAIL/u);

@@ -26,6 +26,13 @@ import {
 } from "./aiden-remote-bot-session.js";
 import type { AskUserQuestionV1 } from "../../renderer/shared/ask-user-question.js";
 import { createBotApprovals } from "./bot-runtime/bot-approvals.js";
+import { createBotHandoffs } from "./bot-runtime/bot-handoffs.js";
+import { signInCandidate } from "./bot-runtime/bot-sign-in-tool.js";
+import type { BotHandoffOpened } from "./bot-runtime/bot-handoff-open.js";
+import type { BotPendingHandoff } from "../../renderer/shared/bot-handoffs.js";
+import type { BotIssue, BotIssueAction } from "../../renderer/shared/bot-issues.js";
+import { BOT_LOCKED_RULES } from "../../renderer/shared/bot-rules.js";
+import { applyRemoteBotSessionEvent, remoteBotSessionView, type RemoteBotSessionView } from "../../renderer/lib/hosts/remote-bot-session.js";
 import { createBotQuestions } from "./bot-runtime/bot-questions.js";
 import { createBotTurnIntents } from "./bot-runtime/bot-turn-intents.js";
 import { createBotLiveProjection, createBotRunStarts } from "./bot-runtime/live-projection.js";
@@ -33,11 +40,14 @@ import {
   AIDEN_REMOTE_BOT_SESSION_MAX_ENTRIES,
   AIDEN_REMOTE_MAX_SSE_FRAME_BYTES,
   parseAidenRemoteBotApproval,
+  parseAidenRemoteBotList,
   parseAidenRemoteBotQuestion,
   parseAidenRemoteBotSession,
   parseAidenRemoteBotSessionEntry,
   parseAidenRemoteBotSessionEvent,
+  parseAidenRemoteBotSummary,
   parseAidenSseFrames,
+  type AidenRemoteBotSessionEvent,
 } from "./aiden-remote-protocol.js";
 import {
   BOT_NOTICE_ENTRY_KIND,
@@ -57,11 +67,11 @@ const BOT_ID = "bot_session_1";
 const DEVICE_ID = "device_1";
 const RESUME_KEY = "resume-request-0001";
 
-function bot(id = BOT_ID): BotDefinition {
+function bot(id = BOT_ID, name = "Planner"): BotDefinition {
   return {
     id,
     revision: "bot_revision_1",
-    name: "Planner",
+    name,
     instructions: "Plan carefully.",
     avatar: { version: 1, shape: "orb", color: "sky" },
     createdAt: 1_000,
@@ -70,13 +80,13 @@ function bot(id = BOT_ID): BotDefinition {
 }
 
 /** A Bot store with one live Bot and no other side effects. */
-function botService(options: { sessionStates?: Map<string, "needs_model" | "idle"> } = {}) {
+function botService(options: { sessionStates?: Map<string, "needs_model" | "idle">; name?: string } = {}) {
   const application = {
     async get(botId: string) {
-      return botId === BOT_ID ? bot() : null;
+      return botId === BOT_ID ? bot(BOT_ID, options.name) : null;
     },
     async list() {
-      return [bot()];
+      return [bot(BOT_ID, options.name)];
     },
   };
   return new AidenRemoteBotService({
@@ -91,7 +101,7 @@ function botService(options: { sessionStates?: Map<string, "needs_model" | "idle
 /** A fake durable runtime: one interrupted turn that a Resume continues. */
 function fakeRuntime(initial: BotSessionState) {
   let state: BotSessionState = initial;
-  const calls = { resume: 0, abort: 0, dismiss: 0 };
+  const calls = { resume: 0, abort: 0, dismiss: 0, pause: [] as string[], unpause: 0 };
   let closeWatch: () => void = () => {};
   const conversation = {
     async watch() {
@@ -111,6 +121,8 @@ function fakeRuntime(initial: BotSessionState) {
   };
   const runtime: AidenRemoteBotSessionRuntime = {
     async send() {
+      // Like the real service: a person's pause refuses before anything runs.
+      if (state.kind === "paused") throw new BotSessionError("paused_by_person");
       return { submissionId: "sub_1", deduped: false };
     },
     async resume() {
@@ -128,6 +140,17 @@ function fakeRuntime(initial: BotSessionState) {
         calls.abort += 1;
         state = { kind: "idle" };
       }
+      return state;
+    },
+    async pause(_botId, by) {
+      calls.pause.push(by);
+      // Idempotent like the real service: the first pause's time and origin stay.
+      if (state.kind !== "paused") state = { kind: "paused", since: 5_000, by };
+      return state;
+    },
+    async unpause() {
+      calls.unpause += 1;
+      if (state.kind === "paused") state = { kind: "idle" };
       return state;
     },
     async state() {
@@ -362,10 +385,13 @@ test("an answer after the question was withdrawn is refused and records nothing"
   const asked = ask(controller.signal);
   controller.abort(); // Stop, Dismiss, delete or quit
   await assert.rejects(asked);
-  await assert.rejects(
-    service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0004", option("Blue")),
-    isError("question_expired", 409),
-  );
+  for (const attempt of ["first", "retry"]) {
+    await assert.rejects(
+      service.answerQuestion(DEVICE_ID, BOT_ID, WAIT_ID, "answer-request-0004", option("Blue")),
+      isError("question_expired", 409),
+      `${attempt}: the same request UUID gets the same refusal, not a server error`,
+    );
+  }
   assert.deepEqual(questions.pending(), []);
   await service.close();
 });
@@ -674,21 +700,90 @@ test("deleting a Bot while its stream is open ends the stream and the next read 
 test("a connect card finished on the Mac reads as connected on the next fetch, with nothing committed", async () => {
   const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
   const connected = new Set<string>();
+  let granted = false;
   const fake = fakeRuntime({ kind: "idle" });
   const service = new AidenRemoteBotSessionService({
     bots: botService(),
     runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
-    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+    connectCardStatus: async (_botId, entry) =>
+      connected.has(entry.pluginId) ? (granted ? "connected" : "needs_access") : entry.status,
   });
   const cardOf = (session: { entries: Array<{ type: string }> }) =>
     session.entries.find((entry) => entry.type === "connect_card") as unknown as { status: string; name: string };
   try {
     assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
     connected.add("gmail");
+    // Connected on the Mac but not part of this Bot's access: phones keep the
+    // card pending, so "Finish on your Mac" leads to "Add to this Bot" there.
+    assert.equal(cardOf(await service.session(BOT_ID)).status, "pending");
+    granted = true;
     const shown = cardOf(await service.session(BOT_ID));
     assert.equal(shown.status, "connected");
     assert.equal(shown.name, "Gmail");
   } finally {
+    await service.close();
+  }
+});
+
+test("a phone watching the chat sees a connect card turn connected once the app is set up on the Mac", async () => {
+  const driven = drivenConversation([user(1, "Help with email"), card(2, "gmail")]);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    connected.add("gmail");
+    // What main does when an app's connection status changes on the Mac.
+    await service.refreshConnectCards();
+    await stream.until(
+      () =>
+        stream.frames.some(
+          (frame) =>
+            frame.type === "snapshot" &&
+            frame.payload.session.entries.some((entry: any) => entry.type === "connect_card" && entry.status === "connected"),
+        ) && stream.frames.length >= 2,
+      "the connected card",
+    );
+    const last = stream.frames[stream.frames.length - 1]!;
+    assert.equal(last.seq, stream.frames[0]!.seq + 1, "the refresh is the next frame in sequence");
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a connect card refreshed outside the phone's window does not reappear at the bottom of the chat", async () => {
+  const history = [card(1, "gmail"), ...Array.from({ length: 201 }, (_, index) => user(index + 2, `Message ${index + 2}`))];
+  const driven = drivenConversation(history);
+  const connected = new Set<string>();
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = new AidenRemoteBotSessionService({
+    bots: botService(),
+    runtime: async () => ({ ...fake.runtime, conversation: async () => driven.conversation as never }),
+    connectCardStatus: async (_botId, entry) => (connected.has(entry.pluginId) ? "connected" : entry.status),
+  });
+  const stream = await openStream(service);
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const first = stream.frames[0]!.payload.session;
+    assert.equal(first.hasOlder, true);
+    assert.equal(first.entries.some((entry: any) => entry.type === "connect_card"), false, "the card starts outside the window");
+    connected.add("gmail");
+    await service.refreshConnectCards();
+    await stream.until(() => stream.frames.length >= 2, "the refresh");
+    assert.equal(stream.frames.some((frame) => frame.type === "entry"), false, "no entry event appends the old card");
+    const refreshed = stream.frames[stream.frames.length - 1]!;
+    assert.equal(refreshed.type, "snapshot");
+    const texts = refreshed.payload.session.entries.map((entry: any) => entry.text);
+    assert.equal(texts.at(-1), "Message 202", "the newest message stays last");
+    assert.deepEqual(texts, first.entries.map((entry: any) => entry.text));
+  } finally {
+    await stream.close();
     await service.close();
   }
 });
@@ -716,6 +811,7 @@ test("a connection request for an app Aiden can't connect is refused without bot
 
 test("a routine change with a stale If-Match is a revision conflict that changes nothing", async () => {
   const routine: BotRoutine = {
+    pendingFireCount: 0,
     id: "routine_1", botId: BOT_ID, name: "Brief", prompt: "Brief me", schedule: { kind: "daily", time: "08:00" },
     timezone: "UTC", label: "Every day at 8:00 AM", enabled: true, updatedAt: 5_000,
   };
@@ -812,19 +908,24 @@ after(() => {
   for (const root of durableRoots) rmSync(root, { recursive: true, force: true });
 });
 
-async function interruptedDurableBot() {
+async function interruptedDurableBot(options: { handoffs?: boolean; stateChanges?: boolean } = {}) {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-session-"));
   durableRoots.push(profileDir);
   const child = spawnHarnessChild("stream", [profileDir, "bot:killed", "req-killed"]);
   await child.waitFor("STREAMING");
   await child.kill();
   const fauxModels = createFauxModels([fauxAssistantMessage("resumed answer"), fauxAssistantMessage("extra")]);
+  // The runtime's own state bridge, as the desktop exposes it (`onBotSessionStateChange`).
+  const stateListeners = new Set<(botId: string) => void>();
   const runtime = await createBotSessionService({
     profileDir,
     models: fauxModels.models,
     extension: recordingDeps(),
     resolveModel: async () => FAUX_MODEL_REF,
     knownBotIds: async () => new Set(["bot:killed"]),
+    onStateChange: (botId) => {
+      for (const listener of stateListeners) listener(botId);
+    },
   });
   await runtime.initialize();
   let exists = true;
@@ -835,8 +936,21 @@ async function interruptedDurableBot() {
     } as never,
     chatStore: { get: async () => null },
   });
-  const service = new AidenRemoteBotSessionService({ bots, runtime: async () => runtime });
-  return { runtime, service, fauxModels, markDeleted: () => { exists = false; } };
+  const service = new AidenRemoteBotSessionService({
+    bots,
+    runtime: async () => runtime,
+    // Revision 37: a host wired for hand-offs and pause on phones.
+    ...(options.handoffs ? { handoffs: createBotHandoffs(), openHandoffOnMac: async () => "focused" as const } : {}),
+    ...(options.stateChanges
+      ? {
+          stateChanges: (listener: (botId: string) => void) => {
+            stateListeners.add(listener);
+            return () => void stateListeners.delete(listener);
+          },
+        }
+      : {}),
+  });
+  return { runtime, service, fauxModels, stateListeners, markDeleted: () => { exists = false; } };
 }
 
 test("two phones tapping Resume at once on a turn killed mid-stream make one provider request", async () => {
@@ -862,6 +976,84 @@ test("two phones tapping Resume at once on a turn killed mid-stream make one pro
     await service.close();
     await runtime.shutdown();
   }
+});
+
+test("a paused Bot reads as unavailable to phones on every surface the shipped contract decodes, and its writes are stale", async () => {
+  const { runtime, service, fauxModels } = await interruptedDurableBot();
+  const stream = await openStream(service, "bot:killed");
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the first snapshot");
+    const paused = await runtime.pause("bot:killed", "mac");
+    assert.equal(paused.kind, "paused");
+
+    // Snapshot: the shipped (revision 35) parser decodes it, as unavailable, with its transcript.
+    const session = parseAidenRemoteBotSession(JSON.parse(JSON.stringify(await service.session("bot:killed"))));
+    assert.deepEqual([session.state, session.interrupted], ["unavailable", false]);
+    assert.ok(session.entries.some((entry) => entry.type === "message" && entry.text === "hello"), "the transcript still shows");
+
+    // Stop has nothing to stop; its answer is the same unavailable view.
+    assert.deepEqual(await service.stop("device_a", "bot:killed", "stop-request-00p1", {}), {
+      state: "unavailable",
+      interrupted: false,
+    });
+    // Frames: every frame already went through the shipped event parser in `openStream`.
+    await stream.until(
+      () => stream.frames.some((frame) => (frame.type === "snapshot" ? frame.payload.session.state : frame.payload?.state) === "unavailable"),
+      "the paused state on the stream",
+    );
+    const views = stream.frames.flatMap((frame) =>
+      frame.type === "state" ? [frame.payload.state] : frame.type === "snapshot" ? [frame.payload.session.state] : [],
+    );
+    assert.equal(views.includes("paused"), false, "no frame names a state shipped clients cannot decode");
+
+    // Writes: refused with a code shipped clients know, and nothing runs.
+    for (const write of [
+      () => service.send("device_a", "bot:killed", "send-request-00p1", { text: "are you there?" }),
+      () => service.resume("device_a", "bot:killed", "resume-request-0p1", {}),
+      () => service.dismiss("device_a", "bot:killed", "dismiss-request-0p1", {}),
+    ]) {
+      await assert.rejects(write(), isError("operation_stale", 409));
+    }
+    assert.equal(fauxModels.calls(), 0);
+
+    // The refusals left no ledger record: once unpaused, the same request runs.
+    await runtime.unpause("bot:killed");
+    assert.equal((await service.session("bot:killed")).state, "interrupted");
+    assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p1", {})).state, "running");
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    assert.equal(fauxModels.calls(), 1);
+  } finally {
+    await stream.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("a paused Bot's list row and summary decode with the shipped parsers and read unavailable", async () => {
+  const pausedState = projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }).state;
+  const bots = new AidenRemoteBotService({
+    application: {
+      async get(botId: string) {
+        return botId === BOT_ID ? bot() : null;
+      },
+      async list() {
+        return [bot()];
+      },
+    } as never,
+    chatStore: { get: async () => null },
+    sessionStates: async (ids) => new Map(ids.map((id) => [id, pausedState] as const)),
+  });
+  const list = parseAidenRemoteBotList(JSON.parse(JSON.stringify(await bots.list())));
+  assert.deepEqual(list.bots.map((summary) => summary.sessionState), ["unavailable"]);
+  assert.equal(parseAidenRemoteBotSummary(JSON.parse(JSON.stringify(await bots.summaryOf(BOT_ID)))).sessionState, "unavailable");
+});
+
+test("a paused state is unavailable on the wire, whatever turn waits underneath", () => {
+  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "phone", interrupted: "sub_1" }), {
+    state: "unavailable",
+    interrupted: false,
+  });
+  assert.deepEqual(projectBotSessionState({ kind: "paused", since: 1, by: "mac" }), { state: "unavailable", interrupted: false });
 });
 
 test("deleting a durable Bot while a phone streams its chat closes the stream", async () => {
@@ -961,10 +1153,13 @@ test("a phone can deny a Bot approval but only the Mac can allow Computer Use", 
     await waitFor(() => approvals.pending(BOT_ID).length === 1, { what: "the approval prompt" });
     const waiting = (await service.session(BOT_ID)).approval!;
     assert.equal(waiting.canAllow, false);
-    await assert.rejects(
-      service.respondApproval(DEVICE_ID, waiting.waitId, "allow", "approve-request-0003"),
-      isError("capability_denied", 403),
-    );
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.respondApproval(DEVICE_ID, waiting.waitId, "allow", "approve-request-0003"),
+        isError("capability_denied", 403),
+        `${attempt}: the same request UUID gets the same refusal, not a server error`,
+      );
+    }
     await assert.rejects(
       service.respondApproval(DEVICE_ID, waiting.waitId, "deny", "approve-request-0004", "always"),
       isError("invalid_request", 400),
@@ -1029,6 +1224,35 @@ test("only a device holding bot:cards sees memory and routine proposal cards, as
     const legacy = await service.session(BOT_ID);
     assert.deepEqual(legacy.entries.map((entry) => entry.type), ["message", "message"]);
     assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
+  } finally {
+    await service.close();
+  }
+});
+
+test("phones see only the newest card of a revised suggestion, and a trigger card's label names what starts it", async () => {
+  const driven = drivenConversation([
+    user(1, "Tell me when the report lands."),
+    proposal(2, "11111111-1111-4111-8111-111111111111", "Morning check-in", "Check in.", "Every day at 8:00 AM"),
+    { id: 3, kind: "aiden.routine-proposal-status", data: { proposalId: "11111111-1111-4111-8111-111111111111", status: "dismissed", supersededBy: "22222222-2222-4222-8222-222222222222" } },
+    proposal(4, "22222222-2222-4222-8222-222222222222", "Morning check-in", "Check in.", "Every day at 9:00 AM"),
+    {
+      id: 5,
+      kind: "aiden.routine-proposal",
+      data: { proposalId: "33333333-3333-4333-8333-333333333333", name: "Report landed", prompt: "Summarize the report.", trigger: { kind: "webhook" }, label: "When this routine's link is called" },
+    },
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const session = await service.session(BOT_ID, { cards: true });
+    assert.deepEqual(parseAidenRemoteBotSession(session), session);
+    const cards = session.entries.flatMap((entry) =>
+      entry.type === "routine_proposal" ? [{ proposalId: entry.proposalId, label: entry.label, status: entry.status }] : [],
+    );
+    assert.deepEqual(cards, [
+      { proposalId: "22222222-2222-4222-8222-222222222222", label: "Every day at 9:00 AM · UTC", status: "pending" },
+      { proposalId: "33333333-3333-4333-8333-333333333333", label: "When this routine's link is called", status: "pending" },
+    ]);
   } finally {
     await service.close();
   }
@@ -1288,7 +1512,7 @@ function activityBots() {
 /** Serve one Bot's SSE stream to a device with these opt-ins; keep the raw data lines too. */
 async function openAudienceStream(
   service: AidenRemoteBotSessionService,
-  audience: { cards?: boolean; activity?: boolean },
+  audience: { cards?: boolean; activity?: boolean; handoffs?: boolean; handoffNotes?: boolean; images?: boolean; issues?: boolean },
   botId = BOT_ID,
 ) {
   const server = createServer((_request, response) => {
@@ -2484,7 +2708,7 @@ test("a failed placement lookup is reported, and that bubble falls back to its t
 });
 
 /** Publish order: frames one publish emits never go back in this order. */
-const PUBLISH_ORDER = ["entry", "partial", "state", "question", "approval", "activity", "queued"];
+const PUBLISH_ORDER = ["entry", "partial", "state", "question", "approval", "handoff", "activity", "queued"];
 
 test("a steer and a follow-up placed mid-turn take their queued ids, two at one boundary each their own, in the publish that drops them from Queued", async () => {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "aiden-remote-bot-placed-"));
@@ -2558,5 +2782,1028 @@ test("a steer and a follow-up placed mid-turn take their queued ids, two at one 
     await stream.close();
     await service.close();
     await runtime.shutdown();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 37: hand-offs and pause on phones (`bot:handoffs`)
+// ---------------------------------------------------------------------------
+
+const HANDOFF_WAIT_ID = "4f9c2d1e-7a3b-4c5d-9e8f-0a1b2c3d4e5f";
+const HOLDER = { handoffs: true };
+
+/** The card behind the shared `botHandoffs` fixture, as the Mac's hand-off bridge holds it. */
+function handoffPrompt(overrides: Partial<BotPendingHandoff> = {}): BotPendingHandoff {
+  return {
+    botId: BOT_ID,
+    waitId: HANDOFF_WAIT_ID,
+    toolCallId: "call_fixture_36",
+    kind: "action",
+    action: "Enter the 2FA code your bank sent you",
+    why: "The bank asks for a code only you can see.",
+    open: { url: "https://bank.example.com/verify" },
+    source: "tool",
+    ...overrides,
+  };
+}
+
+const SIGN_IN: Partial<BotPendingHandoff> = {
+  kind: "sign_in",
+  action: "Sign in to bank.example.com",
+  why: undefined,
+  open: { url: "https://bank.example.com" },
+  origin: "https://bank.example.com",
+  target: "browser",
+};
+
+/** The conversation behind the shared `botHandoffs` fixture. */
+function scoutConversation(): RawEntry[] {
+  return [
+    {
+      id: 40,
+      kind: "pi.user",
+      model: [{ role: "user", content: [{ type: "text", text: "Pay the electricity bill." }], timestamp: Date.parse("2026-10-20T09:00:00.000Z") }],
+    },
+    {
+      id: 41,
+      kind: "pi.assistant",
+      model: [{
+        role: "assistant",
+        content: [{ type: "text", text: "I've filled in the payment form." }],
+        stopReason: "stop",
+        timestamp: Date.parse("2026-10-20T09:00:30.000Z"),
+      }],
+    },
+  ];
+}
+
+/** The `hand_off` (or `sign_in`) tool result the runtime records when the person answers a card. */
+function handoffResult(
+  id: number,
+  details: Record<string, unknown>,
+  options: { toolCallId?: string; isError?: boolean } = {},
+): RawEntry {
+  return {
+    id,
+    kind: "pi.tool-result",
+    model: [{
+      role: "toolResult",
+      toolCallId: options.toolCallId ?? "call_fixture_36",
+      toolName: details.kind === "sign_in" ? "sign_in" : "hand_off",
+      isError: options.isError ?? false,
+      content: [{ type: "text", text: "The person answered the card." }],
+      details,
+      timestamp: Date.parse("2026-10-20T09:02:00.000Z"),
+    }],
+  };
+}
+
+/** A host wired for hand-offs and pause on phones, with a Bot named as the fixture's. */
+function handoffSession(
+  runtime: AidenRemoteBotSessionRuntime,
+  options: { wired?: boolean; opened?: BotHandoffOpened; conversation?: ReturnType<typeof drivenConversation> } = {},
+) {
+  const handoffs = createBotHandoffs();
+  const openedOnMac: Array<[string, string]> = [];
+  const service = new AidenRemoteBotSessionService({
+    bots: botService({ name: "Scout" }),
+    runtime: async () => (options.conversation
+      ? { ...runtime, conversation: async () => options.conversation!.conversation as never }
+      : runtime),
+    ...(options.wired === false
+      ? {}
+      : {
+          handoffs,
+          openHandoffOnMac: async (botId: string, waitId: string) => {
+            openedOnMac.push([botId, waitId]);
+            return options.opened ?? "focused";
+          },
+        }),
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+  const handOff = (overrides: Partial<BotPendingHandoff> = {}, signal?: AbortSignal) => {
+    const asked = handoffs.request({ ...handoffPrompt(overrides), signal });
+    asked.catch(() => undefined);
+    return asked;
+  };
+  return { handoffs, service, handOff, openedOnMac };
+}
+
+/** A session without its Bot id and stream cursor, which differ between a test host and the fixture. */
+const withoutCursor = ({ botId: _botId, epoch: _epoch, seq: _seq, ...session }: Record<string, unknown>) => session;
+const framesOf = (frames: Frame[]) =>
+  frames.map(({ type, payload }) => ({ type, payload: type === "snapshot" ? { session: withoutCursor(payload.session) } : payload }));
+
+test("a waiting hand-off reads as the shared fixture shows it, to holders and to every other device", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const driven = drivenConversation(scoutConversation());
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { conversation: driven });
+  try {
+    assert.equal((await service.session(BOT_ID, HOLDER)).handoff, null, "a holder always gets the key");
+    handOff();
+    const holder = await service.session(BOT_ID, HOLDER);
+    assert.deepEqual(withoutCursor(holder as never), withoutCursor(fixture.session));
+
+    const legacy = await service.session(BOT_ID);
+    assert.deepEqual(withoutCursor(legacy as never), withoutCursor(fixture.legacy.session));
+    assert.equal("handoff" in legacy, false);
+    // A device with other opt-ins but not this one is still a legacy device here.
+    const cardsOnly = await service.session(BOT_ID, { cards: true, activity: true });
+    assert.equal("handoff" in cardsOnly, false);
+    assert.equal(last(cardsOnly.entries)?.id, `handoff-notice:${HANDOFF_WAIT_ID}`);
+  } finally {
+    await service.close();
+  }
+});
+
+test("only a device that also asked for hand-off notes is told a password card takes no note; a rev-37 holder gets the card it can decode", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const NOTES = { handoffs: true, handoffNotes: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const notes = await openAudienceStream(service, NOTES);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await notes.until(() => notes.frames.length >= 1, "the notes snapshot");
+    handOff({
+      waitId: fixture.noNoteHandoff.waitId,
+      action: fixture.noNoteHandoff.action,
+      why: undefined,
+      open: undefined,
+      source: "rule",
+      rule: { id: BOT_LOCKED_RULES[0]!.id, label: "Enter passwords or codes" },
+    });
+    const { takesNote: _takesNote, ...rev37Card } = fixture.noNoteHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, NOTES)).handoff, fixture.noNoteHandoff);
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev37Card);
+    // Asking for notes without hand-offs is still a legacy device.
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffNotes: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await notes.until(() => card(notes) !== undefined, "the notes hand-off frame");
+    assert.deepEqual(card(notes), fixture.noNoteHandoff);
+    assert.deepEqual(card(holder), rev37Card);
+  } finally {
+    await holder.close();
+    await notes.close();
+    await service.close();
+  }
+});
+
+test("only a device that asked for on-Mac steps is told one is on the Bot's own screen; others get the card without its page", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  const ON_MAC = { handoffs: true, handoffOnMac: true };
+  const holder = await openAudienceStream(service, HOLDER);
+  const onMac = await openAudienceStream(service, ON_MAC);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await onMac.until(() => onMac.frames.length >= 1, "the on-Mac snapshot");
+    handOff({
+      waitId: fixture.onMacHandoff.waitId,
+      action: fixture.onMacHandoff.action,
+      why: fixture.onMacHandoff.why,
+      open: { url: "https://shop.example.com/checkout" },
+      target: "browser",
+    });
+    const { onMac: _onMac, ...rev40Card } = fixture.onMacHandoff;
+
+    assert.deepEqual((await service.session(BOT_ID, ON_MAC)).handoff, fixture.onMacHandoff);
+    // An older holder can't offer Finish on your Mac, but never gets the Bot's page either.
+    assert.deepEqual((await service.session(BOT_ID, HOLDER)).handoff, rev40Card);
+    assert.equal("handoff" in (await service.session(BOT_ID, { handoffOnMac: true })), false);
+
+    const card = (stream: typeof holder) => stream.frames.find((frame) => frame.type === "handoff")?.payload.handoff;
+    await holder.until(() => card(holder) !== undefined, "the holder's hand-off frame");
+    await onMac.until(() => card(onMac) !== undefined, "the on-Mac hand-off frame");
+    assert.deepEqual(card(onMac), fixture.onMacHandoff);
+    assert.deepEqual(card(holder), rev40Card);
+  } finally {
+    await holder.close();
+    await onMac.close();
+    await service.close();
+  }
+});
+
+test("a hand-off, its answer and a pause reach holders and other devices frame for frame as the fixture shows, at the same seqs", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const driven = drivenConversation(scoutConversation());
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const { service, handOff } = handoffSession(fake.runtime, { conversation: driven });
+  const holder = await openAudienceStream(service, HOLDER);
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    const asked = handOff();
+    await holder.until(() => holder.frames.length >= 2, "the hand-off frame");
+
+    const receipt = await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0001", fixture.answer.request, HOLDER);
+    assert.deepEqual(receipt, fixture.answer.response);
+    assert.deepEqual(await asked, fixture.answer.request, "the Bot gets the person's answer");
+    await holder.until(() => holder.frames.length >= 3, "the settled frame");
+
+    // The runtime records the answer; it reads as the person's message for everyone.
+    await driven.emit([
+      ...scoutConversation(),
+      handoffResult(42, { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", note: "The code was from 9:01.", toolCallId: "call_fixture_36" }),
+    ]);
+    await holder.until(() => holder.frames.length >= 4, "the answer entry");
+
+    assert.deepEqual(await service.pause(DEVICE_ID, BOT_ID, "pause-request-000001", {}, HOLDER), fixture.pause.response);
+    assert.deepEqual(fake.calls.pause, ["phone"], "a phone's pause is recorded as the phone's");
+    await holder.until(() => holder.frames.length >= 5, "the paused state");
+    await legacy.until(() => legacy.frames.length >= 5, "the legacy view of the pause");
+
+    assert.deepEqual(framesOf(holder.frames.slice(1)), framesOf(fixture.events));
+    assert.deepEqual(framesOf(legacy.frames.slice(1)), framesOf(fixture.legacy.events));
+    for (const stream of [holder, legacy]) assert.ok(gapless(stream.frames));
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    for (const line of legacy.raw) assert.doesNotMatch(line, /"handoff"|"paused"/u);
+
+    // A reconnect after the pause: the snapshot both views expect.
+    assert.deepEqual(withoutCursor(await service.session(BOT_ID, HOLDER) as never), withoutCursor(fixture.pausedSession));
+    assert.deepEqual(withoutCursor(await service.session(BOT_ID) as never), withoutCursor(fixture.legacy.pausedSession));
+
+    // A write to the paused Bot is refused with the code each device knows, and nothing is sent.
+    for (const [options, expected] of [[HOLDER, fixture.pausedError], [{}, fixture.legacy.pausedError]] as const) {
+      await assert.rejects(
+        service.send(DEVICE_ID, BOT_ID, "send-request-paused-01", { text: "Are you there?" }, options),
+        (error: { code?: string; status?: number; message?: string }) =>
+          error.code === expected.error.code && error.status === 409 && error.message === expected.error.message,
+      );
+    }
+    assert.deepEqual(await service.unpause(DEVICE_ID, BOT_ID, "unpause-request-0001", HOLDER), fixture.unpause.response);
+    assert.deepEqual(
+      await service.send(DEVICE_ID, BOT_ID, "send-request-paused-01", { text: "Are you there?" }, HOLDER),
+      { submissionId: "sub_1", deduped: false, state: "idle", interrupted: false },
+      "the refusal recorded nothing, so the same request runs once the Bot is unpaused",
+    );
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+/** A stream's frames folded by a Mac's Bot session reducer, as a client without `bot:handoffs` shows them. */
+function reducedView(frames: Frame[]): RemoteBotSessionView {
+  const [first, ...rest] = frames as unknown as AidenRemoteBotSessionEvent[];
+  assert.equal(first?.type, "snapshot", "a stream opens with a snapshot");
+  let view = remoteBotSessionView((first as Extract<AidenRemoteBotSessionEvent, { type: "snapshot" }>).payload.session);
+  for (const event of rest) {
+    const next = applyRemoteBotSessionEvent(view, event);
+    assert.ok(next, `frame ${event.seq} follows the one before it`);
+    view = next;
+  }
+  return view;
+}
+
+const noticesOf = (view: RemoteBotSessionView) =>
+  view.snapshot.entries.flatMap((entry) => (entry.id.startsWith("handoff-notice:") ? [entry.id] : []));
+
+test("a device without bot:handoffs drops a hand-off's line once it is answered, withdrawn or replaced, as a fresh read shows it", async () => {
+  const driven = drivenConversation(scoutConversation());
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { conversation: driven });
+  const legacy = await openAudienceStream(service, {});
+  /** What the stream shows once it reached the seq a fresh read is at, beside that read. */
+  const shownAndRead = async () => {
+    const read = await service.session(BOT_ID);
+    await legacy.until(() => last(legacy.frames)?.seq === read.seq, `the stream at seq ${read.seq}`);
+    return { shown: reducedView(legacy.frames), read: remoteBotSessionView(read) };
+  };
+  try {
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+
+    // Done from a phone that holds `bot:handoffs`, then the answer's row.
+    const asked = handOff();
+    let { shown, read } = await shownAndRead();
+    assert.deepEqual(noticesOf(shown), [`handoff-notice:${HANDOFF_WAIT_ID}`], "the waiting hand-off's line");
+    assert.deepEqual(shown, read);
+    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0201", { outcome: "done" }, HOLDER);
+    await asked;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), [], "an answered hand-off leaves no line");
+    assert.deepEqual(shown, read);
+    await driven.emit([
+      ...scoutConversation(),
+      handoffResult(42, { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", toolCallId: "call_fixture_36" }),
+    ]);
+    ({ shown, read } = await shownAndRead());
+    assert.equal(last(shown.snapshot.entries)?.type, "user", "the person's answer is the newest line");
+    assert.deepEqual(shown, read);
+
+    // Withdrawn by Stop, Dismiss, delete or quit.
+    const controller = new AbortController();
+    const withdrawn = handOff({ waitId: "5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60" }, controller.signal);
+    ({ shown } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:5a0d3e2f-8b4c-4d6e-8f90-1b2c3d4e5f60"]);
+    controller.abort();
+    await assert.rejects(withdrawn);
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), [], "a withdrawn hand-off leaves no line");
+    assert.deepEqual(shown, read);
+
+    // Two cards wait; answering the first puts the second in its place.
+    const first = handOff({ waitId: "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071" });
+    const second = handOff({ waitId: "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", action: "Approve the transfer in your bank's app" });
+    ({ shown } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071"], "the older card is the one shown");
+    await service.answerHandoff(DEVICE_ID, BOT_ID, "6b1e4f30-9c5d-4e7f-9a01-2c3d4e5f6071", "handoff-request-0202", { outcome: "skipped" }, HOLDER);
+    await first;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), ["handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182"], "only the replacement's line");
+    assert.equal(last(shown.snapshot.entries)?.id, "handoff-notice:7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "and it is the newest line");
+    assert.deepEqual(shown, read);
+    await service.answerHandoff(DEVICE_ID, BOT_ID, "7c2f5041-ad6e-4f80-ab12-3d4e5f607182", "handoff-request-0203", { outcome: "done" }, HOLDER);
+    await second;
+    ({ shown, read } = await shownAndRead());
+    assert.deepEqual(noticesOf(shown), []);
+    assert.deepEqual(shown, read);
+    assert.ok(gapless(legacy.frames));
+    for (const line of legacy.raw) assert.doesNotMatch(line, /"handoff"|"paused"/u);
+  } finally {
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("a hand-off answer is idempotent per request UUID, and a card that stopped waiting is handoff_expired", async () => {
+  const { service, handOff, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  try {
+    const asked = handOff();
+    const [phone, tablet] = await Promise.allSettled([
+      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "skipped" }, HOLDER),
+      service.answerHandoff("device_2", BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0003", { outcome: "done" }, HOLDER),
+    ]);
+    assert.deepEqual(phone, { status: "fulfilled", value: { waitId: HANDOFF_WAIT_ID } });
+    assert.equal(tablet.status, "rejected");
+    assert.ok(isError("handoff_expired", 409)((tablet as PromiseRejectedResult).reason));
+    assert.deepEqual(await asked, { outcome: "skipped" }, "the first answer wins");
+
+    assert.deepEqual(
+      await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "skipped" }, HOLDER),
+      { waitId: HANDOFF_WAIT_ID },
+      "a retry with the same request UUID replays the receipt",
+    );
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0002", { outcome: "done" }, HOLDER),
+      "the same request UUID with another answer is not a replay",
+    );
+
+    // Withdrawn by Stop, Dismiss, delete or quit.
+    const controller = new AbortController();
+    const withdrawn = handOff({}, controller.signal);
+    controller.abort();
+    await assert.rejects(withdrawn);
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
+      isError("handoff_expired", 409),
+    );
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0004", { outcome: "done" }, HOLDER),
+      isError("handoff_expired", 409),
+      "a retry of the refused answer gets the same refusal, not a server error",
+    );
+    assert.deepEqual(handoffs.pending(), []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("an answer the card does not accept is invalid and the card keeps waiting; a phone may only skip a sign-in", async () => {
+  const { service, handOff, handoffs } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  try {
+    handOff();
+    for (const [key, body] of [
+      ["handoff-request-0005", { outcome: "later" }],
+      ["handoff-request-0006", { outcome: "done", note: "   " }],
+      ["handoff-request-0007", { outcome: "done", note: "x".repeat(4_001) }],
+      ["handoff-request-0008", { outcome: "done", waitId: HANDOFF_WAIT_ID }],
+    ] as const) {
+      await assert.rejects(service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, key, body, HOLDER), isError("invalid_request", 400), key);
+    }
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, "wait id", "handoff-request-0009", { outcome: "done" }, HOLDER),
+      isError("invalid_request", 400),
+      "a malformed wait id",
+    );
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, "bot_missing", HANDOFF_WAIT_ID, "handoff-request-0010", { outcome: "done" }, HOLDER),
+      isError("not_found", 404),
+    );
+    assert.equal((await service.session(BOT_ID, HOLDER)).handoff?.waitId, HANDOFF_WAIT_ID);
+
+    // A sign-in happens in the Mac's browser: Done from a phone is refused, Skip settles it.
+    const signIn = handOff(SIGN_IN);
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0011", { outcome: "done" }, HOLDER),
+        (error: { code?: string; status?: number; message?: string }) =>
+          error.code === "invalid_request" && error.status === 400 && /signing in on your Mac/u.test(error.message ?? ""),
+        `${attempt}: the same request UUID gets the same refusal`,
+      );
+    }
+    assert.equal(handoffs.pending(BOT_ID).length, 1, "the sign-in still waits");
+    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0012", { outcome: "skipped", note: "Not today." }, HOLDER);
+    assert.deepEqual(await signIn, { outcome: "skipped", note: "Not today." });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a sign-in the Bot asks for reaches a holder as a sign_in card and other devices as a needs-you line, Finish on your Mac opens it there, and Skip from the phone answers the Bot", async () => {
+  const { service, handoffs, openedOnMac } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, {
+    opened: "browser",
+  });
+  const holder = await openAudienceStream(service, HOLDER);
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    // The Bot's sign_in call, as its tool runs it in a turn.
+    const asked = signInCandidate(BOT_ID, handoffs)
+      .bind!({
+        callId: "call_sign_in_1",
+        signal: new AbortController().signal,
+        entries: async () => [],
+        submissions: async () => [],
+        appendEntry: async () => {},
+        memo: async (_name, candidate) => candidate,
+      })
+      .execute("call_sign_in_1", { site: "GitHub.com/login", why: "To read your issues." } as never);
+    await holder.until(() => holder.frames.some((frame) => frame.type === "handoff"), "the sign-in frame");
+    const card = holder.frames.find((frame) => frame.type === "handoff")!.payload.handoff as { waitId: string };
+    // The phone gets what it shows: the site's name, never the Bot's own page.
+    assert.deepEqual(card, {
+      waitId: card.waitId,
+      kind: "sign_in",
+      action: "Sign in to github.com",
+      why: "To read your issues.",
+      open: { url: "https://github.com" },
+    });
+    const legacy = await service.session(BOT_ID);
+    const notice = last(legacy.entries);
+    assert.equal(notice?.type === "message" && notice.text, "Scout needs you on your Mac: Sign in to github.com");
+
+    // Finish on your Mac: the Mac opens this card where the Bot signs in, and the card still waits.
+    assert.deepEqual(await service.openHandoffOnMac(DEVICE_ID, BOT_ID, card.waitId, "open-request-000101", {}), {
+      waitId: card.waitId,
+      opened: true,
+    });
+    assert.deepEqual(openedOnMac, [[BOT_ID, card.waitId]]);
+    assert.equal(handoffs.get(BOT_ID, card.waitId)?.kind, "sign_in", "opening it answers nothing");
+    // Signing in happens on the Mac: a phone can't say it is done.
+    await assert.rejects(
+      service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0100", { outcome: "done" }, HOLDER),
+      isError("invalid_request", 400),
+    );
+
+    await service.answerHandoff(DEVICE_ID, BOT_ID, card.waitId, "handoff-request-0101", { outcome: "skipped" }, HOLDER);
+    const result = await asked;
+    assert.equal(
+      result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+      "The person chose not to do this: Sign in to github.com. Do not try another way to do it; say what you will do instead.",
+    );
+    await holder.until(() => last(holder.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff === null, "the settled frame");
+  } finally {
+    await holder.close();
+    await service.close();
+  }
+});
+
+test("Open on Mac brings the waiting card forward once per request UUID and says when nothing could open", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const { service, handOff, openedOnMac } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  try {
+    const asked = handOff();
+    const receipt = await service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000001", fixture.openOnMac.request);
+    assert.deepEqual(receipt, fixture.openOnMac.response);
+    assert.deepEqual(
+      await service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000001", {}),
+      receipt,
+      "a retry replays without opening it again",
+    );
+    assert.deepEqual(openedOnMac, [[BOT_ID, HANDOFF_WAIT_ID]]);
+    assert.equal((await service.session(BOT_ID, HOLDER)).handoff?.waitId, HANDOFF_WAIT_ID, "opening it answers nothing");
+    await assert.rejects(
+      service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000002", { focus: true }),
+      isError("invalid_request", 400),
+    );
+    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0013", { outcome: "done" }, HOLDER);
+    await asked;
+    for (const attempt of ["first", "retry"]) {
+      await assert.rejects(
+        service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000003", {}),
+        isError("handoff_expired", 409),
+        `${attempt}: the same request UUID gets the same refusal, not a server error`,
+      );
+    }
+  } finally {
+    await service.close();
+  }
+
+  const nothing = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime, { opened: "none" });
+  try {
+    nothing.handOff();
+    assert.deepEqual(
+      await nothing.service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000004", {}),
+      { waitId: HANDOFF_WAIT_ID, opened: false },
+    );
+  } finally {
+    await nothing.service.close();
+  }
+});
+
+test("a host without the hand-off bridge has no hand-off or pause routes and sends every device the revision-35 view", async () => {
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const { service, handOff } = handoffSession(fake.runtime, { wired: false });
+  try {
+    assert.equal(service.supportsHandoffs, false);
+    handOff();
+    assert.equal("handoff" in (await service.session(BOT_ID, HOLDER)), false, "a claimed opt-in the host never offered changes nothing");
+    for (const call of [
+      () => service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0014", { outcome: "done" }, HOLDER),
+      () => service.openHandoffOnMac(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "open-request-000005", {}),
+      () => service.pause(DEVICE_ID, BOT_ID, "pause-request-000002", {}, HOLDER),
+      () => service.unpause(DEVICE_ID, BOT_ID, "unpause-request-0002", HOLDER),
+    ]) {
+      await assert.rejects(call(), isError("not_found", 404));
+    }
+    assert.deepEqual(fake.calls.pause, []);
+    fake.setState({ kind: "paused", since: 1, by: "mac" });
+    assert.equal((await service.session(BOT_ID, HOLDER)).state, "unavailable");
+    await assert.rejects(
+      service.send(DEVICE_ID, BOT_ID, "send-request-paused-02", { text: "Hi" }, HOLDER),
+      isError("operation_stale", 409),
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("a phone's pause holds a real Bot: holders read paused and bot_paused, other devices unavailable and operation_stale, and nothing runs", async () => {
+  const { runtime, service, fauxModels } = await interruptedDurableBot({ handoffs: true });
+  const holder = await openAudienceStream(service, HOLDER, "bot:killed");
+  const legacy = await openAudienceStream(service, {}, "bot:killed");
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    // A turn interrupted mid-stream, then paused from the phone: a holder sees the pause.
+    assert.deepEqual(
+      await service.pause("device_a", "bot:killed", "pause-request-000003", {}, HOLDER),
+      { state: "paused", interrupted: false },
+    );
+    const paused = await runtime.state("bot:killed");
+    assert.equal(paused.kind === "paused" && paused.by, "phone");
+    assert.deepEqual(
+      await service.pause("device_a", "bot:killed", "pause-request-000003", {}, HOLDER),
+      { state: "paused", interrupted: false },
+      "a retried pause replays",
+    );
+
+    await holder.until(() => holder.frames.some((frame) => frame.type === "state" && frame.payload.state === "paused"), "the paused frame");
+    await legacy.until(() => legacy.frames.some((frame) => frame.type === "state" && frame.payload.state === "unavailable"), "the unavailable frame");
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+    assert.equal((await service.session("bot:killed", HOLDER)).state, "paused");
+    assert.equal((await service.session("bot:killed")).state, "unavailable");
+
+    for (const [options, code] of [[HOLDER, "bot_paused"], [{}, "operation_stale"]] as const) {
+      for (const write of [
+        () => service.send("device_a", "bot:killed", "send-request-00p2", { text: "are you there?" }, options),
+        () => service.resume("device_a", "bot:killed", "resume-request-0p2", {}, options),
+        () => service.dismiss("device_a", "bot:killed", "dismiss-request-0p2", {}, options),
+      ]) {
+        await assert.rejects(write(), isError(code, 409), code);
+      }
+    }
+    assert.equal(fauxModels.calls(), 0);
+
+    // Unpausing leaves the interrupted turn for Resume; the refused Resume was never recorded.
+    assert.deepEqual(
+      await service.unpause("device_a", "bot:killed", "unpause-request-0003", HOLDER),
+      { state: "interrupted", interrupted: true },
+    );
+    assert.equal((await service.resume("device_a", "bot:killed", "resume-request-0p2", {}, HOLDER)).state, "running");
+    await waitFor(async () => (await runtime.state("bot:killed")).kind === "idle", { what: "the resumed turn" });
+    assert.equal(fauxModels.calls(), 1);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+});
+
+test("a pause and unpause made on the Mac reach open phone streams at once, as each device names them", async () => {
+  const { runtime, service, stateListeners } = await interruptedDurableBot({ handoffs: true, stateChanges: true });
+  const holder = await openAudienceStream(service, HOLDER, "bot:killed");
+  const legacy = await openAudienceStream(service, {}, "bot:killed");
+  const statesOf = (frames: Frame[]) => frames.flatMap((frame) => (frame.type === "state" ? [frame.payload.state] : []));
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    // The Mac pauses: no phone route runs and the conversation does not change.
+    await runtime.pause("bot:killed", "mac");
+    await holder.until(() => statesOf(holder.frames).includes("paused"), "the paused frame");
+    await legacy.until(() => statesOf(legacy.frames).includes("unavailable"), "the unavailable frame");
+    assert.equal(statesOf(legacy.frames).includes("paused"), false);
+
+    // The Mac unpauses: the interrupted turn is back, waiting for Resume, on both.
+    await runtime.unpause("bot:killed");
+    await holder.until(() => last(statesOf(holder.frames)) === "interrupted", "the holder's interrupted frame");
+    await legacy.until(() => last(statesOf(legacy.frames)) === "interrupted", "the legacy interrupted frame");
+    assert.deepEqual(statesOf(holder.frames), ["paused", "interrupted"]);
+    assert.deepEqual(statesOf(legacy.frames), ["unavailable", "interrupted"]);
+    assert.deepEqual(legacy.frames.map((frame) => frame.seq), holder.frames.map((frame) => frame.seq));
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+    await runtime.shutdown();
+  }
+  assert.equal(stateListeners.size, 0, "a closed service stops listening");
+});
+
+test("a hand-off holds a running turn at Waiting for you on bot:activity phones, after the hand-off frame", async () => {
+  const driven = drivenConversation([user(1, "Pay the bill")]);
+  const fake = fakeRuntime({ kind: "running", submissionId: "sub_1" });
+  const handoffs = createBotHandoffs();
+  const service = runningOn(driven, fake, { handoffs, openHandoffOnMac: async () => "focused" });
+  const stream = await openAudienceStream(service, { activity: true, handoffs: true });
+  try {
+    await stream.until(() => stream.frames.length >= 1, "the snapshot");
+    const searching = { run: { inputs: [1] }, tools: [{ callId: "call_1", name: "web_search", status: "running" }] };
+    await driven.emitView([user(1, "Pay the bill")], { "pi.live": searching });
+    await stream.until(() => phasesOf(stream.frames).includes("searching"), "the tool phase");
+    const asked = handoffs.request({ ...handoffPrompt(), signal: undefined });
+    await stream.until(() => last(phasesOf(stream.frames)) === "waiting", "the waiting phase");
+    const opened = stream.frames.findIndex((frame) => frame.type === "handoff");
+    const waiting = stream.frames.findIndex((frame) => frame.type === "activity" && frame.payload.activity?.phase === "waiting");
+    assert.ok(opened > 0 && opened < waiting, "a phone has the card before the line says it waits on the person");
+
+    // A reconnect mid-wait gets both in its first snapshot.
+    const snapshot = await service.session(BOT_ID, { activity: true, handoffs: true });
+    assert.equal(snapshot.handoff?.waitId, HANDOFF_WAIT_ID);
+    assert.equal(snapshot.activity?.phase, "waiting");
+
+    assert.equal(handoffs.answer(BOT_ID, HANDOFF_WAIT_ID, { outcome: "done" }), "answered", "answered on the Mac");
+    await asked;
+    await stream.until(() => last(phasesOf(stream.frames)) === "searching", "the turn back at work");
+    assert.equal(last(stream.frames.filter((frame) => frame.type === "handoff"))?.payload.handoff, null);
+    assert.ok(gapless(stream.frames));
+  } finally {
+    await stream.close();
+    await service.close();
+  }
+});
+
+test("a hand-off answer reads as the person's message, and a call id the wire refuses gets a stable id", async () => {
+  const fixture = (await contractFixture()).botHandoffs;
+  const done = { kind: "action", outcome: "done", action: "Enter the 2FA code your bank sent you", note: "The code was from 9:01." };
+  const answerEntry = fixture.events.find((event: { type: string }) => event.type === "entry").payload.entry;
+  assert.deepEqual(projectBotSessionEntries([handoffResult(42, done)] as never), [answerEntry]);
+
+  const [skipped] = projectBotSessionEntries([handoffResult(43, { ...done, outcome: "skipped", note: undefined })] as never);
+  assert.equal(skipped?.type === "message" && skipped.text, "You skipped this: Enter the 2FA code your bank sent you");
+  const [signedIn] = projectBotSessionEntries([
+    handoffResult(44, { kind: "sign_in", outcome: "done", action: "Sign in to bank.example.com", origin: "https://bank.example.com" }),
+  ] as never);
+  assert.equal(signedIn?.type === "message" && signedIn.text, "You signed in to bank.example.com");
+  // A stopped card records no answer: nothing on the person's side.
+  assert.deepEqual(projectBotSessionEntries([handoffResult(45, done, { isError: true })] as never).filter((entry) => entry.type === "message"), []);
+
+  const odd = (toolCallId: string) => projectBotSessionEntries([handoffResult(46, done, { toolCallId })] as never)[0]!;
+  const first = odd("call/with spaces and ünïcode");
+  assert.match(first.id, /^entry_handoff_[0-9a-f]{32}$/u);
+  assert.deepEqual(parseAidenRemoteBotSessionEntry(first), first);
+  assert.equal(odd("call/with spaces and ünïcode").id, first.id, "the same row keys the same bubble on every snapshot");
+  assert.notEqual(odd("call/other").id, first.id);
+  assert.equal(odd(`call_${"x".repeat(200)}`).id.length, "entry_handoff_".length + 32, "a call id past the wire bound");
+});
+
+test("a legacy phone's hand-off line leaves its next snapshot once the card settles", async () => {
+  const { service, handOff } = handoffSession(fakeRuntime({ kind: "running", submissionId: "sub_1" }).runtime);
+  try {
+    const asked = handOff();
+    const notices = async () => (await service.session(BOT_ID)).entries.filter((entry) => entry.id.startsWith("handoff-notice:"));
+    assert.equal((await notices()).length, 1);
+    await service.answerHandoff(DEVICE_ID, BOT_ID, HANDOFF_WAIT_ID, "handoff-request-0015", { outcome: "done" }, HOLDER);
+    await asked;
+    assert.deepEqual(await notices(), []);
+  } finally {
+    await service.close();
+  }
+});
+
+// --- Contract revision 45: images a Bot shares reach phones -------------------------
+
+/** A 1×1 PNG, as `share_image` stores it. */
+const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+const sharedImage = (id: number, name: string, data = PNG_BASE64, mimeType = "image/png"): RawEntry => ({
+  id,
+  kind: "aiden.bot-shared-image",
+  data: { id: `img-${id}`, name, mimeType, size: Buffer.from(data, "base64").length, data },
+});
+
+test("an image the Bot shares reaches bot:images phones as the shared fixture shows it, other devices as a line pointing to the Mac, and its bytes read back exactly", async () => {
+  const fixture = (await contractFixture()).botImages;
+  const driven = drivenConversation([
+    user(1, "Chart this week's sales."),
+    sharedImage(2, fixture.entry.name),
+    assistant(3, "Here's the chart."),
+  ]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    const image = holder.entries.find((entry) => entry.type === "shared_image");
+    assert.ok(image, "the holder sees the image");
+    const { id: _fixtureId, size: _fixtureSize, ...expected } = fixture.entry;
+    assert.deepEqual({ ...image, id: undefined, size: undefined }, { ...expected, id: undefined, size: undefined });
+    assert.equal(image.size, Buffer.from(PNG_BASE64, "base64").length);
+    assert.equal(JSON.stringify(holder).includes(PNG_BASE64), false, "bytes never ride the session");
+
+    const legacy = await service.session(BOT_ID);
+    assert.equal(legacy.entries.some((entry) => entry.type === "shared_image"), false);
+    const line = legacy.entries.find((entry) => entry.id === image.id);
+    assert.deepEqual({ ...line, id: undefined }, { ...fixture.legacyEntry, id: undefined });
+    assert.deepEqual(parseAidenRemoteBotSession(legacy), legacy);
+
+    const read = await service.sharedImage(BOT_ID, image.id);
+    assert.equal(read.mimeType, "image/png");
+    assert.deepEqual(read.bytes, Buffer.from(PNG_BASE64, "base64"));
+    await assert.rejects(service.sharedImage(BOT_ID, "entry_999"), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a shared image whose bytes don't match its type is never offered to phones as readable", async () => {
+  const notAPng = Buffer.from("this is not an image").toString("base64");
+  const driven = drivenConversation([sharedImage(1, "broken.png", notAPng), sharedImage(2, "notes.gif", PNG_BASE64, "image/gif")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  try {
+    const holder = await service.session(BOT_ID, { images: true });
+    // A type outside the contract is left out; a PNG whose bytes are wrong is listed but refused on read.
+    assert.deepEqual(holder.entries.map((entry) => entry.type === "shared_image" ? entry.name : entry.type), ["broken.png"]);
+    await assert.rejects(service.sharedImage(BOT_ID, holder.entries[0]!.id), { code: "not_found" });
+  } finally {
+    await service.close();
+  }
+});
+
+test("a newly shared image reaches bot:images streams as an image and other streams as its line, at the same seq", async () => {
+  const driven = drivenConversation([user(1, "Draw it.")]);
+  const fake = fakeRuntime({ kind: "idle" });
+  const service = sessionService({ ...fake.runtime, conversation: async () => driven.conversation as never });
+  const holder = await openAudienceStream(service, { images: true });
+  const legacy = await openAudienceStream(service, {});
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+    await driven.emit([user(1, "Draw it."), sharedImage(2, "sketch.png")]);
+    await holder.until(() => holder.frames.length >= 2, "the image entry");
+    await legacy.until(() => legacy.frames.length >= 2, "the line entry");
+    const [shown, line] = [holder.frames[1]!, legacy.frames[1]!];
+    assert.equal(shown.payload.entry.type, "shared_image");
+    assert.equal(shown.payload.entry.name, "sketch.png");
+    assert.deepEqual(line.payload.entry, {
+      type: "message",
+      id: shown.payload.entry.id,
+      role: "assistant",
+      text: "I shared an image: sketch.png. Open this chat on your Mac to see it.",
+    });
+    assert.equal(shown.seq, line.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Contract revision 42: Bot issues on phones (`bot:issues`)
+// ---------------------------------------------------------------------------
+
+const ISSUES_HOLDER = { issues: true };
+/** The issue the shared `botIssues` fixture carries, as the host stores it. */
+const ISSUE_CARD: BotIssue = {
+  id: "issue_card_1",
+  botId: BOT_ID,
+  kind: "run_stalled",
+  dedupeKey: "run:stalled:1",
+  title: "A reply has been quiet for 10 minutes",
+  body: "The Bot is still working on the invoices.",
+  actions: [{ kind: "stop_run" }, { kind: "keep_waiting" }],
+  createdAt: Date.parse("2026-10-27T09:06:00.000Z"),
+};
+
+/** A host's issue service: the cards it holds, the actions it ran, and its change listeners. */
+function issueHost(
+  options: {
+    cards?: BotIssue[];
+    /** What `act` answers, in order; the last one repeats. */
+    results?: Array<"done" | "not_open" | "invalid">;
+  } = {},
+) {
+  let cards = [...(options.cards ?? [ISSUE_CARD])];
+  const results = [...(options.results ?? ["done"])];
+  const listeners = new Set<(botId: string) => void>();
+  const calls: Array<{ botId: string; issueId: string; action: BotIssueAction }> = [];
+  const service = {
+    list: async (botId: string) => cards.filter((card) => card.botId === botId),
+    act: async (botId: string, issueId: string, action: BotIssueAction) => {
+      calls.push({ botId, issueId, action });
+      return results.length > 1 ? results.shift()! : results[0]!;
+    },
+    onChange: (listener: (botId: string) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return {
+    service,
+    calls,
+    settle(issueId: string) {
+      cards = cards.map((card) =>
+        card.id === issueId
+          ? { ...card, actions: [], resolvedAt: Date.parse("2026-10-27T09:20:00.000Z"), resolution: "fixed" as const }
+          : card,
+      );
+      for (const listener of listeners) listener(BOT_ID);
+    },
+  };
+}
+
+function issueSession(
+  issues: ReturnType<typeof issueHost>["service"],
+  options: { wired?: boolean } = {},
+) {
+  return new AidenRemoteBotSessionService({
+    bots: botService({ name: "Scout" }),
+    runtime: async () => fakeRuntime({ kind: "idle" }).runtime,
+    ...(options.wired === false ? {} : { issues }),
+    notifyBotsChanged: () => {},
+    projectorIdleMs: 60_000,
+  });
+}
+
+test("issues are omitted unless bot:issues is negotiated, and a settled card reaches holders at its own seq", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  const holder = await openAudienceStream(service, ISSUES_HOLDER);
+  const legacy = await openAudienceStream(service, { cards: true, handoffs: true, handoffNotes: true });
+  try {
+    await holder.until(() => holder.frames.length >= 1, "the holder snapshot");
+    await legacy.until(() => legacy.frames.length >= 1, "the legacy snapshot");
+
+    const fetched = await service.session(BOT_ID, ISSUES_HOLDER);
+    assert.deepEqual(fetched.issues?.map((issue) => [issue.id, issue.kind, issue.resolved]), [
+      ["issue_card_1", "run_stalled", false],
+    ]);
+    assert.deepEqual(fetched.issues?.[0]?.actions, [{ kind: "stop_run" }, { kind: "keep_waiting" }]);
+    // Another device with every other opt-in is still a legacy device here.
+    const other = await service.session(BOT_ID, { cards: true, activity: true, handoffs: true, handoffNotes: true });
+    assert.equal("issues" in other, false);
+    assert.deepEqual(holder.frames[0]?.payload.session.issues, fetched.issues);
+    assert.equal("issues" in legacy.frames[0]!.payload.session, false);
+
+    host.settle("issue_card_1");
+    await holder.until(() => holder.frames.some((frame) => frame.type === "issues"), "the issues frame");
+    await legacy.until(() => legacy.frames.length >= 2, "the legacy state frame");
+    const frame = holder.frames.find((candidate) => candidate.type === "issues")!;
+    assert.deepEqual(
+      frame.payload.issues?.map((issue: { id: string; resolved: boolean }) => [issue.id, issue.resolved]),
+      [["issue_card_1", true]],
+    );
+    const legacyFrame = legacy.frames[1]!;
+    assert.equal(legacyFrame.type, "state", "a device without bot:issues still advances its seq");
+    assert.equal(legacyFrame.seq, frame.seq);
+  } finally {
+    await holder.close();
+    await legacy.close();
+    await service.close();
+  }
+});
+
+test("an unwired host sends no issues even when the device asks for them", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service, { wired: false });
+  try {
+    assert.equal(service.supportsIssues, false);
+    assert.equal("issues" in (await service.session(BOT_ID, ISSUES_HOLDER)), false);
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0009", { action: { kind: "stop_run" } }),
+      isError("not_found", 404),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("act stop_run reaches the issue service once, and an action the card never offered records nothing", async () => {
+  const host = issueHost({ results: ["done", "invalid", "done", "not_open"] });
+  const service = issueSession(host.service);
+  try {
+    const request = { action: { kind: "stop_run" } };
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    // The same request UUID replays its receipt instead of acting twice.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0001", request),
+      { result: "done" },
+    );
+    assert.deepEqual(host.calls, [{ botId: BOT_ID, issueId: ISSUE_CARD.id, action: { kind: "stop_run" } }]);
+
+    // An action the card no longer offers is `409 operation_stale`, and
+    // nothing is recorded: the same key runs once the card offers it again.
+    const keepWaiting = { action: { kind: "keep_waiting" } };
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      isError("operation_stale", 409),
+    );
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0002", keepWaiting),
+      { result: "done" },
+    );
+    assert.equal(host.calls.length, 3);
+
+    // not_open is a success: the card is gone, so the phone drops it.
+    assert.deepEqual(
+      await service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0003", {
+        action: { kind: "open_chat" },
+      }),
+      { result: "not_open" },
+    );
+  } finally {
+    await service.close();
+  }
+});
+
+test("unknown and desktop-only issue actions are 400 and run nothing", async () => {
+  const host = issueHost();
+  const service = issueSession(host.service);
+  try {
+    for (const action of [
+      { kind: "open_settings", section: "model" },
+      { kind: "stop_run", routineId: "routine_1" },
+      { kind: "resume_routine" },
+      { kind: "surprise" },
+    ]) {
+      await assert.rejects(
+        service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0010", { action }),
+        isError("invalid_request", 400),
+        JSON.stringify(action),
+      );
+    }
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, ISSUE_CARD.id, "issue-act-request-0011", { action: { kind: "stop_run" }, extra: true }),
+      isError("invalid_request", 400),
+    );
+    await assert.rejects(
+      service.actIssue(DEVICE_ID, BOT_ID, "not an issue id", "issue-act-request-0012", { action: { kind: "stop_run" } }),
+      isError("invalid_request", 400),
+    );
+    assert.deepEqual(host.calls, []);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a card's desktop-only settings action never crosses the wire, and a settled card offers nothing", async () => {
+  const host = issueHost({
+    cards: [
+      {
+        ...ISSUE_CARD,
+        id: "issue_settings_1",
+        dedupeKey: "preflight:gmail",
+        kind: "preflight_failed",
+        actions: [{ kind: "open_settings", section: "connections" }],
+      },
+      // The store keeps a settled row's old actions; the wire still offers none.
+      { ...ISSUE_CARD, id: "issue_settled_1", resolvedAt: 1_234, resolution: "fixed" },
+    ],
+  });
+  const service = issueSession(host.service);
+  try {
+    const issues = (await service.session(BOT_ID, ISSUES_HOLDER)).issues ?? [];
+    // The store holds them newest first; the wire carries them oldest first.
+    assert.deepEqual(issues.map((issue) => issue.id), ["issue_settled_1", "issue_settings_1"]);
+    const settings = issues.find((issue) => issue.id === "issue_settings_1");
+    const settled = issues.find((issue) => issue.id === "issue_settled_1");
+    assert.deepEqual(settings?.actions, [], "settings stay on the Mac");
+    assert.equal(settings?.resolved, false);
+    assert.equal(settled?.resolved, true);
+    assert.deepEqual(settled?.actions, [], "a settled card offers nothing");
+  } finally {
+    await service.close();
   }
 });

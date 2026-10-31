@@ -103,6 +103,15 @@ func aidenResolvedBotDeepLink(
     return .openChat(chat.chatId)
 }
 
+/// The Bots path a `aiden-otg://bot/{id}/chat` link opens on a Mac serving
+/// durable sessions: that Bot's one durable chat, where its hand-off card
+/// waits (Android parity). Nil on an older Mac, whose link opens the Bot's
+/// conversation (`aidenResolvedBotDeepLink`).
+func aidenBotSessionDeepLinkPath(botID: String, hostFeatures: [String]?) -> [String]? {
+    guard case let .durableSession(id) = AidenBotChatRoute.resolve(botID: botID, hostFeatures: hostFeatures) else { return nil }
+    return [AidenBotChatRoute.pathValue(botID: id)]
+}
+
 /// A shimmering placeholder block for cold loads. Warm refreshes keep the
 /// last-good UI in place and never show it.
 struct AidenBotSkeletonBlock: View {
@@ -155,11 +164,13 @@ struct AidenBotHomeRow: Equatable, Identifiable {
 
     var id: String { bot.id }
 
-    /// The durable session state comes first: a paused turn or a missing
-    /// model says so; otherwise the last message, or a greeting prompt.
+    /// The durable session state comes first: an interrupted turn, a Bot the
+    /// person paused (revision 37) or a missing model says so; otherwise the
+    /// last message, or a greeting prompt.
     var preview: String {
         switch bot.sessionState {
-        case .interrupted: return AidenBotSessionCopy.pausedSubtitle
+        case .interrupted: return AidenBotSessionCopy.interruptedSubtitle
+        case .paused: return AidenBotSessionCopy.pausedSubtitle
         case .needsModel: return AidenBotSessionCopy.needsModel
         default: break
         }
@@ -771,8 +782,9 @@ struct AidenBotsHomeView: View {
         )
         Task {
             await createFlow.submit(input, operations: operations, retrying: retrying) { created in
-                await load()
+                // The new Bot's chat opens from the create receipt; the list refreshes behind it.
                 openChat(for: AidenBotSummary(detail: created))
+                await load()
             }
         }
     }
@@ -781,7 +793,7 @@ struct AidenBotsHomeView: View {
     @MainActor
     private func openChat(for bot: AidenBotSummary) {
         guard !isCreatingConversation else { return }
-        if case .durableSession = AidenBotChatRoute.resolve(botID: bot.id, hostFeatures: coordinator.server?.features) {
+        if case .durableSession = AidenBotChatRoute.resolve(botID: bot.id, hostFeatures: coordinator.knownServerFeatures) {
             onOpenBotSession(bot)
             return
         }
@@ -827,8 +839,9 @@ struct AidenBotsHomeView: View {
             let result = try await coordinator.remoteClient(for: context).createBotFromPreset(request, idempotencyKey: key)
             guard coordinator.isCurrent(context) else { return }
             presetAttempt = nil
-            await load()
+            // Open now from the receipt; the list refreshes behind the chat.
             openChat(for: result.bot)
+            await load()
         } catch is CancellationError {
             return
         } catch {
@@ -896,7 +909,9 @@ struct AidenBotsHomeView: View {
             remoteSearchResults = nil
         }
         loadError = nil
-        isLoading = coordinator.connectionState == .connected
+        // Connecting is unsettled, not empty: with nothing saved it shows the
+        // skeleton until the Mac answers or the connection fails.
+        isLoading = coordinator.connectionState == .connected || coordinator.connectionState == .connecting
         let activation = await AidenBotCache.shared.activate(
             instanceId: installation.id,
             deviceId: installation.deviceId
@@ -922,7 +937,9 @@ struct AidenBotsHomeView: View {
 
         if coordinator.connectionState != .connected {
             loadError = snapshot == nil ? nil : "Offline — showing saved Bots"
-            isLoading = false
+            // Connecting with nothing saved stays unsettled (the skeleton, not
+            // "No saved Bots"); `loadID` reruns this once the Mac answers.
+            isLoading = coordinator.connectionState == .connecting && snapshot == nil
             return
         }
 

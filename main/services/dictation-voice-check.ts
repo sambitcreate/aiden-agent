@@ -21,7 +21,7 @@ export function createPressVoiceCheck(deps: PressVoiceCheckDeps): {
       const resolution = await deps.resolve();
       pressResolution = resolution;
       return resolution.kind === "ready"
-        ? { ok: true }
+        ? { ok: true, voice: resolution }
         : { ok: false, message: voiceSetupMessage(resolution.reason) };
     },
     warmUp: async () => {

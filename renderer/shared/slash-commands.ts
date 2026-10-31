@@ -63,6 +63,7 @@ export type SlashCommandIcon =
   | "appearance"
   | "assistant"
   | "chat"
+  | "check"
   | "copy"
   | "clone"
   | "editor"
@@ -75,6 +76,7 @@ export type SlashCommandIcon =
   | "new"
   | "logout"
   | "providers"
+  | "pull-request"
   | "rename"
   | "review"
   | "settings"
@@ -95,7 +97,8 @@ export type SlashCommandAction =
       engine?: CompactionEngine;
       action: "fork" | "clone" | "export" | "compact" | "details" | "logout" | "worktree";
     }
-  | { kind: "composer-instruction"; instruction: "visualize" | "btw" };
+  | { kind: "composer-instruction"; instruction: "visualize" | "btw" }
+  | { kind: "follow-through"; action: "until" | "follow" };
 
 export type SlashCommandAvailability =
   | "always"
@@ -108,7 +111,9 @@ export type SlashCommandAvailability =
   | "workspace-terminal"
   | "workspace-environment"
   | "workspace-worktree"
-  | "idle-workspace";
+  | "idle-workspace"
+  /** A chat in a workspace with folder access, on the desktop. */
+  | "workspace-chat";
 
 export interface SlashCommandDefinition {
   name: string;
@@ -248,6 +253,19 @@ export const SLASH_COMMANDS = Object.freeze([
     action: { kind: "session", action: "export" },
     behavior: "immediate",
     availability: "idle-chat-session",
+    argument: "none",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "delete",
+    aliases: [],
+    title: "Delete chat",
+    description: "Delete this chat after you confirm.",
+    keywords: ["remove", "trash", "conversation"],
+    icon: "chat",
+    action: { kind: "command", commandId: "chat.delete" },
+    behavior: "immediate",
+    availability: "chat-required",
     argument: "none",
     draftPolicy: "preserve",
   }),
@@ -473,11 +491,11 @@ export const SLASH_COMMANDS = Object.freeze([
     draftPolicy: "preserve",
   }),
   define({
-    name: "mcp",
-    aliases: ["plugins"],
-    title: "Plugins",
-    description: "Open the plugin directory and MCP connection status.",
-    keywords: ["tools", "connectors", "servers", "mcp", "plugins"],
+    name: "connectors",
+    aliases: ["mcp"],
+    title: "Connectors",
+    description: "Connect apps and tool servers, and check their status.",
+    keywords: ["tools", "apps", "servers", "mcp", "integrations"],
     icon: "mcp",
     action: { kind: "settings", section: "mcp" },
     behavior: "navigation",
@@ -535,6 +553,32 @@ export const SLASH_COMMANDS = Object.freeze([
     behavior: "argument",
     availability: "idle-chat-session",
     argument: "optional-prompt",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "until",
+    aliases: ["done-when"],
+    title: "Until a check passes",
+    description: "Run a check, such as your tests, after each answer; the agent keeps fixing until it passes, 5 checks at most.",
+    keywords: ["test", "check", "loop", "done when", "ci"],
+    icon: "check",
+    action: { kind: "follow-through", action: "until" },
+    behavior: "argument",
+    availability: "workspace-chat",
+    argument: "optional-prompt",
+    draftPolicy: "preserve",
+  }),
+  define({
+    name: "follow",
+    aliases: ["watch"],
+    title: "Follow this pull request",
+    description: "Tell this chat about failed checks, merge conflicts and reviewers' comments until it is merged.",
+    keywords: ["pull request", "pr", "checks", "ci", "github", "review"],
+    icon: "pull-request",
+    action: { kind: "follow-through", action: "follow" },
+    behavior: "immediate",
+    availability: "workspace-chat",
+    argument: "none",
     draftPolicy: "preserve",
   }),
 ] satisfies readonly SlashCommandDefinition[]);

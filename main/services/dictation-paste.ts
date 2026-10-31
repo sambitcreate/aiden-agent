@@ -130,6 +130,48 @@ export async function detectMacSecureInput(run: RunJxa = runJxa): Promise<boolea
   throw new Error(`Unexpected Secure Input probe output: ${output.slice(0, 80)}`);
 }
 
+/** A probe started this long before the paste still describes the focused field. */
+export const SECURE_INPUT_PROBE_MAX_AGE_MS = 1_500;
+
+export interface SecureInputPrefetch {
+  /** Start a probe now, unless a recent one can still answer. */
+  prefetch(): void;
+  /** The recent probe's answer, or a fresh probe. Each probe answers one delivery. */
+  isSecureInputActive(): Promise<boolean>;
+}
+
+/**
+ * The Secure Input probe launches osascript (about 200 ms). Starting it when
+ * the user stops talking lets it run while the audio is transcribed instead of
+ * in front of the paste.
+ */
+export function createSecureInputPrefetch(deps: {
+  probe: () => Promise<boolean>;
+  now: () => number;
+  maxAgeMs?: number;
+}): SecureInputPrefetch {
+  const maxAgeMs = deps.maxAgeMs ?? SECURE_INPUT_PROBE_MAX_AGE_MS;
+  let latest: { startedAt: number; answer: Promise<boolean> } | null = null;
+  const fresh = () => latest !== null && deps.now() - latest.startedAt <= maxAgeMs;
+  const start = () => {
+    const answer = deps.probe();
+    // Read later by the delivery; a rejection is handled there.
+    answer.catch(() => {});
+    latest = { startedAt: deps.now(), answer };
+    return answer;
+  };
+  return {
+    prefetch() {
+      if (!fresh()) start();
+    },
+    isSecureInputActive() {
+      const answer = fresh() && latest ? latest.answer : start();
+      latest = null;
+      return answer;
+    },
+  };
+}
+
 /** Run an AppleScript handler with data passed as argv, never interpolated. */
 export function runOsascript(script: string, args: string[] = []): Promise<string> {
   return new Promise((resolve, reject) => {

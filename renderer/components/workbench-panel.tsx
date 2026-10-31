@@ -178,6 +178,8 @@ export interface WorkbenchPanelProps<T extends WorkbenchTab>
   /** Every view stays mounted; only `selectedViewId` is visible. */
   views: readonly WorkbenchView[];
   selectedViewId: string;
+  /** Shown above every view, such as a card the floating panel would otherwise cover. */
+  notice?: React.ReactNode;
   activeTabRef?: React.RefObject<HTMLButtonElement | null>;
   surfaceRef?: React.RefObject<HTMLElement | null>;
 }
@@ -200,6 +202,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
   onActivate,
   views,
   selectedViewId,
+  notice,
   activeTabRef: providedActiveTabRef,
   surfaceRef: providedSurfaceRef,
   tabs,
@@ -279,6 +282,7 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
       ref={surfaceRef}
       id={id}
       data-environment-surface={surface}
+      data-focus-region="panel"
       data-surface-mode={inline ? "tools-pinned" : "tools-floating"}
       data-state={open ? (presented ? "open" : "covered") : "closed"}
       inert={!presented ? true : undefined}
@@ -331,6 +335,8 @@ export function WorkbenchPanel<T extends WorkbenchTab>({
         closeTitle={closeTitle}
         onClose={onClose}
       />
+
+      {notice}
 
       <div className="min-h-0 flex-1 @container">
         {views.map((view) => {

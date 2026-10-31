@@ -14,12 +14,19 @@ export interface LinkRouteInput {
   forceExternal?: boolean;
   /** aiden-ui / restricted Markdown */
   forcePrompt?: boolean;
+  /** The active workspace's folder, so absolute paths inside it count as workspace files. */
+  workspaceFolder?: string | null;
 }
 
 export type LinkRoute =
   | { kind: "browser" | "external"; url: string }
   | { kind: "ask"; url: string; remember: boolean; inApp: boolean }
-  | { kind: "file"; path: string };
+  /**
+   * A local file or folder. `path` is what the Aiden browser opens; `workspacePath`
+   * is the same file relative to the workspace folder ("" for the folder itself),
+   * or null when it is outside the workspace.
+   */
+  | { kind: "file"; path: string; preview: boolean; workspacePath: string | null };
 
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -42,15 +49,73 @@ function webUrl(href: string): URL | null {
   }
 }
 
-function filePath(href: string): string | null {
-  if (/^(?:[a-z][a-z\d+.-]*:|#|\/\/)/i.test(href)) return null;
-  const path = href.split(/[?#]/, 1)[0];
-  if (!/\.(?:html?|pdf)$/i.test(path)) return null;
+// `name.ext:12` is a file and line, not a URL scheme.
+const BARE_FILE_LINE = /^[\w-][\w.-]*\.[a-z\d]+:\d+(?::\d+)?$/i;
+const LINE_SUFFIX = /:\d+(?::\d+)?$/;
+const PREVIEW_EXTENSION = /\.(?:html?|pdf)$/i;
+
+/** True for a Markdown link target that names a local file and must survive URL sanitizing. */
+export function isLocalFileHref(href: string): boolean {
+  return /^file:/i.test(href) || BARE_FILE_LINE.test(href);
+}
+
+function decodedPath(raw: string): string | null {
   try {
-    return decodeURIComponent(path);
+    return decodeURIComponent(raw);
   } catch {
     return null;
   }
+}
+
+function hrefPath(href: string): string | null {
+  if (/^file:/i.test(href)) {
+    try {
+      const url = new URL(href);
+      if (url.hostname && url.hostname.toLowerCase() !== "localhost") return null;
+      const path = decodedPath(url.pathname);
+      // file:///C:/x names the Windows path C:/x.
+      return path?.replace(/^\/([a-z]:\/)/i, "$1") ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (!BARE_FILE_LINE.test(href) && /^(?:[a-z][a-z\d+.-]*:|#|\/\/)/i.test(href)) return null;
+  const raw = href.split(/[?#]/, 1)[0];
+  return raw ? decodedPath(raw) : null;
+}
+
+const isAbsolutePath = (path: string) => path.startsWith("/") || /^[a-z]:\//i.test(path);
+
+/**
+ * `path` relative to `folder` with `.` and `..` resolved, "" for the folder
+ * itself, or null when it leaves the folder.
+ */
+export function workspaceRelativePath(path: string, folder: string | null | undefined): string | null {
+  let rest = path.replace(/\\/g, "/");
+  if (isAbsolutePath(rest)) {
+    const root = folder?.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (!root || (rest !== root && !rest.startsWith(`${root}/`))) return null;
+    rest = rest.slice(root.length);
+  }
+  const segments: string[] = [];
+  for (const segment of rest.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment !== "..") segments.push(segment);
+    else if (!segments.pop()) return null;
+  }
+  return segments.join("/");
+}
+
+function fileRoute(href: string, workspaceFolder: string | null | undefined): LinkRoute | null {
+  const decoded = hrefPath(href);
+  if (!decoded) return null;
+  const path = decoded.replace(LINE_SUFFIX, "");
+  // `~/x` is the home folder, not a workspace folder named "~".
+  const workspacePath = path.startsWith("~") ? null : workspaceRelativePath(path, workspaceFolder);
+  // An absolute path outside the workspace with no file extension (an app
+  // route such as /settings) is not treated as a file.
+  if (workspacePath === null && isAbsolutePath(path) && !/^file:/i.test(href) && !/\.[^/]+$/.test(path)) return null;
+  return { kind: "file", path, preview: PREVIEW_EXTENSION.test(path), workspacePath };
 }
 
 export function resolveLinkOpen(input: LinkRouteInput): LinkRoute | null {
@@ -63,10 +128,7 @@ export function resolveLinkOpen(input: LinkRouteInput): LinkRoute | null {
     }
   }
   const url = webUrl(href);
-  if (!url) {
-    const path = browserAvailable ? filePath(href) : null;
-    return path ? { kind: "file", path } : null;
-  }
+  if (!url) return browserAvailable ? fileRoute(href, input.workspaceFolder) : null;
   const flip = modifiers.metaKey || modifiers.ctrlKey;
   if (input.forceExternal) return { kind: "external", url: url.href };
   if (input.forcePrompt)

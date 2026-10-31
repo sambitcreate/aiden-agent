@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Type, type JsonObject } from "@earendil-works/pi-ai";
+import { Type, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { validateMcpServerMetadata } from "../../renderer/shared/mcp-oauth-config.js";
 import { createPiToolDiscovery, type PiDiscoverableTool } from "./pi-tool-discovery.js";
 
@@ -118,12 +118,12 @@ test("namespace output is bounded and oversized inventories degrade to a marked,
     onInventoryTruncated: (total) => reported.push(total),
   });
   const capped = excessive.searchTools("tool_5");
-  assert.equal(capped.inventoryTruncated, true);
+  assert.equal(capped.inventoryTruncated, undefined);
   assert.equal(names(capped)[0], "tool_5");
-  // Only the first 512 callable tools are searchable.
-  assert.deepEqual(names(excessive.searchTools("tool_599")), []);
+  // Later services remain searchable before schema/output bounds.
+  assert.deepEqual(names(excessive.searchTools("tool_599")), ["tool_599"]);
   assert.deepEqual(names(excessive.searchTools("tool_511")), ["tool_511"]);
-  assert.deepEqual(reported, [600]);
+  assert.deepEqual(reported, []);
   assert.equal(createPiToolDiscovery({ tools: () => [tool("one")], isCallable: () => true }).searchTools("").inventoryTruncated, undefined);
 });
 
@@ -144,9 +144,9 @@ test("the inventory limit counts callable tools while excluded wrappers stay und
   assert.throws(() => discovery.describeNamespace("mcp:private"), /Unknown or unavailable/);
   admitted = [...admitted, tool("overflow", "mcp:one")];
   const overflowing = discovery.searchTools("tool_511");
-  assert.equal(overflowing.inventoryTruncated, true);
+  assert.equal(overflowing.inventoryTruncated, undefined);
   assert.deepEqual(names(overflowing), ["tool_511"]);
-  assert.deepEqual(names(discovery.searchTools("overflow")), []);
+  assert.deepEqual(names(discovery.searchTools("overflow")), ["overflow"]);
   admitted = admitted.filter((candidate) => candidate.name !== "overflow" && candidate.name !== "tool_511");
   assert.deepEqual(names(discovery.searchTools("tool_511")), []);
   assert.deepEqual(names(discovery.searchTools("tool_510")), ["tool_510"]);
@@ -255,4 +255,62 @@ test("namespaces accept the service name and tool-name prefix as case- and separ
   const ambiguous = createPiToolDiscovery({ tools: () => [...inventory, twin], isCallable: () => true });
   assert.throws(() => ambiguous.describeNamespace("GitHub Work"), /matches several services/u);
   assert.equal(ambiguous.describeNamespace("github_work_2").namespace, "mcp:cccccccccccccccccccccccc");
+});
+
+test("large admitted inventories support late namespace search and deterministic paging", () => {
+  for (const count of [64, 512, 1536]) {
+    const tools = Array.from({ length: count }, (_, i) => tool(`item_${String(i).padStart(4, "0")}`, i < count - 1 ? "mcp:early" : "mcp:late"));
+    const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true });
+    assert.deepEqual(names(discovery.searchTools(`item_${String(count - 1).padStart(4, "0")}`, { limit: 1 })), [tools[count - 1].name]);
+    assert.deepEqual(names(discovery.describeNamespace("mcp:late")), [tools[count - 1].name]);
+    const first = discovery.searchTools("", { namespace: "mcp:early", limit: 2 });
+    const second = discovery.searchTools("", { namespace: "mcp:early", limit: 2, offset: first.nextOffset });
+    assert.deepEqual(names(first), ["item_0000", "item_0001"]);
+    assert.deepEqual(names(second), ["item_0002", "item_0003"]);
+  }
+});
+
+test("schema byte paging never consumes a valid record from the next page", () => {
+  const tools = ["a", "b", "c"].map((name) => ({ ...tool(name), parameters: Type.Object({ value: Type.String({ description: "x".repeat(12000) }) }) }));
+  const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true });
+  const first = discovery.searchTools("", { limit: 20 });
+  assert.deepEqual(names(first), ["a", "b"]);
+  const second = discovery.searchTools("", { limit: 20, offset: first.nextOffset });
+  assert.deepEqual(names(second), ["c"]);
+});
+
+test("truncated global search exposes a namespace directory and bounded late lookup", () => {
+  const tools = Array.from({ length: 4096 }, (_, i) => tool(`early_${i}`, "mcp:early"));
+  tools.push(tool("late_unique", "mcp:late"));
+  const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true, onInventoryTruncated: () => {} });
+  assert.equal(discovery.searchTools("late_unique").inventoryTruncated, true);
+  const directory = discovery.searchTools("", { listNamespaces: true, limit: 1 });
+  assert.deepEqual(directory.namespaces, [{ namespace: "mcp:early", label: "Server mcp:early" }]);
+  const next = discovery.searchTools("", { listNamespaces: true, limit: 1, offset: directory.nextOffset });
+  assert.deepEqual(next.namespaces, [{ namespace: "mcp:late", label: "Server mcp:late" }]);
+  assert.deepEqual(names(discovery.searchTools("late_unique", { namespace: "mcp:late" })), ["late_unique"]);
+});
+
+test("tool_search lists the namespace directory from a call that omits query", async () => {
+  const discovery = createPiToolDiscovery({ tools: () => [tool("read_docs", "mcp:docs")], isCallable: () => true });
+  const args = validateToolArguments(discovery.toolSearch, { type: "toolCall", id: "directory", name: "tool_search", arguments: { listNamespaces: true } });
+  const result = await discovery.toolSearch.execute("directory", args);
+  assert.deepEqual((result.structuredContent as JsonObject).namespaces, [{ namespace: "mcp:docs", label: "Server mcp:docs" }]);
+  await assert.rejects(discovery.toolSearch.execute("search", {}), /search query/u);
+});
+
+test("namespace directory cursors can traverse beyond the ranked search cap", () => {
+  const tools = Array.from({ length: 4102 }, (_, i) => tool(`t${i}`, `mcp:n${String(i).padStart(5, "0")}`));
+  const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true, onInventoryTruncated: () => {} });
+  const page = discovery.searchTools("", { listNamespaces: true, offset: 4080, limit: 20 });
+  const next = discovery.searchTools("", { listNamespaces: true, offset: page.nextOffset });
+  assert.equal((next.namespaces as JsonObject[]).length, 2);
+});
+
+test("truncated search reserves envelope bytes for navigation and cursor", () => {
+  const tools = Array.from({ length: 4097 }, (_, i) => ({ ...tool(`t${i}`), parameters: i < 2 ? Type.Object({}, { description: "x".repeat(16240) }) : null as never }));
+  const discovery = createPiToolDiscovery({ tools: () => tools, isCallable: () => true, onInventoryTruncated: () => {} });
+  const result = discovery.searchTools("", { limit: 20 });
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 32768);
+  assert.equal(result.inventoryTruncated, true);
 });

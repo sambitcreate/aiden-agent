@@ -1,5 +1,6 @@
 import type { AgentActivity, ToolActivity } from "../agent-activity";
 import { resolveAgentActivity } from "../agent-activity";
+import { withoutHostLocalRecaps } from "./remote-chat-mapper";
 import type { ApprovalPrompt } from "../ipc";
 import type { ChatMessage } from "../types";
 import {
@@ -252,7 +253,7 @@ export function applyRemoteRunEvent(current: RemoteRunView, event: PeerRunEvent)
     }
     case "timeline": {
       const timeline = parseGenerationTimeline(payload.timeline);
-      return { view: timeline ? { ...view, timeline } : view, refetch: false };
+      return { view: timeline ? { ...view, timeline: withoutHostLocalRecaps(timeline) } : view, refetch: false };
     }
     case "approval_required":
       return { view: { ...view, approvals: withApproval(view.approvals, approvalPrompt(payload)) }, refetch: false };

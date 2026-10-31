@@ -22,9 +22,19 @@ import {
   type WebSearchKeyPoolDocument,
   type WebSearchPooledKey,
 } from "./web-search-key-pool-core.js";
+import {
+  isWebExtractKeyPoolId,
+  type WebExtractKeyPoolId,
+} from "../../renderer/shared/web-search-key-pool.js";
 
 /** Stable namespace for Web Search credentials in the encrypted key store. */
 export const WEB_SEARCH_CREDENTIAL_PREFIX = "web-search:";
+/** Extraction-model credentials share the pool but never a search provider's slot. */
+export const WEB_EXTRACT_CREDENTIAL_PREFIX = "web-extract:";
+/** The fixed origin each pooled extraction credential is bound to. */
+const WEB_EXTRACT_CREDENTIAL_ORIGINS: Readonly<Record<WebExtractKeyPoolId, string>> = Object.freeze({
+  "cloudflare-workers-ai": "https://api.cloudflare.com",
+});
 export const WEB_SEARCH_API_KEY_SLOT = "api-key";
 /** The pre-v2 Exa key is intentionally retained as a read/migration input. */
 export const LEGACY_EXA_SECRET_ID = "exa";
@@ -32,7 +42,8 @@ export const MAX_WEB_SEARCH_CREDENTIAL_CHARS = 16_384;
 export const MAX_WEB_SEARCH_CREDENTIAL_BYTES = 64 * 1_024;
 
 export interface WebSearchCredentialReference {
-  providerId: WebSearchProviderId;
+  /** A search provider, or the pooled extraction-model credential. */
+  providerId: WebSearchProviderId | WebExtractKeyPoolId;
   credentialSlot: typeof WEB_SEARCH_API_KEY_SLOT;
   secretId: string;
   binding: string;
@@ -201,6 +212,21 @@ export function webSearchCredentialReference(
   providerId: unknown,
   providerConfig?: BoundedNonSecretProviderConfig,
 ): WebSearchCredentialReference {
+  if (isWebExtractKeyPoolId(providerId)) {
+    // Bound to the fixed API origin only. The account ID is ordinary
+    // configuration, so changing it never strands the saved keys.
+    return {
+      providerId,
+      credentialSlot: WEB_SEARCH_API_KEY_SLOT,
+      secretId: `${WEB_EXTRACT_CREDENTIAL_PREFIX}${providerId}:${WEB_SEARCH_API_KEY_SLOT}`,
+      binding: JSON.stringify({
+        version: 1,
+        providerId,
+        credentialSlot: WEB_SEARCH_API_KEY_SLOT,
+        endpoint: WEB_EXTRACT_CREDENTIAL_ORIGINS[providerId],
+      }),
+    };
+  }
   if (!isWebSearchProviderId(providerId) || !supportsApiKey(providerId)) {
     throw new Error("This Web Search provider does not accept an API key.");
   }

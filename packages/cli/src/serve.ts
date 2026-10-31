@@ -12,12 +12,12 @@ import { createCliBots } from "./bots.ts";
 import { createCliRemote } from "./remote.ts";
 
 /** Local control socket is private to the agent directory's owner. */
-export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean } = {}) {
+export async function serve(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void } = {}) {
   recoverStaleServeLease(agentDir);
   const release = acquireLease(join(agentDir, "serve"));
   try { await serveOwned(agentDir, signal, options); } finally { release(); }
 }
-async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean }) {
+async function serveOwned(agentDir: string, signal: AbortSignal, options: { remote?: boolean; onReady?: () => void }) {
   const runtime = createCliScheduler(agentDir);
   const chats = createDaemonChats(agentDir);
   const workspaceRuntime = createCliWorkspaceApplication(agentDir, {
@@ -25,7 +25,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     cancelSchedules: (id) => runtime.service.cancelWorkspace(id), resumeSchedules: (id) => runtime.service.resumeWorkspace(id),
   });
   const telegram = createCliTelegram(agentDir, chats);
-  const bots = await createCliBots(agentDir, chats); chats.setBots(bots);
+  const bots = await createCliBots(agentDir, chats); chats.setBots(bots); bots.setScheduler(runtime);
   let remote: Awaited<ReturnType<typeof createCliRemote>> | undefined;
   const path = daemonSocket(agentDir);
   const clients = new Set<import("node:net").Socket>();
@@ -60,6 +60,7 @@ async function serveOwned(agentDir: string, signal: AbortSignal, options: { remo
     chmodSync(path, 0o600);
     await runtime.service.start();
     await telegram.start();
+    options.onReady?.();
     process.stderr.write(`Aiden scheduler listening at ${path}\n`);
     if (!signal.aborted) await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   } finally {

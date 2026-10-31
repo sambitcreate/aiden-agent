@@ -49,7 +49,6 @@ test("OpenAI's fixed 30-minute cache starts at GPT-5.6; earlier models only give
   assert.equal(promptCacheTtlMs(catalogModel("azure", "gpt-6-sol")), 30 * MINUTE);
   assert.equal(promptCacheTtlMs(catalogModel("openai", "gpt-5.5")), 0);
   assert.equal(promptCacheTtlMs(catalogModel("azure", "gpt-5.4")), 0);
-  assert.equal(promptCacheTtlMs(catalogModel("openai-codex", "gpt-5.3-codex-spark")), 0);
 });
 
 test("GitHub Copilot publishes its own idle lifetimes per model family", () => {

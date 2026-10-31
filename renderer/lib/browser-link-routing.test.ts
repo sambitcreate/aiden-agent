@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isLoopbackHost, resolveLinkOpen, type LinkRouteInput } from "./browser-link-routing";
+import { isLoopbackHost, resolveLinkOpen, workspaceRelativePath, type LinkRouteInput } from "./browser-link-routing";
 
 const plain = { metaKey: false, ctrlKey: false };
 const cmd = { metaKey: true, ctrlKey: false };
@@ -61,10 +61,48 @@ test("model-generated links always prompt, without remember, unless cmd-clicked"
   assert.equal(route({ forcePrompt: true, preference: "browser", modifiers: cmd })?.kind, "external");
 });
 
-test("workspace HTML and PDF links preview in Aiden; everything else is left to the app", () => {
-  assert.deepEqual(route({ href: "docs/My%20Report.html#top" }), { kind: "file", path: "docs/My Report.html" });
-  assert.deepEqual(route({ href: "out.pdf?page=2" }), { kind: "file", path: "out.pdf" });
-  assert.deepEqual(route({ href: "/abs/out.html" }), { kind: "file", path: "/abs/out.html" });
-  for (const href of ["#section", "/settings", "//cdn.example.com/x", "javascript:alert(1)", "file:///etc/hosts", "notes.md", "https://", "https://user:pw@example.com/", "bad%zz.html"])
-    assert.equal(route({ href }), null, href);
+test("workspace HTML and PDF links preview in Aiden; other files open in Files", () => {
+  const folder = "/Users/me/prompt-lab";
+  const file = (href: string) => route({ href, workspaceFolder: folder });
+  assert.deepEqual(file("docs/My%20Report.html#top"), { kind: "file", path: "docs/My Report.html", preview: true, workspacePath: "docs/My Report.html" });
+  assert.deepEqual(file("out.pdf?page=2"), { kind: "file", path: "out.pdf", preview: true, workspacePath: "out.pdf" });
+  assert.deepEqual(file("./thermostat/style.css"), { kind: "file", path: "./thermostat/style.css", preview: false, workspacePath: "thermostat/style.css" });
+  assert.deepEqual(file("thermostat/glm-dgx/"), { kind: "file", path: "thermostat/glm-dgx/", preview: false, workspacePath: "thermostat/glm-dgx" });
+  // Agents link file and line; the line is dropped, including the bare `name.ext:12` form.
+  assert.deepEqual(file("script.js:12"), { kind: "file", path: "script.js", preview: false, workspacePath: "script.js" });
+  assert.deepEqual(file("src/app.ts:12:4"), { kind: "file", path: "src/app.ts", preview: false, workspacePath: "src/app.ts" });
+});
+
+test("absolute paths and file:// links resolve against the workspace folder", () => {
+  const folder = "/Users/me/prompt-lab";
+  const file = (href: string) => route({ href, workspaceFolder: folder });
+  assert.deepEqual(file("file:///Users/me/prompt-lab/thermostat/index.html"), {
+    kind: "file", path: "/Users/me/prompt-lab/thermostat/index.html", preview: true, workspacePath: "thermostat/index.html",
+  });
+  assert.deepEqual(file("file:///Users/me/prompt-lab/a%20b/script.js"), {
+    kind: "file", path: "/Users/me/prompt-lab/a b/script.js", preview: false, workspacePath: "a b/script.js",
+  });
+  assert.deepEqual(file("/Users/me/prompt-lab/thermostat"), { kind: "file", path: "/Users/me/prompt-lab/thermostat", preview: false, workspacePath: "thermostat" });
+  assert.deepEqual(file("file://localhost/Users/me/prompt-lab/"), { kind: "file", path: "/Users/me/prompt-lab/", preview: false, workspacePath: "" });
+  // Outside the workspace: still a file (the opener explains it can't open it), never a web link.
+  assert.deepEqual(file("file:///etc/hosts"), { kind: "file", path: "/etc/hosts", preview: false, workspacePath: null });
+  assert.deepEqual(file("/Users/me/prompt-lab-old/x.css"), { kind: "file", path: "/Users/me/prompt-lab-old/x.css", preview: false, workspacePath: null });
+  assert.deepEqual(file("../secrets.txt"), { kind: "file", path: "../secrets.txt", preview: false, workspacePath: null });
+  assert.deepEqual(file("~/notes.md"), { kind: "file", path: "~/notes.md", preview: false, workspacePath: null });
+  assert.equal(file("file://fileserver/share/x.html"), null);
+});
+
+test("anchors, app routes, and other schemes are left to the app", () => {
+  for (const href of ["#section", "/settings", "//cdn.example.com/x", "javascript:alert(1)", "https://", "https://user:pw@example.com/", "bad%zz.html"])
+    assert.equal(route({ href, workspaceFolder: "/Users/me/prompt-lab" }), null, href);
+  assert.equal(route({ href: "/settings" }), null);
+});
+
+test("workspace paths stay inside the folder", () => {
+  assert.equal(workspaceRelativePath("a/./b/../c.ts", "/w"), "a/c.ts");
+  assert.equal(workspaceRelativePath("a/../../c.ts", "/w"), null);
+  assert.equal(workspaceRelativePath("/w/a/../../c.ts", "/w"), null);
+  assert.equal(workspaceRelativePath("/w", "/w/"), "");
+  assert.equal(workspaceRelativePath("/wx/a", "/w"), null);
+  assert.equal(workspaceRelativePath("/w/a", null), null);
 });

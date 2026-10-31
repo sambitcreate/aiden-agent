@@ -16,6 +16,7 @@ import {
 } from "./harness-host.js";
 import { spawnHarnessChild } from "./test-support/child.js";
 import { createFauxModels, FAUX_MODEL_REF, slowAnswer, waitFor, type FauxModels } from "./test-support/faux.js";
+import { OPENROUTER_ATTRIBUTION_HEADERS, recordingOpenRouter } from "../openrouter-recording-test-support.js";
 
 const ctx = BACKGROUND_CONTEXT;
 const roots: string[] = [];
@@ -172,6 +173,50 @@ test("(b) after SIGKILL mid-stream the scan reports the Bot without calling the 
   }
 });
 
+test("(b1) a turn cut off by a crash every time it resumed still runs when the person resumes it again", async () => {
+  const profile = tempProfile();
+  const first = spawnHarnessChild("stream", [profile, "bot:looping", "req-1"]);
+  await first.waitFor("STREAMING");
+  await first.kill();
+  // Pi Durable parks a task after five crashes in a row unless the host says otherwise.
+  for (let crash = 2; crash <= 5; crash += 1) {
+    const child = spawnHarnessChild("resume", [profile, "bot:looping"]);
+    await child.waitFor("STREAMING");
+    await child.kill();
+  }
+
+  const fauxModels = createFauxModels([fauxAssistantMessage("finally answered")]);
+  const host = await hostFor(profile, fauxModels);
+  try {
+    const { harness } = await host.open("bot:looping");
+    assert.equal((await harness.inspect(ctx)).scheduling, "paused");
+    harness.resume();
+    await waitFor(() => fauxModels.calls() > 0, { what: "the resumed turn to reach the provider" });
+    await waitFor(async () => (await harness.inspect(ctx)).submissions.length === 0, { what: "the resumed turn to finish" });
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("a Bot's requests to OpenRouter carry no pi attribution headers", async (t) => {
+  const router = await recordingOpenRouter(t);
+  const host = await createBotHarnessHost({ profileDir: tempProfile(), buildRegistry: () => createRegistry(), models: router.models });
+  assert.ok(!isBotHarnessHostUnavailable(host), "profile lock should be free");
+  try {
+    const { conversation } = await host.open("bot-router");
+    await conversation.configure({ model: { provider: router.model.provider, modelId: router.model.id } }, ctx);
+    const submission = await conversation.submit({ type: "input", content: "hello" }, ctx);
+    assert.equal((await submission.wait(ctx)).status, "done");
+  } finally {
+    await host.shutdown();
+  }
+  assert.ok(router.requests.length > 0);
+  assert.deepEqual(
+    OPENROUTER_ATTRIBUTION_HEADERS.filter((header) => router.requests.some((request) => header in request)),
+    [],
+  );
+});
+
 test("(b2) the scan closes Bots that have nothing to recover", async () => {
   const profile = tempProfile();
   const fauxModels = createFauxModels([fauxAssistantMessage("done")]);
@@ -211,6 +256,81 @@ test("(c) destroy during a live stream aborts it and removes the Bot directory",
     assert.equal(existsSync(path.join(profile, "bots", "bot-doomed")), false, "nothing reopened the files");
     await assert.rejects(host.open("bot-doomed"), /deleted/u);
   } finally {
+    await host.shutdown();
+  }
+});
+
+test("(c2) suspend during a live stream leaves the turn placed and paused, with no further provider calls", async () => {
+  const profile = tempProfile();
+  const fauxModels = createFauxModels([slowAnswer(), fauxAssistantMessage("after resume")], { tokensPerSecond: 40 });
+  const host = await hostFor(profile, fauxModels);
+  try {
+    const { conversation } = await host.open("bot-suspended");
+    await conversation.configure({ model: FAUX_MODEL_REF }, ctx);
+    const submission = await conversation.submit({ type: "input", content: "go" }, ctx);
+    await waitFor(async () => (await submission.status(ctx)).status === "placed" && fauxModels.calls() === 1, {
+      what: "stream start",
+    });
+
+    assert.equal(await host.suspend("bot-suspended"), "closed");
+    assert.equal(host.isOpen("bot-suspended"), false);
+
+    const inspection = await host.inspect("bot-suspended");
+    assert.equal(inspection.scheduling, "paused");
+    assert.deepEqual(
+      inspection.submissions.filter((record) => record.type === "input").map((record) => record.id),
+      [submission.id],
+      "the interrupted turn is still there for Resume",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(fauxModels.calls(), 1, "a suspended Bot makes no provider request");
+    assert.equal(existsSync(path.join(profile, "bots", "bot-suspended", BOT_SESSION_FILE)), true);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(c3) suspend of a Bot that is not open reports not_open", async () => {
+  const host = await hostFor(tempProfile(), createFauxModels());
+  try {
+    assert.equal(await host.suspend("bot-cold"), "not_open");
+    assert.equal(host.isOpen("bot-cold"), false);
+  } finally {
+    await host.shutdown();
+  }
+});
+
+test("(c4) suspend gives up within its bound when a close hangs, and the close keeps going", async () => {
+  const profile = tempProfile();
+  const reports: unknown[] = [];
+  const host = await hostFor(profile, createFauxModels(), { onReport: (_botId, error) => reports.push(error) });
+  const first = await host.open("bot-stuck");
+  const originalClose = first.harness.close.bind(first.harness);
+  let finishClose!: () => void;
+  const gate = new Promise<void>((resolve) => { finishClose = resolve; });
+  first.harness.close = async (context) => {
+    await gate;
+    return originalClose(context);
+  };
+  try {
+    const started = Date.now();
+    assert.equal(await host.suspend("bot-stuck", 150), "timed_out");
+    assert.ok(Date.now() - started < 2_000, "suspend returned within its bound");
+    assert.equal(reports.length, 1, "the hung close is reported");
+
+    let reopened = false;
+    const reopening = host.open("bot-stuck").then((result) => {
+      reopened = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(reopened, false, "a reopen waits for the close that is still running");
+    finishClose();
+    const second = await reopening;
+    assert.notEqual(second.harness, first.harness);
+    assert.equal(second.conversation.id, first.conversation.id);
+  } finally {
+    finishClose();
     await host.shutdown();
   }
 });

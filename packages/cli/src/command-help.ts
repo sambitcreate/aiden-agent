@@ -7,8 +7,7 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   import <desktop-journal|aiden-chat.json>   Copy a conversation into a new CLI session
   export <session.jsonl> [output.aiden-chat.json]
   auth list|login|logout                     Provider credentials (OAuth or API key)
-  mcp list|presets|add|preset|login|remove    MCP servers and browser OAuth
-  pi-mcp add|remove|list|login|logout         Native pi MCP configuration (also /mcp)
+  mcp list|presets|add|preset|login|logout|remove  MCP servers and browser OAuth (also /mcp)
   provider list|import <models.json>         Custom OpenAI-compatible/Ollama/LM Studio providers
   catalog refresh|models-dev fetch|models-dev status
   insights aa|openrouter show|fetch|disconnect
@@ -22,6 +21,8 @@ export const CLI_COMMAND_HELP = `Aiden commands:
   speech status|download|select|delete <id>|transcribe <pcm16-file> <model-id>
   serve [--remote] [--daemon] | stop | status   Scheduling, Telegram, and Remote daemon
   remote status|devices|pair lan|tailscale|pair-status|pair-cancel <id>|revoke <id>|roots|approve-root <path>
-  bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access
+  bots list|get|catalog|notice|acknowledge|create|update|access|chat|chat-access|pause|unpause <id>
+  bots enable-durable                       Back up legacy Bot history; restart daemon to switch
+  bots session|send|resume|dismiss|stop|delete|approvals|approve
   reset                                     Reset first-run onboarding only
 `;

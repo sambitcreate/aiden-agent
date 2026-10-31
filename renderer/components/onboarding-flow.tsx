@@ -48,6 +48,7 @@ import {
   type OnboardingSnapshot,
 } from "../shared/onboarding";
 import { useAppCapabilities } from "../lib/app-capabilities";
+import { focusRegionWhenShown } from "../lib/focus-regions";
 import { OnboardingBotsStep } from "./onboarding-bots-step";
 import { OnboardingFeatureGallery, onboardingFeatures } from "./onboarding-feature-gallery";
 
@@ -151,8 +152,14 @@ export function OnboardingFlow({
   const queryClient = useQueryClient();
   const capabilities = useAppCapabilities();
   const visibleFeatureBentos = React.useMemo(
-    () => visibleOnboardingFeatures(onboardingFeatures, { bots: capabilities.bots, computerUse: capabilities.computerUse, platform: capabilities.platform }),
-    [capabilities.bots, capabilities.computerUse, capabilities.platform],
+    () =>
+      visibleOnboardingFeatures(onboardingFeatures, {
+        bots: capabilities.bots,
+        botComputers: capabilities.botComputers,
+        computerUse: capabilities.computerUse,
+        platform: capabilities.platform,
+      }),
+    [capabilities.bots, capabilities.botComputers, capabilities.computerUse, capabilities.platform],
   );
   const providers = useProviders();
   const codexStatus = useCodexProviderStatus();
@@ -523,6 +530,8 @@ export function OnboardingFlow({
       const startedBotId = startedBotIdRef.current;
       startedBotIdRef.current = null;
       if (startedBotId) onOpenBotChat?.(startedBotId);
+      // Ready to type: the message box takes focus once it's on screen.
+      focusRegionWhenShown("composer");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Aiden couldn't finish onboarding.");
     } finally {

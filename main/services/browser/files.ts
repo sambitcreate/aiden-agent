@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { BROWSER_DISCOVERY_LIMITS, browserAssetReferences, type BrowserAssetSourceKind } from "./asset-discovery.js";
+import { botIdForBrowserWorkspace } from "./bot-workspaces.js";
 
 const CAPABILITY_QUERY = "__aiden_preview";
 export const BROWSER_PREVIEW_AUTH_HEADER = "X-Aiden-Preview-Authorization";
@@ -760,6 +761,9 @@ export class BrowserFileService {
       throw new Error("The workspace browser preview was closed.");
   }
   private async resolveRoot(workspaceId: string): Promise<RootIdentity> {
+    // A Bot's browser never previews local files.
+    if (botIdForBrowserWorkspace(workspaceId) !== undefined)
+      throw new FilePreviewError(403, "A Bot's browser can't open local files.");
     const workspace = await this.options.getWorkspace(workspaceId);
     if (
       !workspace ||

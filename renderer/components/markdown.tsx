@@ -4,9 +4,10 @@
 // (syntax highlighting and per-block copy) via the CodeBlock component.
 
 import * as React from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "../lib/ui-utils";
+import { isLocalFileHref } from "../lib/browser-link-routing";
 import {
   contentMayContainMath,
   loadMarkdownMath,
@@ -123,6 +124,14 @@ function remarkOpenFence() {
 }
 
 /**
+ * The default sanitizer blanks `file:` links (and `name.ext:12`, read as a
+ * scheme), so agent links to local files would do nothing. Keep those link
+ * targets; the link router decides where they open.
+ */
+const urlTransform: UrlTransform = (url, key) =>
+  key === "href" && isLocalFileHref(url) ? url : defaultUrlTransform(url);
+
+/**
  * Plugin lists for one message. Math plugins join only when the content has a
  * `$` and KaTeX has loaded; the first such message starts the load.
  */
@@ -141,6 +150,7 @@ function useMarkdownPlugins(content: string, richLinks: boolean, streaming = fal
       ...(streaming ? [remarkOpenFence] : []),
     ],
     rehypePlugins: math ? [math.rehype] : [],
+    urlTransform,
   };
 }
 

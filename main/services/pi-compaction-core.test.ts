@@ -11,6 +11,7 @@ import {
   createModels,
   fauxAssistantMessage,
   fauxProvider,
+  normalizeContext,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -38,6 +39,8 @@ import {
 } from "./pi-compaction-session-store.js";
 import type { ResolvedModelRuntime } from "./model-runtime-core.js";
 import type { ChatMessage } from "./types.js";
+import { UsageLimitGate, usageLimitMaxWaitMs } from "./usage-limit-core.js";
+import { withUsageLimitWait } from "./usage-limit-stream.js";
 import { createPiSessionPort, type PiSessionPort } from "./pi-session-port.js";
 import { migratePiSessionJournal } from "./pi-session-migration.js";
 import { upgradeOldPiV4File } from "./pi-session-v4-upgrade.js";
@@ -430,7 +433,7 @@ test("transient provider failures remain durable but are retried without the fai
     models,
     model,
     thinkingLevel: "off",
-    retryDelayMs: 0,
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
   });
 
   const first = await coordinator.check(firstFailure);
@@ -481,7 +484,7 @@ test("provider retry state does not consume overflow recovery", async () => {
     models,
     model,
     thinkingLevel: "off",
-    retryDelayMs: 0,
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
     settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 100 },
   });
 
@@ -501,6 +504,188 @@ test("provider retry state does not consume overflow recovery", async () => {
   assert.equal(overflowRetry.compacted, true);
   assert.equal(overflowRetry.shouldRetry, true);
   assert.equal(overflowRetry.failureCode, undefined);
+});
+
+test("transient provider failures retry five times with growing waits before giving up", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-backoff");
+  const request = user("keep trying", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" });
+  const retries: Array<[number | undefined, number | undefined, number | undefined]> = [];
+  for (let index = 0; index < 6; index += 1) {
+    const failure = assistant(model, {
+      stopReason: "error",
+      errorMessage: "502 Bad Gateway",
+      input: 10,
+      timestamp: 20 + index,
+    });
+    const result = await coordinator.check(failure, { liveMessages: [request, failure] });
+    if (!result.shouldRetry) {
+      assert.equal(result.failureCode, "retry-exhausted");
+      assert.match(result.errorMessage ?? "", /after 5 automatic retries/u);
+      break;
+    }
+    retries.push([result.retryDelayMs, result.retryAttempt, result.maxAttempts]);
+  }
+  assert.deepEqual(retries, [
+    [2_000, 2, 6],
+    [4_000, 3, 6],
+    [8_000, 4, 6],
+    [16_000, 5, 6],
+    [32_000, 6, 6],
+  ]);
+});
+
+test("a usage limit the wait gave up on fails once with its reset time instead of retrying", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("usage-limit-give-up");
+  const request = user("past the plan window", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" });
+  let sends = 0;
+  const rejected = (message: string) => () => {
+    sends += 1;
+    const stream = createAssistantMessageEventStream();
+    const error = fauxAssistantMessage("", { stopReason: "error", errorMessage: message });
+    error.content = [];
+    stream.push({ type: "error", reason: "error", error });
+    stream.end();
+    return stream;
+  };
+  const limits = (maxHours: number) => ({
+    gate: new UsageLimitGate(),
+    owner: { kind: "chat" as const, id: "chat-1" },
+    providerLabel: "ChatGPT",
+    maxWaitMs: () => usageLimitMaxWaitMs(maxHours),
+    random: () => 0,
+  });
+  const window = "429 You have hit your ChatGPT usage limit (plus plan). Try again in ~420 min.";
+
+  // Seven hours away, past the six-hour longest wait: the wait gives up at once.
+  const gaveUp = await (await withUsageLimitWait(rejected(window), limits(6))(model, normalizeContext({ messages: [] }), {})).result();
+  const checked = await coordinator.check(gaveUp, { liveMessages: [request, gaveUp] });
+  assert.equal(checked.shouldRetry, false);
+  assert.notEqual(checked.failureCode, "retry-exhausted");
+  assert.match(gaveUp.errorMessage ?? "", /Aiden stopped waiting: the limit resets /u);
+  assert.equal(sends, 1);
+
+  // With waiting off the same rejection is an ordinary failure, retried as before.
+  const plain = await (await withUsageLimitWait(rejected(window), limits(0))(model, normalizeContext({ messages: [] }), {})).result();
+  const retried = await coordinator.check(plain, { liveMessages: [request, plain] });
+  assert.equal(retried.shouldRetry, true);
+});
+
+test("a timed-out request is tried three times in all", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-timeout");
+  const request = user("slow provider", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({ session, models, model, thinkingLevel: "off" });
+  const timeout = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "Request timed out.", input: 10, timestamp });
+  const first = await coordinator.check(timeout(20), { liveMessages: [request, timeout(20)] });
+  assert.deepEqual([first.shouldRetry, first.retryAttempt, first.maxAttempts], [true, 2, 3]);
+  const second = await coordinator.check(timeout(21), { liveMessages: [request, timeout(21)] });
+  assert.deepEqual([second.shouldRetry, second.retryAttempt, second.maxAttempts], [true, 3, 3]);
+  const third = await coordinator.check(timeout(22), { liveMessages: [request, timeout(22)] });
+  assert.equal(third.shouldRetry, false);
+  assert.equal(third.failureCode, "retry-exhausted");
+});
+
+test("an answer between failures starts a fresh set of retries", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-progress");
+  const request = user("long task", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+  });
+  const failure = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "fetch failed", input: 10, timestamp });
+  const first = await coordinator.check(failure(20), { liveMessages: [request, failure(20)] });
+  assert.equal(first.shouldRetry, true);
+  // The retried request answered with a tool call, and a later request failed.
+  const step = assistant(model, { stopReason: "toolUse", text: "checking", input: 10, timestamp: 21 });
+  const later = await coordinator.check(failure(22), {
+    liveMessages: [request, step, failure(22)],
+  });
+  assert.equal(later.shouldRetry, true);
+  assert.equal(later.retryAttempt, 2);
+  // With no answer since, the next failure has used up the one retry.
+  const again = await coordinator.check(failure(23), {
+    liveMessages: [request, step, failure(23)],
+  });
+  assert.equal(again.shouldRetry, false);
+  assert.equal(again.failureCode, "retry-exhausted");
+
+  // Compaction between the retry and the answer shortens the transcript; the
+  // answer still counts once the history is rebuilt around it.
+  const history = Array.from({ length: 6 }, (_, index) => user(`earlier ${index}`, 10));
+  const beforeCompaction = await coordinator.check(failure(30), {
+    liveMessages: [...history, request, failure(30)],
+  });
+  assert.equal(beforeCompaction.shouldRetry, true);
+  const summary = user("Summary of the earlier conversation", 10);
+  const answered = assistant(model, { stopReason: "toolUse", text: "found it", input: 10, timestamp: 31 });
+  const afterCompaction = await coordinator.check(failure(32), {
+    liveMessages: [summary, answered, failure(32)],
+  });
+  assert.equal(afterCompaction.shouldRetry, true);
+  assert.equal(afterCompaction.retryAttempt, 2);
+});
+
+test("a new prompt starts with every retry even when the last one was stopped mid-wait", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-new-prompt");
+  const request = user("first question", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+  });
+  const failure = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "fetch failed", input: 10, timestamp });
+  assert.equal((await coordinator.check(failure(20), { liveMessages: [request, failure(20)] })).shouldRetry, true);
+  // Stop during the wait: no answer and no give-up reaches the coordinator.
+  coordinator.beginPrompt();
+  const next = user("second question", 10);
+  const result = await coordinator.check(failure(30), { liveMessages: [request, next, failure(30)] });
+  assert.equal(result.shouldRetry, true);
+  assert.equal(result.retryAttempt, 2);
+});
+
+test("text kept from a dropped stream is not an answer that starts fresh retries", async () => {
+  const { models, model } = compactionFixture();
+  const session = await memorySession("provider-kept-cut-off");
+  const request = user("long answer", 10);
+  await session.appendMessage(request);
+  const coordinator = new PiCompactionCoordinator({
+    session,
+    models,
+    model,
+    thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
+  });
+  const failure = (timestamp: number) =>
+    assistant(model, { stopReason: "error", errorMessage: "terminated", input: 10, timestamp });
+  const first = await coordinator.check(failure(20), { liveMessages: [request, failure(20)] });
+  assert.equal(first.shouldRetry, true);
+  // The dropped stream's text was kept as a cut-off reply, then the continuation failed too.
+  const kept = assistant(model, { stopReason: "length", text: "half of it", input: 10, timestamp: 21 });
+  const continued = user("continue", 22);
+  const again = await coordinator.check(failure(23), {
+    liveMessages: [request, kept, continued, failure(23)],
+  });
+  assert.equal(again.shouldRetry, false);
+  assert.equal(again.failureCode, "retry-exhausted");
 });
 
 test("summary failure leaves the append-only history authoritative", async () => {
@@ -1926,6 +2111,7 @@ test("retry exhaustion reconciles a visible partial before persisting its marker
     models,
     model,
     thinkingLevel: "off",
+    providerRetry: { enabled: true, maxRetries: 1, baseDelayMs: 0 },
   });
   coordinator.beginPrompt();
   const lease = await beginPiVisibleTurnLease(session);
@@ -2310,7 +2496,9 @@ test("foreign response labels preserve transient retry and success resets its al
   });
   const foreign = { ...model, id: "provider-response-alias" };
   const failed = assistant(foreign, { stopReason: "error", errorMessage: "503 Service Unavailable", input: 0, output: 0 });
-  assert.equal((await coordinator.check(failed)).shouldRetry, true);
+  for (let retry = 1; retry <= 5; retry += 1) {
+    assert.equal((await coordinator.check(failed)).shouldRetry, true);
+  }
   assert.equal((await coordinator.check(failed)).failureCode, "retry-exhausted");
   assert.equal((await coordinator.check(failed)).shouldRetry, true);
   assert.equal((await coordinator.check(assistant(foreign, { input: 10 }))).compacted, false);

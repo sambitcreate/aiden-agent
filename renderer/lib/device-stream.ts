@@ -20,6 +20,7 @@
  * A hidden tab calls `stop()`, so an idle device costs nothing on the GPU.
  * Timers, fetch, sockets, and codecs are injectable for tests.
  */
+import { BOT_COMPUTER_VIEWER_SCROLL_TAG } from "../shared/bot-computers";
 import type { DevicePlatform, DeviceStreamGrant } from "../shared/devices";
 import {
   DUO_POSE_IDS,
@@ -492,6 +493,12 @@ export interface DeviceStreamClient {
   ): void;
   /** iOS sends the HID usage for `code`; Android needs `detail` for the character or key name. */
   sendKey(code: string, phase: "down" | "up", detail?: DeviceKeyDetail): void;
+  /**
+   * Scrolls by the wheel's pixel deltas at a normalized point. Only the Bot
+   * computer viewer hub reads this packet; serve-sim has none, and Android
+   * sends nothing.
+   */
+  sendScroll(x: number, y: number, deltaX: number, deltaY: number): void;
   pressButton(button: DeviceHardwareButton): void;
   /** Rotates to the next orientation. On an iPhone Duo this goes through the hinge command queue. */
   rotate(): void;
@@ -1247,6 +1254,10 @@ export function createDeviceStreamClient(
       }
       const usage = hidUsageForCode(code);
       if (usage !== null) send(taggedJson(IOS_MSG_KEY, { type: phase, usage }));
+    },
+    sendScroll: (x, y, dx, dy) => {
+      if (android || ![x, y, dx, dy].every(Number.isFinite)) return;
+      send(taggedJson(BOT_COMPUTER_VIEWER_SCROLL_TAG, { x, y, dx, dy }));
     },
     pressButton: (button) => {
       if (android) {

@@ -1,5 +1,6 @@
-// On-device voice settings: engine status, the active model, when an idle
-// model is unloaded to free memory, and silence trimming.
+// On-device voice settings: engine status, the active model, whether it loads
+// ahead of the first dictation, when an idle model is unloaded to free memory,
+// and silence trimming.
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -18,8 +19,10 @@ import {
   Text,
   toast,
 } from "../ui";
-import { Settings2 } from "lucide-react";
-import { settingsApi } from "../../lib/ipc";
+import { Download, Settings2 } from "lucide-react";
+import { localVoiceApi, onNotification, settingsApi } from "../../lib/ipc";
+import type { ModelDownloadProgress } from "../../lib/ipc";
+import type { LocalVoiceModel } from "../../lib/types";
 import { queryKeys, useEngineStatus, useLocalModels, useSettings } from "../../lib/queries";
 import { ModelManagerView } from "./model-manager-view";
 import { effectiveLocalModelId } from "../../shared/voice-provider";
@@ -28,7 +31,7 @@ import {
   isLocalVoiceIdleUnloadMinutes,
   LOCAL_VOICE_IDLE_UNLOAD_CHOICES,
 } from "../../shared/dictation-preferences";
-import { voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
+import { localVoicePreloadEnabled, voiceTrimSilenceEnabled } from "../../shared/voice-preferences";
 
 function idleUnloadLabel(minutes: number): string {
   if (minutes === 0) return "Never";
@@ -73,6 +76,30 @@ export function IdleUnload() {
           ))}
         </SelectContent>
       </Select>
+    </Field>
+  );
+}
+
+function LoadInAdvance() {
+  const qc = useQueryClient();
+  const settings = useSettings();
+  const enabled = localVoicePreloadEnabled(settings.data?.localVoicePreload);
+
+  const change = async (value: boolean) => {
+    try {
+      await settingsApi.set({ localVoicePreload: value });
+      await qc.invalidateQueries({ queryKey: queryKeys.settings });
+    } catch {
+      toast.error("Aiden couldn’t change when the on-device model loads.");
+    }
+  };
+
+  return (
+    <Field
+      label="Load in advance"
+      description="Loads the model when Aiden starts and when you choose one, so the first dictation starts instantly. Off loads it when you start dictating."
+    >
+      <Switch aria-label="Load in advance" checked={enabled} onCheckedChange={(value) => void change(value)} />
     </Field>
   );
 }
@@ -129,6 +156,70 @@ function EngineStatus() {
   );
 }
 
+/** Faster builds of a model that only some hosts list, such as Parakeet on this Mac's GPU. */
+const FASTER_MODEL: Readonly<Record<string, string>> = { "parakeet-v3": "parakeet-v3-metal" };
+
+/**
+ * Offers the faster build of the model dictation uses, when this host lists
+ * it and it is not downloaded. A chosen model follows the upgrade; Automatic
+ * stays Automatic and picks the faster build up on its own.
+ */
+function FasterModelOffer({ inUse, faster, chosen }: { inUse: LocalVoiceModel; faster: LocalVoiceModel; chosen: boolean }) {
+  const qc = useQueryClient();
+  const [percentage, setPercentage] = React.useState<number | null>(null);
+
+  React.useEffect(
+    () =>
+      onNotification<ModelDownloadProgress>("localModels:progress", (progress) => {
+        if (progress.id === faster.id) setPercentage(progress.percentage);
+      }),
+    [faster.id],
+  );
+
+  const upgrade = async () => {
+    setPercentage(0);
+    try {
+      await localVoiceApi.downloadModel(faster.id);
+      if (chosen) await settingsApi.set({ localVoiceModel: faster.id });
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: queryKeys.localModels }),
+        qc.invalidateQueries({ queryKey: queryKeys.settings }),
+        qc.invalidateQueries({ queryKey: queryKeys.voiceResolution }),
+        qc.invalidateQueries({ queryKey: queryKeys.engineStatus }),
+      ]);
+      toast.success(`${faster.name} is ready. You can remove ${inUse.name} in Manage Models.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/cancel/i.test(message)) toast.error(message);
+    } finally {
+      setPercentage(null);
+    }
+  };
+
+  return (
+    <Field
+      label="Faster on this Mac"
+      description={`${faster.description} ${faster.sizeLabel} download.`}
+    >
+      {percentage === null ? (
+        <Button variant="filled" onClick={() => void upgrade()}>
+          <Download />
+          Download and Use
+        </Button>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Text variant="small" color="secondary" className="tabular-nums">
+            Downloading… {percentage}%
+          </Text>
+          <Button variant="transparent" onClick={() => void localVoiceApi.cancelDownload(faster.id)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function ActiveModel({ onManage }: { onManage: () => void }) {
   const qc = useQueryClient();
   const models = useLocalModels();
@@ -142,6 +233,9 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
     ? undefined
     : effectiveLocalModelId(undefined, installed.map((m) => m.id));
   const fallback = installed.find((m) => m.id === fallbackId);
+  const inUse = active ?? fallback;
+  const fasterId = inUse ? FASTER_MODEL[inUse.id] : undefined;
+  const faster = fasterId ? (models.data ?? []).find((m) => m.id === fasterId && !m.installed) : undefined;
 
   React.useEffect(() => {
     if (activeId && models.data && !models.data.some((m) => m.id === activeId && m.installed)) {
@@ -162,6 +256,7 @@ function ActiveModel({ onManage }: { onManage: () => void }) {
           </Text>
         </Field>
       )}
+      {inUse && faster ? <FasterModelOffer inUse={inUse} faster={faster} chosen={active !== undefined} /> : null}
       <Field label="Models" description="Download, remove, and choose your on-device transcription model.">
         <Button variant="filled" onClick={onManage}>
           <Settings2 />
@@ -182,6 +277,7 @@ export function LocalVoiceSettings() {
       <FieldSet title="On-Device Engine">
         <EngineStatus />
         <ActiveModel onManage={() => setManaging(true)} />
+        <LoadInAdvance />
         <IdleUnload />
         <TrimSilence />
       </FieldSet>

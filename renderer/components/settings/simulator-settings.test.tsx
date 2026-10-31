@@ -10,6 +10,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DeviceServiceState, DeviceToolchainState } from "../../shared/devices.js";
 import {
+  assistantSettingsSections,
   availableSettingsDestinations,
   SETTINGS_DESTINATIONS,
   SETTINGS_SECTIONS,
@@ -75,15 +76,13 @@ test("Simulator is an Agent settings destination hidden without the devices capa
   assert.ok(destination?.keywords.includes("ios"));
   // The settings nav and the command palette both filter through this helper.
   const hasSimulator = (devices: boolean) =>
-    availableSettingsDestinations({ computerUse: true, devices }).some((entry) => entry.id === "simulator");
+    availableSettingsDestinations({ computerUse: true, devices, botComputers: true }).some((entry) => entry.id === "simulator");
   assert.equal(hasSimulator(false), false);
   assert.equal(hasSimulator(true), true);
   assert.match(read("../../main/settings-view.tsx"), /simulator: SimulatorSettings/u);
-  assert.match(
-    read("../../../main/services/llm-client.ts"),
-    /devicesEnabled\(\)\s*\? SETTINGS_SECTIONS\s*: SETTINGS_SECTIONS\.filter\(\(section\) => section !== "simulator"\)/u,
-    "the assistant prompt lists Simulator only when enabled",
-  );
+  // The assistant prompt lists Simulator only when the devices feature is on.
+  assert.equal(assistantSettingsSections({ devices: false, botComputers: true }).includes("simulator"), false);
+  assert.equal(assistantSettingsSections({ devices: true, botComputers: true }).includes("simulator"), true);
 });
 
 test("a build without the devices capability reads nothing and says so", () => {

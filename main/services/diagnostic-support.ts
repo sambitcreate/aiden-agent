@@ -42,6 +42,7 @@ import {
   SUBAGENT_RUNTIME_FAILURES,
   subagentRuntimeDiagnosticSinkFailed,
 } from "./subagents/subagent-runtime-diagnostics.js";
+import { DIAGNOSTIC_REF_SALT_FILE, forgetDiagnosticRefSalt } from "./diagnostic-ref-salt.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -525,12 +526,15 @@ export async function deleteAllDiagnosticData(roots: DiagnosticSupportRoots): Pr
     "subagent-runtime.log",
     "subagent-runtime.prev.log",
     "diagnostic-health.json",
+    DIAGNOSTIC_REF_SALT_FILE,
   ]) {
     const candidate = path.join(roots.logsPath, name);
     if (isPathInside(roots.logsPath, candidate, { allowRoot: false }) && !ownedJournalFiles.has(path.resolve(candidate))) {
       await fs.rm(candidate, { force: true });
     }
   }
+  // New references must not link to ones in earlier exports.
+  forgetDiagnosticRefSalt();
   await withCrashMaintenance(async () => {
     await ensurePrivateDirectory(roots.crashDumpsPath);
     for (const entry of await fs.readdir(roots.crashDumpsPath, { withFileTypes: true })) {

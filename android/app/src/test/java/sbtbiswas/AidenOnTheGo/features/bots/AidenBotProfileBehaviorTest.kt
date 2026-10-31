@@ -1,5 +1,10 @@
 package sbtbiswas.AidenOnTheGo.features.bots
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -8,12 +13,18 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import sbtbiswas.AidenOnTheGo.AidenRemoteContractFixture
 import sbtbiswas.AidenOnTheGo.models.*
 import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteCapability
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteClientException
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorCode
+import sbtbiswas.AidenOnTheGo.protocol.AidenRemoteErrorEnvelope
+import java.io.IOException
+import java.util.UUID
 
 class AidenBotProfileBehaviorTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -302,5 +313,91 @@ class AidenBotProfileBehaviorTest {
         val first = requireNotNull(AidenBotCustomAccessDraft.fromCatalog(catalog))
         assertEquals(first.modelID, recommended.customAccess.modelID)
         assertNotEquals(other.second, recommended.customAccess.modelID)
+    }
+
+    // Revision 37 (`bot:handoffs`): Pause Bot and Resume Bot
+
+    private val pausedBot: AidenBotDetail by lazy {
+        val text = requireNotNull(javaClass.classLoader?.getResourceAsStream("contract.json")) { "contract.json missing" }
+            .bufferedReader().use { it.readText() }
+        val element = json.parseToJsonElement(text).jsonObject.getValue("botHandoffs").jsonObject.getValue("pausedDetail")
+        AidenBotWireJson.json.decodeFromJsonElement(AidenBotDetail.serializer(), element)
+    }
+
+    @Test
+    fun pauseIsOfferedOnlyToAPhoneTheMacSendsHandoffsToThatMayChangeBots() {
+        val writable = listOf(AidenRemoteCapability.BOT_READ, AidenRemoteCapability.BOT_WRITE)
+        fun mac(held: List<AidenRemoteCapability>, offered: List<AidenRemoteCapability>) =
+            AidenServer(instanceId = "mac-1", name = "Mac", capabilities = held, serverCapabilities = (held + offered).distinct())
+        val holder = mac(writable + AidenRemoteCapability.BOT_HANDOFFS, emptyList())
+        assertTrue(aidenBotOffersPause(holder, canWriteBots = true, bot = pausedBot))
+        assertFalse("offered, not yet held", aidenBotOffersPause(mac(writable, listOf(AidenRemoteCapability.BOT_HANDOFFS)), true, pausedBot))
+        assertFalse("an older Mac", aidenBotOffersPause(mac(writable, emptyList()), true, pausedBot))
+        assertFalse("a phone that may only read Bots", aidenBotOffersPause(holder, canWriteBots = false, bot = pausedBot))
+        assertFalse("a Bot without a durable session", aidenBotOffersPause(holder, true, pausedBot.copy(sessionState = null, paused = false)))
+        assertFalse(aidenBotOffersPause(null, true, pausedBot))
+    }
+
+    private class PauseTransport : AidenBotPauseTransport {
+        val calls = mutableListOf<Pair<Boolean, UUID>>()
+        val failures = ArrayDeque<Exception>()
+        var gate: CompletableDeferred<Unit>? = null
+        var resumeView = AidenBotSessionStateView(AidenBotSessionState.IDLE, false)
+
+        override suspend fun pause(botId: String, key: UUID): AidenBotSessionStateView {
+            calls += true to key
+            gate?.await()
+            failures.removeFirstOrNull()?.let { throw it }
+            return AidenBotSessionStateView(AidenBotSessionState.PAUSED, false)
+        }
+
+        override suspend fun unpause(botId: String, key: UUID): AidenBotSessionStateView {
+            calls += false to key
+            gate?.await()
+            failures.removeFirstOrNull()?.let { throw it }
+            return resumeView
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun pauseAndResumeSettleOnTheMacsAnswerAndALostRequestReusesItsKey() = runTest {
+        val idle = pausedBot.withSessionState(AidenBotSessionStateView(AidenBotSessionState.IDLE, false))
+        assertFalse(idle.paused)
+        val transport = PauseTransport()
+        val control = AidenBotPauseControl()
+
+        // A dropped connection may have reached the Mac: trying again replays the same key.
+        transport.failures += IOException("offline")
+        assertTrue(runCatching { control.set(transport, idle, pause = true) }.exceptionOrNull() is IOException)
+        val paused = requireNotNull(control.set(transport, idle, pause = true))
+        assertEquals(transport.calls[0].second, transport.calls[1].second)
+        assertTrue(paused.paused)
+        assertEquals(AidenBotSessionState.PAUSED, paused.sessionState)
+
+        // A reply the pause cut short comes back interrupted, and the flag goes with the pause.
+        transport.resumeView = AidenBotSessionStateView(AidenBotSessionState.INTERRUPTED, true)
+        val resumed = requireNotNull(control.set(transport, paused, pause = false))
+        assertFalse(resumed.paused)
+        assertEquals(AidenBotSessionState.INTERRUPTED, resumed.sessionState)
+
+        // The Mac answered with an error: that attempt is over, and the next is a new request.
+        transport.failures += AidenRemoteClientException.Server(
+            409,
+            AidenRemoteErrorEnvelope.Body(AidenRemoteErrorCode.REVISION_CONFLICT, "Nope.", "req_1", false)
+        )
+        assertTrue(runCatching { control.set(transport, idle, pause = true) }.exceptionOrNull() is AidenRemoteClientException.Server)
+        control.set(transport, idle, pause = true)
+        assertNotEquals(transport.calls[3].second, transport.calls[4].second)
+
+        // One at a time.
+        transport.gate = CompletableDeferred()
+        val first = async { control.set(transport, idle, pause = true) }
+        runCurrent()
+        assertTrue(control.isBusy)
+        assertNull(control.set(transport, idle, pause = true))
+        transport.gate!!.complete(Unit)
+        assertNotNull(first.await())
+        assertEquals(6, transport.calls.size)
     }
 }

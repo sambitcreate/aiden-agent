@@ -1,6 +1,7 @@
 // Browser sign-in controls for OAuth MCP servers: Authorize, Cancel while the
-// browser is open, Sign out, and a "Needs sign-in" state when stored tokens
-// stopped working. Shared by custom servers and OAuth presets.
+// browser is open, Sign out whenever a sign-in is stored (working or not), and
+// a "Needs sign-in" state when stored tokens stopped working. Shared by custom
+// servers and OAuth presets.
 
 import { ShieldCheck } from "lucide-react";
 import { Badge, Button, Text } from "../ui";
@@ -9,6 +10,7 @@ export function McpSignInControls({
   authorizing,
   authorized,
   needsSignIn,
+  hasSession = false,
   signingOut,
   disabled,
   onAuthorize,
@@ -18,6 +20,8 @@ export function McpSignInControls({
   authorizing: boolean;
   authorized: boolean;
   needsSignIn: boolean;
+  /** Something is stored for this server (even a broken or outdated sign-in): Sign out removes it. */
+  hasSession?: boolean;
   signingOut: boolean;
   disabled: boolean;
   onAuthorize: () => void;
@@ -47,7 +51,7 @@ export function McpSignInControls({
           Authorized
         </span>
       ) : null}
-      {!authorizing && (authorized || needsSignIn) ? (
+      {!authorizing && (authorized || needsSignIn || hasSession) ? (
         <Button size="small" variant="transparent" onClick={onSignOut} disabled={signingOut}>
           {signingOut ? "Signing out…" : "Sign out"}
         </Button>

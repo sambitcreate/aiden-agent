@@ -60,6 +60,7 @@ import type {
 import { useAppCapabilities } from "../../lib/app-capabilities";
 import { isWebSearchKeyPoolProviderId } from "../../shared/web-search-key-pool";
 import { WebSearchKeyPoolEditor } from "./web-search-key-pool";
+import { WebPageSettings } from "./web-page-settings";
 
 type WebSearchProvider = WebSearchProviderRendererMetadata;
 type CredentialMode = WebSearchRouteEntry["credentialMode"];
@@ -2057,6 +2058,8 @@ export function WebSearchSettings() {
           </div>
         </section>
       ) : null}
+
+      <WebPageSettings />
 
       <section
         aria-labelledby="web-search-privacy"

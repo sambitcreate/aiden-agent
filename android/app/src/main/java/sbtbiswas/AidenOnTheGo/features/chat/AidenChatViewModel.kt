@@ -273,14 +273,23 @@ class AidenChatViewModel(
     private val turnAttempts = AidenTurnAttemptTracker()
     private val attachmentImageLoadMutex = Mutex()
     private val attachmentImageLoads = mutableMapOf<String, Deferred<ByteArray?>>()
-    private val boundClient = coordinator.client.value
     private val instanceId: String = coordinator.installationStore.activeInstallation?.instanceId ?: ""
     private val deviceId: String = coordinator.installationStore.activeInstallation?.deviceId ?: ""
+    /** The pairing this chat was opened under; a re-pair of the same Mac is a different one. */
+    private val pairing = coordinator.activePairing
     private val modelPreferenceStore = coordinator.modelPreferenceStore
     private var hasExplicitModelSelection = false
+    /** The client the transcript was last read with; a refreshed client rereads it. */
+    private var transcriptClient: AidenRemoteClient? = null
 
+    /**
+     * The coordinator's current client for this chat's pairing. A Retry or reconnect replaces
+     * the client object for the same pairing, and this chat must keep loading and sending with
+     * the new one; a switched, removed or re-paired installation yields null, and a response
+     * from an earlier client (`activeClient() !== client`) is never applied.
+     */
     private fun activeClient(): AidenRemoteClient? =
-        boundClient?.takeIf { coordinator.client.value === it }
+        coordinator.client.value?.takeIf { coordinator.holdsPairing(pairing) }
 
     val isReadOnlyPresentation: Boolean
         get() = coordinator.installationStore.activeInstallation == null
@@ -648,6 +657,13 @@ class AidenChatViewModel(
         }
         loadChat()
         loadCatalog()
+        // A reconnect gives the pairing a new client: reread the transcript with it so a chat
+        // opened while the Mac was unreachable fills in once Retry succeeds.
+        viewModelScope.launch {
+            coordinator.client.collect { client ->
+                if (client != null && client !== transcriptClient && activeClient() === client) loadChat()
+            }
+        }
         resumeActiveStreamIfNeeded()
         viewModelScope.launch {
             _streamState.collect { state ->
@@ -1220,6 +1236,50 @@ class AidenChatViewModel(
     }
 
     /**
+     * The Mac announced `chat-browser-recordings-v1` (revision 46), so a browser
+     * recording's Play reads the video from it. Without it the card says to watch
+     * the recording on the Mac.
+     */
+    val canPlayBrowserRecordings: Boolean
+        get() = instanceId.isNotEmpty() && AidenBrowserRecordingGate.isAvailable(
+            coordinator.serverInfo.value?.features,
+            coordinator.installationStore.activeInstallation
+                ?.takeIf { it.instanceId == instanceId && it.deviceId == deviceId }
+                ?.serverFeatures
+        )
+
+    /**
+     * Reads [recording] from the bound Mac into the cache for the player. Any
+     * recording saved for an earlier Play is dropped first, so at most one video
+     * waits on disk. A 404 means the Mac no longer has it.
+     */
+    suspend fun browserRecording(recording: AidenBrowserRecordingRecap): AidenBrowserRecordingLoad {
+        val client = activeClient() ?: return AidenBrowserRecordingLoad.Failed
+        withContext(ioDispatcher) { coordinator.purgeBrowserRecordings() }
+        return try {
+            val saved = client.browserRecording(chatId, recording.id, coordinator.browserRecordingDir)
+            if (activeClient() === client) {
+                AidenBrowserRecordingLoad.Ready(saved)
+            } else {
+                // The pairing changed while the video downloaded: it is not this chat's to show.
+                withContext(ioDispatcher) { saved.file.delete() }
+                AidenBrowserRecordingLoad.Failed
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: AidenRemoteClientException.Server) {
+            if (error.statusCode == 404) AidenBrowserRecordingLoad.Missing else AidenBrowserRecordingLoad.Failed
+        } catch (_: Exception) {
+            AidenBrowserRecordingLoad.Failed
+        }
+    }
+
+    /** The player closed: its video leaves the cache. */
+    fun releaseBrowserRecording(recording: AidenBrowserRecordingFile) {
+        viewModelScope.launch(ioDispatcher) { recording.file.delete() }
+    }
+
+    /**
      * Appends a follow-up a visual asked for, after the user confirmed it, to the
      * composer draft. It is never sent from here. Returns false when the chat is
      * read-only or the text is blank.
@@ -1286,27 +1346,32 @@ class AidenChatViewModel(
     }
 
     /**
-     * An explicit composer choice becomes this paired Mac's remembered
-     * default for later Workspace chats and launches, and it stops this chat
-     * from being re-seeded by the remembered value on catalog refreshes.
+     * An explicit composer choice stays with this chat and stops it from being
+     * re-seeded by the remembered value on catalog refreshes. It always joins
+     * the picker's Recent list. In a new chat (no messages yet) it becomes this
+     * paired Mac's remembered default for later Workspace chats; in an existing
+     * chat it is kept for that chat alone until its next send, so reopening the
+     * chat still shows it and the model other chats start with never changes.
      */
     private fun rememberExplicitModelSelection() {
         hasExplicitModelSelection = true
         if (instanceId.isEmpty()) return
-        modelPreferenceStore.remember(
-            instanceId,
-            AidenChatModelSelection(
-                providerId = _selectedProviderId.value,
-                modelId = _selectedModelId.value,
-                thinkingLevel = _selectedThinkingLevel.value
-            )
+        val currentChat = _chat.value
+        val selection = AidenChatModelSelection(
+            providerId = _selectedProviderId.value,
+            modelId = _selectedModelId.value,
+            thinkingLevel = _selectedThinkingLevel.value
         )
+        val newChat = currentChat == null || currentChat.messages.isEmpty()
+        modelPreferenceStore.remember(instanceId, selection, asDefault = newChat)
+        if (!newChat) modelPreferenceStore.rememberChat(instanceId, chatId, selection)
     }
 
     fun loadChat() {
         if (_isStarting.value) return
         val generation = transcriptGeneration
         val client = activeClient() ?: return
+        transcriptClient = client
         // Published before the launch so a chat with nothing saved shows its transcript
         // placeholders on the first frame rather than a blank screen.
         _isLoading.value = true
@@ -1341,6 +1406,18 @@ class AidenChatViewModel(
 
     private fun resolveModelSelection() {
         val currentChat = _chat.value ?: return
+        // An unsent pick made in this chat before it was last closed wins
+        // like a pick made now.
+        if (!hasExplicitModelSelection && instanceId.isNotEmpty() && !currentChat.isBotChat &&
+            currentChat.messages.isNotEmpty()
+        ) {
+            modelPreferenceStore.chatSelection(instanceId, chatId)?.let { pick ->
+                _selectedProviderId.value = pick.providerId
+                _selectedModelId.value = pick.modelId
+                _selectedThinkingLevel.value = pick.thinkingLevel
+                hasExplicitModelSelection = true
+            }
+        }
         val selection = AidenChatModelAuthority.resolvedSelection(
             chat = currentChat,
             catalog = _catalog.value,
@@ -1383,7 +1460,6 @@ class AidenChatViewModel(
             selectedModelId = _selectedModelId.value,
             selectedThinkingLevel = _selectedThinkingLevel.value
         )
-
         val request = retryAttempt?.request ?: AidenTurnRequestBuilder.make(
             text = text,
             providerId = turnModel.providerId,
@@ -1441,6 +1517,14 @@ class AidenChatViewModel(
                 clearStoredDraft?.let { withContext(ioDispatcher) { it() } }
                 check(attempt.canRetry() && activeClient() === client) { "The saved request is no longer safe to retry. Check the conversation on your desktop." }
                 val response = client.startTurn(chatId, request, idempotencyKey)
+                // The Mac now holds this pick as the chat's own model.
+                if (!currentChat.isBotChat && instanceId.isNotEmpty()) {
+                    modelPreferenceStore.forgetChat(
+                        instanceId,
+                        chatId,
+                        matching = AidenChatModelSelection(request.providerId, request.modelId, request.thinkingLevel)
+                    )
+                }
                 lastLocalTurnId = response.turnId
                 val stream = AidenChatCache.ActiveStream(
                     deviceId = deviceId,
@@ -1492,7 +1576,7 @@ class AidenChatViewModel(
                     draftWriter?.let { writer -> withContext(ioDispatcher) { writer.flush() } }
                     _pendingAttachments.value = AidenDraftSendReconciliation.failedAttachments(submittedAttachments, _pendingAttachments.value)
                     _streamState.value = null
-                    if (e is AidenRemoteClientException.Server && e.statusCode in setOf(400, 401, 403, 404, 413, 422, 429)) {
+                    if (e is AidenRemoteClientException.Server && AidenDraftSendReconciliation.refusalSettlesSend(e.statusCode, e.body.code)) {
                         draftSession?.let { session -> withContext(ioDispatcher) { draftStore.settlePendingSend(attempt.key, session) } }
                         _pendingSend.value = null
                         turnAttempts.reset()
@@ -2085,6 +2169,15 @@ class AidenChatViewModel(
         lastRunInputAttempt = attempt
         val pairingCreatedAt = pairingCreatedAt()
         _isSubmittingRunInput.value = true
+        // The draft clears the moment the input leaves, like a sent message; it comes back if the
+        // Mac rejects or never confirms it and nothing new was typed meanwhile. Only the screen
+        // clears now: the saved draft is the text's durable copy until the Mac admits it, so a
+        // rejection that lands after this screen or pairing changed still leaves it on disk.
+        // A retry resends the saved text, not the draft.
+        val draftBeforeSend = _draft.value
+        val draftAfterSend = if (retry) draftBeforeSend else AidenRunInputPresentation.consumedDraft(text, draftBeforeSend)
+        if (!retry) consumeRunInputDraft(text, persist = false)
+        fun restoreDraft() { if (!retry) restoreRunInputDraft(text, draftBeforeSend, draftAfterSend) }
         viewModelScope.launch {
             try {
                 val session = draftSession ?: error("The chat draft is not ready.")
@@ -2101,30 +2194,39 @@ class AidenChatViewModel(
                 // the submission left; a mismatched receipt is never trusted.
                 if (result.streamId != streamId || result.chatId != chatId || result.mode != mode) {
                     if (activeClient() !== client) return@launch
+                    restoreDraft()
                     _presentedError.value =
-                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                        "The run input was not confirmed. Your draft is back — check the chat before trying again."
                     return@launch
                 }
                 if (pairingCreatedAt?.let(::isPairingRetained) != true) return@launch
-                withContext(ioDispatcher) { draftStore.settlePendingSend(key.toString(), session) }
+                withContext(ioDispatcher) {
+                    draftStore.settlePendingSend(key.toString(), session)
+                    // The admitted text leaves the saved draft under the same ownership, so a
+                    // screen or client change before this answer cannot offer it again. A draft
+                    // typed and saved since is left alone.
+                    if (!retry && AidenRunInputPresentation.consumesDraft(result)) draftStore.consumeDraft(text, draftBeforeSend, session)
+                }
                 if (activeClient() !== client) return@launch
                 _pendingSend.value = null
                 if (lastRunInputAttempt == attempt) lastRunInputAttempt = null
                 if (AidenRunInputPresentation.consumesDraft(result)) {
-                    consumeRunInputDraft(text)
+                    if (retry) consumeRunInputDraft(text) else draftWriter?.writeSoon(_draft.value)
                     AidenRunInputPresentation.receipt(result)?.let { showRunInputReceipt(it) }
                     // The Mac persisted the message before queue admission;
                     // pull it into the transcript without waiting for the
                     // next turn.
                     reconcileChat()
                 } else {
+                    restoreDraft()
                     _presentedError.value = AidenRunInputPresentation.rejectionMessage(result.reason)
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 if (activeClient() === client) {
+                    restoreDraft()
                     _presentedError.value =
-                        "The run input was not confirmed. Your draft is unchanged — check the chat before trying again."
+                        "The run input was not confirmed. Your draft is back — check the chat before trying again."
                 }
             } finally {
                 _isSubmittingRunInput.value = false
@@ -2364,12 +2466,26 @@ class AidenChatViewModel(
         }
     }
 
-    private fun consumeRunInputDraft(text: String) {
+    /** Removes the submitted text from the composer; with [persist] false the saved draft keeps it. */
+    private fun consumeRunInputDraft(text: String, persist: Boolean = true) {
         val remaining = AidenRunInputPresentation.consumedDraft(text, _draft.value)
         if (remaining != _draft.value) {
             _draft.value = remaining
-            draftWriter?.writeSoon(remaining)
+            if (persist) draftWriter?.writeSoon(remaining)
         }
+    }
+
+    /**
+     * Puts a draft back after a run input the Mac rejected or never confirmed. Text typed since
+     * it was cleared is kept under the rejected text, as a failed send keeps it.
+     */
+    private fun restoreRunInputDraft(submitted: String, previous: String, remaining: String) {
+        if (previous == remaining) return
+        val current = _draft.value
+        val restored = if (current == remaining) previous else AidenDraftSendReconciliation.failedDraft(submitted, current)
+        if (restored == current) return
+        _draft.value = restored
+        draftWriter?.writeSoon(restored)
     }
 
     private fun showRunInputReceipt(text: String) {
@@ -2671,7 +2787,8 @@ class AidenChatViewModel(
                 hasRequiredWriteCapability = hasWrite,
                 hostCanAllow = approval.canAllow,
                 canAllow = canControl && approval.canAllow && hasWrite,
-                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE)
+                scopes = approval.scopes ?: listOf(AidenApprovalScope.ONCE),
+                schedule = AidenApprovalSchedule.forTool(approval.toolName, approval.schedule)
             )
         }
         _pendingQuestion.value = projection.pendingQuestion?.let { question ->

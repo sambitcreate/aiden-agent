@@ -328,3 +328,41 @@ test("error projection keeps categories and fingerprints without raw messages", 
   assert.equal(projectDiagnosticError(budget).errorType, "SubagentTreeBudgetExhaustedError");
   assert.equal(projectDiagnosticError(budget).code, "contract-rejected");
 });
+
+test("MCP failure fields admit only hostnames, error codes and fixed vocabularies", () => {
+  const kept = normalizeDiagnosticFields({
+    mcpFailure: "http-5xx",
+    oauthError: "invalid_grant",
+    transport: "stdio",
+    serverHost: "mcp.example.com",
+    serverRef: "0123456789abcdef",
+    errno: "ECONNREFUSED",
+    keptLastGood: true,
+    suppressed: 3,
+  });
+  assert.deepEqual(kept, {
+    mcpFailure: "http-5xx",
+    oauthError: "invalid_grant",
+    transport: "stdio",
+    serverHost: "mcp.example.com",
+    serverRef: "0123456789abcdef",
+    errno: "ECONNREFUSED",
+    keptLastGood: true,
+    suppressed: 3,
+  });
+  const rejected: Array<Record<string, string>> = [
+    { serverHost: "https://mcp.example.com/v1?token=abc" },
+    { serverHost: "mcp.example.com:8443" },
+    { serverHost: "user@mcp.example.com" },
+    { serverHost: "/Users/someone/bin/server" },
+    { errno: "connect ECONNREFUSED 10.0.0.1:443" },
+    { mcpFailure: "custom-failure" },
+    { oauthError: "tenant_blocked" },
+    { transport: "sse" },
+    { serverRef: "figma" },
+  ];
+  for (const fields of rejected) {
+    assert.equal(normalizeDiagnosticFields(fields), undefined, JSON.stringify(fields));
+  }
+  assert.equal(createDiagnosticEvent({ level: "info", area: "mcp", event: "mcp-recovered", outcome: "recovered" }, sessionId).event, "mcp-recovered");
+});

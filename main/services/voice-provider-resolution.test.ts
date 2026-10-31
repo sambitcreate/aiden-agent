@@ -5,7 +5,7 @@ import { createVoiceProviderResolver, type VoiceProviderResolverDeps } from "./v
 function harness(overrides: {
   settings?: Awaited<ReturnType<VoiceProviderResolverDeps["settings"]>>;
   installed?: string[];
-  engineReady?: boolean;
+  engineReady?: boolean | ((modelId: string) => boolean);
   openai?: boolean;
   google?: boolean;
 }) {
@@ -13,9 +13,10 @@ function harness(overrides: {
   const resolve = createVoiceProviderResolver({
     settings: async () => overrides.settings ?? {},
     installedModels: async () => overrides.installed ?? [],
-    engineStatus: async () => {
+    engineStatus: async (modelId) => {
       engineProbes += 1;
-      return { ready: overrides.engineReady ?? true };
+      const ready = overrides.engineReady ?? true;
+      return { ready: typeof ready === "function" ? ready(modelId) : ready };
     },
     hasOpenAIKey: async () => overrides.openai ?? false,
     hasGoogleKey: async () => overrides.google ?? false,
@@ -59,4 +60,25 @@ test("failing lookups resolve as absent instead of throwing", async () => {
     hasGoogleKey: async () => false,
   });
   assert.deepEqual(await resolve(), { kind: "needs-setup", reason: "no-provider" });
+});
+
+test("Parakeet on Metal failing to load falls back to an installed sherpa model, unless it was chosen", async () => {
+  const metalBroken = (modelId: string) => modelId !== "parakeet-v3-metal";
+  const installed = ["parakeet-v3-metal", "parakeet-v3"];
+
+  const automatic = harness({ installed, engineReady: metalBroken, openai: true });
+  assert.deepEqual(await automatic.resolve(), { kind: "ready", provider: "local", modelId: "parakeet-v3", automatic: true });
+
+  // A chosen model stands or falls with its own engine: Automatic moves to cloud, explicit on-device says why.
+  const chosen = harness({ installed, engineReady: metalBroken, openai: true, settings: { localVoiceModel: "parakeet-v3-metal" } });
+  assert.deepEqual(await chosen.resolve(), { kind: "ready", provider: "openai", automatic: true });
+  const explicitLocal = harness({
+    installed,
+    engineReady: metalBroken,
+    settings: { voiceProvider: "local", localVoiceModel: "parakeet-v3-metal" },
+  });
+  assert.deepEqual(await explicitLocal.resolve(), { kind: "needs-setup", reason: "local-engine-unavailable" });
+
+  const onlyMetal = harness({ installed: ["parakeet-v3-metal"], engineReady: metalBroken, openai: true });
+  assert.deepEqual(await onlyMetal.resolve(), { kind: "ready", provider: "openai", automatic: true });
 });

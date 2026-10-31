@@ -54,6 +54,8 @@ final class AidenBotHomeProfileTests: XCTestCase {
             "revision": "rev-\(id)",
         ]
         if let sessionState { object["sessionState"] = sessionState }
+        // Revision 37: a paused Bot's summary also carries `paused: true`.
+        if sessionState == "paused" { object["paused"] = true }
         return try AidenRemoteJSONDecoder.decode(
             AidenBotSummary.self,
             from: JSONSerialization.data(withJSONObject: object)
@@ -118,14 +120,17 @@ final class AidenBotHomeProfileTests: XCTestCase {
         XCTAssertFalse(rows[1].isWorking)
     }
 
-    func testHomeRowSubtitleReportsAPausedTurnOrAMissingModel() throws {
+    /// G2: an interrupted turn and a Bot the person paused read differently.
+    func testHomeRowSubtitleReportsAnInterruptedTurnAPauseOrAMissingModel() throws {
         let bots = [
-            try summary(id: "paused", name: "Paused", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "interrupted"),
+            try summary(id: "interrupted", name: "Interrupted", updatedAt: "2026-08-18T18:00:00.000Z", sessionState: "interrupted"),
+            try summary(id: "paused", name: "Paused", updatedAt: "2026-08-18T17:45:00.000Z", sessionState: "paused"),
             try summary(id: "fresh", name: "Fresh", updatedAt: "2026-08-18T17:30:00.000Z", sessionState: "needs_model"),
             try summary(id: "working", name: "Working", updatedAt: "2026-08-18T17:00:00.000Z", sessionState: "running"),
         ]
         let conversations = [
-            try conversation(botID: "paused", preview: "Your first meeting is", updatedAt: "2026-08-18T18:00:00.000Z"),
+            try conversation(botID: "interrupted", preview: "Your first meeting is", updatedAt: "2026-08-18T18:00:00.000Z"),
+            try conversation(botID: "paused", preview: "Paid the bill", updatedAt: "2026-08-18T17:45:00.000Z"),
         ]
 
         let rows = Dictionary(uniqueKeysWithValues: aidenBotHomeRows(
@@ -134,10 +139,12 @@ final class AidenBotHomeProfileTests: XCTestCase {
             query: ""
         ).map { ($0.id, $0) })
 
-        XCTAssertEqual(rows["paused"]?.preview, "Paused — tap to resume")
+        XCTAssertEqual(rows["interrupted"]?.preview, "Interrupted — tap to resume")
+        XCTAssertEqual(rows["paused"]?.preview, "Paused")
         XCTAssertEqual(rows["fresh"]?.preview, "Needs an AI model")
         XCTAssertEqual(rows["working"]?.preview, "Say hello")
         XCTAssertEqual(rows["working"]?.isWorking, true)
+        XCTAssertEqual(rows["interrupted"]?.isWorking, false)
         XCTAssertEqual(rows["paused"]?.isWorking, false)
     }
 
@@ -573,9 +580,12 @@ final class AidenBotInstantEditTests: XCTestCase {
         )
         saver.adopt(try detail())
         let (one, two) = (try AidenBotIdentityPatch(name: "Scout II"), try AidenBotIdentityPatch(name: "Scout III"))
-        async let first = saver.save(one)
-        async let second = saver.save(two)
-        let outcomes = await [first, second]
+        // Two `async let`s may reach the saver in either order, so the second
+        // starts only once the first has taken its place in line.
+        let first = Task { await saver.save(one) }
+        while saver.inFlight == 0 && sent.isEmpty { await Task.yield() }
+        let second = Task { await saver.save(two) }
+        let outcomes = [await first.value, await second.value]
         XCTAssertEqual(sent.map(\.1), ["bot_revision_7", "rev_8"], "the second waits and goes on the first's revision")
         XCTAssertEqual(outcomes, [.saved(try detail(revision: "rev_8", name: "Scout II")), .saved(try detail(revision: "rev_9", name: "Scout III"))])
     }

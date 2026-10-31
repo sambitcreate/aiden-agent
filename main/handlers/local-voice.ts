@@ -2,7 +2,7 @@
 // management, and local transcription. Thin — logic lives in
 // services/local-speech.ts and services/local-speech-models.ts.
 
-import { ipcMain } from "../platform.js";
+import { ipcMain, logger } from "../platform.js";
 import {
   engineStatus,
   onLocalSpeechState,
@@ -18,11 +18,14 @@ import {
   isModelInstalled,
 } from "../services/local-speech-models.js";
 import { configStore } from "../services/config-store.js";
+import { preloadLocalVoice } from "../services/local-voice-preload.js";
 import { resolveVoiceProviderNow } from "../services/voice-provider-resolution.js";
 import { unreportedUsageRecord } from "../services/usage-accounting.js";
 import { usageStore } from "../services/usage-store.js";
 import { asString, pcm16FromIpc } from "./voice-codec.js";
 import { rendererDocumentOwner } from "../services/renderer-document-owner.js";
+import { localLivePreviews } from "../services/local-speech-live.js";
+import { MAX_LIVE_PREVIEW_PUSH_SAMPLES } from "../services/local-speech-live-core.js";
 
 const activeLocalTranscriptions = new Map<
   string,
@@ -68,6 +71,8 @@ export function registerLocalVoiceHandlers(): void {
     // Download for missing models, and Aiden Remote skips installed ones too.
     if (isModelInstalled(modelId)) return;
     await downloadModel(modelId);
+    // A first download can make it the model dictation uses; load it now.
+    void preloadLocalVoice();
   });
   ipcMain.handle("localModels:cancel", async (_event, id: unknown) => {
     return cancelDownload(asString(id, "id"));
@@ -92,6 +97,8 @@ export function registerLocalVoiceHandlers(): void {
       const key = localOperationKey(owner.id, owner.documentId, operationId);
       const parsedModelId = asString(modelId, "modelId");
       const samples = pcm16FromIpc(pcm);
+      // The final decode supersedes the live preview; no preview decode may queue behind it.
+      localLivePreviews.stopOwner(owner);
       const previous = activeLocalTranscriptions.get(key);
       previous?.controller.abort();
       previous?.removeOwnerInvalidation();
@@ -100,30 +107,27 @@ export function registerLocalVoiceHandlers(): void {
         controller.abort();
       });
       activeLocalTranscriptions.set(key, { controller, removeOwnerInvalidation });
+      // The usage write must not hold the transcript back from the paste.
+      const recordUsage = (status: "completed" | "failed") => {
+        void usageStore
+          .record(
+            unreportedUsageRecord({
+              source: "voice-transcription",
+              providerId: "local-voice",
+              providerLabel: "On-device voice",
+              modelId: parsedModelId,
+              local: true,
+              status,
+            }),
+          )
+          .catch((error: unknown) => logger.warn("local-speech", "Could not record voice usage.", error));
+      };
       try {
         const transcript = await transcribeLocalPcm16(samples, parsedModelId, controller.signal);
-        await usageStore.record(
-          unreportedUsageRecord({
-            source: "voice-transcription",
-            providerId: "local-voice",
-            providerLabel: "On-device voice",
-            modelId: parsedModelId,
-            local: true,
-            status: "completed",
-          }),
-        );
+        recordUsage("completed");
         return transcript;
       } catch (error) {
-        await usageStore.record(
-          unreportedUsageRecord({
-            source: "voice-transcription",
-            providerId: "local-voice",
-            providerLabel: "On-device voice",
-            modelId: parsedModelId,
-            local: true,
-            status: "failed",
-          }),
-        );
+        recordUsage("failed");
         throw error;
       } finally {
         removeOwnerInvalidation();
@@ -133,6 +137,28 @@ export function registerLocalVoiceHandlers(): void {
       }
     },
   );
+  // ── Live dictation text (models fast enough to decode while you speak) ──
+  ipcMain.handle("voice:localLiveStart", (event, modelId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    return localLivePreviews.start(owner, asString(modelId, "modelId"));
+  });
+  ipcMain.handle("voice:localLivePush", (event, sessionId: unknown, pcm: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    localLivePreviews.push(owner, asString(sessionId, "sessionId"), pcm16FromIpc(pcm, MAX_LIVE_PREVIEW_PUSH_SAMPLES));
+  });
+  ipcMain.handle("voice:localLiveStop", (event, sessionId: unknown) => {
+    const owner = rendererDocumentOwner(
+      event,
+      () => new Error("Live dictation text must come from the active application document."),
+    );
+    localLivePreviews.stop(owner, asString(sessionId, "sessionId"));
+  });
   ipcMain.handle("voice:transcribeLocalCancel", (event, operationId: unknown) => {
     const owner = rendererDocumentOwner(
       event,
