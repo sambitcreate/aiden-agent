@@ -19,6 +19,7 @@ import { chatPullRequestStore } from "./chat-pull-request-service-main.js";
 import { cancelVisualSnapshots } from "./visual-snapshot-service.js";
 import { deleteChatFollowThrough, restoreChatFollowThrough } from "./follow-through/follow-through-main.js";
 import { interruptedWaits } from "./interrupted-waits-main.js";
+import { workspaceApplicationService } from "./workspace-application-service-main.js";
 
 export const chatApplicationService = createChatApplicationService({
   chatStore,
@@ -42,6 +43,7 @@ export const chatApplicationService = createChatApplicationService({
   },
   forgetDeletedChat: (chatId) => llmClient.forgetDeletedChat(chatId),
   attachments: remoteAttachmentStore,
+  afterChatRemoved: (workspaceId) => workspaceApplicationService.releaseNoWorkspaceAfterChat(workspaceId),
   toolOutputStore,
   logError: (area, message, error) => logger.error(area, message, error),
 });

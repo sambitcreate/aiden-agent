@@ -97,6 +97,8 @@ export interface ChatApplicationDependencies {
   releaseChatContext?: (chatId: string) => void;
   /** Remove per-chat scratch state once the chat is gone. Best effort; never throws. */
   forgetDeletedChat?: (chatId: string) => Promise<void>;
+  /** After a deletion commits: lets a No workspace chat's hidden folder go with it. */
+  afterChatRemoved?: (workspaceId: string) => Promise<void>;
   logError(area: string, message: string, error: unknown): void;
 }
 
@@ -384,6 +386,9 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         void deps.forgetDeletedChat?.(chatId).catch((error: unknown) =>
           deps.logError("chats", "Could not remove the deleted chat's agent scratch folder.", error),
         );
+        await deps.afterChatRemoved?.(persistedChatWorkspaceId(current.workspaceId)).catch((error: unknown) => {
+          deps.logError("workspace", "Could not release the deleted chat's folder.", error);
+        });
       } finally {
         if (!releaseAdmission) {
           try {
