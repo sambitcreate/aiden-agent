@@ -319,6 +319,13 @@ async function waitForServer(agentDir: string, timeoutMs = 30_000): Promise<bool
   return false;
 }
 
+/** Which networks really reach the server: the local network in LAN modes, Tailscale only while its route is connected. */
+export function reachableNetwork(status: { connectionMode?: string; tailscaleConnected?: boolean } | undefined): RemoteNetwork | undefined {
+  const lan = status?.connectionMode === "lan" || status?.connectionMode === "both";
+  const tailscale = (status?.connectionMode === "tailscale" || status?.connectionMode === "both") && status.tailscaleConnected === true;
+  return lan && tailscale ? "both" : lan ? "local" : tailscale ? "tailscale" : undefined;
+}
+
 /** `aiden service ...`. Prints its own output. */
 export async function serviceCommand(agentDir: string, args: string[], host: ServiceHost = systemHost(), options: { readyTimeoutMs?: number } = {}): Promise<void> {
   const [action, ...rest] = args;
@@ -364,6 +371,16 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
       restoreService(host, installed.previous);
       throw new Error(`${message} Put back the service that was installed before.`, { cause: error });
     }
+    // A first install that never served is removed, so it can't keep restarting next to a server started by hand.
+    if (installed) {
+      try {
+        uninstallService(host);
+      } catch (removeError) {
+        throw new Error(`${message} ${removeError instanceof Error ? removeError.message : String(removeError)}`, { cause: error });
+      }
+      const restart = stopped && !daemonStatus(agentDir).running ? " The server that was running before is stopped; start it again with `aiden serve --daemon`." : "";
+      throw new Error(`${message} Removed the service it installed.${restart}`, { cause: error });
+    }
     // Say how to get back the server this install stopped, unless something is already serving again.
     if (!stopped || daemonStatus(agentDir).running) throw error;
     throw new Error(`${message} The server that was running before is stopped; start it again with \`aiden serve --daemon\`.`, { cause: error });
@@ -371,21 +388,24 @@ export async function serviceCommand(agentDir: string, args: string[], host: Ser
   const logs = installed.manager === "systemd" ? `journalctl --user -u ${SYSTEMD_UNIT}` : join(agentDir, "serve.log");
 
   const { remoteDaemonCommand } = await import("./daemon-control.ts");
-  let reachable: RemoteNetwork = network;
+  let reachable: RemoteNetwork | undefined = network;
   try {
     await remoteDaemonCommand(agentDir, "remote", ["network", network]);
   } catch (error) {
-    const status = await remoteDaemonCommand(agentDir, "remote", ["status"]).catch(() => undefined) as { connectionMode?: string } | undefined;
-    reachable = status?.connectionMode === "tailscale" ? "tailscale" : status?.connectionMode === "both" ? "both" : "local";
+    const status = await remoteDaemonCommand(agentDir, "remote", ["status"]).catch(() => undefined) as { connectionMode?: string; tailscaleConnected?: boolean } | undefined;
+    reachable = reachableNetwork(status);
     process.stderr.write(`aiden: Could not set up ${NETWORK_LABEL[network]}. ${error instanceof Error ? error.message : String(error)}\n`);
-    out(`For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`);
+    out(reachable
+      ? `For now the server is reachable over ${NETWORK_LABEL[reachable]}. Change it later with \`aiden remote network local|tailscale|both\`.`
+      : "For now no phone can reach the server. Fix the step above, or use the local network with `aiden remote network local`.");
   }
   // Without lingering a Linux user service does not start at boot; the warning says so instead.
   const boot = installed.manager === "systemd" && installed.warning ? "" : installed.manager === "systemd" ? " It starts again after a reboot." : " It starts again when you log in.";
-  out(`The Aiden server is running as a service and reachable over ${NETWORK_LABEL[reachable]}.${boot}`);
+  out(`The Aiden server is running as a service${reachable ? ` and reachable over ${NETWORK_LABEL[reachable]}` : ""}.${boot}`);
   if (installed.warning) out(installed.warning);
   out(`Logs: ${logs}. Stop it for good with \`aiden service uninstall\`.`);
 
+  if (!reachable) return;
   if (!flags.pair || !process.stdout.isTTY) {
     out(`Pair a phone with \`aiden remote pair ${reachable === "local" ? "lan" : "tailscale"}\`.`);
     return;

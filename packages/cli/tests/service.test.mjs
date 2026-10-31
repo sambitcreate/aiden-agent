@@ -112,6 +112,34 @@ test("a reinstall whose new server never becomes ready puts back the service tha
   }
 });
 
+test("a first install whose server never becomes ready is removed instead of left restarting", async (t) => {
+  const entry = join(mkdtempSync(join(tmpdir(), "aiden-service-entry-")), "cli.js");
+  writeFileSync(entry, "");
+  t.after(() => rmSync(dirname(entry), { recursive: true, force: true }));
+  const saved = process.env.AIDEN_CLI_ENTRY;
+  process.env.AIDEN_CLI_ENTRY = entry;
+  t.after(() => { if (saved === undefined) delete process.env.AIDEN_CLI_ENTRY; else process.env.AIDEN_CLI_ENTRY = saved; });
+  for (const platform of ["linux", "darwin"]) {
+    const { host, calls, local } = fakeHost(t, platform, { "loginctl show-user": { stdout: "yes\n" } });
+    await assert.rejects(api.serviceCommand(local.agentDir, ["install", "--network", "local", "--no-pair"], host, { readyTimeoutMs: 300 }), (error) => {
+      assert.match(error.message, /did not start the server.*Removed the service it installed/s, platform);
+      assert.doesNotMatch(error.message, /aiden serve --daemon/, `${platform}: no server was stopped, so none is suggested`);
+      return true;
+    });
+    assert.equal(calls.at(platform === "linux" ? -2 : -1), platform === "linux" ? "systemctl --user disable --now aiden.service" : "launchctl bootout gui/501/com.sambitcreate.aiden-agent.serve", `${platform}: the service is stopped`);
+    assert.equal(api.serviceStatus(host).installed, false, `${platform}: nothing is left installed`);
+  }
+});
+
+test("the server is called reachable over Tailscale only while its route is connected", () => {
+  assert.equal(api.reachableNetwork({ connectionMode: "lan" }), "local");
+  assert.equal(api.reachableNetwork({ connectionMode: "both", tailscaleConnected: true }), "both");
+  assert.equal(api.reachableNetwork({ connectionMode: "both", tailscaleConnected: false }), "local");
+  assert.equal(api.reachableNetwork({ connectionMode: "tailscale", tailscaleConnected: true }), "tailscale");
+  assert.equal(api.reachableNetwork({ connectionMode: "tailscale", tailscaleConnected: false }), undefined);
+  assert.equal(api.reachableNetwork(undefined), undefined, "a server that does not answer is not called reachable");
+});
+
 test("Linux uninstall stops the service and removes the unit; a second uninstall reports nothing to remove", (t) => {
   const { host, calls, local } = fakeHost(t, "linux", { "loginctl show-user": { stdout: "yes\n" } });
   const { file } = api.installService(host, local);
