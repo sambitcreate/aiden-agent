@@ -1999,14 +1999,29 @@ export function runCommandEnv(
 /** How long after the shell exits a command whose leftovers hold its output returns. */
 const LEFTOVER_RELEASE_MS = 1_500;
 
-function processGroupAlive(group: number): boolean {
+/**
+ * Whether anything in the group still runs. A group can outlive its work
+ * as zombies nobody has reaped (a non-reaping init), and those need no
+ * stopping. A lookup that fails says nothing either way, so it counts.
+ */
+async function processGroupStillRuns(group: number): Promise<boolean> {
   try {
     process.kill(-group, 0);
-    return true;
   } catch {
     // Gone, or (EPERM) a reused id that is not ours: nothing of this command's to stop.
     return false;
   }
+  return new Promise((resolve) => {
+    execFile("ps", ["-A", "-o", "pgid=,stat="], { timeout: 2_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      if (error || typeof stdout !== "string") return resolve(true);
+      resolve(
+        stdout.split("\n").some((line) => {
+          const [pgid, stat] = line.trim().split(/\s+/u);
+          return Number(pgid) === group && Boolean(stat) && !stat!.startsWith("Z");
+        }),
+      );
+    });
+  });
 }
 
 /**
@@ -2067,7 +2082,7 @@ function makeRunCommand(workspace: WorkspaceRootGuard, options: CodingToolOption
         result.leftoverOutput.stderr.resume();
       }
       const untracked =
-        !handoff && result.leftoverProcessGroup !== undefined && processGroupAlive(result.leftoverProcessGroup)
+        !handoff && result.leftoverProcessGroup !== undefined && (await processGroupStillRuns(result.leftoverProcessGroup))
           ? untrackedLeftoversNote(result.leftoverProcessGroup)
           : undefined;
       const combined = [result.stdout, result.stderr, handoff?.note ?? untracked].filter(Boolean).join("\n").trim();

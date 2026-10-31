@@ -3118,6 +3118,31 @@ test("run_command hands what a command leaves running to the chat, whether or no
   }
 });
 
+/** Members of a process group that still run: an ended one nobody has reaped yet (a zombie) does not count. */
+function runningGroupMembers(group: number): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    execFile("ps", ["-A", "-o", "pid=,pgid=,stat="], (error, stdout) => {
+      if (error) return reject(error);
+      resolve(
+        String(stdout)
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/u))
+          .filter(([, pgid, stat]) => Number(pgid) === group && stat !== undefined && !stat.startsWith("Z"))
+          .map(([pid]) => Number(pid)),
+      );
+    });
+  });
+}
+
+async function untilGroupStopsRunning(group: number): Promise<number[]> {
+  let running = await runningGroupMembers(group);
+  for (let tries = 0; tries < 100 && running.length > 0; tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    running = await runningGroupMembers(group);
+  }
+  return running;
+}
+
 test("run_command tells the agent how to stop leftovers no job could take over", async () => {
   if (process.platform === "win32") return;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-command-untracked-"));
@@ -3144,23 +3169,17 @@ test("run_command tells the agent how to stop leftovers no job could take over",
       const text = result.content[0]?.type === "text" ? result.content[0].text : "";
       const group = groups[groups.length - 1]!;
       assert.equal(result.isError, undefined, outcome);
+      assert.ok((await runningGroupMembers(group)).length > 0, `${outcome}: the server is still running`);
       assert.match(text, /not tracked/u, outcome);
       const stop = text.match(/kill -- -(\d+)/u);
       assert.equal(Number(stop?.[1]), group, `${outcome}: the note names the command's own group`);
-      // The command the note gives really does stop them.
+      // The command the note gives really does stop the server.
       process.kill(-group, "SIGTERM");
-      for (let tries = 0; tries < 50; tries += 1) {
-        try {
-          process.kill(-group, 0);
-        } catch {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      assert.throws(() => process.kill(-group, 0), outcome);
+      assert.deepEqual(await untilGroupStopsRunning(group), [], outcome);
     }
 
-    // Leftovers that are already gone by the time the handoff answers need no note.
+    // Leftovers that have ended by the time the handoff answers need no note, even
+    // while nothing has reaped them yet.
     const quick = buildCodingTools(root, undefined, {
       leftovers: {
         begin() {
@@ -3169,14 +3188,7 @@ test("run_command tells the agent how to stop leftovers no job could take over",
             adopt: async (group) => {
               groups.push(group);
               process.kill(-group, "SIGKILL");
-              for (let tries = 0; tries < 100; tries += 1) {
-                try {
-                  process.kill(-group, 0);
-                } catch {
-                  break;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 50));
-              }
+              assert.deepEqual(await untilGroupStopsRunning(group), []);
               return undefined;
             },
           };
