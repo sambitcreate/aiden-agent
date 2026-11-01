@@ -1,3 +1,5 @@
+> 2026-10-31: proposed for replacement by Design mode (see `design-mode.md`). Its P0 removes this code.
+
 # Design Studio DS-1a (headless core)
 
 Status: DS-1a (DS-1a.1 through DS-1a.19) merged in PR #385 (2026-10-08), shipped in 0.55.0. It stays behind `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` (`designStudioEnabled()`). There is no UI yet; DS-1b (Studio UI) is next.
