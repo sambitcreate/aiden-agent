@@ -2,18 +2,17 @@ import { migrateCliAzureConfig } from "./azure-config-migration.ts";
 import { googleThinkingLevelsForModel } from "../../../renderer/shared/google-thinking.js";
 import { anthropicThinkingLevelsForModel } from "../../../renderer/shared/anthropic-thinking.js";
 import { codexThinkingLevelsForModel } from "../../../renderer/shared/codex-thinking.js";
-import { dirname, join } from "node:path";
-import { ModelRuntime, VERSION, type InlineExtension } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
+import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { concentrateProvider } from "../../../main/services/concentrate-provider.js";
 import { withPiRemoteCatalog, isPiRemoteCatalogProvider } from "../../../main/services/pi-remote-catalog.js";
 import { fetchModelsDevCatalog, parseModelsDevCacheDocument } from "../../../main/services/models-dev-cache-core.js";
 import { fetchArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-runtime-core.js";
 import { fetchOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-runtime-core.js";
 import { parseArtificialAnalysisUserCache } from "../../../main/services/artificial-analysis-catalog-core.js";
-import { parseOpenRouterBenchmarkCache, type OpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
+import { parseOpenRouterBenchmarkCache } from "../../../main/services/openrouter-benchmark-catalog-core.js";
 import { insightCredentials } from "./credentials.ts";
-import { resolveModelInfo, parseModelCatalog } from "../../../main/services/models-catalog-core.js";
-import { atomicJson, readJson, splitArgs, JsonStore } from "./state.ts";
+import { atomicJson, readJson, JsonStore } from "./state.ts";
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 
@@ -79,56 +78,6 @@ export async function insightsCommand(agentDir: string, args: string[]) {
   atomicJson(file, value);
   return value;
 }
-
-/** A missing, unreadable or no-longer-valid insights cache means no benchmark, never an error. */
-function cachedOpenRouterBenchmarks(agentDir: string): OpenRouterBenchmarkCache | null {
-  try {
-    const value = readJson(join(agentDir, "openrouter-insights.json"), null);
-    return value ? parseOpenRouterBenchmarkCache(value) : null;
-  } catch { return null; }
-}
-
-export function createProviderParityExtension(agentDir: string): InlineExtension {
-  return { name: "aiden-providers", factory(pi) {
-    pi.registerProvider(concentrateProvider());
-    pi.on("session_start", async (_event, ctx) => {
-      const ids = new Set(ctx.modelRegistry.getAll().map((model) => model.provider));
-      const remoteIds: string[] = [];
-      for (const id of ids) {
-        const provider = ctx.modelRegistry.getProvider(id);
-        if (provider && isPiRemoteCatalogProvider(provider)) { pi.registerProvider(withPiRemoteCatalog(provider)); remoteIds.push(id); }
-      }
-      if (!process.env.PI_OFFLINE && process.env.AIDEN_CHILD !== "1" && remoteIds.length) {
-        await ctx.modelRegistry.refresh({ allowNetwork: true, providers: remoteIds, signal: AbortSignal.timeout(10_000) });
-      }
-    });
-    pi.registerCommand("models", { description: "List models or show model metadata: /models info provider/id",
-      handler: async (args, ctx) => {
-        const [action, identity] = splitArgs(args);
-        const models = ctx.modelRegistry.getAll();
-        if (action === "info") {
-          const model = models.find((candidate) => `${candidate.provider}/${candidate.id}` === identity);
-          if (!model) throw new Error("Model not found. Use provider/model-id.");
-          const cached = readJson(join(agentDir, "models-dev.json"), null);
-          const document = cached ? parseModelsDevCacheDocument(cached) : null;
-          const catalog = document?.appVersion === VERSION && document.catalog ? document.catalog : parseModelCatalog(readJson(join(dirname(process.env.AIDEN_CLI_ENTRY!), "model-capabilities.json"), {}));
-          // Display-only: the shared desktop matcher reads the offline insights cache; no network here.
-          const metadata = catalog ? resolveModelInfo(catalog, { id: model.provider, baseUrl: model.baseUrl }, model.id, cachedOpenRouterBenchmarks(agentDir)) : null;
-          ctx.ui.notify(JSON.stringify({ ...model, metadata }, null, 2), "info");
-        } else ctx.ui.notify(models.map((model) => `${model.provider}/${model.id}\t${model.name}\tcontext ${model.contextWindow}\tthinking ${model.reasoning}`).join("\n"), "info");
-      },
-    });
-    for (const [name, run] of Object.entries({ catalog: catalogCommand, insights: insightsCommand })) {
-      pi.registerCommand(name, { description: name === "catalog" ? "Explicit catalog refresh and display-only metadata" : "Manual benchmark fetch and offline insights",
-        handler: async (args, ctx) => {
-          ctx.ui.notify(JSON.stringify(await run(agentDir, splitArgs(args)), null, 2), "info");
-          if (name === "catalog" && args.trim() === "refresh") await ctx.modelRegistry.refresh({ allowNetwork: false });
-        },
-      });
-    }
-  } };
-}
-
 
 /** Main-owned provider inventory. Remote projections remove endpoints and credentials. */
 export async function listCliProviders(agentDir: string): Promise<import("../../../main/services/types.js").Provider[]> {

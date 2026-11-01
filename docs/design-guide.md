@@ -11,6 +11,7 @@ for emphasis; do not add a separate pill or circular button variant.
 | --- | --- | --- |
 | Buttons, toolbar actions, navigation actions, and button links | `Button`, or the shared action rule in `renderer/styles.css` for existing native buttons | `--radius-button: 16px` and `corner-shape: squircle` |
 | Window top-bar actions (sidebar toggle, history, chat tools, header menus) | `Button` with `variant="bar"` and `size="small"` | The same squircle at 28px: no fill at rest, list-hover fill on hover, list-selection fill while `aria-pressed`/`aria-expanded` |
+| Linux window controls (minimize, maximize/restore, close) and the Linux main menu button | `WindowControls` / `Button` with `variant="bar"` and `size="small"` | The same 28px bar squircle with 14px custom glyphs, separated from the header tools by a 16px separator. Close stays neutral on hover (closing is guarded, not destructive). Top bars that reach the window's top-right corner add the cluster's width to their right padding (`useTrailingWindowControlsClearance`) |
 | A custom visual that must follow a button's silhouette, such as its artwork mask | `.squircle-control` | The same button radius and corner shape |
 | Joined actions, such as an action with a separate menu trigger | `.squircle-control.squircle-action-group` around direct `Button` children | 16px outer corners, square internal seams |
 | Chat composer | `.composer-shell` | `--radius-composer: 40px` and `corner-shape: squircle` |
@@ -96,6 +97,7 @@ keeps the summary card.
 Aiden adopts the structural layer of the Untitled theme (`GUI.md`, `gui/`) while keeping its own radii and preset palettes:
 
 - **Motion.** Controls, menus, and popovers use `--motion-duration` (200ms) with `--motion-easing`; popovers enter from `--motion-popup-scale` (0.96). Shared buttons settle by `--motion-press-distance` (1px) while held. Tailwind exposes the curves as `ease-standard` and `ease-emphasized`. Shared dialogs keep their deliberate near-instant entrance and the sidebar keeps its 300ms width timing with the emphasized curve. Every motion is removed under Reduce Motion.
+- **Dialog sizes.** The shared `Dialog` is 440px by default, `large` (680px) for searchable lists, `wide` (860px) for a dialog with its own vertical tab list such as Workspace settings, and `full` for an image's full view. All cap at 85% of the window height and scroll their body.
 - **Surfaces.** Cards, sheets, popovers, and floating panels have no outline: fill and the existing elevation tokens define their edge. Inset row separators and header separators remain.
 - **Fields.** Inputs, textareas, and select triggers rest on the `--surface-input` fill with their neutral resting border; focus deepens the fill to `--surface-control`. No accent border or ring.
 - **Buttons.** Labeled buttons use roomier horizontal padding (12/16/20px for small/medium/large) at the existing heights.
@@ -133,6 +135,24 @@ or hover. Text-entry
 focus uses fill and caret changes without a new border or ring. Reuse existing
 hover and press feedback and respect Reduce Motion; do not animate the corner
 shape or add layout shifts.
+
+## Model and provider marks
+
+Every row, chip, or menu item that names a model or a provider shows its mark
+with `ProviderIcon` (`renderer/components/provider-icon.tsx`), never a generic
+glyph such as a robot or server icon. Pass `modelId` when the row is a model, so a
+Claude or Grok model shows that model's mark as the composer's picker does, and
+pass the provider's `artwork` when it is known, so a custom connection shows the
+picture its owner chose. A provider without a bundled logo falls back to a
+neutral initial. Name models with `resolveModelDisplay` and the device-local
+model info (`useProvidersModelInfo`) rather than the raw id, so a model reads the
+same in the composer, the command palette, Bots, and scheduled tasks. The Bot
+capability catalog carries opaque grant ids, so the Bot model picker finds the
+real provider by its label (only when exactly one provider has that label) and
+uses the model's display name as the Claude or Grok hint. iOS
+(`AidenProviderIcon`) and Android (`AidenProviderIcon`) use the same marks for
+new work; some native lists, such as the iOS scheduled-task model picker and
+the iOS Bot model rows, still show text or an initial.
 
 ## Loading and optimistic updates
 

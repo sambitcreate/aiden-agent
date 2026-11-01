@@ -8,7 +8,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { app, ipcMain, logger } from "../../platform.js";
 import { agentNotice, fenceAsData, tailText, type AgentNoticeV1 } from "../../../renderer/shared/agent-notices.js";
-import type { BackgroundJobOutput } from "../../../renderer/shared/background-jobs.js";
+import type { BackgroundJobOutput, BackgroundJobView } from "../../../renderer/shared/background-jobs.js";
 import {
   emptyChatFollowThrough,
   type ChatFollowThroughV1,
@@ -23,7 +23,16 @@ import { hostPlatformCapabilities } from "../host-platform-capabilities.js";
 import { hostRunRegistry } from "../host-runs-main.js";
 import type { HostRunSummary } from "../host-run-registry.js";
 import { llmClient } from "../llm-client.js";
-import { BackgroundJobs, describeJobEnd, formatDuration, type BackgroundJobEnded } from "./background-jobs.js";
+import {
+  BACKGROUND_JOB_MARKER,
+  BackgroundJobLimitError,
+  BackgroundJobs,
+  describeJobEnd,
+  formatDuration,
+  newBackgroundJobId,
+  type BackgroundJobEnded,
+} from "./background-jobs.js";
+import type { RunCommandLeftovers } from "../coding-tools.js";
 import { DoneWhenChecks, DONE_WHEN_TIMEOUT_MS, type DoneWhenRecord } from "./done-when.js";
 import { noticeDelivery } from "./notice-delivery-main.js";
 import type { PullRequestFollowRecord } from "./pull-request-follow.js";
@@ -90,6 +99,8 @@ async function loadState(): Promise<SavedState> {
 const runStarts = new Map<string, { chatId: string; start: number }>();
 const runWindows = new Map<string, Array<{ start: number; end: number }>>();
 const settledRuns = new Set<string>();
+/** Recently deleted chats, so a run that ends after its chat is gone leaves no window behind. */
+const deletedChats = new Set<string>();
 
 function chatWasAnswering(chatId: string, at: number): boolean {
   for (const run of runStarts.values()) {
@@ -113,6 +124,7 @@ function observeRun(summary: HostRunSummary): void {
   if (settledRuns.size > 500) settledRuns.delete(settledRuns.values().next().value!);
   const start = runStarts.get(summary.runId)?.start ?? (Date.parse(summary.startedAt) || Date.now());
   runStarts.delete(summary.runId);
+  if (deletedChats.has(summary.chatId)) return;
   const now = Date.now();
   const windows = (runWindows.get(summary.chatId) ?? []).filter((window) => window.end > now - RUN_WINDOW_KEEP_MS);
   windows.push({ start, end: Date.parse(summary.updatedAt) || now });
@@ -211,6 +223,50 @@ export const pullRequestFollows = new PullRequestFollows({
   log: (message, error) => logger.warn("follow-through", message, error),
 });
 
+/**
+ * `run_command` in a workspace chat: each command's processes carry a fresh
+ * job marker, and whatever the command leaves running becomes one of the
+ * chat's background jobs.
+ */
+export function runCommandLeftovers(input: { chatId: string; workspaceId: string; cwd: string }): RunCommandLeftovers {
+  return {
+    begin() {
+      const id = newBackgroundJobId();
+      return {
+        env: { [BACKGROUND_JOB_MARKER]: id },
+        adopt: async (processGroup, command, description, output) => {
+          let job: BackgroundJobView | undefined;
+          try {
+            job = await backgroundJobs.adopt({
+              id,
+              ...input,
+              command,
+              ...(description ? { description } : {}),
+              processGroup,
+              ...(output ? { output } : {}),
+            });
+          } catch (error) {
+            if (!(error instanceof BackgroundJobLimitError)) throw error;
+            return {
+              note: `[Aiden: this command left processes running, but they are not tracked: ${error.message} Stop them yourself if they should not keep running.]`,
+              adopted: false,
+            };
+          }
+          if (!job) return undefined;
+          const note = [
+            `[Aiden: this command left processes running. They are now background job ${job.id}: the person sees it beside the chat with a Stop button, and it stops when the chat is deleted or Aiden quits.`,
+            output
+              ? `Read its output with background_job action "read".`
+              : "Its output went elsewhere, so Aiden does not capture it.",
+            "Next time, start servers and watchers with the background_job tool.]",
+          ].join(" ");
+          return { note, adopted: true };
+        },
+      };
+    },
+  };
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────
 
 let started = false;
@@ -244,7 +300,16 @@ export async function shutdownFollowThrough(): Promise<void> {
 export async function deleteChatFollowThrough(chatId: string): Promise<void> {
   pullRequestFollows.deleteChat(chatId);
   doneWhen.clear(chatId);
+  runWindows.delete(chatId);
+  deletedChats.add(chatId);
+  if (deletedChats.size > 500) deletedChats.delete(deletedChats.values().next().value!);
+  for (const [runId, run] of runStarts) if (run.chatId === chatId) runStarts.delete(runId);
   await backgroundJobs.stopChat(chatId, "chat-deleted", true);
+}
+
+/** A delete that rolled back before its durable boundary leaves the chat in use: observe its runs again. */
+export function restoreChatFollowThrough(chatId: string): void {
+  deletedChats.delete(chatId);
 }
 
 /** Folder access changed: what ran in that folder stops. */

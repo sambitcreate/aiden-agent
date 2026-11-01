@@ -44,7 +44,6 @@ export class AidenOpaqueHandleError extends Error {
 interface StoredHandle {
   kind: AidenOpaqueHandleKind;
   claims: AidenOpaqueHandleClaims;
-  consumed: boolean;
   /** Scope of the listing that issued this handle, e.g. one device's view of one workspace. */
   listing?: string;
   superseded?: boolean;
@@ -55,56 +54,118 @@ function digest(token: string): string {
   return createHash("sha256").update(token).digest("base64url");
 }
 
+const DEFAULT_MAX_ENTRIES = 10_000;
+// One listing issues up to 4,000 file handles, so a device keeps room for a
+// fresh listing while other paired devices always keep the other half.
+const DEFAULT_MAX_ENTRIES_PER_DEVICE = 5_000;
+const SWEEP_INTERVAL_MS = 60_000;
+
 export class AidenOpaqueHandleStore {
   private readonly handles = new Map<string, StoredHandle>();
+  private readonly deviceCounts = new Map<string, number>();
+  /** Handles issued by the newest listing of each scope, by digest. */
+  private readonly listings = new Map<string, Set<string>>();
+  /** Superseded handles never resolved: the first reclaimed when full. */
+  private readonly reclaimable = new Set<string>();
+  private nextSweepAt = Number.NEGATIVE_INFINITY;
+  private lastSweepAt = Number.NEGATIVE_INFINITY;
 
-  constructor(private readonly options: { maxEntries?: number; now?: () => number } = {}) {}
+  constructor(
+    private readonly options: { maxEntries?: number; maxEntriesPerDevice?: number; now?: () => number } = {},
+  ) {}
 
   private get maxEntries(): number {
-    return Math.max(1, this.options.maxEntries ?? 10_000);
+    return Math.max(1, this.options.maxEntries ?? DEFAULT_MAX_ENTRIES);
+  }
+
+  private get maxEntriesPerDevice(): number {
+    return Math.min(this.maxEntries, Math.max(1, this.options.maxEntriesPerDevice ?? DEFAULT_MAX_ENTRIES_PER_DEVICE));
   }
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
   }
 
-  private prune(now: number, exceptDigest?: string): void {
-    for (const [key, stored] of this.handles) {
-      if (key !== exceptDigest && (stored.consumed || stored.claims.expiresAt <= now)) {
-        this.handles.delete(key);
-      }
+  private remove(key: string): void {
+    const stored = this.handles.get(key);
+    if (!stored) return;
+    this.handles.delete(key);
+    this.reclaimable.delete(key);
+    const deviceId = stored.claims.deviceId;
+    const count = (this.deviceCounts.get(deviceId) ?? 1) - 1;
+    if (count > 0) this.deviceCounts.set(deviceId, count);
+    else this.deviceCounts.delete(deviceId);
+    if (stored.listing) {
+      const issued = this.listings.get(stored.listing);
+      issued?.delete(key);
+      if (issued?.size === 0) this.listings.delete(stored.listing);
     }
+  }
+
+  /**
+   * Expired handles are dropped when they are next used, by a sweep at most
+   * once a minute, and when the store is full and time has moved on since the
+   * last sweep, so issuing stays amortized O(1) instead of scanning every
+   * outstanding handle per call.
+   */
+  private sweep(now: number): void {
+    this.lastSweepAt = now;
+    this.nextSweepAt = now + SWEEP_INTERVAL_MS;
+    for (const [key, stored] of this.handles) {
+      if (stored.claims.expiresAt <= now) this.remove(key);
+    }
+  }
+
+  private makeRoom(now: number, deviceId: string): void {
+    const full = () =>
+      this.handles.size >= this.maxEntries ||
+      (this.deviceCounts.get(deviceId) ?? 0) >= this.maxEntriesPerDevice;
+    if (!full()) return;
+    // A device that reaches its own quota gives back only its own handles.
+    const deviceFull = (this.deviceCounts.get(deviceId) ?? 0) >= this.maxEntriesPerDevice;
+    for (const key of [...this.reclaimable]) {
+      if (!deviceFull || this.handles.get(key)?.claims.deviceId === deviceId) this.remove(key);
+    }
+    if (full() && now > this.lastSweepAt) this.sweep(now);
+    if (full()) throw new AidenOpaqueHandleError("handle_capacity");
   }
 
   issue(kind: AidenOpaqueHandleKind, claims: AidenOpaqueHandleClaims, options: { listing?: string } = {}): string {
     const now = this.now();
-    this.prune(now);
     if (claims.expiresAt <= now) throw new AidenOpaqueHandleError("handle_expired");
     if (kind === "file" && !claims.workspaceId) throw new AidenOpaqueHandleError("handle_invalid");
-    if (this.handles.size >= this.maxEntries) this.reclaimSuperseded();
-    if (this.handles.size >= this.maxEntries) throw new AidenOpaqueHandleError("handle_capacity");
+    if (now >= this.nextSweepAt) this.sweep(now);
+    this.makeRoom(now, claims.deviceId);
     const token = `${kind}_${randomBytes(32).toString("base64url")}`;
-    this.handles.set(digest(token), {
-      kind, claims: { ...claims }, consumed: false, ...(options.listing ? { listing: options.listing } : {}),
+    const key = digest(token);
+    this.handles.set(key, {
+      kind, claims: { ...claims }, ...(options.listing ? { listing: options.listing } : {}),
     });
+    this.deviceCounts.set(claims.deviceId, (this.deviceCounts.get(claims.deviceId) ?? 0) + 1);
+    if (options.listing) {
+      let issued = this.listings.get(options.listing);
+      if (!issued) this.listings.set(options.listing, (issued = new Set()));
+      issued.add(key);
+    }
     return token;
   }
 
   /**
    * A new listing for `listing` supersedes the handles earlier listings of it
-   * issued. They keep working, but once the store is full those never resolved
-   * are reclaimed first (a document the client opened has been resolved), so
-   * re-listing cannot lock the device out until the old handles expire.
+   * issued. They keep working, but once the store (or the device's share of
+   * it) is full those never resolved are reclaimed first (a document the
+   * client opened has been resolved), so re-listing cannot lock the device out
+   * until the old handles expire.
    */
   supersedeListing(listing: string): void {
-    for (const stored of this.handles.values()) {
-      if (stored.listing === listing) stored.superseded = true;
-    }
-  }
-
-  private reclaimSuperseded(): void {
-    for (const [key, stored] of this.handles) {
-      if (stored.superseded && !stored.resolved) this.handles.delete(key);
+    const issued = this.listings.get(listing);
+    if (!issued) return;
+    this.listings.delete(listing);
+    for (const key of issued) {
+      const stored = this.handles.get(key);
+      if (!stored) continue;
+      stored.superseded = true;
+      if (!stored.resolved) this.reclaimable.add(key);
     }
   }
 
@@ -117,7 +178,7 @@ export class AidenOpaqueHandleStore {
   }
 
   discard(token: string): void {
-    this.handles.delete(digest(token));
+    this.remove(digest(token));
   }
 
   claimsFor(
@@ -128,11 +189,11 @@ export class AidenOpaqueHandleStore {
       throw new AidenOpaqueHandleError("handle_invalid");
     }
     const stored = this.handles.get(digest(token));
-    if (!stored || stored.kind !== expectedKind || stored.consumed) {
+    if (!stored || stored.kind !== expectedKind) {
       throw new AidenOpaqueHandleError("handle_invalid");
     }
     if (stored.claims.expiresAt <= this.now()) {
-      this.handles.delete(digest(token));
+      this.remove(digest(token));
       throw new AidenOpaqueHandleError("handle_expired");
     }
     return { ...stored.claims };
@@ -149,16 +210,15 @@ export class AidenOpaqueHandleStore {
     }
     const tokenDigest = digest(token);
     const stored = this.handles.get(tokenDigest);
-    if (!stored || stored.kind !== expectedKind || stored.consumed) {
+    if (!stored || stored.kind !== expectedKind) {
       throw new AidenOpaqueHandleError("handle_invalid");
     }
     const claims = stored.claims;
     const now = options.now ?? this.now();
     if (now >= claims.expiresAt) {
-      this.handles.delete(tokenDigest);
+      this.remove(tokenDigest);
       throw new AidenOpaqueHandleError("handle_expired");
     }
-    this.prune(now, tokenDigest);
     if (claims.instanceId !== current.instanceId || claims.deviceId !== current.deviceId) {
       throw new AidenOpaqueHandleError("handle_wrong_device");
     }
@@ -188,7 +248,9 @@ export class AidenOpaqueHandleStore {
       throw new AidenOpaqueHandleError("filesystem_identity_changed");
     }
     stored.resolved = true;
-    if (options.consume) stored.consumed = true;
+    this.reclaimable.delete(tokenDigest);
+    // A consumed handle is gone: any later use is simply an unknown handle.
+    if (options.consume) this.remove(tokenDigest);
     return { ...claims };
   }
 

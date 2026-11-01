@@ -75,6 +75,7 @@ async function launch(executable, root, userData, config, overrides = {}) {
       AIDEN_CONFIG_DIR: config,
       AIDEN_DISABLE_PRODUCTION_DIAGNOSTICS: "1",
       AIDEN_RUNTIME_PROFILE: "production",
+      AIDEN_ANALYTICS: "0",
       HOME: root,
     },
     overrides,

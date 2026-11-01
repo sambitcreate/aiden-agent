@@ -166,9 +166,88 @@ void app.whenReady().then(async () => {
   expiry.callback();
   await autoStopped;
   assert.equal(tab.state.recording, false);
+  const autoStoppedVideo = await native.stopRecording(tab);
+  assert.ok(autoStoppedVideo.sizeBytes > 0, "the next stop returns the video the limit saved");
+  await assert.rejects(native.stopRecording(tab), /not recording/, "an automatic stop is returned once");
   assert.deepEqual(policies(), [true, true, true], "automatic stop releases the window's last exception");
   assert.equal(isBackgrounded(), true);
   attachment();
+  // Picture in Picture of a hidden tab behind the minimized host paints from the
+  // page's screencast: no main-process capture, paused while the preview itself
+  // is minimized, kept through a recording, and released on close. Linux keeps
+  // its capture loop (unchanged), so this runs where the host really minimizes.
+  let pictureInPicture: Record<string, unknown> | undefined;
+  if (backgroundMode === "minimized") {
+    native.present(tab, false);
+    await wc.executeJavaScript("globalThis.fixtureTicks = 0; (function tick() { document.body.textContent = 'Frame ' + globalThis.fixtureTicks++; requestAnimationFrame(tick); })()");
+    const pipCommand = (enabled: boolean) => browser.command("throttle", {
+      action: "picture_in_picture", tabId: tab.state.id, enabled,
+    }, { source: "user" });
+    console.error("[throttling] opening picture in picture");
+    await pipCommand(true);
+    console.error("[throttling] picture in picture open");
+    const pipWindow = BrowserWindow.getAllWindows().find(window => window.getTitle() === "Browser Picture in Picture");
+    assert.ok(pipWindow, "Picture in Picture opens its window");
+    await pipWindow.webContents.executeJavaScript("globalThis.paints = 0; new MutationObserver(() => globalThis.paints++).observe(document.querySelector('img'), { attributes: true }); 0");
+    const nativeCapture = wc.capturePage.bind(wc);
+    let captures = 0;
+    wc.capturePage = ((...args: Parameters<typeof wc.capturePage>) => {
+      captures += 1;
+      return nativeCapture(...args);
+    }) as typeof wc.capturePage;
+    const paintsOver = async (ms: number) => {
+      const before = await pipWindow.webContents.executeJavaScript("globalThis.paints") as number;
+      await new Promise(resolve => setTimeout(resolve, ms));
+      return (await pipWindow.webContents.executeJavaScript("globalThis.paints") as number) - before;
+    };
+    try {
+      const paintedWhileBackgrounded = await paintsOver(1_500);
+      assert.ok(paintedWhileBackgrounded >= 2, `the preview keeps painting a hidden tab behind a minimized host (${paintedWhileBackgrounded})`);
+      assert.ok(paintedWhileBackgrounded <= 8, `the preview paints at most 4 frames a second (${paintedWhileBackgrounded})`);
+      assert.equal(wc.getBackgroundThrottling(), false, "the open preview keeps the page rendering");
+      const minimizedPip = new Promise<void>(resolve => pipWindow.once("minimize", () => resolve()));
+      pipWindow.minimize();
+      await minimizedPip;
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const paintedWhileMinimized = await paintsOver(1_000);
+      assert.equal(paintedWhileMinimized, 0, "a minimized preview paints nothing");
+      const restoredPip = new Promise<void>(resolve => pipWindow.once("restore", () => resolve()));
+      pipWindow.restore();
+      await restoredPip;
+      console.error("[throttling] recording beside picture in picture");
+      await native.startRecording(tab, 10);
+      const paintedWhileRecording = await paintsOver(1_000);
+      const pipVideo = await native.stopRecording(tab);
+      assert.ok(pipVideo.sizeBytes > 16, "a recording beside the preview still produces video");
+      const paintedAfterRecording = await paintsOver(1_000);
+      assert.ok(paintedWhileRecording >= 1 && paintedAfterRecording >= 1, `the preview keeps painting through a recording (${paintedWhileRecording}, ${paintedAfterRecording})`);
+      assert.equal(captures, 1, "only the recording's opening frame is captured; the preview captures nothing");
+      pictureInPicture = { paintedWhileBackgrounded, paintedWhileMinimized, paintedWhileRecording, paintedAfterRecording, captures };
+    } finally {
+      wc.capturePage = nativeCapture;
+    }
+    await pipCommand(false);
+    assert.equal(wc.getBackgroundThrottling(), true, "closing the preview releases the page");
+    assert.equal(pipWindow.isDestroyed(), true);
+    // A crash ends the preview: its screencast dies with the renderer, and the
+    // replacement starts hidden, so a kept window would hold a frozen frame.
+    console.error("[throttling] crashing beside picture in picture");
+    await pipCommand(true);
+    const crashedPip = BrowserWindow.getAllWindows().find(window => window.getTitle() === "Browser Picture in Picture");
+    assert.ok(crashedPip, "Picture in Picture reopens");
+    const pipCrashed = new Promise<void>(resolve => wc.once("render-process-gone", () => resolve()));
+    const pipClosed = new Promise<void>(resolve => crashedPip.once("closed", () => resolve()));
+    const pipRecovered = new Promise<void>(resolve => wc.once("did-navigate", () => wc.once("did-stop-loading", () => resolve())));
+    wc.forcefullyCrashRenderer();
+    await pipCrashed;
+    assert.equal(tab.state.pictureInPicture, false, "a crash closes the preview");
+    assert.equal(wc.getBackgroundThrottling(), true, "a crash releases the preview's lease");
+    await pipClosed;
+    await pipRecovered;
+    await wc.executeJavaScript("document.body.textContent = 'Local scheduling fixture'");
+    native.present(tab, true, { x: 0, y: 0, width: 600, height: 400 });
+    attachment();
+  }
   owner.contentView.removeChildView(sibling.view);
   native.close(sibling);
   const restored = new Promise<void>(resolve => {
@@ -208,7 +287,7 @@ void app.whenReady().then(async () => {
     electron: process.versions.electron, platform: process.platform, idlePolicy, idlePolicies,
     screenshotBytes: Buffer.from(screenshot.data, "base64").length,
     timerResult: value.value, recordingBytes: video.sizeBytes,
-    cancellationRestored: true, failureRestored: true, crashRestored: true, attachedWindow,
+    cancellationRestored: true, failureRestored: true, crashRestored: true, attachedWindow, pictureInPicture,
   }, null, 2));
   owner.destroy();
   clearTimeout(deadline);

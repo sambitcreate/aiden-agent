@@ -11,7 +11,7 @@ Aiden Agent can expose a small authenticated API to Aiden On The Go on phones an
 
 After choosing the method, setup takes two desktop actions. Scanning and any phone permissions are additional steps. Existing ready connections can add a device directly. Under **Workspace access**, approve any additional folders the phone may browse; existing workspace access is unchanged. Approving the whole home folder requires a separate confirmation.
 
-The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network access is running. LAN traffic uses a per-install P-256 HTTPS identity. The QR contains the private CA trust anchor and the server public-key pin so the mobile client can validate the hostname, certificate chain, and pinned key. A certificate renewal keeps the server key; an identity-key change requires pairing again.
+The Mac advertises `_aiden-agent._tcp` with Bonjour only while Local Network access is running. LAN traffic uses a per-install P-256 HTTPS identity. The QR contains the private CA trust anchor and the server public-key pin so the mobile client can validate the hostname, certificate chain, and pinned key. On a Mac, the LAN endpoint uses the Bonjour name (`scutil --get LocalHostName` plus `.local`, the name shown in System Settings → General → Sharing → Local hostname), not the Unix host name, which can be a bare `Mac` or a router-assigned `.lan` name that does not resolve. The certificate covers that name and the Unix host name; when the computer is renamed, the certificate is reissued on the next start for the new name. A certificate renewal or reissue keeps the server key; an identity-key change requires pairing again. The iPhone app compares host names without regard to case: Nearby discovery reports the Bonjour name with its capitals, while TLS challenges and the setup-code payload carry it in lowercase.
 
 ## Tailscale setup
 
@@ -44,7 +44,7 @@ Any computer running Aiden Agent can use the chats, workspaces and Bots of anoth
 
 ### Pair a computer
 
-1. On the computer you want to control, open **Settings → Connections → Control this device** and leave **Accept connection requests** on.
+1. On the computer you want to control, open **Settings → Connections → Control this device** enable **Accept connection requests** (off on new installations), and open **Add device**. Requests are accepted only while that host window is open. Existing paired devices continue to work.
 2. On this Mac, open **Settings → Connections → Control other devices** and choose **Add device**. While the sheet is open, Aiden looks for computers on the same network and on your Tailscale tailnet. It never searches in the background.
 3. Choose **Connect** beside the computer. Both screens show the same six-digit match code.
 4. On the other computer, check the code and choose **Allow**. A request that is denied, cancelled or left for two minutes pairs nothing.
@@ -61,9 +61,10 @@ Pairing a computer gives it full control of this computer's chats: it can read t
   - **Context.** The composer's context meter shows how full the next request would be on the other computer, as that computer projects it for the chosen model. It refreshes when the chat opens, when a reply finishes and when you pick another model. It needs Aiden on that computer to support contract revision 41; an older one shows no meter. Unsent draft text is not counted.
   - **Queue.** Messages queued while a reply is running wait on this Mac in the same editable list as a local chat's, then go to the other computer one at a time as new messages once its run ends. **Steer** joins the running reply there directly. Stop pauses the queue.
   - **Failed replies.** A reply that failed offers **Try again** or **Continue**, and **Switch model**. Compacting a full context and fixing a provider sign-in happen on the other computer.
+  - **Pictures.** PNG and JPEG images in the chat (up to 8 MB), the ones you sent and the ones a reply drew or showed, appear as pictures. Each shows as a named file until its bytes arrive from the other computer, which hands over a few at a time so sends and approvals are never held up. **Expand** opens one full size. **Save** and **Copy** are not offered here; use them on the computer the chat runs on. An image that computer can no longer hand over stays a named file.
   - **Not here.** Read-aloud is not offered for a remote chat.
-- **New chats.** On a new chat, choose the computer in the composer's machine picker, then one of its workspaces and models. Attachments upload to that computer.
-- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own, with **Working…** while one is running there. Opening one shows the same single conversation its own computer, phones and Telegram show: the Bot runs there, and this Mac sends messages, Stop, Resume, Dismiss, question answers and tool approvals to it. A tool that only its own computer may allow (Computer Use) can only be denied from here. Connect cards ask the Bot's computer to finish the connection there. When the app is already connected on that computer but the Bot's Custom access leaves it out, the card still reads **Finish on <computer>**, and that opens the Bot's chat there, where its card offers **Add to this Bot**. Phones work the same way with **Finish on your Mac**. If that computer runs an older Aiden, update it; an older Mac sending to a newer computer's Bot is told to update. When the Bot's computer offers hand-offs (contract revision 37), a step the Bot hands back ("Your turn: …") can be answered from here too: **Done** (with a note typed in the composer if you like), **Skip**, or **Open** for the page it names. A sign-in step offers **Finish on <computer>**, which brings it forward in the Bot's own browser there. The chat's **···** menu offers **Pause Bot** and **Resume Bot**, and a paused Bot shows a Resume card and holds the composer until it is resumed. The Assistant stays on its own computer.
+- **New chats.** On a new chat, choose the computer in the composer's machine picker, then one of its workspaces and models. Attachments upload to that computer. Pictures in a format the other computer does not take (WebP, GIF, BMP) are converted first, to PNG (or JPEG when that is what fits), and shrunk step by step until each is within 8 MB and the message's attachments together are within 16 MB. An animated GIF sends its first frame. HEIC photos can't be sent to another computer yet: the composer asks you to export one as a JPEG first. A picture this Mac cannot open is not sent either, and the composer says to save it as a PNG or JPEG.
+- **Bots.** Paired computers' Bots appear in the Bots area below this Mac's own, with **Working…** while one is running there. Opening one shows the same single conversation its own computer, phones and Telegram show: the Bot runs there, and this Mac sends messages, Stop, Resume, Dismiss, question answers and tool approvals to it. A tool that only its own computer may allow (Computer Use) can only be denied from here. Connect cards ask the Bot's computer to finish the connection there. When the app is already connected on that computer but the Bot's Custom access leaves it out, the card still reads **Finish on <computer>**, and that opens the Bot's chat there, where its card offers **Add to this Bot**. Phones work the same way with **Finish on your Mac**. If that computer runs an older Aiden, update it; an older Mac sending to a newer computer's Bot is told to update. When the Bot's computer offers hand-offs (contract revision 37), a step the Bot hands back ("Your turn: …") can be answered from here too: **Done** (with a note typed in the composer if you like), **Skip**, or **Open** for the page it names. A sign-in step offers **Finish on <computer>**, which brings it forward in the Bot's own browser there. Images the Bot shares appear in its chat as pictures, read from the Bot's computer while its chat is connected (contract revision 45). The chat's **···** menu offers **Pause Bot** and **Resume Bot**, and a paused Bot shows a Resume card and holds the composer until it is resumed. The Assistant stays on its own computer.
 - **Not available remotely.** Terminal, the Environment browser, computer use and open-in-editor work only on the computer you are sitting at.
 
 ### Offline and identity changes
@@ -78,6 +79,30 @@ If a computer reached over the local network presents a different identity, Aide
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
 
+## Add a local project to a paired computer
+
+In a new chat with a repository-root project selected, open the machine menu and
+choose **Add this project to another machine…**. Pick a connected desktop that
+supports project cloning (contract revision 48), then browse its approved folders and choose the parent
+folder for the new repository. The target uses its own Git authentication.
+The item is not offered in a No workspace chat, a scratch folder, or any folder
+outside a Git repository.
+
+Environment files may contain secrets. All choices start unchecked. Select only
+files you want on that computer. Aiden offers ignored root-level `.env*` and
+`.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
+the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+project becomes available after the selected files arrive. The new chat opens on
+the destination; a typed prompt and attachments carry over when that computer has
+no saved draft. An existing remote draft is retained, with the local prompt still
+saved here.
+
+The flow clones committed history from the remote. Local edits and unpushed commits
+stay here. Nested project folders must first be opened as repository-root projects.
+A clone can run for up to 90 seconds. **Stop** requests cancellation; if the
+connection is interrupted, check the destination project list before trying again.
+Phones and CLI daemons do not offer this desktop setup action.
+
 ## Bot hand-offs and pause on the phone
 
 When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone and Android shows a step a Bot hands back to you ("Your turn: Enter the code your bank sent you") as a card in the Bot's chat. **Done** marks it done: to add a note, type it in the composer and send it. A step your password-or-code rule hands back takes no note, so the composer waits and says "Enter it yourself, then tap Done": a code typed there would reach the Bot. **Skip** skips the step, and **Open** opens the page it names in the phone's browser. A sign-in step is finished in the Bot's own browser on the Mac: **Finish on your Mac** brings it forward there, or you can **Skip** it. A step in the Bot's own browser or on its own computer (a newer Mac) reads "This step is on the Bot’s own screen on your Mac": **Finish on your Mac** opens the Bot's screen there, and **Done** or **Skip** answers it from the phone. If the Bot's chat is open while the app is in the background, a notification says the Bot needs you. The Bot's profile menu offers **Pause Bot** and **Resume Bot**. A paused Bot reads "Paused" in the Bots list, and its chat shows a Resume card and takes no messages until you resume it. An interrupted Bot reads "Interrupted — tap to resume". With an older Mac, the step appears as a "needs you on your Mac" message, and you answer it on the Mac.
@@ -88,7 +113,7 @@ When the paired Mac offers it (contract revision 42, `bot:issues`), a Bot's **Ne
 
 ## Images a Bot shares
 
-When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 45) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. With an older phone or Mac, or on another Mac viewing the Bot, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
+When a Bot shares an image (a chart it drew, a screenshot it took), the paired Mac (contract revision 45) sends it to Aiden On The Go for iPhone and Android, which shows it in the Bot's chat like a photo in any other chat: tap it to see it full screen and save it. The phone reads the picture from the Mac when it is shown and keeps a limited number of pictures only while the chat is open; one it let go is read again when you scroll back to it. Another Mac viewing the Bot shows the picture too (see [Use a paired computer](#use-a-paired-computer)). With an older phone or Mac, the chat says "I shared an image: NAME. Open this chat on your Mac to see it."
 
 ## Browser recordings
 
@@ -100,13 +125,17 @@ When the agent reads a page in extract mode, the Mac (contract revision 38) send
 
 When the paired Mac has spending limits on (contract revision 47), Aiden On The Go for iPhone and Android shows a quiet line in a workspace chat or Bot chat once it has used 80% of its limit, and a card with **Allow $X more** once it reaches it. Allowing more from the phone and the Mac at the same moment adds the amount once. The limits themselves are set on the Mac in Settings → Limits & spending; see [usage limits and spending limits](usage-limits-and-spending.md). With an older phone, or from another paired Mac, a send over the limit is refused with the Mac's message, and you allow more on the Mac.
 
+## Background jobs
+
+When the agent leaves something running for a workspace chat on the Mac (a dev server, a watcher, a long test run, or a server a command started), Aiden On The Go for iPhone and Android shows **N in background** beside the composer (contract revision 49, `chat:jobs`, asked for in a call of its own). Its list says how long each job has run or how it ended and which addresses a server listens on ("localhost:5173 on your Mac"; open them in a browser on the Mac), and **Stop** ends a job and everything it started. The list refreshes after each reply and every few seconds while something runs. Linux desktops serve it too; the CLI does not run background jobs. Older phones and Macs show nothing new. See [coding follow-through](coding-follow-through.md).
+
 ## Pictures in a reply
 
 When the agent shows, shares or generates a picture, Aiden On The Go for iPhone and Android draws it right beneath the step that made it, in the order the reply happened (contract revision 44). Pictures still arrive when the reply is saved, not while it streams; a picture being generated shows its placeholder in that same spot. With an older Mac they stay at the end of the reply.
 
 ## Paired-Mac voice input
 
-In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit microphone action. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
+In the mobile app's speech settings, choose the paired Mac when you want Aiden Agent's local Parakeet model to transcribe composer dictation instead of the phone's native speech API. Recording begins only after an explicit dictation action in the app or the intentional iOS voice shortcut; externally opened URLs never start recording. The phone sends at most 60 seconds of mono PCM audio over the same authenticated, certificate-pinned Remote Access connection and receives one final transcript for the composer.
 
 The Mac processes that recording locally. Aiden does not persist the recording or transcript, include either in Remote Access diagnostics, or send them to Aiden's model-provider integrations or an Aiden-operated service. Normal chat submission remains a separate user action.
 
@@ -122,6 +151,7 @@ If the selected local speech model is not installed, the mobile settings can ask
 - **Tailnet HTTPS unavailable:** complete Tailscale's HTTPS authorization flow, then retry Connect in Aiden. Aiden will not authorize it on your behalf.
 - **Serve conflict:** inspect the route shown in the error. Remove or relocate the conflicting handler yourself; Aiden will not take it over.
 - **A folder is missing:** add it from the Mac. The phone cannot submit an arbitrary path or approve a new browser root.
+- **"This chat's workspace folder is missing" or "This chat's worktree folder is missing on your Mac":** the chat's workspace folder was moved, renamed or deleted on the Mac, or its drive isn't connected. Nothing was sent; your message stays in the box. Put the folder back, or for a worktree choose **Restore worktree** in that chat on the Mac, then send again. The phone never receives the folder's path.
 - **Paired-Mac speech is unavailable:** confirm Aiden Agent is running, Remote Access is reachable, and the paired Mac remains selected in mobile speech settings.
 - **Speech model needs setup:** open mobile speech settings and choose setup for the fixed local model, or complete the same setup in Aiden Agent on the Mac.
 - **Speech setup failed:** keep Aiden Agent online, retry once, and verify the Mac has enough free local storage. Aiden will discard an incomplete staged model.
@@ -132,11 +162,26 @@ Remote Access diagnostics keep only closed route categories, outcome/status clas
 
 ## Connection recovery
 
+On iPhone and iPad, the disconnected recovery panel offers **Switch connection**
+alongside **Retry connection**. It opens the saved-computer list, where you can
+select another paired computer or choose **Pair Another Aiden Agent** without
+reconnecting first. Switching remains available when a secure-identity failure
+prevents retrying.
+
 Settings → Connections separates computers that control this device from computers
 this device controls. A paired computer shows its current route, route count, and last
 successful chat synchronization. “Syncing chats” means the secure connection is open
 but the chat feed is not ready. “Recently active” describes recent contact, not a live
 connection guarantee.
+
+When a paired desktop cannot connect, its row distinguishes address lookup, network
+routing, a refused connection, a timeout, secure connection failure, and an unreadable
+response when the transport can identify the cause. Recovery steps point to Tailscale
+online status and access rules, or the local network, firewall, and Local Network
+permission for the last known route. A refused connection asks you to open Aiden and
+turn on Control this device on the other computer. The displayed route is the last
+successful route; Aiden may also have tried its saved alternatives. These hints do
+not probe Tailscale or change permissions. Identity changes still require re-pairing.
 
 Paired desktop computers can learn local-network and Tailscale alternatives through
 their verified connection. Aiden checks each route's certificate and paired identity
@@ -146,11 +191,23 @@ routes** is selected. The computer still needs to be awake with Aiden running.
 
 A send whose response is lost remains a saved, unconfirmed request. Reopening the
 conversation restores its notice. **Retry** uses that exact request and its original
-key within the safe retry window; it never runs automatically. When the window ends,
+key within the safe retry window; it never runs automatically. A send the host refuses
+as busy (`429 rate_limited` with `retryable: true`) is different: nothing was added to
+the chat, so Aiden On The Go for iPhone and Android saves the same request under a new
+key and sends it again on its own after the delay the host asked for
+(`details.retryAfterSeconds`, else the `Retry-After` header, held between 1 and 60
+seconds). If three automatic resends are refused as busy too, the request stays saved
+for **Retry** and the notice says Aiden Agent is still busy and the message wasn’t sent,
+so retrying is safe. A
+`429` the host marks `retryable: false` fails the send and returns the text to the
+composer. When the window ends,
 review the conversation on the host before dismissing the notice and making a new
 attempt. New draft edits remain separate from the saved request. Desktop saved
 requests are encrypted locally and bound to the original pairing; mobile records
-stay in the app's private storage and are scoped to that pairing.
+stay in the app's private storage and are scoped to that pairing. Editable mobile
+drafts and unconfirmed-send records are excluded from backups and do not move to
+a replacement phone through backup restore. iOS marks existing draft storage during app startup even when no chat is opened
+and retains its existing protected storage class; Android keeps its backup and device-transfer exclusions.
 
 On Android, **Nearby** discovers desktops on the local network. New Android pairings
 require a desktop supporting the Android device identity (contract revision 31); an
@@ -160,3 +217,23 @@ setup-code verification and certificate validation still establish trust. Connec
 errors distinguish network reachability, secure-identity verification, and app-version
 problems. A secure-identity failure requires verification and pairing repair, rather
 than a trust-bypass retry.
+
+## External links and shortcuts
+
+On iOS and Android, an external new-chat link waits for connection and workspace
+readiness, then asks before creating a chat. Waiting grants no installation
+switch, chat creation or recording authority; newer navigation supersedes the
+waiting request. The
+confirmation names its desktop installation and workspace before any installation
+switch or host write. The legacy `aiden-otg://new-chat-voice` link opens this same
+confirmation and cannot start the microphone, even when microphone permission is
+already granted. Use the in-app microphone button to dictate. No recognized text
+is sent automatically. Existing-chat notification and widget links still open
+their paired conversation.
+
+iOS App Intents deliver a short-lived, one-use action inside the foreground app
+process. The intentional **New Chat with Voice** shortcut retains dictation using
+the selected mode and ordinary OS permission checks. URL parameters and Android
+Intent extras cannot claim internal-action authority. A cancelled, expired,
+revoked or stale creation approval is discarded, and creation is never retried
+automatically after an uncertain result.

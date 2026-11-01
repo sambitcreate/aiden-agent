@@ -24,6 +24,12 @@ import type { DevicePlatform } from "../../../renderer/shared/devices.js";
 /** Long enough for simctl to write the MP4 trailer of a ten-minute recording. */
 export const DEVICE_RECORDING_STOP_TIMEOUT_MS = 15_000;
 
+/**
+ * A failed recording nobody discarded (its viewer was closed when it failed)
+ * is deleted with its temp file after this long. It can never be saved.
+ */
+export const DEVICE_RECORDING_FAILED_TTL_MS = 60 * 60_000;
+
 /** The subset of `ChildProcess` the recorder relies on, so tests can pass a fake. */
 export interface RecorderChild {
   exitCode: number | null;
@@ -50,6 +56,7 @@ export interface DeviceRecorderDeps {
   clearTimeout(timer: Timer): void;
   maxDurationMs?: number;
   stopTimeoutMs?: number;
+  failedTtlMs?: number;
 }
 
 export interface DeviceRecordingStart {
@@ -91,6 +98,8 @@ interface Entry {
   cleaned: boolean;
   /** The device's recorder was never confirmed stopped, so its file may be unfinished. */
   stopUnconfirmed: boolean;
+  /** Deletes a failed recording nobody discarded. */
+  sweepTimer: Timer | null;
 }
 
 export interface DeviceRecorder {
@@ -115,6 +124,7 @@ export interface DeviceRecorder {
 export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
   const maxDurationMs = deps.maxDurationMs ?? DEVICE_RECORDING_MAX_MS;
   const stopTimeoutMs = deps.stopTimeoutMs ?? DEVICE_RECORDING_STOP_TIMEOUT_MS;
+  const failedTtlMs = deps.failedTtlMs ?? DEVICE_RECORDING_FAILED_TTL_MS;
   const entries = new Map<string, Entry>();
   const listeners = new Set<(recordings: DeviceRecordingInfo[]) => void>();
   /**
@@ -132,7 +142,14 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
 
   const update = (entry: Entry, next: Partial<DeviceRecordingInfo>) => {
     entry.info = { ...entry.info, ...next };
-    if (entries.get(entry.info.id) === entry) emit();
+    if (entries.get(entry.info.id) !== entry) return;
+    if (entry.info.status === "failed" && !entry.sweepTimer) {
+      entry.sweepTimer = deps.setTimeout(() => {
+        entry.sweepTimer = null;
+        void removeEntry(entry);
+      }, failedTtlMs);
+    }
+    emit();
   };
 
   /** Deletes the device's copy once, whatever happened to the recording. */
@@ -221,10 +238,13 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
     return entry.stopping;
   };
 
-  const removeEntry = async (entry: Entry) => {
+  const removeEntry = async (entry: Entry): Promise<void> => {
     if (entry.child) await stopEntry(entry, "user").catch(() => undefined);
     else if (entry.stopping) await entry.stopping.catch(() => undefined);
     else if (entry.settling) await entry.settling.catch(() => undefined);
+    // The stop above can fail the recording, which arms a sweep this removal makes moot.
+    if (entry.sweepTimer) deps.clearTimeout(entry.sweepTimer);
+    entry.sweepTimer = null;
     if (entries.get(entry.info.id) === entry) {
       entries.delete(entry.info.id);
       emit();
@@ -297,6 +317,7 @@ export function createDeviceRecorder(deps: DeviceRecorderDeps): DeviceRecorder {
           remote,
           cleaned: remote === null,
           stopUnconfirmed: false,
+          sweepTimer: null,
         };
         entry.capTimer = deps.setTimeout(() => {
           entry.capTimer = null;

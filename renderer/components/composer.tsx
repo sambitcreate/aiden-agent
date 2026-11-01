@@ -18,6 +18,7 @@ import {
   Text,
   toast,
 } from "./ui";
+import { ProviderIcon } from "./provider-icon";
 import { cn } from "../lib/ui-utils";
 import {
   ArrowUp,
@@ -26,6 +27,7 @@ import {
   ListPlus,
   Loader2,
   Lock,
+  MessageCircle,
   Mic,
   OctagonAlert,
   Paperclip,
@@ -132,6 +134,7 @@ import { MAX_CHAT_MESSAGE_CONTENT_BYTES } from "../shared/chat-message-contract"
 import { LOCAL_COMPOSER_SURFACES, type ComposerSurfaces } from "../lib/hosts/composer-surfaces";
 import { CONNECT_PROVIDER_ACTION } from "../lib/provider-setup-copy";
 import { escapeStopsGeneration } from "../lib/composer-type-focus";
+import { isNoWorkspace, NO_WORKSPACE_LABEL } from "../lib/no-workspace";
 
 const CLIPBOARD_IMAGE_MIME_TYPES = new Set([
   "image/png",
@@ -213,6 +216,8 @@ interface ComposerProps {
   workspaces?: Workspace[];
   onSelectWorkspace?: (workspaceId: string) => Promise<void>;
   onCreateScratchWorkspace?: () => Promise<void>;
+  /** Workspace menu's No workspace: the draft joins the Chats group (global settings, hidden folder). */
+  onChooseNoWorkspace?: () => Promise<void>;
   /** Workspace menu's Open folder…: native picker, then move the draft there. */
   onOpenFolderAsWorkspace?: () => Promise<void>;
   /** Opens the draft's workspace menu from outside (the headline name, the palette's Clone row). */
@@ -401,6 +406,7 @@ export function Composer({
   workspaces = [],
   onSelectWorkspace,
   onCreateScratchWorkspace,
+  onChooseNoWorkspace,
   onOpenFolderAsWorkspace,
   workspaceMenuRequest,
   onCreateGitWorktree,
@@ -755,6 +761,13 @@ export function Composer({
     return forkTurnEligibility(sessionChat.messages, { editInFork: !sessionChat.botId });
   }, [sessionChat]);
   const completedForkTurns = forkEligibility.turns;
+  // The latest prompt, when it has a finished reply and can be edited in a fork.
+  const lastPromptForkId = React.useMemo(() => {
+    if (!onForkChat || !sessionChat) return null;
+    const lastPrompt = [...sessionChat.messages].reverse().find((message) => message.role === "user");
+    const lastTurn = completedForkTurns[completedForkTurns.length - 1];
+    return lastPrompt && lastTurn?.userMessageId === lastPrompt.id ? lastPrompt.id : null;
+  }, [completedForkTurns, onForkChat, sessionChat]);
   const forkSummaryTurnIds = React.useMemo(
     () => (sessionChat && onForkWithSummary ? forkSummaryRows(sessionChat.messages) : null),
     [onForkWithSummary, sessionChat],
@@ -2019,6 +2032,25 @@ export function Composer({
         }
       }
     }
+    // ↑ in an empty message box brings the last prompt back in a fork, to fix and send again.
+    if (
+      event.key === "ArrowUp" &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.repeat &&
+      !event.nativeEvent.isComposing &&
+      text === "" &&
+      attachments.length === 0 &&
+      !selectedSkill &&
+      !isGenerating &&
+      lastPromptForkId
+    ) {
+      event.preventDefault();
+      void forkFromTurn(lastPromptForkId, "before");
+      return;
+    }
     if (
       escapeStopsGeneration({
         key: event.key,
@@ -2042,9 +2074,13 @@ export function Composer({
 
   const permission = workspace?.permission ?? "ask";
   const PermissionIcon = PERMISSION_META[permission].icon;
-  const folderName = workspace?.folderPath
-    ? workspace.folderPath.split("/").filter(Boolean).pop()
-    : workspace?.name;
+  const noWorkspace = isNoWorkspace(workspace);
+  const folderName = noWorkspace
+    ? NO_WORKSPACE_LABEL
+    : workspace?.folderPath
+      ? workspace.folderPath.split("/").filter(Boolean).pop()
+      : workspace?.name;
+  const WorkspaceChipIcon = noWorkspace ? MessageCircle : Folder;
   const hasUserMessages =
     sessionChat?.messages.some((message) => message.role === "user") ?? hasMessages;
   const { chips: contextChips, pullRequestAnnouncement } = useComposerContextChips({
@@ -2106,7 +2142,7 @@ export function Composer({
     <>
       <div data-browser-composer-inset="true" className="aiden-dock-inset chat-content-column pointer-events-none pb-4 pt-3 sm:pb-5">
         {firstSendPending ? <Text as="p" variant="small" color="secondary" role="status" className="px-4 pb-1">{firstSendStatus ?? "Sending…"}</Text> : null}
-        <div className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
+        <div data-focus-region="composer" className="composer-responsive pointer-events-auto relative isolate" inert={firstSendPending || undefined} aria-busy={firstSendPending || undefined}>
           <ComposerSlashPalettePresence
             present={Boolean(slashSession)}
             immediate={
@@ -2152,6 +2188,7 @@ export function Composer({
                 activeWorkspaceId={workspace?.id}
                 onSelectWorkspace={onSelectWorkspace}
                 onCreateScratchWorkspace={onCreateScratchWorkspace}
+                onChooseNoWorkspace={onChooseNoWorkspace}
                 onOpenFolder={onOpenFolderAsWorkspace}
                 busyReason={workspaceChangeBusyReason({
                   sending: sending || firstSendPending,
@@ -2178,7 +2215,7 @@ export function Composer({
                         : "Choose a workspace"
                     }
                   >
-                    <Folder className="size-4 shrink-0" />
+                    <WorkspaceChipIcon className="size-4 shrink-0" />
                     <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
                   </Button>
                 }
@@ -2192,7 +2229,7 @@ export function Composer({
                 disabled={!workspace?.folderPath}
                 aria-label={workspace?.folderPath ? "Open folder in file manager" : "Workspace"}
               >
-                <Folder className="size-4 shrink-0" />
+                <WorkspaceChipIcon className="size-4 shrink-0" />
                 <span className="max-w-[16rem] truncate">{folderName ?? "Workspace"}</span>
               </Button>
             )}
@@ -2356,6 +2393,7 @@ export function Composer({
               // Approval keys stay off while this holds a draft, wherever focus is; the
               // value marks staged attachments or a skill that the text alone doesn't show.
               data-message-draft={attachments.length > 0 || selectedSkill ? "attached" : ""}
+              data-focus-region-entry
               value={composerValue}
               readOnly={composerInputLocked || firstSendPending || dictationPreviewing}
               aria-busy={composerInputLocked || firstSendPending || dictationPreviewing || undefined}
@@ -2754,9 +2792,10 @@ export function Composer({
         title="Enable Full Access?"
         description={
           <Text variant="small" color="secondary">
-            Aiden will be able to read and edit files, and run commands in “
-            {folderName ?? "this workspace"}” without asking each time. You can change this any time
-            from the composer.
+            {noWorkspace
+              ? "Aiden will be able to read and edit files, and run commands in this chat’s own folder without asking each time. "
+              : <>Aiden will be able to read and edit files, and run commands in “{folderName ?? "this workspace"}” without asking each time. </>}
+            You can change this any time from the composer.
           </Text>
         }
         confirmLabel="Enable Full Access"
@@ -2943,6 +2982,7 @@ export function Composer({
                   setLogoutConfirmOpen(true);
                 }}
               >
+                <ProviderIcon providerId={provider.id} providerLabel={provider.label} className="size-4 text-secondary" />
                 <span>
                   <span className="block text-small-strong">{provider.label}</span>
                   <span className="block text-small text-tertiary">{provider.detail}</span>

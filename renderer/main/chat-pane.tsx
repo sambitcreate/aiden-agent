@@ -1,3 +1,6 @@
+import { hostQueryKeys } from "../lib/hosts/host-query-keys";
+import { PeerProjectCloneDialog } from "./peer-project-clone-dialog";
+import { remoteNewChatDraftKey } from "./remote-new-chat-view";
 import {
   beginChatDraftSend,
   createChatDraft,
@@ -14,6 +17,7 @@ import {
   updateChatDraftWorktree,
 } from "../lib/chat-draft";
 import { registerChatPromptTarget } from "../lib/chat-prompt-bridge";
+import { resolveModelDisplay } from "../lib/model-display";
 import { readChatDraftGitMemory, resolveDraftWorktreeDefaults } from "../lib/chat-draft-git-memory";
 import {
   draftWorkInOptions,
@@ -25,6 +29,7 @@ import {
   activeWorktreeSend,
   continueWorktreeSendInView,
   isWorktreeSendCancelled,
+  WorktreeSendCancelledError,
   registerWorktreeSendContinuation,
   startWorktreeFirstSend,
   subscribeActiveWorktreeSends,
@@ -41,6 +46,7 @@ import { adoptWorkspace } from "../lib/use-workspace-path-intake";
 import { workspaceChangeBusyReason } from "../lib/workspace-menu";
 import {
   discardComposerDraft,
+  loadComposerDraft,
   restoreUnsentMessage,
   saveComposerDraftText,
   seedComposerAttachments,
@@ -80,6 +86,13 @@ import { useActiveChatIds } from "../lib/use-chat-activity";
 import { useChatSession } from "../lib/hosts/use-chat-session";
 import { LOCAL_HOST_ID } from "../shared/peer-host";
 import { replaceEqualDeep, useQuery, useQueryClient } from "@tanstack/react-query";
+import { WorkspaceFolderMissingNotice } from "../components/workspace-folder-missing-notice";
+import {
+  MANAGED_WORKTREE_MISSING_SEND_REFUSAL,
+  WORKSPACE_FOLDER_MISSING_SEND_REFUSAL,
+  workspaceFolderCheckApplies,
+} from "../shared/workspace-folder-presence";
+import { useOptionalNewChatActions } from "../lib/new-chat-actions";
 import { Button, EmptyState, ScrollArea, ScrollAreaFooterStack, Text, toast } from "../components/ui";
 import {
   agentsInstructionNoticeMessage,
@@ -147,6 +160,8 @@ import {
   type ApprovalPrompt,
   type GenerationHandle,
 } from "../lib/ipc";
+import { isNoWorkspace, noWorkspaceHome } from "../lib/no-workspace";
+import { noWorkspaceFolderForFirstSend } from "../lib/no-workspace-send";
 import {
   queryKeys,
   installAppendedChatSnapshot,
@@ -187,7 +202,11 @@ import {
 import { COMPUTER_USE_CONTINUE_PROMPT } from "../shared/computer-use-access";
 import { userFacingErrorMessage } from "../lib/ipc-error";
 import { PROVIDER_FAILURE_FOLLOW_UPS, type ProviderFailureAction } from "../shared/provider-failure";
-import { INTERRUPTED_REPLY_FOLLOW_UP } from "../shared/interrupted-reply";
+import {
+  formatRecoveredAskUserQuestionAnswers,
+  INTERRUPTED_REPLY_FOLLOW_UP,
+  type InterruptedWaitV1,
+} from "../shared/interrupted-reply";
 import type { CompactionEngine } from "../shared/compaction";
 import {
   resolveAgentActivity,
@@ -249,6 +268,7 @@ import { isLocalProviderDeployment } from "../shared/provider-deployment";
 import type { ChatArtifactV1 } from "../shared/chat-artifacts";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import {
+  ASK_USER_QUESTION_VERSION,
   askUserQuestionMsUntilExpiry,
   formatLateAskUserQuestionFollowUp,
   retainExpiredAskUserQuestionForLateAnswer,
@@ -264,6 +284,7 @@ import {
   isAcpHarnessProvider,
   type AcpHarnessBlockedSurface,
 } from "../shared/acp-harness";
+import { useChatFind } from "../components/chat-find-bar";
 
 const ANTHROPIC_PROVIDER_ID = "anthropic";
 
@@ -319,6 +340,69 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const effectiveWorkspace = workspaces.find((workspace) => workspace.id === effectiveWorkspaceId);
   const effectiveWorkspaceIdRef = React.useRef(effectiveWorkspaceId);
   effectiveWorkspaceIdRef.current = effectiveWorkspaceId;
+  // A moved or deleted folder is named above the composer, and a send is
+  // refused before it reaches the agent (main refuses it again at start).
+  const folderWorkspaceId =
+    effectiveWorkspace && workspaceFolderCheckApplies(effectiveWorkspace) ? effectiveWorkspace.id : undefined;
+  const folderPresenceQuery = useQuery({
+    queryKey: queryKeys.workspaceFolderPresence(folderWorkspaceId ?? ""),
+    queryFn: () => workspacesApi.folderPresence(folderWorkspaceId!),
+    enabled: folderWorkspaceId !== undefined,
+    staleTime: 10_000,
+    refetchOnWindowFocus: true,
+  });
+  const missingWorkspaceFolder =
+    folderWorkspaceId !== undefined && folderPresenceQuery.data?.presence === "missing"
+      ? {
+          id: folderWorkspaceId,
+          name: effectiveWorkspace!.name,
+          folder: folderPresenceQuery.data.folder,
+          worktree: folderPresenceQuery.data.worktree,
+        }
+      : undefined;
+  // A deleted Aiden-managed worktree: put it back on its branch, or carry the
+  // unsent message to a new chat in the main checkout.
+  const newChatActions = useOptionalNewChatActions();
+  const [restoringWorktree, setRestoringWorktree] = React.useState(false);
+  const restoreDeletedWorktree = React.useCallback(
+    async (workspaceId: string) => {
+      setRestoringWorktree(true);
+      try {
+        await workspacesApi.restoreDeletedWorktree(workspaceId);
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
+          qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) }),
+        ]);
+        toast.success("Worktree restored. You can send again.");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "The worktree could not be restored.");
+        // A refused or rolled-back restore can still leave a folder in place,
+        // so the notice must follow what is on disk now.
+        void qc.invalidateQueries({ queryKey: queryKeys.workspaceFolderPresence(workspaceId) });
+      } finally {
+        setRestoringWorktree(false);
+      }
+    },
+    [qc],
+  );
+  const newChatInMainCheckout = React.useCallback(
+    (mainWorkspaceId: string) => {
+      if (!newChatActions) return;
+      // A send refused by the folder check may be waiting in the paused queue
+      // with the composer already cleared.
+      const initialText = (
+        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
+      ).trim();
+      void newChatActions
+        .openNewChatIn(mainWorkspaceId, { gitMode: "checkout", ...(initialText ? { initialText } : {}) })
+        .catch((error: unknown) => {
+          toast.error(error instanceof Error ? error.message : "Couldn't start a new chat.");
+        });
+    },
+    [chatId, newChatActions],
+  );
+  const folderWorkspaceRef = React.useRef<{ id: string; name: string } | undefined>(undefined);
+  folderWorkspaceRef.current = folderWorkspaceId ? { id: folderWorkspaceId, name: effectiveWorkspace!.name } : undefined;
   // Agent-backed models need someone answering approvals in an ordinary chat.
   const agentBlockedSurface: AcpHarnessBlockedSurface | undefined =
     chat.data?.botId ? "bot" : effectiveWorkspaceId === ASSISTANT_WORKSPACE_ID ? "assistant" : undefined;
@@ -547,8 +631,10 @@ export function ChatPane({ chatId }: { chatId: string }) {
     },
     [contextFeed],
   );
+  const cloneDraftRef = React.useRef<{ text: string; attachments: Attachment[] }>({ text: "", attachments: [] });
   const onDraftContextChange = React.useCallback(
     (value: string, draftAttachments: Attachment[]) => {
+      cloneDraftRef.current = { text: value, attachments: draftAttachments };
       const draftText = value.trim() ? value : undefined;
       const attachments = draftAttachments.length ? draftAttachments : undefined;
       contextFeed.draftChanged(draftText || attachments ? { draftText, attachments } : undefined);
@@ -718,6 +804,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const btwViewRef = React.useRef<BtwLiveView | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   useCommandHandler("composer.focus", () => composerRef.current?.focus());
+  const findBar = useChatFind(chatId);
   // A new-chat entry point (⌘N, New Agent, the sidebar +, New chat in…) asks
   // the draft's composer for focus; it may mount a few frames after navigation.
   React.useEffect(() => {
@@ -1329,13 +1416,16 @@ export function ChatPane({ chatId }: { chatId: string }) {
   React.useEffect(() => {
     environmentPanel.setContextDetails(!draft && chat.data ? {
       chat: chat.data,
+      providerId,
       providerLabel: selectedProvider?.label ?? providerId ?? "Unavailable",
-      modelLabel: model ?? "Unavailable",
+      providerArtwork: selectedProvider?.artwork,
+      modelId: model,
+      modelLabel: model ? resolveModelDisplay(model, modelInfo.data?.[model]).label : "Unavailable",
       pressure: contextPressure,
       compacting: contextCompactPending || timelineCompacting,
     } : null);
     return () => environmentPanel.setContextDetails(null);
-  }, [chat.data, draft, selectedProvider?.label, providerId, model, contextPressure, contextCompactPending, timelineCompacting, environmentPanel.setContextDetails]);
+  }, [chat.data, draft, selectedProvider?.label, selectedProvider?.artwork, providerId, model, modelInfo.data, contextPressure, contextCompactPending, timelineCompacting, environmentPanel.setContextDetails]);
 
   // The PR rail/push dialog read the presented chat even without subagents.
   React.useLayoutEffect(() => {
@@ -1570,6 +1660,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
             setModelCallRetry(retry);
           },
           onAgentsInstructionNotices: (notices) => {
+            if (!mountedRef.current || generationIntentRef.current !== generationIntent) return;
             for (const notice of agentsInstructionNotices.update(chatId, notices)) {
               toast.info(agentsInstructionNoticeMessage(notice));
             }
@@ -1900,6 +1991,27 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (getChatDraft(chatId) && draftGitPendingRef.current) {
         throw new Error("Reading Git status… Send again in a moment.");
       }
+      const folderWorkspace = folderWorkspaceRef.current;
+      if (folderWorkspace) {
+        const folderCheckVisit = chatVisitRef.current;
+        // A failed check is no reason to refuse; main checks again at start.
+        const presence = await qc
+          .fetchQuery({
+            queryKey: queryKeys.workspaceFolderPresence(folderWorkspace.id),
+            queryFn: () => workspacesApi.folderPresence(folderWorkspace.id),
+            staleTime: 0,
+          })
+          .catch(() => undefined);
+        // The user left this chat during the check: send nothing from a pane
+        // that now shows another chat. The composer's saved draft keeps the text.
+        if (!(mountedRef.current && chatVisitRef.current === folderCheckVisit)) {
+          throw new WorktreeSendCancelledError();
+        }
+        // The notice above the composer names the folder; the toast stays short.
+        if (presence?.presence === "missing") {
+          throw new Error(presence.worktree ? MANAGED_WORKTREE_MISSING_SEND_REFUSAL : WORKSPACE_FOLDER_MISSING_SEND_REFUSAL);
+        }
+      }
       let worktreeRequest: FirstMessageWorktreeRequest | undefined;
       try {
         worktreeRequest =
@@ -1920,12 +2032,24 @@ export function ChatPane({ chatId }: { chatId: string }) {
       setIsStartingGeneration(true);
       try {
         let updated: Chat;
+        /** Set when this No workspace draft is saved in a fresh hidden folder. */
+        let separateNoWorkspaceId: string | undefined;
         try {
+          if (firstDraft && !worktreeRequest) {
+            const draftWorkspace = workspaces.find((entry) => entry.id === firstDraft.chat.workspaceId);
+            if (isNoWorkspace(draftWorkspace)) {
+              separateNoWorkspaceId = await noWorkspaceFolderForFirstSend(
+                { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+                draftWorkspace!.id,
+              );
+              if (separateNoWorkspaceId) await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+            }
+          }
           const firstMessageInput = firstDraft
             ? {
                 draftId: chatId,
                 title: firstDraft.chat.title === "New agent" ? undefined : firstDraft.chat.title,
-                workspaceId: firstDraft.chat.workspaceId!,
+                workspaceId: separateNoWorkspaceId ?? firstDraft.chat.workspaceId!,
                 providerId,
                 model,
                 turnId: messageTurnId,
@@ -2042,7 +2166,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
         // into an unsent composer payload.
         // A New worktree send saved the chat in the worktree's workspace,
         // which this render has not seen yet.
-        if (worktreeRequest) effectiveWorkspaceIdRef.current = updated.workspaceId;
+        // A No workspace draft that needed its own folder was saved in a fresh one.
+        if (worktreeRequest || separateNoWorkspaceId) effectiveWorkspaceIdRef.current = updated.workspaceId;
         void runGeneration(messageTurnId).then((started) => {
           if (!started.ok && mountedRef.current && chatIdRef.current === chatId) {
             setError(started.error.message);
@@ -2070,6 +2195,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       model,
       qc,
       runGeneration,
+      workspaces,
     ],
   );
 
@@ -2511,11 +2637,25 @@ export function ChatPane({ chatId }: { chatId: string }) {
       if (environmentPanel.editorState.dirty)
         throw new Error("Save or discard the open file's edits before changing workspace access.");
       if (environmentPanel.agentBusy) environmentPanel.cancelAgent?.();
-      await workspacesApi.update(effectiveWorkspace.id, { permission });
+      let targetId = effectiveWorkspace.id;
+      // A No workspace draft shares its folder with an existing chat until it
+      // is sent. Give it its own folder now so that chat keeps its access.
+      if (getChatDraft(chatId) && isNoWorkspace(effectiveWorkspace)) {
+        const separateId = await noWorkspaceFolderForFirstSend(
+          { listChats: chatsApi.list, createNoWorkspace: workspacesApi.createNoWorkspace },
+          effectiveWorkspace.id,
+        );
+        if (separateId) {
+          updateChatDraft(chatId, { workspaceId: separateId });
+          selectWorkspace(separateId);
+          targetId = separateId;
+        }
+      }
+      await workspacesApi.update(targetId, { permission });
       await Promise.all([
         qc.invalidateQueries({ queryKey: queryKeys.workspaces }),
         qc.invalidateQueries({
-          queryKey: queryKeys.skillCatalog(effectiveWorkspace.id),
+          queryKey: queryKeys.skillCatalog(targetId),
         }),
       ]);
     },
@@ -2528,6 +2668,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
       environmentPanel.editorState.saving,
       environmentPanel.gitOperationBusy,
       qc,
+      selectWorkspace,
     ],
   );
 
@@ -2759,6 +2900,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
     workspaceChangeBusy,
   ]);
 
+  // The workspace menu's No workspace: the draft joins the Chats group. It
+  // gets its own hidden folder when sent (see noWorkspaceFolderForFirstSend).
+  const chooseNoWorkspace = React.useCallback(async () => {
+    let home = noWorkspaceHome(workspaces);
+    if (!home) {
+      home = await workspacesApi.createNoWorkspace();
+      await qc.invalidateQueries({ queryKey: queryKeys.workspaces });
+    }
+    await moveNewChatToWorkspace(home.id);
+  }, [moveNewChatToWorkspace, qc, workspaces]);
+
   // The workspace menu's Open folder… and ⌘⇧O on a draft: the native folder
   // picker registers the folder, then this draft (text, attachments and model
   // included) moves there.
@@ -2775,6 +2927,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   }, [documentAppendReconciliationRequired, isNewChat, moveNewChatToWorkspace, qc, workspaceChangeBusy]);
 
   // The headline name and app-level entry points open the composer's menu.
+  const [cloningProject, setCloningProject] = React.useState(false);
   const [workspaceMenuRequest, setWorkspaceMenuRequest] = React.useState<WorkspaceMenuRequest>();
   const openWorkspaceMenu = React.useCallback((view: DraftWorkspaceMenuView) => {
     setWorkspaceMenuRequest((current) => ({ nonce: (current?.nonce ?? 0) + 1, view }));
@@ -3216,13 +3369,84 @@ export function ChatPane({ chatId }: { chatId: string }) {
       });
     }
   }, [chatId, handleSend]);
-  const interruptedReply = React.useMemo(
+  const replyInterrupted = transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true;
+  // What the interrupted reply was waiting on. A question is offered again in
+  // place of Resume; an approval is only named on the Resume card.
+  const interruptedWaitsQuery = useQuery({
+    queryKey: ["chat-interrupted-waits", chatId, messages.length],
+    queryFn: () => chatsApi.interruptedWaits(chatId),
+    enabled: replyInterruptedQuery.data === true,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const [dismissedWaitIds, setDismissedWaitIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const interruptedWaits = React.useMemo(
     () =>
-      transcriptIdle && !draft && !failedReplyId && replyInterruptedQuery.data === true
-        ? { busy: resumeBusy, onResume: () => void resumeInterruptedReply() }
-        : undefined,
-    [draft, failedReplyId, replyInterruptedQuery.data, resumeBusy, resumeInterruptedReply, transcriptIdle],
+      replyInterrupted ? (interruptedWaitsQuery.data ?? []).filter((wait) => !dismissedWaitIds.has(wait.waitId)) : [],
+    [dismissedWaitIds, interruptedWaitsQuery.data, replyInterrupted],
   );
+  const recoveredQuestion = React.useMemo<AskUserQuestionPromptV1 | undefined>(() => {
+    const wait = interruptedWaits.find((item) => item.kind === "question");
+    return wait?.kind === "question" && !questionnaire
+      ? {
+          version: ASK_USER_QUESTION_VERSION,
+          promptId: wait.waitId,
+          streamId: "s-recovered",
+          toolCallId: "recovered",
+          questions: wait.questions,
+        }
+      : undefined;
+  }, [interruptedWaits, questionnaire]);
+  // Like Resume, sending a recovered answer is busy only in its own chat.
+  const recoveredAnswerTokenRef = React.useRef(0);
+  const [recoveredAnswerOwners, setRecoveredAnswerOwners] = React.useState<Readonly<Record<string, number>>>({});
+  const recoveredAnswerSending = recoveredAnswerOwners[chatId] !== undefined;
+  const answerRecoveredQuestion = React.useCallback(
+    async (response: AskUserQuestionResponseV1) => {
+      if (!recoveredQuestion || recoveredAnswerSending) return;
+      const waitId = recoveredQuestion.promptId;
+      const token = ++recoveredAnswerTokenRef.current;
+      setRecoveredAnswerOwners((owners) => ({ ...owners, [chatId]: token }));
+      try {
+        // Closing the card leaves the plain Resume card; Submit always sends, skipped questions included.
+        if (!response.cancelled) {
+          await handleSend(formatRecoveredAskUserQuestionAnswers(recoveredQuestion.questions, response.answers), []);
+        }
+        setDismissedWaitIds((ids) => new Set(ids).add(waitId));
+        // Once the host forgets the wait, drop it from the cached reads too, so
+        // the card stays gone when the pane opens this chat again.
+        void chatsApi
+          .dismissInterruptedWait(chatId, waitId)
+          .then(() =>
+            qc.setQueriesData<InterruptedWaitV1[]>({ queryKey: ["chat-interrupted-waits", chatId] }, (waits) =>
+              waits?.filter((wait) => wait.waitId !== waitId),
+            ),
+          )
+          .catch(() => undefined);
+      } catch (answerError) {
+        if (chatIdRef.current !== chatId) return;
+        toast.error(userFacingErrorMessage(answerError, "Couldn’t send your answers."));
+      } finally {
+        setRecoveredAnswerOwners((owners) => {
+          if (owners[chatId] !== token) return owners;
+          const { [chatId]: _settled, ...rest } = owners;
+          return rest;
+        });
+      }
+    },
+    [chatId, handleSend, qc, recoveredAnswerSending, recoveredQuestion],
+  );
+  // Held until the saved waits are read, so Resume never shows in front of a question it would orphan.
+  const interruptedWaitsRead = interruptedWaitsQuery.isFetched || interruptedWaitsQuery.isError;
+  const interruptedReply = React.useMemo(() => {
+    if (!replyInterrupted || !interruptedWaitsRead || recoveredQuestion) return undefined;
+    const approvalSummaries = interruptedWaits.flatMap((wait) => (wait.kind === "approval" ? [wait.summary] : []));
+    return {
+      busy: resumeBusy,
+      onResume: () => void resumeInterruptedReply(),
+      ...(approvalSummaries.length ? { approvalSummaries } : {}),
+    };
+  }, [interruptedWaits, interruptedWaitsRead, recoveredQuestion, replyInterrupted, resumeBusy, resumeInterruptedReply]);
 
   React.useEffect(() => {
     void readAloudController.refreshStatus(chatId);
@@ -3302,6 +3526,8 @@ export function ChatPane({ chatId }: { chatId: string }) {
   return (
     <>
       <ScrollArea
+        focusRegion="chat"
+        overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
         title={
@@ -3494,12 +3720,35 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 expiresAt={questionnaire.expiresAt}
               />
             ) : null}
+            {recoveredQuestion ? <AskUserQuestionExpiryNotice state="restarted" /> : null}
+            {missingWorkspaceFolder && !questionnaire ? (
+              <WorkspaceFolderMissingNotice
+                workspaceName={missingWorkspaceFolder.name}
+                folder={missingWorkspaceFolder.folder}
+                {...(missingWorkspaceFolder.worktree ? { worktree: missingWorkspaceFolder.worktree } : {})}
+                checking={folderPresenceQuery.isFetching}
+                restoring={restoringWorktree}
+                onCheckAgain={() => void folderPresenceQuery.refetch()}
+                onRestore={() => void restoreDeletedWorktree(missingWorkspaceFolder.id)}
+                onNewChatInMain={newChatActions ? () => {
+                  const mainWorkspaceId = missingWorkspaceFolder.worktree?.mainWorkspaceId;
+                  if (mainWorkspaceId) newChatInMainCheckout(mainWorkspaceId);
+                } : undefined}
+              />
+            ) : null}
             {questionnaire ? (
               <AskUserQuestionComposer
                 key={questionnaire.promptId}
                 prompt={questionnaire}
                 submitting={questionnaireSubmitting}
                 onRespond={answerQuestionnaire}
+              />
+            ) : recoveredQuestion ? (
+              <AskUserQuestionComposer
+                key={recoveredQuestion.promptId}
+                prompt={recoveredQuestion}
+                submitting={recoveredAnswerSending}
+                onRespond={answerRecoveredQuestion}
               />
             ) : (
               <Composer
@@ -3592,6 +3841,13 @@ export function ChatPane({ chatId }: { chatId: string }) {
                     <RemoteMachinePicker
                       machines={newChatMachines}
                       selected="local"
+                      // Only a Git project can be cloned. A No workspace chat, a scratch
+                      // folder or any other folder outside a repository has none to offer.
+                      onAddProject={
+                        effectiveWorkspace?.folderPath && !isNoWorkspace(effectiveWorkspace) && git.data?.isRepo === true
+                          ? () => setCloningProject(true)
+                          : undefined
+                      }
                       disabled={isGenerating || isStartingGeneration}
                       onSelect={(machine) => {
                         if (machine !== "local") void navigate({ to: "/host/$hostId/new", params: { hostId: machine } });
@@ -3602,6 +3858,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
                 workspaces={workspaces}
                 onSelectWorkspace={moveNewChatToWorkspace}
                 onCreateScratchWorkspace={createScratchWorkspace}
+                onChooseNoWorkspace={chooseNoWorkspace}
                 onOpenFolderAsWorkspace={openFolderForDraft}
                 workspaceMenuRequest={workspaceMenuRequest}
                 onCreateGitWorktree={createGitWorktree}
@@ -3865,6 +4122,17 @@ export function ChatPane({ chatId }: { chatId: string }) {
           />
         )}
       </ScrollArea>
+      {cloningProject && isNewChat && effectiveWorkspace ? <PeerProjectCloneDialog workspaceId={effectiveWorkspace.id} onClose={() => setCloningProject(false)} onCreated={(hostId, workspace) => {
+        const key = remoteNewChatDraftKey(hostId);
+        if (!loadComposerDraft(key).text) {
+          saveComposerDraftText(key, cloneDraftRef.current.text);
+          seedComposerAttachments(key, cloneDraftRef.current.attachments);
+        } else if (cloneDraftRef.current.text || cloneDraftRef.current.attachments.length) {
+          toast.info("The paired computer already has a draft. Your current prompt remains saved on this computer.");
+        }
+        qc.setQueryData<import("../shared/peer-host").PeerHostFeedSnapshot | null>(hostQueryKeys.feed(hostId), current => current ? { ...current, workspaces: [...current.workspaces.filter(row => row.id !== workspace.id), workspace] } : current);
+        void navigate({ to: "/host/$hostId/new", params: { hostId }, search: { workspaceId: workspace.id } });
+      }} /> : null}
       <ForkSummaryDialog
         open={forkSummaryRequest !== null}
         kind={forkSummaryRequest?.position === "before" ? "edit" : "fork"}

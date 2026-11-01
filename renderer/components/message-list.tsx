@@ -81,6 +81,7 @@ import {
   type VisualDrafts,
   htmlArtifactTranscriptPlan,
 } from "../lib/html-artifact-transcript";
+import { pauseWhenUnseen } from "../lib/offscreen-pause";
 
 const EMPTY_CHAT_ARTIFACTS: readonly ChatArtifactV1[] = [];
 interface MessageListProps {
@@ -138,6 +139,11 @@ interface MessageListProps {
   /** This fork's summary card, placed after the last copied message. */
   forkSummary?: { afterMessageId: string; node: React.ReactNode };
   /**
+   * Save to Downloads and Copy image on settled replies. They read the chat
+   * this Mac stores, so a chat stored on a paired host turns them off.
+   */
+  storedImageActions?: boolean;
+  /**
    * False where nothing comes before the first prompt shown, and editing it
    * in a fork is refused (a paired Mac's chat): that prompt offers no fork.
    */
@@ -186,6 +192,21 @@ const EMPTY_UI_DRAFTS: UiDrafts = new Map();
 const EMPTY_VISUALS: readonly ChatHtmlArtifactV1[] = [];
 const EMPTY_PLACEMENTS: ReadonlyMap<string, string> = new Map();
 const EMPTY_WIDE_VISUALS: ReadonlySet<string> = new Set();
+
+/**
+ * Whether a reply is running, for visuals' follow-up confirmations. A context
+ * rather than a prop, so a turn starting or ending updates the visuals alone
+ * instead of re-rendering every memoized transcript row.
+ */
+const VisualFollowUpBusyContext = React.createContext(false);
+
+function FollowUpAwareHtmlArtifactFrame(props: Omit<React.ComponentProps<typeof HtmlArtifactFrame>, "followUpBusy">) {
+  return <HtmlArtifactFrame {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
+
+function FollowUpAwareAidenUiBlock(props: Omit<React.ComponentProps<typeof AidenUiBlock>, "followUpBusy">) {
+  return <AidenUiBlock {...props} followUpBusy={React.useContext(VisualFollowUpBusyContext)} />;
+}
 
 type RenderVisual = (
   artifact: ChatHtmlArtifactV1,
@@ -278,6 +299,19 @@ function AssistantResponse({
   const active =
     streaming && !streamComplete && (reasoningActive || (!timeline && !content));
   const reasoningLabel = reasoningActivityLabel(timeline, active);
+  // One action row closes the turn, after its last row. While the reply
+  // streams it is laid out but hidden there, so a new paragraph never moves it.
+  const actions = content ? (
+    <MessageActions
+      copyText={content}
+      readAloud={readAloud}
+      hidden={streaming && !streamComplete}
+      footer={footer}
+      fork={streaming ? undefined : fork}
+    />
+  ) : (
+    proselessActions(footer, fork)
+  );
   const showReasoning = Boolean(reasoning);
   if (!rows || !timeline) {
     const activityTimeline = timeline
@@ -321,16 +355,14 @@ function AssistantResponse({
               streaming={streaming}
               streamComplete={streamComplete}
               onStreamHandoffComplete={onStreamHandoffComplete}
-              readAloud={readAloud}
-              footer={footer}
-              fork={fork}
+              showCopy={false}
             />
           ) : null,
         ]}
         {media}
-        {!content ? proselessActions(footer, fork) : null}
         {visualNodes(slots.trailing)}
         {uiNodes(uiSlots.trailing, false)}
+        {actions}
       </>
     );
   }
@@ -401,18 +433,14 @@ function AssistantResponse({
             streamComplete={streamComplete}
             textClosed={index < rows.length - 1}
             onStreamHandoffComplete={isLastText ? onStreamHandoffComplete : undefined}
-            showCopy={isLastText}
-            copyText={content}
-            readAloud={isLastText ? readAloud : undefined}
-            footer={isLastText ? footer : undefined}
-            fork={isLastText ? fork : undefined}
+            showCopy={false}
           />
         );
       })}
       {media}
-      {lastTextIndex < 0 ? proselessActions(footer, fork) : null}
       {visualNodes(slots.trailing)}
       {uiNodes(uiSlots.trailing, false)}
+      {actions}
     </>
   );
 }
@@ -420,12 +448,7 @@ function AssistantResponse({
 /** A reply with only attachments or activity still needs its fork action. */
 function proselessActions(footer: React.ReactNode, fork: MessageForkAction | undefined): React.ReactNode {
   if (!fork) return footer ?? null;
-  // The reply's media sits above, so hovering this row reveals the action.
-  return (
-    <div className="group">
-      <MessageActions copyText="" footer={footer} fork={fork} />
-    </div>
-  );
+  return <MessageActions copyText="" footer={footer} fork={fork} />;
 }
 
 function settledTurnFooter(message: ChatMessage): React.ReactNode {
@@ -462,6 +485,8 @@ interface SettledMessageRowProps {
   uiVisuals?: readonly ChatUiVisualV1[];
   /** Stable; receives the owning message so local state can be remembered. */
   renderSettledUiVisual?: (visual: ChatUiVisualV1, message: ChatMessage) => React.ReactNode;
+  /** False for a chat stored on a paired host: Save and Copy read this Mac's chats. */
+  storedImageActions?: boolean;
 }
 
 /**
@@ -484,6 +509,7 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
   renderVisual,
   uiVisuals,
   renderSettledUiVisual,
+  storedImageActions = true,
 }: SettledMessageRowProps) {
   const placements = message?.htmlArtifactPlacements;
   const visualPlacements = React.useMemo(
@@ -512,7 +538,10 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
     };
   }, [forkDisabledReason, message, onFork, onForkWithSummary]);
   const assistant = Boolean(live) || message?.role === "assistant";
-  const imageActions = React.useMemo(() => ({ chatId }), [chatId]);
+  const imageActions = React.useMemo(
+    () => (storedImageActions ? { chatId } : undefined),
+    [chatId, storedImageActions],
+  );
   const storedImagePlacements = message?.imagePlacements;
   const messageTimeline = message?.role === "assistant" ? message.timeline : undefined;
   const messageAttachments = message?.attachments;
@@ -525,9 +554,14 @@ const SettledMessageRow = React.memo(function SettledMessageRow({
       ),
     [messageAttachments, messageTimeline, storedImagePlacements],
   );
+  const contained =
+    deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length;
   const row = (
-    <div className={deferOffscreenLayout && !visuals?.length && !uiVisuals?.length && !message?.attachments?.length && !message?.appPanels?.length
-      ? "transcript-settled-contained flex min-w-0 flex-col gap-3" : "flex min-w-0 flex-col gap-3"}>
+    // Hovering anywhere on a reply reveals the action row at its end.
+    <div
+      data-transcript-reply={assistant ? "" : undefined}
+      className={`${contained ? "transcript-settled-contained " : ""}${assistant ? "group/reply " : ""}flex min-w-0 flex-col gap-3`}
+    >
       {live ? (
         <AssistantResponse {...live} streaming />
       ) : !message ? null : message.role === "assistant" ? (
@@ -599,6 +633,8 @@ export type InterruptedReplyActions = {
   onResume: () => void;
   /** True while Resume is sending. */
   busy?: boolean;
+  /** What the reply was waiting for approval to do. Approvals are never carried over a restart. */
+  approvalSummaries?: readonly string[];
 };
 
 /** Shown after the last message when Aiden quit or crashed mid-reply; Resume is never automatic. */
@@ -606,9 +642,27 @@ export function InterruptedReplyCallout({ actions }: { actions: InterruptedReply
   return (
     <Callout role="status" data-interrupted-reply="true">
       <Text variant="small-strong">This reply was interrupted</Text>
-      <Text variant="small" color="secondary" className="mt-0.5 block">
-        Aiden closed before it finished. Resume to pick up where it stopped.
-      </Text>
+      {actions.approvalSummaries?.length ? (
+        <>
+          <Text variant="small" color="secondary" className="mt-0.5 block">
+            Aiden closed while waiting for your approval, so this didn’t run:
+          </Text>
+          <ul className="mt-1 flex flex-col gap-0.5" aria-label="Waiting for approval">
+            {actions.approvalSummaries.map((summary, index) => (
+              <li key={index} className="break-words text-small text-primary">
+                {summary}
+              </li>
+            ))}
+          </ul>
+          <Text variant="small" color="secondary" className="mt-1 block">
+            Resume to pick up where it stopped.
+          </Text>
+        </>
+      ) : (
+        <Text variant="small" color="secondary" className="mt-0.5 block">
+          Aiden closed before it finished. Resume to pick up where it stopped.
+        </Text>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="small" disabled={actions.busy} onClick={actions.onResume}>
           Resume
@@ -729,6 +783,7 @@ export function MessageList({
   onForkWithSummary,
   forkSummary,
   forkBeforeFirstPrompt = true,
+  storedImageActions = true,
 }: MessageListProps) {
   const onForkRef = React.useRef(onFork);
   const onForkWithSummaryRef = React.useRef(onForkWithSummary);
@@ -847,47 +902,44 @@ export function MessageList({
   );
   const renderVisual = React.useCallback(
     (artifact: ChatHtmlArtifactV1, placementCallId?: string, layout?: HtmlArtifactLayout) => (
-      <HtmlArtifactFrame
+      <FollowUpAwareHtmlArtifactFrame
         key={`html:${artifact.mediaId}`}
         chatId={chatId}
         artifact={artifact}
         onGuestPrompt={stableVisualPrompt}
-        followUpBusy={visualFollowUpBusy}
         placementCallId={placementCallId}
         layout={layout}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   const renderLiveUiVisual = React.useCallback<RenderUiVisual>(
     (visual, draft) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         draft={draft}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
       />
     ),
-    [stableVisualPrompt, visualFollowUpBusy],
+    [stableVisualPrompt],
   );
   const renderSettledUiVisual = React.useCallback(
     (visual: ChatUiVisualV1, message: ChatMessage) => (
-      <AidenUiBlock
+      <FollowUpAwareAidenUiBlock
         key={`ui:${visual.id}`}
         visual={visual}
         attachments={message.attachments}
-        followUpBusy={visualFollowUpBusy}
         onAction={(action) => {
           if (action.kind === "send") stableVisualPrompt(action.text, visual.id);
         }}
         onStateChange={(state) => scheduleUiVisualStateSave(chatId, message.id, visual.id, state)}
       />
     ),
-    [chatId, stableVisualPrompt, visualFollowUpBusy],
+    [chatId, stableVisualPrompt],
   );
 
   React.useEffect(() => {
@@ -950,9 +1002,15 @@ export function MessageList({
 
 
   const transcriptRows: React.ReactNode[] = [];
-  const summaryRows = forkWithSummaryEnabled ? forkSummaryRows(messages) : null;
-  const unforkablePromptId =
-    forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined;
+  // Streaming frames re-render the list without changing saved messages.
+  const summaryRows = React.useMemo(
+    () => (forkWithSummaryEnabled ? forkSummaryRows(messages) : null),
+    [forkWithSummaryEnabled, messages],
+  );
+  const unforkablePromptId = React.useMemo(
+    () => (forkEnabled && !forkBeforeFirstPrompt ? messages.find((message) => message.role === "user")?.id : undefined),
+    [forkBeforeFirstPrompt, forkEnabled, messages],
+  );
   // The persisted copy of the reply still on screen waits until the live row
   // hands over, then takes the live row's key: one reply, settled in place.
   const settlingMessageId = streamingRowVisible ? persistedHandoffMessageId : null;
@@ -1066,6 +1124,7 @@ export function MessageList({
         renderVisual={renderVisual}
         uiVisuals={uiByMessage.get(message.id)}
         renderSettledUiVisual={renderSettledUiVisual}
+        storedImageActions={storedImageActions}
       />,
     );
     if (forkSummary?.afterMessageId === message.id) {
@@ -1083,28 +1142,30 @@ export function MessageList({
 
   return (
     <MessageAttachmentPreviewProvider>
-      <div
-        ref={transcriptRef}
-        className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
-        data-subagent-chip-focus-scope="true"
-      >
-        {transcriptRows}
+      <VisualFollowUpBusyContext.Provider value={visualFollowUpBusy}>
+        <div
+          ref={transcriptRef}
+          className="aiden-dock-inset chat-content-column flex flex-col gap-5 py-6"
+          data-subagent-chip-focus-scope="true"
+        >
+          {transcriptRows}
 
-        <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
+          <AgentActivityTransition activity={agentActivity} onRetryUsageLimit={onRetryUsageLimit} />
 
-        <EventPresence present={Boolean(error)}>
-          {error ? (
-            <Callout color="red" role="alert" aria-atomic="true">
-              <Text variant="small-strong" color="red">
-                Generation failed
-              </Text>
-              <Text variant="small" color="secondary" className="mt-0.5 block">
-                {error}
-              </Text>
-            </Callout>
-          ) : null}
-        </EventPresence>
-      </div>
+          <EventPresence present={Boolean(error)}>
+            {error ? (
+              <Callout color="red" role="alert" aria-atomic="true">
+                <Text variant="small-strong" color="red">
+                  Generation failed
+                </Text>
+                <Text variant="small" color="secondary" className="mt-0.5 block">
+                  {error}
+                </Text>
+              </Callout>
+            ) : null}
+          </EventPresence>
+        </div>
+      </VisualFollowUpBusyContext.Provider>
     </MessageAttachmentPreviewProvider>
   );
 }
@@ -1155,6 +1216,13 @@ function AgentActivityTransition({
         variant="small"
         color="secondary"
         title={current.label}
+        ref={
+          current.phase === "thinking" ||
+          current.phase === "loading" ||
+          current.phase === "visualizing"
+            ? pauseWhenUnseen
+            : undefined
+        }
         className={
           current.phase === "thinking" ||
           current.phase === "loading" ||
