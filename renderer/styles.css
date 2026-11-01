@@ -2781,10 +2781,10 @@ textarea {
   height: 7px;
   margin: 0 -6%;
   width: 112%;
-  /* Drawn from the warning support tone, at full opacity rather than the other
-     bars' dimmed one. Light schemes darken that tone for text contrast, so the bar
-     lifts it to at least an amber lightness and chroma, keeping its hue, and reads
-     amber at miniature size in both themes. */
+  /* Drawn from the warning support tone at 80% alpha, without the other bars'
+     0.55 element opacity. Light schemes darken that tone for text contrast, so the
+     bar lifts it to at least an amber lightness and chroma, keeping its hue, and
+     reads amber at miniature size in both themes. */
   background: var(--support-warning);
   background: oklch(from var(--support-warning) max(l, 0.8) max(c, 0.15) h / 0.8);
   opacity: 1;

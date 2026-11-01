@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import { TooltipProvider } from "../ui";
 import { ChatRow } from "./chat-row";
 import { InboxView, type InboxRowContext } from "./inbox-view";
-import { botInboxRows, inboxRowAction, inboxShortcutTargets, type InboxEntry } from "../../lib/sidebar-inbox-view";
+import { botInboxRows, inboxRowAction, inboxShortcutTargets, resolveInboxEntry, type InboxEntry } from "../../lib/sidebar-inbox-view";
 import { botFixture } from "../../main/bots/test-fixtures";
 import type { InboxSignals } from "../../lib/sidebar-inbox";
 import { projectOrderKey } from "../../lib/sidebar-organization";
@@ -286,10 +286,10 @@ test("⌘N opens the Nth row on screen, a Bot lingering in Needs you after it wa
   assert.equal(answered.listed.length, 0);
   rerender(view([...chats, ...answered.listed], { unlisted: answered.unlisted, onShortcutOrderChange }));
 
-  // The sidebar's lookup: listed rows first, then Bots that no longer qualify.
+  // The sidebar's lookup, listed rows first, then Bots that no longer qualify.
   const listed = new Map(chats.map((item) => [item.key, item] as const));
   const unlisted = new Map(answered.unlisted.map((item) => [item.key, item] as const));
-  const resolve = (key: string) => listed.get(key) ?? unlisted.get(key);
+  const resolve = resolveInboxEntry(listed, unlisted);
   const onScreen = rowTitles(inboxRoot());
   assert.deepEqual(onScreen, ["Trip Planner", "Chat u", "Chat a"]);
   const targets = inboxShortcutTargets(reported, resolve, null);

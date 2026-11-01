@@ -3,7 +3,6 @@ import {
   createMemoryHistory,
   createRootRouteWithContext,
   createRoute,
-  createRouter,
   lazyRouteComponent,
 } from "@tanstack/react-router";
 import * as React from "react";
@@ -21,8 +20,7 @@ import { parseSettingsSearch } from "../lib/settings-section";
 import { useAppCapabilities } from "../lib/app-capabilities";
 import { parseBotPageSearch } from "./bots/bot-page-search";
 import { StudioCapabilityRoute } from "./studio-capability-route";
-import { guardHistoryTraversal } from "../lib/guarded-history";
-import { carryBotListRequest } from "../lib/bot-routes";
+import { createAppRouter } from "../lib/app-router";
 import { reopenClosedChatDraft } from "../lib/chat-draft";
 
 // Chat is the startup surface, so only its shell and pane are in the entry
@@ -284,19 +282,17 @@ const routeTree = rootRoute.addChildren([
 
 const queryClient = createAppQueryClient();
 
-// An ask for the Bot list rides on the history entries the router commits.
-const router = carryBotListRequest(
-  createRouter({
-    routeTree,
-    // Back/Forward (sidebar history buttons, Settings' Back to app) run leave guards too.
-    history: guardHistoryTraversal(createMemoryHistory()),
-    defaultPreloadStaleTime: 0,
-    scrollRestoration: true,
-    context: {
-      queryClient,
-    },
-  }),
-);
+// Back/Forward (sidebar history buttons, Settings' Back to app) run leave
+// guards too, and an ask for the Bot list rides on the entries it commits.
+const router = createAppRouter({
+  routeTree,
+  history: createMemoryHistory(),
+  defaultPreloadStaleTime: 0,
+  scrollRestoration: true,
+  context: {
+    queryClient,
+  },
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

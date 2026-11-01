@@ -1,19 +1,18 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { createMemoryHistory, createRootRoute, createRoute } from "@tanstack/react-router";
+import { createAppRouter } from "./app-router";
 import {
   botChatPath,
   botChatRouteBotId,
   botListLocation,
   botRouteBotId,
-  carryBotListRequest,
   environmentToggleTarget,
   isBotsPath,
   lastNonBotRoute,
   rememberRoute,
   sidebarShowsBotList,
 } from "./bot-routes";
-import { guardHistoryTraversal } from "./guarded-history";
 
 test("Bots pages are /bots and everything under it, and nothing that only starts with the same letters", () => {
   for (const path of ["/bots", "/bots/", "/bots/b1", "/bots/b1/chat", "/host/h1/bots/b1/chat"]) assert.equal(isBotsPath(path), true, path);
@@ -58,17 +57,15 @@ test("with the Inbox as the view, only an entry that asked for the Bot list show
   assert.equal(sidebarShowsBotList({ pathname: "/scheduled", state: {} }, false), false);
 });
 
-// The app's router shape: guarded memory history, the ask carried on commit,
-// and a history subscriber that loads each entry (RouterProvider's job in the app).
+// The app's router wiring with a small route tree, and a history subscriber
+// that loads each entry (RouterProvider's job in the app).
 async function botsRouter(initialEntry: string) {
   const root = createRootRoute();
   const route = (path: string) => createRoute({ getParentRoute: () => root, path });
-  const router = carryBotListRequest(
-    createRouter({
-      routeTree: root.addChildren([route("/bots"), route("/bots/$botId/chat"), route("/chat/$chatId"), route("/scheduled")]),
-      history: guardHistoryTraversal(createMemoryHistory({ initialEntries: [initialEntry] })),
-    }),
-  );
+  const router = createAppRouter({
+    routeTree: root.addChildren([route("/bots"), route("/bots/$botId/chat"), route("/chat/$chatId"), route("/scheduled")]),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+  });
   router.history.subscribe(() => void router.load());
   await router.load();
   const go = (options: { to: string; params?: Record<string, string>; search?: Record<string, string>; state?: object; replace?: boolean }) =>

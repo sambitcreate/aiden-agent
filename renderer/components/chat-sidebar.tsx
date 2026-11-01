@@ -86,6 +86,7 @@ import {
   INBOX_SHORTCUT_LIMIT,
   inboxRowAction,
   inboxShortcutTargets,
+  resolveInboxEntry,
   localInboxEntries,
   markReadThroughMessageId,
   pendingAttentionRequest,
@@ -1024,7 +1025,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
   // and held Bots included, in the order that numbers their hints.
   React.useEffect(() => {
     if (!inboxActive) return;
-    const resolve = (key: string) => inboxEntriesByKey.get(key) ?? inboxUnlisted.get(key);
+    const resolve = resolveInboxEntry(inboxEntriesByKey, inboxUnlisted);
     const { jump, previous, next } = inboxShortcutTargets(inboxShortcutKeys, resolve, activeInboxKey);
     const unregister = jump.flatMap((entry, index) =>
       entry ? [registerCommand(`chat.jump.${index + 1}` as CommandId, () => openInboxEntry(entry))] : [],

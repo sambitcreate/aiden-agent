@@ -527,6 +527,17 @@ export function inboxShortcutOrder(held: HeldInboxOrder, options: { workingExpan
 export const INBOX_SHORTCUT_LIMIT = 9;
 
 /**
+ * The Inbox's key lookup: a listed entry first, then a held one that no
+ * longer qualifies (a Bot answered or read elsewhere while it lingers).
+ */
+export function resolveInboxEntry<Entry>(
+  listed: ReadonlyMap<string, Entry>,
+  unlisted: ReadonlyMap<string, Entry>,
+): (key: string) => Entry | undefined {
+  return (key) => listed.get(key) ?? unlisted.get(key);
+}
+
+/**
  * What ⌘1–9 and previous/next open, given the keys the Inbox reports in
  * on-screen order (the same order that numbers the rows' hints): ⌘N opens the
  * Nth row, a held row that no longer qualifies included, so the binding always
