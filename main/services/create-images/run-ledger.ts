@@ -142,6 +142,7 @@ interface AttemptRow {
 /** One succeeded Generate attempt with its images, for the gallery. */
 export interface GeneratedAttempt {
   runId: string;
+  runState: RunState;
   workflowId: string;
   nodeId: string;
   variant: number;
@@ -154,6 +155,7 @@ export interface GeneratedAttempt {
 
 interface GeneratedAttemptRow {
   run_id: string;
+  run_state: RunState;
   workflow_id: string;
   node_id: string;
   variant: number;
@@ -168,6 +170,7 @@ interface GeneratedAttemptRow {
 function generatedAttemptFrom(row: GeneratedAttemptRow): GeneratedAttempt {
   return {
     runId: row.run_id,
+    runState: row.run_state,
     workflowId: row.workflow_id,
     nodeId: row.node_id,
     variant: Number(row.variant),
@@ -309,7 +312,7 @@ function statements(db: DatabaseSync) {
     workflowRuns: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at"),
     // Newest first by finish time, then insertion order for attempts that finished in the same millisecond.
     generatedAttempts: db.prepare(
-      `SELECT r.id AS run_id, r.workflow_id AS workflow_id, a.node_id AS node_id, a.variant AS variant, a.provider AS provider,
+      `SELECT r.id AS run_id, r.state AS run_state, r.workflow_id AS workflow_id, a.node_id AS node_id, a.variant AS variant, a.provider AS provider,
         a.model AS model, a.prompt AS prompt, a.finished_at AS finished_at, r.created_at AS created_at, a.output AS output
       FROM attempts a JOIN runs r ON r.id = a.run_id
       WHERE a.state = 'succeeded' AND a.output IS NOT NULL AND a.provider IS NOT NULL AND (?1 IS NULL OR r.workflow_id = ?1)

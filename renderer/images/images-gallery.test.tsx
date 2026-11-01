@@ -17,7 +17,7 @@ import type { ImageActions } from "./viewer/use-image-actions";
 afterEach(() => cleanup());
 
 const item = (seed: string, runId: string, patch: Partial<GalleryItem> = {}): GalleryItem => ({
-  assetId: seed.repeat(64), width: 1024, height: 1024, mediaType: "image/png", runId, workflowId: "wf", nodeId: "g", variant: 0,
+  assetId: seed.repeat(64), width: 1024, height: 1024, mediaType: "image/png", runId, runState: "succeeded", workflowId: "wf", nodeId: "g", variant: 0,
   index: 0, provider: "openrouter", model: "m", createdAt: 1_000, saved: true, thumbUrl: `thumb-${seed}`, ...patch,
 });
 const ITEMS = [item("a", "r2", { prompt: "A lighthouse at dusk" }), item("b", "r2"), item("c", "r1")];
@@ -110,8 +110,7 @@ test("history groups images by run with each run's state and count, and Save All
   render(
     <HistoryPanel
       status="ready"
-      items={ITEMS}
-      runStates={new Map([["r2", "partial"]])}
+      items={ITEMS.map((entry) => (entry.runId === "r2" ? { ...entry, runState: "partial" as const } : entry))}
       saveFolderLabel="Pictures › Aiden"
       now={1_000 + 5 * 60_000}
       onOpen={(index) => opened.push(index)}
@@ -121,7 +120,7 @@ test("history groups images by run with each run's state and count, and Save All
     />,
   );
   const headings = screen.getAllByRole("heading").map((heading) => heading.textContent);
-  assert.deepEqual(headings, ["5 min ago · Finished with errors · 2 images", "5 min ago · 1 image"]);
+  assert.deepEqual(headings, ["5 min ago · Finished with errors · 2 images", "5 min ago · Finished · 1 image"]);
   fireEvent.click(screen.getByRole("button", { name: "Save all 1 image from this run…" }));
   fireEvent.click(screen.getByRole("button", { name: "Save all 2 images from this run…" }));
   // Thumbnails open the viewer over the whole history, in its order.
@@ -136,7 +135,7 @@ test("history groups images by run with each run's state and count, and Save All
 
 test("an empty history explains where images will appear and that they are saved automatically", () => {
   render(
-    <HistoryPanel status="ready" items={[]} runStates={new Map()} saveFolderLabel="Pictures › Aiden" onOpen={() => undefined} onSaveAll={() => undefined} onRevealFolder={() => undefined} onRetry={() => undefined} />,
+    <HistoryPanel status="ready" items={[]} saveFolderLabel="Pictures › Aiden" onOpen={() => undefined} onSaveAll={() => undefined} onRevealFolder={() => undefined} onRetry={() => undefined} />,
   );
   assert.ok(screen.getByText("No images yet"));
   assert.ok(screen.getByText(/saved to Pictures › Aiden/u));

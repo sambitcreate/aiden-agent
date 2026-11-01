@@ -152,6 +152,11 @@ export function parseImageActionRequest(value: unknown): ImageActionRequest {
       if (!Array.isArray(ids) || ids.length === 0 || ids.length > SAVE_ALL_MAX_IMAGES) invalid();
       return { op: "save-all", assetIds: Array.from(ids, (entry) => assetId(entry)) };
     }
+    case "reveal-saved": {
+      const savedId = shape(value, ["op", "savedId"]).savedId;
+      if (typeof savedId !== "string" || !/^[0-9a-f-]{36}$/u.test(savedId)) invalid();
+      return { op: "reveal-saved", savedId };
+    }
     case "reveal-folder":
       shape(value, ["op"]);
       return { op: "reveal-folder" };

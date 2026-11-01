@@ -6,6 +6,7 @@ import { ownValue } from "./run-view-core";
 
 export interface GalleryRunGroup {
   runId: string;
+  runState: RunState;
   /** When the run's newest image finished. */
   createdAt: number;
   /** The run's images, each with its position in the whole gallery (the viewer's index). */
@@ -21,7 +22,7 @@ export function groupGalleryByRun(items: readonly GalleryItem[]): GalleryRunGrou
       group.entries.push({ item, index });
       group.createdAt = Math.max(group.createdAt, item.createdAt);
     } else {
-      groups.set(item.runId, { runId: item.runId, createdAt: item.createdAt, entries: [{ item, index }] });
+      groups.set(item.runId, { runId: item.runId, runState: item.runState, createdAt: item.createdAt, entries: [{ item, index }] });
     }
   });
   return [...groups.values()];
@@ -84,6 +85,7 @@ export function viewerItemsForOutputs(
     assetUrls: Readonly<Record<string, string>>;
     attempts: readonly AttemptSnapshot[];
     runId?: string;
+    runState?: RunState;
   },
 ): GalleryItem[] {
   const known = new Map(context.gallery.map((item) => [item.assetId, item]));
@@ -94,6 +96,7 @@ export function viewerItemsForOutputs(
     return {
       ...image,
       runId: context.runId ?? "",
+      runState: context.runState ?? "running",
       workflowId: context.workflowId,
       nodeId: context.nodeId,
       variant: attempt?.variant ?? 0,

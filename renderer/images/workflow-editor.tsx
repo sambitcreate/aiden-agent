@@ -95,7 +95,7 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
     if (!viewer) return [];
     if (viewer.source.kind === "history") return gallery.items;
     return viewerItemsForOutputs(outputsFor(viewer.source.nodeId), {
-      gallery: gallery.items, workflowId, nodeId: viewer.source.nodeId, assetUrls, attempts: snapshot?.attempts ?? [], runId: snapshot?.run.runId,
+      gallery: gallery.items, workflowId, nodeId: viewer.source.nodeId, assetUrls, attempts: snapshot?.attempts ?? [], runId: snapshot?.run.runId, runState: snapshot?.run.state,
     });
   }, [viewer, gallery.items, outputsFor, workflowId, assetUrls, snapshot]);
   const viewerOpen = viewer !== null && viewerItems.length > 0;
@@ -259,7 +259,6 @@ export function WorkflowEditor({ workflowId }: { workflowId: string }) {
               <HistoryPanel
                 status={gallery.status}
                 items={gallery.items}
-                runStates={gallery.runStates}
                 saveFolderLabel={gallery.saveFolderLabel}
                 onOpen={(index) => {
                   const item = gallery.items[index];

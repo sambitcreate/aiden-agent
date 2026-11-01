@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from "../../platform.js";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from "../../platform.js";
 import { IMAGE_EXTENSIONS } from "../../services/create-images/image-export.js";
 import { createImagesRuntime } from "../../services/create-images/main.js";
 import { rendererDocumentOwner } from "../../services/renderer-document-owner.js";
@@ -67,6 +67,7 @@ export function registerCreateImagesIpc(): void {
         clipboard.writeImage(image);
         return true;
       },
+      downloadsFolder: () => app.getPath("downloads"),
       showItemInFolder: (file) => shell.showItemInFolder(file),
       openFolder: async (folder) => {
         const failure = await shell.openPath(folder);

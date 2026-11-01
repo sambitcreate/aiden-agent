@@ -46,6 +46,8 @@ const CHANNELS = [
   "imageWorkflows:list-runs", "imageWorkflows:mutate", "imageWorkflows:prepare-run", "imageWorkflows:save", "imageWorkflows:start-run",
 ];
 
+const DOWNLOADS = path.join(path.sep, "fake-home", "Downloads");
+
 /** Records every Electron-side file action; the dialogs answer with whatever the test sets. */
 function fakeFiles() {
   const calls: { op: string; arg?: unknown }[] = [];
@@ -55,6 +57,7 @@ function fakeFiles() {
       calls.push({ op: "save-dialog", arg: options });
       return answers.savePath;
     },
+    downloadsFolder: () => DOWNLOADS,
     chooseFolder: async (_event, options) => {
       calls.push({ op: "folder-dialog", arg: options });
       return answers.folder;
@@ -542,7 +545,7 @@ test("an Image Input a workflow holds can be viewed, copied and revealed", async
   assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "show", arg: file });
 });
 
-test("save-as, save-all, drag and reveal-folder write through main and honour a cancelled dialog", async (t) => {
+test("save-as, save-all, reveal-saved, drag and reveal-folder write through main and honour a cancelled dialog", async (t) => {
   const env = await harness(t);
   await generate(env, "One", "Saver");
   await generate(env, "Two", "Saver");
@@ -551,27 +554,40 @@ test("save-as, save-all, drag and reveal-folder write through main and honour a 
   const [newest, older] = items as [typeof items[0], typeof items[0]];
   const autoSaved = await savedFiles(env.saveRoot);
 
-  // Save As offers the auto-saved name in the auto-save folder; cancelling writes nothing.
+  // Save As offers the auto-saved name in Downloads (not beside the auto-saved copy); cancelling writes nothing.
   assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-as", assetId: newest.assetId }), { ok: false, reason: "cancelled" });
   const offered = env.files.calls[env.files.calls.length - 1]?.arg as { defaultPath: string; mediaType: string };
-  assert.ok(autoSaved.includes(offered.defaultPath), offered.defaultPath);
+  assert.equal(path.dirname(offered.defaultPath), DOWNLOADS);
+  assert.ok(autoSaved.map((file) => path.basename(file)).includes(path.basename(offered.defaultPath)), offered.defaultPath);
   assert.equal(offered.mediaType, "image/png");
   const target = path.join(env.root, "chosen", "mine.png");
   await mkdir(path.dirname(target));
   env.files.answers.savePath = target;
-  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-as", assetId: newest.assetId }), { ok: true });
+  const savedAs = await env.invoke<{ ok: true; savedId: string }>("imageWorkflows:image-action", { op: "save-as", assetId: newest.assetId });
+  assert.equal(savedAs.ok, true);
   assert.deepEqual(await readFile(target), Buffer.from((await env.assets.read(newest.assetId)).bytes));
+  // The returned id shows exactly the file that was written; no path crossed IPC.
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal-saved", savedId: savedAs.savedId }), { ok: true });
+  assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "show", arg: target });
+  assert.deepEqual(
+    await env.invoke("imageWorkflows:image-action", { op: "reveal-saved", savedId: "00000000-0000-4000-8000-000000000000" }),
+    { ok: false, reason: "not-found" },
+  );
 
   // Save All de-duplicates, keeps every name distinct, and reports the count.
   assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds: [newest.assetId] }), { ok: false, reason: "cancelled" });
-  assert.equal((env.files.calls[env.files.calls.length - 1]?.arg as { defaultPath: string }).defaultPath, env.saveRoot);
+  assert.equal((env.files.calls[env.files.calls.length - 1]?.arg as { defaultPath: string }).defaultPath, DOWNLOADS);
   const folder = path.join(env.root, "export-folder");
   await mkdir(folder);
   env.files.answers.folder = folder;
   const assetIds = [newest.assetId, older.assetId, newest.assetId];
-  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds }), { ok: true, count: 2 });
-  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds }), { ok: true, count: 2 });
+  const first = await env.invoke<{ ok: true; count: number; savedId: string }>("imageWorkflows:image-action", { op: "save-all", assetIds });
+  assert.deepEqual({ ok: first.ok, count: first.count }, { ok: true, count: 2 });
+  const second = await env.invoke<{ ok: true; count: number }>("imageWorkflows:image-action", { op: "save-all", assetIds });
+  assert.equal(second.count, 2);
   assert.equal((await readdir(folder)).length, 4);
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal-saved", savedId: first.savedId }), { ok: true });
+  assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "open-folder", arg: folder });
 
   // Drag and reveal reuse the existing auto-saved copy rather than writing another.
   assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "drag", assetId: older.assetId }), { ok: true });

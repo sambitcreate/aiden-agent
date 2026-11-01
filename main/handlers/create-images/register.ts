@@ -1,6 +1,7 @@
 // Create Images IPC. Every handler checks its renderer document first, parses
 // an exact request shape second, and only then touches a store.
 import * as fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   GALLERY_MAX_ITEMS,
@@ -53,6 +54,8 @@ export interface CreateImagesHandlerDependencies<Event> {
 export interface CreateImagesFileActions<Event> {
   /** A Save dialog; the chosen path, or null when cancelled. Overwrite is confirmed by the dialog. */
   chooseSavePath(event: Event, options: { defaultPath: string; mediaType: ImageMediaType }): Promise<string | null>;
+  /** Where Save and Save All dialogs open: the person's Downloads folder. */
+  downloadsFolder(): string;
   /** A folder picker; the chosen folder, or null when cancelled. */
   chooseFolder(event: Event, options: { defaultPath: string }): Promise<string | null>;
   /** Puts the image on the clipboard; false when the bytes cannot be decoded (some WebP). */
@@ -64,6 +67,31 @@ export interface CreateImagesFileActions<Event> {
 }
 
 const ACTION_FAILED = "Aiden couldn't finish that image action.";
+
+/** Most saves this session remembers for "Show in Finder" after Save… or Save All. */
+const SAVED_TARGETS_MAX = 50;
+
+/**
+ * What Save… and Save All wrote, by an opaque id the renderer gets back, so a toast can show
+ * the file or folder without a path crossing IPC. Session-only and bounded.
+ */
+class SavedTargets {
+  private readonly targets = new Map<string, { kind: "file" | "folder"; path: string }>();
+
+  remember(kind: "file" | "folder", target: string): string {
+    const savedId = randomUUID();
+    this.targets.set(savedId, { kind, path: target });
+    for (const oldest of this.targets.keys()) {
+      if (this.targets.size <= SAVED_TARGETS_MAX) break;
+      this.targets.delete(oldest);
+    }
+    return savedId;
+  }
+
+  get(savedId: string): { kind: "file" | "folder"; path: string } | undefined {
+    return this.targets.get(savedId);
+  }
+}
 
 /** An image an action may touch: a Generate output the ledger knows, or an Image Input a workflow holds. */
 interface AuthorizedImage {
@@ -250,12 +278,13 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
     };
   });
 
+  const saved = new SavedTargets();
   handle("imageWorkflows:image-action", async (event, input): Promise<ImageActionResponse> => {
     const owner = deps.owner(event);
     const request = parseImageActionRequest(input);
     const services = await deps.services();
     try {
-      return await imageAction(deps, event, owner, request, services);
+      return await imageAction(deps, event, owner, request, services, saved);
     } catch (error) {
       if (error instanceof CreateImagesExportUnavailableError) return { ok: false, reason: "unsupported", message: error.message };
       // File system details (paths, titles) stay in main.
@@ -284,6 +313,7 @@ async function imageAction<Event>(
   owner: CreateImagesOwner,
   request: ImageActionRequest,
   services: CreateImagesServices,
+  saved: SavedTargets,
 ): Promise<ImageActionResponse> {
   const { exports, assets } = services;
   const fileSystem = exports.fileSystem();
@@ -293,6 +323,13 @@ async function imageAction<Event>(
     await deps.files.openFolder(folder);
     return { ok: true };
   }
+  if (request.op === "reveal-saved") {
+    const target = saved.get(request.savedId);
+    if (!target) return { ok: false, reason: "not-found" };
+    if (target.kind === "file") deps.files.showItemInFolder(target.path);
+    else await deps.files.openFolder(target.path);
+    return { ok: true };
+  }
   if (request.op === "save-all") {
     const images: AuthorizedImage[] = [];
     for (const assetId of new Set(request.assetIds)) {
@@ -300,9 +337,7 @@ async function imageAction<Event>(
       if (!image) return { ok: false, reason: "not-found" };
       images.push(image);
     }
-    const defaultPath = exports.folder();
-    await fileSystem.mkdir(defaultPath, { recursive: true });
-    const folder = await deps.files.chooseFolder(event, { defaultPath });
+    const folder = await deps.files.chooseFolder(event, { defaultPath: deps.files.downloadsFolder() });
     if (!folder) return { ok: false, reason: "cancelled" };
     let count = 0;
     for (const image of images) {
@@ -315,7 +350,7 @@ async function imageAction<Event>(
       }
     }
     return count === images.length
-      ? { ok: true, count }
+      ? { ok: true, count, savedId: saved.remember("folder", folder) }
       : { ok: false, reason: "failed", message: `Aiden saved ${count} of ${images.length} images.` };
   }
   const image = authorizeImage(services, request.assetId);
@@ -334,13 +369,12 @@ async function imageAction<Event>(
       deps.files.startDrag(event, await exports.ensureExported(image.ref, image.workflowTitle));
       return { ok: true };
     case "save-as": {
-      const saved = await exports.savedPath(image.ref.assetId);
-      const target = saved
-        ? { directory: path.dirname(saved), fileName: path.basename(saved) }
-        : exports.target(image.ref, image.workflowTitle);
-      await fileSystem.mkdir(target.directory, { recursive: true });
+      // Offer the auto-saved copy's name, in Downloads: saving beside the auto-saved copy would
+      // only duplicate it (or ask to replace it with the same bytes).
+      const autoSaved = await exports.savedPath(image.ref.assetId);
+      const fileName = autoSaved ? path.basename(autoSaved) : exports.target(image.ref, image.workflowTitle).fileName;
       const chosen = await deps.files.chooseSavePath(event, {
-        defaultPath: path.join(target.directory, target.fileName),
+        defaultPath: path.join(deps.files.downloadsFolder(), fileName),
         mediaType: image.ref.mediaType,
       });
       if (!chosen) return { ok: false, reason: "cancelled" };
@@ -352,7 +386,7 @@ async function imageAction<Event>(
       } finally {
         await handle.close();
       }
-      return { ok: true };
+      return { ok: true, savedId: saved.remember("file", chosen) };
     }
   }
 }

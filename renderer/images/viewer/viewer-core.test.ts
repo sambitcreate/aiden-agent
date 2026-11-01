@@ -17,7 +17,7 @@ import {
 } from "./viewer-core";
 
 const item = (patch: Partial<GalleryItem> = {}): GalleryItem => ({
-  assetId: "a".repeat(64), width: 1024, height: 768, mediaType: "image/png", runId: "r", workflowId: "wf", nodeId: "g",
+  assetId: "a".repeat(64), width: 1024, height: 768, mediaType: "image/png", runId: "r", runState: "succeeded", workflowId: "wf", nodeId: "g",
   variant: 0, index: 0, provider: "openrouter", model: "google/gemini-3.1-flash-image", createdAt: 1_700_000_000_000,
   saved: true, thumbUrl: "aiden-asset://thumb", ...patch,
 });
@@ -99,6 +99,9 @@ test("action outcomes: cancelled says nothing, failures read as plain sentences,
   assert.deepEqual(actionOutcome("save-as", { ok: true }), { kind: "success", text: "Image saved" });
   assert.deepEqual(actionOutcome("save-all", { ok: true, count: 4 }), { kind: "success", text: "Saved 4 images" });
   assert.deepEqual(actionOutcome("copy", { ok: true }), { kind: "success", text: "Image copied" });
+  // Showing a saved file says nothing on success, and plainly when the session forgot it.
+  assert.equal(actionOutcome("reveal-saved", { ok: true }), null);
+  assert.deepEqual(actionOutcome("reveal-saved", { ok: false, reason: "not-found" }), { kind: "error", text: "Aiden no longer knows where that was saved." });
   assert.equal(actionOutcome("reveal", { ok: true }), null);
   assert.deepEqual(actionOutcome("copy", { ok: false, reason: "unsupported" }), {
     kind: "error", text: "Copying images isn't available on this computer.",

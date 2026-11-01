@@ -1,7 +1,6 @@
 import { FolderOpen } from "lucide-react";
 import { Button, EmptyState, Text } from "../components/ui";
 import type { GalleryItem } from "../shared/images/ipc-types";
-import type { RunState } from "../shared/images/run-types";
 import { groupGalleryByRun, imageCountLabel, relativeTime, runStateLabel } from "./gallery-core";
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
@@ -14,7 +13,6 @@ const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 export function HistoryPanel({
   status,
   items,
-  runStates,
   saveFolderLabel,
   now = Date.now(),
   onOpen,
@@ -24,7 +22,6 @@ export function HistoryPanel({
 }: {
   status: "loading" | "ready" | "error";
   items: readonly GalleryItem[];
-  runStates: ReadonlyMap<string, RunState>;
   saveFolderLabel: string;
   now?: number;
   onOpen(index: number): void;
@@ -72,10 +69,9 @@ export function HistoryPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
         {groups.map((group) => {
-          const state = runStates.get(group.runId);
           const when = relativeTime(group.createdAt, now, (timestamp) => dateFormat.format(timestamp));
           const count = imageCountLabel(group.entries.length);
-          const heading = [when, state ? runStateLabel(state) : null, count].filter(Boolean).join(" · ");
+          const heading = [when, runStateLabel(group.runState), count].filter(Boolean).join(" · ");
           return (
             <section key={group.runId} aria-label={`Run ${heading}`} className="flex flex-col gap-2">
               <header className="flex items-center gap-2">

@@ -7,7 +7,7 @@ import type { GeneratedAttempt } from "./run-ledger.js";
 
 const out = (seed: string): OutputRef => ({ assetId: seed.repeat(64), width: 16, height: 9, mediaType: "image/png" });
 function attempt(runId: string, finishedAt: number, output: OutputRef[], overrides: Partial<GeneratedAttempt> = {}): GeneratedAttempt {
-  return { runId, workflowId: "wf-a", nodeId: "g1", variant: 0, provider: "openrouter", model: "m", finishedAt, output, ...overrides };
+  return { runId, runState: "succeeded", workflowId: "wf-a", nodeId: "g1", variant: 0, provider: "openrouter", model: "m", finishedAt, output, ...overrides };
 }
 const everything = { exists: () => true };
 
@@ -60,11 +60,11 @@ test("items carry current titles when they still exist, the prompt, the saved st
   });
   assert.deepEqual(items, [
     {
-      ...out("b"), runId: "r2", workflowId: "gone", nodeId: "g9", variant: 0, index: 0, provider: "openrouter", model: "m",
+      ...out("b"), runId: "r2", runState: "succeeded", workflowId: "gone", nodeId: "g9", variant: 0, index: 0, provider: "openrouter", model: "m",
       prompt: "A red bicycle", createdAt: 200, saved: false, thumbUrl: "aiden-asset://grant/bbbb",
     },
     {
-      ...out("a"), runId: "r1", workflowId: "wf-a", workflowTitle: "Bikes", nodeId: "g1", nodeTitle: "Hero shot", variant: 0, index: 0,
+      ...out("a"), runId: "r1", runState: "succeeded", workflowId: "wf-a", workflowTitle: "Bikes", nodeId: "g1", nodeTitle: "Hero shot", variant: 0, index: 0,
       provider: "openrouter", model: "google/gemini-3.1-flash-image", createdAt: 100, saved: true, thumbUrl: "aiden-asset://grant/aaaa",
     },
   ]);

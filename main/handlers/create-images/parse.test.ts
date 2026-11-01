@@ -107,12 +107,17 @@ test("image actions name images by asset id only, with exact keys per op", () =>
     ]);
   }
   assert.deepEqual(parseImageActionRequest({ op: "reveal-folder" }), { op: "reveal-folder" });
+  const savedId = "0f8b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d";
+  assert.deepEqual(parseImageActionRequest({ op: "reveal-saved", savedId }), { op: "reveal-saved", savedId });
   const many = Array.from({ length: SAVE_ALL_MAX_IMAGES }, (_, index) => index.toString(16).padStart(64, "0"));
   assert.deepEqual(parseImageActionRequest({ op: "save-all", assetIds: many }), { op: "save-all", assetIds: many });
   // eslint-disable-next-line no-sparse-arrays
   const sparse = [ASSET, , ASSET];
   refuses(parseImageActionRequest, [
     { op: "reveal-folder", assetId: ASSET },
+    { op: "reveal-saved" },
+    { op: "reveal-saved", savedId: "/Users/me/Downloads/a.png" },
+    { op: "reveal-saved", savedId, assetId: ASSET },
     { op: "save-all", assetIds: [] },
     { op: "save-all", assetIds: [...many, ASSET] },
     { op: "save-all", assetIds: [ASSET, "nope"] },

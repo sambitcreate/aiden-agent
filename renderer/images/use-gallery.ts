@@ -1,22 +1,16 @@
 import * as React from "react";
 import { createImagesIpc } from "../lib/create-images-ipc";
 import type { GalleryItem } from "../shared/images/ipc-types";
-import type { RunState } from "../shared/images/run-types";
 import { galleryRefreshKey } from "./gallery-core";
-
-/** Most recent runs whose state the History tab names; older runs show their images without it. */
-const RUN_STATE_LIMIT = 50;
 
 export interface GalleryState {
   status: "loading" | "ready" | "error";
   items: readonly GalleryItem[];
   saveFolderLabel: string;
-  /** Each recent run's state, for one workflow's history. Empty for the cross-workflow library. */
-  runStates: ReadonlyMap<string, RunState>;
   error: string | null;
 }
 
-const INITIAL: GalleryState = { status: "loading", items: [], saveFolderLabel: "", runStates: new Map(), error: null };
+const INITIAL: GalleryState = { status: "loading", items: [], saveFolderLabel: "", error: null };
 
 /**
  * One workflow's generated images (every workflow's when `workflowId` is absent), newest
@@ -31,20 +25,9 @@ export function useGallery(workflowId?: string) {
     // Back-to-back refreshes can resolve out of order; only the newest read is applied.
     const current = ++sequence.current;
     try {
-      const [gallery, runs] = await Promise.all([
-        createImagesIpc.gallery(workflowId === undefined ? {} : { workflowId }),
-        workflowId === undefined
-          ? Promise.resolve(null)
-          : createImagesIpc.listRuns(workflowId, RUN_STATE_LIMIT).catch(() => null),
-      ]);
+      const gallery = await createImagesIpc.gallery(workflowId === undefined ? {} : { workflowId });
       if (current !== sequence.current) return;
-      setState((previous) => ({
-        status: "ready",
-        items: gallery.items,
-        saveFolderLabel: gallery.saveFolderLabel,
-        runStates: runs ? new Map(runs.runs.map((run) => [run.runId, run.state])) : previous.runStates,
-        error: null,
-      }));
+      setState({ status: "ready", items: gallery.items, saveFolderLabel: gallery.saveFolderLabel, error: null });
     } catch (failure) {
       if (current !== sequence.current) return;
       const error = failure instanceof Error && failure.message ? failure.message : "Aiden couldn't read your images.";

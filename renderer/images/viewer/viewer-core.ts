@@ -128,7 +128,7 @@ export function revealLabel(isMac: boolean): string {
   return isMac ? "Show in Finder" : "Show in folder";
 }
 
-export type ImageActionOp = "save-as" | "save-all" | "copy" | "reveal" | "reveal-folder" | "drag" | "view";
+export type ImageActionOp = "save-as" | "save-all" | "copy" | "reveal" | "reveal-saved" | "reveal-folder" | "drag" | "view";
 
 export type ActionOutcome = { kind: "success"; text: string } | { kind: "error"; text: string } | null;
 
@@ -137,6 +137,7 @@ const FAILED: Record<ImageActionOp, string> = {
   "save-all": "Aiden couldn't save the images.",
   copy: "Aiden couldn't copy the image.",
   reveal: "Aiden couldn't show the image.",
+  "reveal-saved": "Aiden couldn't show what it saved.",
   "reveal-folder": "Aiden couldn't open the folder.",
   drag: "Aiden couldn't drag the image.",
   view: "Aiden couldn't open the full-size image.",
@@ -147,6 +148,7 @@ const UNSUPPORTED: Record<ImageActionOp, string> = {
   "save-all": "Saving images isn't available on this computer.",
   copy: "Copying images isn't available on this computer.",
   reveal: "Showing files isn't available on this computer.",
+  "reveal-saved": "Showing files isn't available on this computer.",
   "reveal-folder": "Showing files isn't available on this computer.",
   drag: "Dragging images out isn't available on this computer.",
   view: "The full-size image isn't available on this computer.",
@@ -170,6 +172,7 @@ export function actionOutcome(op: ImageActionOp, response: ImageActionResponse):
     case "cancelled":
       return null;
     case "not-found":
+      if (op === "reveal-saved") return { kind: "error", text: "Aiden no longer knows where that was saved." };
       return { kind: "error", text: op === "save-all" ? "These images are no longer available." : "This image is no longer available." };
     case "unsupported":
       return { kind: "error", text: UNSUPPORTED[op] };

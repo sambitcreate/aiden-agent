@@ -15,9 +15,10 @@ async function perform(request: ImageActionRequest): Promise<ImageActionResponse
   }
 }
 
-function announce(outcome: ActionOutcome) {
+function announce(outcome: ActionOutcome, action?: { label: string; onClick: () => void }) {
   if (!outcome) return;
   if (outcome.kind === "error") toast.error(outcome.text);
+  else if (action) toast(outcome.text, { action });
   else toast(outcome.text);
 }
 
@@ -31,9 +32,14 @@ export function useImageActions(options: { onSaved?: () => void } = {}) {
   onSaved.current = options.onSaved;
 
   return React.useMemo(() => {
-    const run = async (op: ImageActionOp, request: ImageActionRequest) => {
+    const run = async (op: ImageActionOp, request: ImageActionRequest): Promise<ImageActionResponse | null> => {
       const response = await perform(request);
-      announce(response ? actionOutcome(op, response) : thrownOutcome(op));
+      // A save names what it wrote by an opaque id, so the toast can show it in the file manager.
+      const savedId = response?.ok ? response.savedId : undefined;
+      const showSaved = savedId
+        ? { label: REVEAL_LABEL, onClick: () => void run("reveal-saved", { op: "reveal-saved", savedId }) }
+        : undefined;
+      announce(response ? actionOutcome(op, response) : thrownOutcome(op), showSaved);
       // Reveal saves a missing auto-saved copy first, so the saved state may have changed.
       if (response?.ok && op === "reveal") onSaved.current?.();
       return response;

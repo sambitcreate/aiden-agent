@@ -5,7 +5,7 @@ import type { AttemptSnapshot, RunSnapshot, RunState } from "../shared/images/ru
 import { galleryRefreshKey, groupGalleryByRun, relativeTime, viewerItemsForOutputs } from "./gallery-core";
 
 const item = (seed: string, runId: string, createdAt: number): GalleryItem => ({
-  assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId, workflowId: "wf", nodeId: "g", variant: 0,
+  assetId: seed.repeat(64), width: 8, height: 8, mediaType: "image/png", runId, runState: "succeeded", workflowId: "wf", nodeId: "g", variant: 0,
   index: 0, provider: "openrouter", model: "m", createdAt, saved: true, thumbUrl: `thumb:${seed}`,
 });
 const snapshot = (state: RunState, workflowId = "wf", runId = "r1"): RunSnapshot => ({

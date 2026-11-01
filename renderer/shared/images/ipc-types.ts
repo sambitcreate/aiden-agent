@@ -1,7 +1,7 @@
 // Request and response shapes for the imageWorkflows IPC channels. Electron-free:
 // shared by the main-process handlers and the renderer client.
 import type { ImageModelOption } from "./port.js";
-import type { ImageRunConsentPlan, ImageMediaType, OutputRef, RunScope, RunSnapshot, RunSummary } from "./run-types.js";
+import type { ImageRunConsentPlan, ImageMediaType, OutputRef, RunScope, RunSnapshot, RunState, RunSummary } from "./run-types.js";
 import type { ImageWorkflowTemplate } from "./templates.js";
 import type { WorkflowDocV1, WorkflowSummary } from "./schema.js";
 
@@ -108,6 +108,8 @@ export interface GalleryRequest {
 /** One generated image with what made it. Newest first in a response. */
 export interface GalleryItem extends OutputRef {
   runId: string;
+  /** How the run that made this image ended (or "running"). */
+  runState: RunState;
   workflowId: string;
   /** The workflow's current title; absent if the workflow no longer exists. */
   workflowTitle?: string;
@@ -139,8 +141,9 @@ export interface GalleryResponse {
  * Actions on generated or imported images. Every op names images by asset id only; file
  * paths and dialogs stay in the main process.
  * - view: a document-bound URL for the full-size original.
- * - save-as: a Save dialog for one image.
- * - save-all: a folder picker, then copies of up to SAVE_ALL_MAX_IMAGES images.
+ * - save-as: a Save dialog for one image (opens in Downloads).
+ * - save-all: a folder picker (opens in Downloads), then copies of up to SAVE_ALL_MAX_IMAGES images.
+ * - reveal-saved: shows what a save-as or save-all just wrote, named by the `savedId` it returned.
  * - copy: the image onto the system clipboard.
  * - reveal: shows the auto-saved copy in the file manager, saving it first if it is missing.
  * - reveal-folder: opens the auto-save folder.
@@ -149,8 +152,9 @@ export interface GalleryResponse {
 export type ImageActionRequest =
   | { op: "view" | "save-as" | "copy" | "reveal" | "drag"; assetId: string }
   | { op: "save-all"; assetIds: string[] }
+  | { op: "reveal-saved"; savedId: string }
   | { op: "reveal-folder" };
 
 export type ImageActionResponse =
-  | { ok: true; url?: string; count?: number }
+  | { ok: true; url?: string; count?: number; savedId?: string }
   | { ok: false; reason: "cancelled" | "not-found" | "unsupported" | "failed"; message?: string };

@@ -57,6 +57,7 @@ export function toGalleryItems(images: readonly GalleryImage[], lookups: Gallery
       height: ref.height,
       mediaType: ref.mediaType,
       runId: attempt.runId,
+      runState: attempt.runState,
       workflowId: attempt.workflowId,
       ...(workflowTitle !== undefined ? { workflowTitle } : {}),
       nodeId: attempt.nodeId,
