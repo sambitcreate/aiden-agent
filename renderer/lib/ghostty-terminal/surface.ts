@@ -592,6 +592,8 @@ export class GhosttyTerminalSurface {
   private compositionInputToSuppress: string | null = null;
   private compositionSuppressionTimer: number | null = null;
   private cursorOn = true;
+  /** The row array the accessible transcript was last built from. */
+  private accessibleRows: GhosttySnapshot["rowData"] | null = null;
   private renderedCursorY: number | null = null;
   private forceFullRender = true;
   private scrollbarDirty = true;
@@ -1742,12 +1744,17 @@ export class GhosttyTerminalSurface {
       this.frame = 0;
     }
     this.snapshot = this.core.snapshot();
-    const accessibleText = this.snapshot.rowData
-      .map((row) => row.text)
-      .join("\n")
-      .trimEnd();
-    if (this.accessibleOutput.textContent !== accessibleText) {
-      this.accessibleOutput.textContent = accessibleText;
+    // Row text changes only with dirty rows or a reallocated grid, so frames
+    // that only blink the cursor skip rebuilding the accessible transcript.
+    if (this.snapshot.dirtyRows.size > 0 || this.snapshot.rowData !== this.accessibleRows) {
+      this.accessibleRows = this.snapshot.rowData;
+      const accessibleText = this.snapshot.rowData
+        .map((row) => row.text)
+        .join("\n")
+        .trimEnd();
+      if (this.accessibleOutput.textContent !== accessibleText) {
+        this.accessibleOutput.textContent = accessibleText;
+      }
     }
     // A cursor that is not blinking right now must be drawn, never caught in an
     // off phase left behind by a blink that has since been turned off.

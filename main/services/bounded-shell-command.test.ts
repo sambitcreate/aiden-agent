@@ -67,7 +67,7 @@ test("a background process that redirected its output away keeps running", posix
     }
   });
   assert.equal(result.exitCode, 0);
-  assert.equal(result.backgroundStopped, undefined);
+  assert.equal(result.backgroundStopped, false);
   // Past the drain and the SIGKILL grace period, it is still running.
   await new Promise((resolve) => setTimeout(resolve, 1_500));
   assert.equal(alive(pid), true, "the detached server is still running");

@@ -27,6 +27,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
   let managed: Workspace | undefined;
   let releaseTerminals: () => void = () => undefined;
   let terminalDrain: Promise<void> = Promise.resolve();
+  let failGitDeletion = false;
   const signal = new AbortController().signal;
   const service = createWorkspaceWorktreeApplicationService({
     environment: {
@@ -96,6 +97,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     rollbackWorktree: async () => { events.push("rollback"); },
     deleteManagedWorktree: async () => {
       events.push("delete-git");
+      if (failGitDeletion) throw new Error("git worktree remove failed");
       return { branchDeleted: true };
     },
     managedWorktreeDeletionPending: async () => false,
@@ -122,6 +124,7 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
       events.push("close-terminals");
       await terminalDrain;
     },
+    closeWorkspaceGitWatcher: (id) => { events.push(`close-git-watcher:${id}`); },
     cancelWorkspaceGeneration: async () => { events.push("cancel-generation"); },
     cancelWorkspaceSchedules: async () => { events.push("cancel-schedules"); },
     resumeWorkspaceSchedules: async () => { events.push("resume-schedules"); },
@@ -168,9 +171,18 @@ test("shared managed-worktree workflow preserves creation rollback gates and des
     "finalize",
     "notify",
     "finish-mutation",
+    "close-git-watcher:workspace-managed",
   ]);
   assert.deepEqual(allocations, [["/aiden/worktrees", "/canonical/source/.git", 1024 + MAX_PROVISIONED_BYTES]]);
   assert.deepEqual(createAdmissions, [["/aiden/worktrees/mobile", MAX_PROVISIONED_BYTES]]);
+
+  // A deletion that fails still closes the watcher; the next read re-observes.
+  const again = await service.create(owner, source.id, "feature/retry", "Retry Workspace");
+  events.length = 0;
+  failGitDeletion = true;
+  await assert.rejects(service.remove(owner, again.id), /git worktree remove failed/u);
+  assert.equal(events.includes(`remove:${again.id}`), false, "the record stays when Git deletion fails");
+  assert.equal(events[events.length - 1], `close-git-watcher:${again.id}`);
 });
 
 

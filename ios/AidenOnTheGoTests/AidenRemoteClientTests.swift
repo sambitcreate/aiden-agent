@@ -3878,6 +3878,52 @@ final class AidenRemoteClientTests: XCTestCase {
     }
 
     @MainActor
+    func testUnavailableComputerCanSwitchToAnotherPairingWithoutRetryingIt() async throws {
+        let store = AidenInstallationStore(keychain: AidenRemoteMemoryKeychain())
+        _ = try store.savePairing(
+            makeExchange(instanceId: "unavailable", deviceId: "old-device", credential: "old-credential"),
+            trust: makeSystemTrust(), name: "Unavailable Mac"
+        )
+        _ = try store.savePairing(
+            makeExchange(instanceId: "available", deviceId: "new-device", credential: "new-credential"),
+            trust: makeSystemTrust(), name: "Available Mac"
+        )
+        try store.setActive("unavailable")
+        var unavailableAttempts = 0
+        let session = makeSession()
+        AidenRemoteMockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer new-credential")
+            if request.url?.path == "/api/aiden/v1/server" {
+                return Self.response(for: request, status: 200, json: """
+                {"protocolVersion":1,"instanceId":"available","name":"Available Mac",
+                "appVersion":"1.0.0","capabilities":["server:read","workspace:read"],
+                "connectionMode":"lan","serverTime":"2026-08-19T07:00:00.000Z"}
+                """)
+            }
+            return Self.response(for: request, status: 200, json: "{\"workspaces\":[]}")
+        }
+        let coordinator = AidenRemoteCoordinator(installationStore: store, clientFactory: { installation, credential in
+            if installation.id == "unavailable" {
+                unavailableAttempts += 1
+                throw URLError(.cannotConnectToHost)
+            }
+            return AidenRemoteClient(endpoint: installation.endpoint, credential: credential, session: session)
+        })
+        await coordinator.connectActiveInstallation()
+        guard case .offline = coordinator.connectionState else { return XCTFail("Expected offline recovery") }
+        XCTAssertEqual(coordinator.connectionIssue?.title, "Computer unavailable")
+
+        let outcome = await coordinator.switchInstallationOutcome(to: "available")
+
+        guard case .success = outcome else { return XCTFail("Switch should connect to the available computer") }
+        XCTAssertEqual(coordinator.activeInstanceId, "available")
+        XCTAssertEqual(coordinator.connectionState, .connected)
+        XCTAssertNil(coordinator.connectionIssue)
+        XCTAssertEqual(unavailableAttempts, 1, "Switching must not first retry the unavailable computer")
+        XCTAssertEqual(store.installations.count, 2, "Recovery must preserve both pairings")
+    }
+
+    @MainActor
     func testInstallationStoreKeepsCredentialsScopedAndSwitchesWithoutLeakage() throws {
         let keychain = AidenRemoteMemoryKeychain()
         let store = AidenInstallationStore(keychain: keychain)

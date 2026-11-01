@@ -19,6 +19,7 @@ import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
 import { shutdownDevices, terminateDeviceHelperCommands } from "./handlers/devices.js";
+import { disposeWorkspaceGitWatchers } from "./handlers/workspaces.js";
 import { forwardTrackpadScrollEnd } from "./services/devices/trackpad-scroll-end.js";
 import { registerBrowserHandlers } from "./handlers/browser.js";
 import { TerminalHistoryStore } from "./services/terminal-history.js";
@@ -363,6 +364,7 @@ function cleanupApplication(): void {
   telegramService.stop();
   subagentRuntimeRegistry.abortAll();
   botSkillContentWatcher.dispose();
+  disposeWorkspaceGitWatchers();
   geminiLiveTranscription.dispose();
   void mcpManager.closeAll({ final: true });
 }
