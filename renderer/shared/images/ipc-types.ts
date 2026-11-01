@@ -93,3 +93,64 @@ export interface GetRunResponse {
 export interface ListRunsResponse {
   runs: RunSummary[];
 }
+
+/** Most images one gallery response lists; run retention keeps the real total well below this. */
+export const GALLERY_MAX_ITEMS = 2_000;
+
+/** Most images one Save All asks to copy into a folder. */
+export const SAVE_ALL_MAX_IMAGES = 200;
+
+/** The gallery of generated images: one workflow's, or every workflow's when `workflowId` is absent. */
+export interface GalleryRequest {
+  workflowId?: string;
+}
+
+/** One generated image with what made it. Newest first in a response. */
+export interface GalleryItem extends OutputRef {
+  runId: string;
+  workflowId: string;
+  /** The workflow's current title; absent if the workflow no longer exists. */
+  workflowTitle?: string;
+  nodeId: string;
+  /** The Generate node's current title; absent if the node no longer exists. */
+  nodeTitle?: string;
+  variant: number;
+  /** Position among the images this request returned. */
+  index: number;
+  provider: string;
+  model: string;
+  /** The prompt text sent with the request, as recorded when the run started. */
+  prompt?: string;
+  /** When the request finished. */
+  createdAt: number;
+  /** Whether Aiden's auto-saved copy of this image is on disk. */
+  saved: boolean;
+  /** Document-bound thumbnail URL (512 px). */
+  thumbUrl: string;
+}
+
+export interface GalleryResponse {
+  items: GalleryItem[];
+  /** Where auto-saved images go, for display only (for example "Pictures › Aiden › Create Images"). */
+  saveFolderLabel: string;
+}
+
+/**
+ * Actions on generated or imported images. Every op names images by asset id only; file
+ * paths and dialogs stay in the main process.
+ * - view: a document-bound URL for the full-size original.
+ * - save-as: a Save dialog for one image.
+ * - save-all: a folder picker, then copies of up to SAVE_ALL_MAX_IMAGES images.
+ * - copy: the image onto the system clipboard.
+ * - reveal: shows the auto-saved copy in the file manager, saving it first if it is missing.
+ * - reveal-folder: opens the auto-save folder.
+ * - drag: starts a native drag of the image file out of the window.
+ */
+export type ImageActionRequest =
+  | { op: "view" | "save-as" | "copy" | "reveal" | "drag"; assetId: string }
+  | { op: "save-all"; assetIds: string[] }
+  | { op: "reveal-folder" };
+
+export type ImageActionResponse =
+  | { ok: true; url?: string; count?: number }
+  | { ok: false; reason: "cancelled" | "not-found" | "unsupported" | "failed"; message?: string };
