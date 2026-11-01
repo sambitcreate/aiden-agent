@@ -335,9 +335,11 @@ function useDesignWindowPolicy(
     const source = consumePendingDesignEntry(chatId);
     const element = containerRef.current;
     if (!source || !element) return;
-    const containerWidth = element.getBoundingClientRect().width;
     const current = sidebarRef.current;
-    const sidebarWidth = current && !current.collapsed ? Math.max(0, window.innerWidth - containerWidth) : 0;
+    // Measure the room design mode will have, not the container now: on entry the
+    // Environment panel is still closing and would make the content look too narrow.
+    const sidebarWidth = current?.reservedWidth ?? 0;
+    const containerWidth = Math.max(0, window.innerWidth - sidebarWidth);
     const action = resolveDesignEntryAction({ containerWidth, sidebarWidth, canWiden: true });
     if (action === "collapseSidebar" && current) {
       current.setCollapsed(true);

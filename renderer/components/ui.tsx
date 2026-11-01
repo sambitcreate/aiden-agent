@@ -404,6 +404,8 @@ export const FieldLabel = Label;
 
 const SplitContext = React.createContext<{
   collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
   toggle: () => void;
   setCollapsed: (collapsed: boolean) => void;
   leadingAnchor: HTMLDivElement | null;
@@ -425,10 +427,18 @@ export function useSplitViewCollapsed(): boolean {
  * The leading sidebar's collapsed state and a setter that persists like the
  * toggle does, for layouts that collapse it for room. Null outside a SplitView.
  */
-export function useSplitViewSidebar(): { collapsed: boolean; setCollapsed: (collapsed: boolean) => void } | null {
+export function useSplitViewSidebar(): {
+  collapsed: boolean;
+  /** The width the sidebar takes from the content: 0 while collapsed or overlaid. */
+  reservedWidth: number;
+  setCollapsed: (collapsed: boolean) => void;
+} | null {
   const context = React.useContext(SplitContext);
   return React.useMemo(
-    () => (context ? { collapsed: context.collapsed, setCollapsed: context.setCollapsed } : null),
+    () =>
+      context
+        ? { collapsed: context.collapsed, reservedWidth: context.reservedWidth, setCollapsed: context.setCollapsed }
+        : null,
     [context],
   );
 }
@@ -623,8 +633,14 @@ function SplitViewRoot({
   }, [collapseKey, compactOpen, leadingAnchor]);
 
   const splitContext = React.useMemo(
-    () => ({ collapsed, toggle, setCollapsed: setPersistedCollapsed, leadingAnchor }),
-    [collapsed, toggle, setPersistedCollapsed, leadingAnchor],
+    () => ({
+      collapsed,
+      reservedWidth: reservedSidebarWidth,
+      toggle,
+      setCollapsed: setPersistedCollapsed,
+      leadingAnchor,
+    }),
+    [collapsed, reservedSidebarWidth, toggle, setPersistedCollapsed, leadingAnchor],
   );
 
   return (

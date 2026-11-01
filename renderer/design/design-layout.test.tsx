@@ -51,6 +51,10 @@ function chat(id: string, overrides: Partial<Chat> = {}): Chat {
 
 let queryClient: QueryClient;
 let containerWidth = 1400;
+/** The window's width; the open sidebar (260 px by default) takes its share of it. */
+function setWindowWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+}
 let widenCalls = 0;
 let widenResult = { widened: true };
 let canWidenResult = { canWiden: false };
@@ -60,6 +64,7 @@ const realRect = HTMLElement.prototype.getBoundingClientRect;
 
 beforeEach(() => {
   containerWidth = 1400;
+  setWindowWidth(1024);
   widenCalls = 0;
   widenResult = { widened: true };
   canWidenResult = { canWiden: false };
@@ -420,8 +425,9 @@ test("design mode that the person did not just turn on never collapses the sideb
 });
 
 test("the person's own entry collapses the sidebar when that is enough for the split", async () => {
-  // 600 px of content plus the open sidebar (the rest of happy-dom's 1024 px window) fits the split.
+  // 600 px of content plus the open 260 px sidebar fits the split.
   containerWidth = 600;
+  setWindowWidth(860);
   await act(async () => {
     render(<Shell chatId="plain-chat" />);
   });
@@ -439,8 +445,26 @@ test("the person's own entry collapses the sidebar when that is enough for the s
   assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "the sidebar design mode collapsed reopens");
 });
 
+test("the person's own entry leaves the sidebar open when only the closing panel makes the content look narrow", async () => {
+  // A 1024 px window with a 260 px sidebar: once the panel has closed the content has 764 px,
+  // enough for the split, even though the panel still squeezes it to 400 px at entry.
+  containerWidth = 400;
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  await act(async () => panel.showTools("terminal"));
+  await act(async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Design mode" }));
+  });
+  await waitFor(() => assert.equal(layoutState() === "off", false));
+  await act(async () => undefined);
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), null, "the sidebar stays open");
+  assert.equal(widenCalls, 0, "and the window keeps its size");
+});
+
 test("the person's own entry widens the window when the sidebar is already collapsed", async () => {
   containerWidth = 600;
+  setWindowWidth(600);
   localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
   await act(async () => {
     render(<Shell chatId="plain-chat" />);
@@ -455,6 +479,7 @@ test("the person's own entry widens the window when the sidebar is already colla
 
 test("after a widen, the sidebar design mode collapsed reopens once it fits again", async () => {
   containerWidth = 600;
+  setWindowWidth(860);
   canWidenResult = { canWiden: true };
   await act(async () => {
     render(<Shell chatId="plain-chat" />);
@@ -470,7 +495,7 @@ test("after a widen, the sidebar design mode collapsed reopens once it fits agai
     fireEvent.click(screen.getByRole("button", { name: "Widen window" }));
   });
   await waitFor(() => assert.equal(screen.queryByText("Design mode needs a wider window"), null));
-  // The window grows: 1300 px of content leaves room for the 424 px sidebar and the split.
+  // The window grows: 1300 px of content leaves room for the 260 px sidebar and the split.
   containerWidth = 1300;
   await act(async () => {
     window.dispatchEvent(new Event("resize"));
