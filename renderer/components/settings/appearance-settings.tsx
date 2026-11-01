@@ -1,6 +1,6 @@
 import { AppControlSettings } from "./app-control-settings";
 import { handleRadioNavigation } from "./radio-navigation";
-import { SidebarViewPicker } from "./sidebar-view-picker";
+import { InboxDockBadgeSetting, SidebarViewPicker } from "./sidebar-view-picker";
 import * as React from "react";
 import {
   Check,
@@ -537,6 +537,7 @@ export function AppearanceSettings() {
           Chooses how the sidebar lists chats. The sidebar’s Organize menu switches the same setting.
         </p>
         <SidebarViewPicker labelledBy="appearance-sidebar-title" />
+        <InboxDockBadgeSetting />
       </section>
     </div>
   );

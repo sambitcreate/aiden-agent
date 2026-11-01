@@ -120,7 +120,11 @@ native subagents use the same contracts as macOS. Linux-specific integrations in
 - opening folders with the default desktop file manager;
 - profile snapshot export through a Save dialog;
 - bundled Node mDNS publication for nearby Aiden On The Go discovery, without
-  requiring Apple's `dns-sd` utility.
+  requiring Apple's `dns-sd` utility;
+- the Inbox (Beta) sidebar's Needs you count on the app icon through
+  `app.setBadgeCount`, shown by launchers that read the Unity launcher API
+  (for example Ubuntu's Dock or KDE's task manager) and ignored elsewhere. Settings →
+  Appearance → Sidebar names it **Show Needs you count on the app icon**.
 
 Bots use the same roster, definitions, access controls, conversations, schedules,
 and Telegram bindings as macOS. Their native authority helper requires an

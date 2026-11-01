@@ -193,6 +193,11 @@ pill, the section and the medium title carry the state. Rows held in place
 after they leave, or on an offline host, step their text tokens down rather
 than fading the whole row.
 
+The Needs you count also goes on the app icon: the Dock badge on macOS and
+the launcher count on Linux. That count is made in the main process from the
+same placement rules (`renderer/shared/inbox-state.ts`), so the icon and the
+section always agree, and nothing in the window draws a second count for it.
+
 A row offers at most one quick action, shown as a single transparent icon
 button over the row's right edge on hover or focus (`data-inbox-action`:
 **Mark read** with `CheckCheck`, **Acknowledge** with `Check`), beside the

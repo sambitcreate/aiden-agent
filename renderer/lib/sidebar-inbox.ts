@@ -1,115 +1,33 @@
-import type { ChatRowState } from "../shared/chat-row-state";
+
+import {
+  INBOX_RECENT_WINDOW_MS,
+  INBOX_SECTIONS,
+  inboxState,
+  type InboxPlacement,
+  type InboxSection,
+  type InboxSignals,
+} from "../shared/inbox-state";
 
 /**
- * Pure Inbox placement and ordering (docs/plans/inbox-sidebar-plan.md, "Status
- * model"). Nothing here reads React state, storage or the clock: callers pass
- * `now`, so the same inputs always give the same sections.
+ * Pure Inbox ordering (docs/plans/inbox-sidebar-plan.md, "Status model"). One
+ * row's placement lives in `renderer/shared/inbox-state.ts`, which the Dock
+ * badge shares. Nothing here reads React state, storage or the clock: callers
+ * pass `now`, so the same inputs always give the same sections.
  */
 
-export const INBOX_RECENT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+export {
+  INBOX_RECENT_WINDOW_MS,
+  INBOX_SECTIONS,
+  INBOX_TIERS,
+  inboxState,
+  inboxTriageHold,
+  type InboxPlacement,
+  type InboxSection,
+  type InboxShelf,
+  type InboxSignals,
+} from "../shared/inbox-state";
+
 export const INBOX_EARLIER_LIMIT = 20;
-
-export const INBOX_SECTIONS = ["needs_you", "pinned", "updates", "earlier", "working"] as const;
-export type InboxSection = (typeof INBOX_SECTIONS)[number];
-export type InboxShelf = InboxSection | "hidden";
-
-/** Needs you tiers, most urgent first. */
-export const INBOX_TIERS = {
-  approval: 0,
-  input: 1,
-  failed: 2,
-  /** A detached or interrupted local prompt. */
-  unavailable: 3,
-} as const;
-
-export interface InboxSignals {
-  rowState: ChatRowState;
-  unread: boolean;
-  /** The newest run failed (`lastAssistantFailed` / `lastRunFailed`). */
-  failed: boolean;
-  /** Local only, from `chats:pendingAttention`. */
-  attention?: "detached" | "interrupted";
-  /** The chat shown in the main pane. It never counts as unread. */
-  isOpen: boolean;
-  /** Always true for local chats. */
-  hostOnline: boolean;
-  updatedAt: number;
-  lastAssistantAt?: number;
-  attentionSince?: number;
-  runStartedAt?: number;
-  /** Phase 2. */
-  pinnedAt?: number;
-  /** Phase 2. */
-  doneAt?: number;
-  /** Phase 2. */
-  snoozedUntil?: number;
-}
-
-export interface InboxPlacement {
-  shelf: InboxShelf;
-  /** The Needs you tier (see `INBOX_TIERS`); 0 on every other shelf. */
-  tier: number;
-  /** The time the row orders by within its shelf. */
-  sortAt: number;
-}
-
-/**
- * The triage that hides a row right now: Mark done until newer output lands,
- * and Snooze until it ends. Both can hold at once.
- */
-export function inboxTriageHold(
-  signals: Pick<InboxSignals, "doneAt" | "snoozedUntil" | "lastAssistantAt">,
-  now: number,
-): { done: boolean; snoozed: boolean } {
-  return {
-    done: signals.doneAt !== undefined && (signals.lastAssistantAt ?? Number.NEGATIVE_INFINITY) <= signals.doneAt,
-    snoozed: signals.snoozedUntil !== undefined && signals.snoozedUntil > now,
-  };
-}
-
-/**
- * Where one chat belongs. The placement rules apply in the plan's order.
- * `includeTriaged` (search) skips rule 5, so a Done or snoozed chat is listed
- * where it would be without its triage.
- */
-export function inboxState(
-  signals: Readonly<InboxSignals>,
-  now: number,
-  recentWindowMs: number = INBOX_RECENT_WINDOW_MS,
-  includeTriaged = false,
-): InboxPlacement {
-  const unread = signals.unread && !signals.isOpen;
-  const needsYou = (tier: number): InboxPlacement => ({
-    shelf: "needs_you",
-    tier,
-    sortAt: signals.attentionSince ?? signals.updatedAt,
-  });
-  // 1. A live prompt overrides Done and Snooze.
-  if (signals.rowState === "needs_approval") return needsYou(INBOX_TIERS.approval);
-  if (signals.rowState === "needs_input") return needsYou(INBOX_TIERS.input);
-  // 2. Unseen output from a failed run (an idle chat; `inboxRowStatus` reads it as Failed).
-  if (signals.rowState === "idle" && signals.failed && unread) return needsYou(INBOX_TIERS.failed);
-  // 3. A local prompt that can no longer be answered where it was raised.
-  if (signals.attention) return needsYou(INBOX_TIERS.unavailable);
-  // 4. Running.
-  if (signals.rowState === "working") {
-    return { shelf: "working", tier: 0, sortAt: signals.runStartedAt ?? signals.updatedAt };
-  }
-  // 5. Done with no newer output, or snoozed.
-  const hidden: InboxPlacement = { shelf: "hidden", tier: 0, sortAt: signals.updatedAt };
-  if (!includeTriaged) {
-    const hold = inboxTriageHold(signals, now);
-    if (hold.done || hold.snoozed) return hidden;
-  }
-  // 6–8.
-  if (signals.pinnedAt !== undefined) return { shelf: "pinned", tier: 0, sortAt: signals.pinnedAt };
-  if (unread) return { shelf: "updates", tier: 0, sortAt: signals.lastAssistantAt ?? signals.updatedAt };
-  // The open chat stays listed however old it is.
-  if (signals.isOpen || now - signals.updatedAt <= recentWindowMs) {
-    return { shelf: "earlier", tier: 0, sortAt: signals.updatedAt };
-  }
-  return hidden;
-}
 
 export interface InboxRow {
   /** `projectOrderKey(hostId, chatId)`: unique across hosts, and the tie-break. */

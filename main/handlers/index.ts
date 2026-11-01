@@ -50,6 +50,7 @@ import { registerAidenRemoteHandlers } from "./aiden-remote.js";
 import { registerPeerHostHandlers } from "./peer-hosts.js";
 import { registerLocalRunIpc } from "./local-runs-main.js";
 import { registerChatPendingAttentionIpc } from "./chat-pending-attention-main.js";
+import { registerInboxDockBadgeIpc } from "../services/inbox-dock-badge-main.js";
 import { registerBotHandlers } from "./bots.js";
 import { registerBotRoutineHandlers } from "./bot-routines.js";
 import { registerBotComputerHandlers } from "./bot-computers.js";
@@ -88,6 +89,7 @@ export function registerHandlers(): void {
   registerAcpHarnessHandlers();
   registerChatHistoryHandlers();
   registerChatPendingAttentionIpc();
+  registerInboxDockBadgeIpc();
   registerChatGenerationHandlers();
   registerWorkspaceHandlers();
   registerPullRequestHandlers();

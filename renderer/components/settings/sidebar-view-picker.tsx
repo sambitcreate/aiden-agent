@@ -1,4 +1,6 @@
-import { useSidebarView } from "../../lib/use-sidebar-view";
+import { useAppCapabilities } from "../../lib/app-capabilities";
+import { useInboxDockBadge, useSidebarView } from "../../lib/use-sidebar-view";
+import { Field, FieldSet, Switch } from "../ui";
 import type { SidebarView } from "../../lib/sidebar-organization";
 import { handleRadioNavigation } from "./radio-navigation";
 
@@ -72,5 +74,28 @@ export function SidebarViewPicker({ labelledBy }: { labelledBy: string }) {
         </button>
       ))}
     </div>
+  );
+}
+
+/**
+ * Settings → Appearance → Sidebar, under the view cards while Inbox is the
+ * view: whether the app icon shows the Needs you count. On by default; the
+ * main process does the counting and clears the badge in any other view.
+ */
+export function InboxDockBadgeSetting() {
+  const { view } = useSidebarView();
+  const { enabled, setEnabled } = useInboxDockBadge();
+  const { platform, badgeCount } = useAppCapabilities();
+  if (view !== "inbox" || !badgeCount) return null;
+  const label = platform === "darwin" ? "Show Needs you count on the Dock icon" : "Show Needs you count on the app icon";
+  return (
+    <FieldSet className="appearance-sidebar-badge mt-3 mb-0">
+      <Field
+        label={label}
+        description="Counts what’s in Needs you: chats and Bots waiting on you, on this computer and on paired ones that are online."
+      >
+        <Switch checked={enabled} onCheckedChange={setEnabled} aria-label={label} />
+      </Field>
+    </FieldSet>
   );
 }

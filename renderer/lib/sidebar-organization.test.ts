@@ -273,6 +273,7 @@ test("legacy preferences migrate and invalid input falls back to defaults", () =
     machineFilter: "all",
     projectGrouping: "separate",
     workingShelfCollapsed: false,
+    dockBadge: true,
   };
   assert.deepEqual(parseSidebarPreferences(null), defaults);
   assert.deepEqual(parseSidebarPreferences("{"), defaults);
@@ -347,6 +348,11 @@ test("the Inbox view and its shelf state are stored, and a downgrade falls back 
     );
   }
   assert.equal(parseSidebarPreferences(JSON.stringify({ workingShelfCollapsed: true })).workingShelfCollapsed, true);
+  // The Dock badge switch is on unless the person turned it off; only a literal false does.
+  for (const dockBadge of ["false", 0, null, {}]) {
+    assert.equal(parseSidebarPreferences(JSON.stringify({ dockBadge })).dockBadge, true, JSON.stringify(dockBadge));
+  }
+  assert.equal(parseSidebarPreferences(JSON.stringify({ dockBadge: false })).dockBadge, false);
 });
 
 test("stored preferences round-trip, keep a downgrade-safe organization, and prune only local keys", () => {
@@ -359,6 +365,7 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     machineFilter: "host:studio",
     projectGrouping: "repository_path",
     workingShelfCollapsed: true,
+    dockBadge: false,
   });
   assert.equal(JSON.parse(stored).organization, "workspace");
   assert.deepEqual(parseSidebarPreferences(stored, ["alpha", "beta"]), {
@@ -370,6 +377,7 @@ test("stored preferences round-trip, keep a downgrade-safe organization, and pru
     machineFilter: "host:studio",
     projectGrouping: "repository_path",
     workingShelfCollapsed: true,
+    dockBadge: false,
   });
   assert.equal(
     JSON.parse(serializeSidebarPreferences({ ...parseSidebarPreferences(null), view: "recent" })).organization,

@@ -1,4 +1,5 @@
-import { CHAT_ROW_STATES, isChatRowState, type ChatRowState } from "../shared/chat-row-state";
+import type { ChatRowState } from "../shared/chat-row-state";
+import type { ChatTriageEntry } from "../shared/chat-triage";
 import type {
   PeerBlockedReason,
   PeerFeedRow,
@@ -6,8 +7,13 @@ import type {
   PeerHostStatus,
   PeerHostView,
   PeerRepositoryIdentity,
-  PeerRunState,
 } from "../shared/peer-host";
+import {
+  latestPeerRuns,
+  PEER_LIVE_RUN_STATES,
+  peerFeedChatState,
+  peerFeedTime as time,
+} from "../shared/peer-feed-inbox";
 import {
   LOCAL_SIDEBAR_HOST_ID,
   projectOrderKey,
@@ -17,7 +23,6 @@ import {
   type SidebarProjectSummary,
 } from "./sidebar-organization";
 import type { HostChatCapability } from "./hosts/host-chat-adapter";
-import type { ChatTriageEntry } from "../shared/chat-triage";
 
 /**
  * Remote adapter for the sidebar projection: maps each paired host's
@@ -77,25 +82,7 @@ export interface RemoteSidebarChat extends SidebarChatSummary {
   attentionSummary?: string;
 }
 
-/**
- * The triage entry a summary row reports: its `triageRevision` with whichever
- * of Pin, Done and Snooze it holds. `updatedAt` is not on the wire; the newest
- * of the entry's times stands in, and nothing orders by it.
- */
-export function reportedTriage(row: PeerFeedRow): ChatTriageEntry | undefined {
-  const revision = row.triageRevision;
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 1) return undefined;
-  const pinnedAt = time(row, "pinnedAt");
-  const doneAt = time(row, "doneAt");
-  const snoozedUntil = time(row, "snoozedUntil");
-  return {
-    revision,
-    updatedAt: Math.max(0, pinnedAt ?? 0, doneAt ?? 0),
-    ...(pinnedAt !== undefined ? { pinnedAt } : {}),
-    ...(doneAt !== undefined ? { doneAt } : {}),
-    ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
-  };
-}
+export { reportedTriage } from "../shared/peer-feed-inbox";
 
 /** One action a remote chat row offers, in menu order. */
 export interface RemoteChatRowAction {
@@ -179,13 +166,6 @@ function text(row: PeerFeedRow, field: string): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-function time(row: PeerFeedRow, field: string): number | undefined {
-  const value = row[field];
-  if (typeof value !== "string") return undefined;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function repositoryOf(row: PeerFeedRow): PeerRepositoryIdentity | null {
   const value = row.repository;
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -193,19 +173,6 @@ function repositoryOf(row: PeerFeedRow): PeerRepositoryIdentity | null {
   return typeof canonicalKey === "string" && canonicalKey && typeof relativePath === "string"
     ? { canonicalKey, relativePath }
     : null;
-}
-
-const LIVE_RUN_STATES = new Set<string>(["working", "needs_approval", "needs_input"]);
-
-function moreUrgent(left: ChatRowState, right: ChatRowState): ChatRowState {
-  return CHAT_ROW_STATES.indexOf(left) <= CHAT_ROW_STATES.indexOf(right) ? left : right;
-}
-
-/** Newest run per chat; the feed keeps runs in insertion order, newest last. */
-function latestRuns(runs: readonly PeerRunState[]): Map<string, PeerRunState> {
-  const latest = new Map<string, PeerRunState>();
-  for (const run of runs) latest.set(run.chatId, run);
-  return latest;
 }
 
 export interface RemoteSidebarRows {
@@ -241,33 +208,17 @@ export function remoteSidebarRows(
       stale,
     };
   });
-  const runs = latestRuns(snapshot.runs);
+  const runs = latestPeerRuns(snapshot.runs);
   const chats = snapshot.summaries.flatMap((row): RemoteSidebarChat[] => {
     const workspaceId = text(row, "workspaceId");
     if (!workspaceId) return [];
     const run = runs.get(row.id);
-    const summaryState: ChatRowState = isChatRowState(row.rowState)
-      ? row.rowState
-      : row.activity === "active"
-        ? "working"
-        : "idle";
-    const runState =
-      run && LIVE_RUN_STATES.has(run.state) && isChatRowState(run.state) ? run.state : "idle";
-    let rowState = moreUrgent(runState, summaryState);
-    // A stale host cannot confirm a run is still going; a waiting prompt stays visible.
-    if (stale && rowState === "working") rowState = "idle";
-    // The summary carries the host's current read marker, so it outranks the
-    // run's hint, which only stands in when a summary has no read state.
-    const hostUnread = typeof row.unread === "boolean" ? row.unread : run?.unread === true;
+    const { rowState, hostUnread, lastRunFailed, attentionSince, runStartedAt, lastAssistantAt, triage } =
+      peerFeedChatState(row, run, stale);
     const unread = !isOpen(host.id, row.id) && hostUnread;
-    const lastRunFailed = row.lastRunFailed === true;
     const revision = text(row, "revision");
-    const attentionSince = time(row, "attentionSince");
-    const runStartedAt = time(row, "runStartedAt");
-    const lastAssistantAt = time(row, "lastAssistantAt");
-    const triage = reportedTriage(row);
     const waiting = rowState === "needs_approval" || rowState === "needs_input";
-    const attentionSummary = waiting && run && LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
+    const attentionSummary = waiting && run && PEER_LIVE_RUN_STATES.has(run.state) ? run.attentionSummary : undefined;
     return [
       {
         key: projectOrderKey(host.id, row.id),

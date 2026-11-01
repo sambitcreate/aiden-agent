@@ -411,6 +411,8 @@ export const appApi = {
     invoke<boolean>("app:setCloseGuard", guard),
   setDockIcon: (preference: "aiden" | "monochrome") =>
     invoke<boolean>("app:setDockIcon", preference),
+  /** Whether the app icon shows the Inbox's Needs you count; main does the counting. */
+  setInboxDockBadge: (enabled: boolean) => invoke<void>("app:setInboxDockBadge", enabled),
 };
 
 export const appUpdatesApi = {

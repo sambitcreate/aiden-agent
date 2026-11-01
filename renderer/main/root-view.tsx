@@ -57,6 +57,7 @@ import { isChatCacheDeleted } from "../lib/chat-deletion-cache";
 import type { Chat } from "../lib/types";
 import { useAppendReconciliationRequired } from "../lib/append-reconciliation";
 import { useBotNotificationsSync } from "../lib/bot-notifications-sync";
+import { useInboxDockBadgeSync } from "../lib/use-sidebar-view";
 import { subscribeLateReturnedGuidance } from "../lib/composer-draft-store";
 import { onAssistantAutomationComposerRequested } from "../lib/assistant-dock";
 
@@ -483,6 +484,7 @@ function RootContent() {
   }, [queryClient]);
 
   useBotNotificationsSync(queryClient);
+  useInboxDockBadgeSync(appApi.setInboxDockBadge, capabilities.badgeCount);
 
   React.useEffect(
     () =>

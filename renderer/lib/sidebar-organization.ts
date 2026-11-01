@@ -389,6 +389,8 @@ export interface SidebarPreferences {
   projectGrouping: SidebarProjectGrouping;
   /** Whether the Inbox's Working shelf is collapsed. */
   workingShelfCollapsed: boolean;
+  /** Whether the app icon shows the Inbox's Needs you count while the Inbox is the view. */
+  dockBadge: boolean;
 }
 
 export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.freeze({
@@ -400,6 +402,7 @@ export const DEFAULT_SIDEBAR_PREFERENCES: Readonly<SidebarPreferences> = Object.
   machineFilter: "all",
   projectGrouping: "separate",
   workingShelfCollapsed: false,
+  dockBadge: true,
 });
 
 export const MAX_SIDEBAR_PROJECT_ORDER = 500;
@@ -482,6 +485,8 @@ export function parseSidebarPreferences(
       typeof record.workingShelfCollapsed === "boolean"
         ? record.workingShelfCollapsed
         : DEFAULT_SIDEBAR_PREFERENCES.workingShelfCollapsed,
+    dockBadge:
+      typeof record.dockBadge === "boolean" ? record.dockBadge : DEFAULT_SIDEBAR_PREFERENCES.dockBadge,
   };
 }
 

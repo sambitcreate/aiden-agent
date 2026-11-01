@@ -16,6 +16,7 @@ import path from "node:path";
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
 import { chatTriage, startChatTriage, stopChatTriage } from "./services/chat-triage-main.js";
+import { startInboxDockBadge, stopInboxDockBadge } from "./services/inbox-dock-badge-main.js";
 import { chatReadMarkers } from "./services/chat-read-markers-main.js";
 import { forgetChatInboxState } from "./services/chat-application-service.js";
 import { terminalService } from "./services/terminal.js";
@@ -361,6 +362,7 @@ function cleanupApplication(): void {
   computerUseStatus.invalidate();
   scheduleService.stop();
   stopChatTriage();
+  stopInboxDockBadge();
   llmClient.abortAll();
   void geminiLiveService.shutdown();
   telegramService.stop();
@@ -2216,6 +2218,9 @@ if (!ownsSingleInstanceLock) {
       // Inbox snoozes: one timer for the next wake, plus the early wake when
       // a run needs an approval, an answer, or fails. Local only.
       startChatTriage();
+      // The Inbox's Needs you count on the Dock tile (or Linux launcher), from
+      // local state and paired hosts' cached feeds. No polling, no network.
+      startInboxDockBadge({ packaged: isPackagedRuntime() });
       // Local-only housekeeping for on-device speech storage; no network.
       void prepareLocalSpeechStorage().catch((error: unknown) => {
         logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);

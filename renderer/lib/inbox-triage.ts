@@ -184,17 +184,7 @@ export function settledInboxReads(
   });
 }
 
-/** The placement signals one entry contributes to a row. */
-export function triageSignals(
-  entry: ChatTriageEntry | null | undefined,
-): Pick<InboxSignals, "pinnedAt" | "doneAt" | "snoozedUntil"> {
-  if (!entry) return {};
-  return {
-    ...(entry.pinnedAt !== undefined ? { pinnedAt: entry.pinnedAt } : {}),
-    ...(entry.doneAt !== undefined ? { doneAt: entry.doneAt } : {}),
-    ...(entry.snoozedUntil !== undefined ? { snoozedUntil: entry.snoozedUntil } : {}),
-  };
-}
+export { triageSignals } from "../shared/inbox-state";
 
 /** One chat in an Undo batch. */
 export interface InboxTriageUndoItem {

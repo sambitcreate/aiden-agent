@@ -1,5 +1,5 @@
 import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
-import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
+import { isLocalInboxChat } from "../shared/inbox-state";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
 import type { ChatTriageEntry } from "../shared/chat-triage";
@@ -25,6 +25,7 @@ import {
 import type { ChatMeta, Workspace } from "./types";
 import { isBotAvatarAppearance, type BotAvatar, type BotDefinition } from "../shared/bots";
 import type { PeerHostFeedSnapshot } from "../shared/peer-host";
+import { peerFeedBotAttention } from "../shared/peer-feed-inbox";
 
 /**
  * The Inbox view's pure parts (docs/plans/inbox-sidebar-plan.md, Phase 1b):
@@ -91,18 +92,12 @@ export interface LocalInboxInput {
  * The Assistant chat and workspace-less scheduled chats are listed.
  */
 export function localInboxProject(chat: ChatMeta, workspaces: readonly Workspace[]): string | null {
-  if (chat.botId) return null;
   const workspace = chat.workspaceId === undefined
     ? undefined
     : workspaces.find((candidate) => candidate.id === chat.workspaceId);
+  if (!isLocalInboxChat(chat, () => workspace !== undefined)) return null;
   if (workspace) return isNoWorkspace(workspace) ? NO_WORKSPACE_GROUP_LABEL : workspace.name;
-  if (chat.workspaceId === ASSISTANT_WORKSPACE_ID) return INBOX_ASSISTANT_PROJECT_LABEL;
-  // A scheduled task without a workspace saves its chat with no workspace,
-  // which the chat list reads back as the default id.
-  if (chat.workspaceId === undefined || chat.workspaceId === DEFAULT_CHAT_WORKSPACE_ID) {
-    return INBOX_SCHEDULED_PROJECT_LABEL;
-  }
-  return null;
+  return chat.workspaceId === ASSISTANT_WORKSPACE_ID ? INBOX_ASSISTANT_PROJECT_LABEL : INBOX_SCHEDULED_PROJECT_LABEL;
 }
 
 export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
@@ -254,8 +249,7 @@ export function remoteBotInboxRows(input: RemoteBotInboxInput): BotInboxRows {
     if (!feed || feed.hostId !== host.id) continue;
     const hostOnline = !feed.stale && host.availability === "online";
     for (const row of feed.bots) {
-      const needsYou = row.needsYou === true;
-      const failed = !needsYou && row.failed === true;
+      const { needsYou, failed } = peerFeedBotAttention(row);
       const isOpen = input.openKey === `${host.id}/${row.id}`;
       const lastReplyAt = feedTime(row.lastReplyAt);
       // The feed has no time a Bot's wait began; its newest reply, else its last edit, stands in.

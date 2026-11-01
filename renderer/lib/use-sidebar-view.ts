@@ -128,3 +128,34 @@ export function useWorkingShelfCollapsed(): {
   );
   return { collapsed, setCollapsed };
 }
+
+/** Whether the app icon shows the Inbox's Needs you count (Settings → Appearance → Sidebar). */
+export function useInboxDockBadge(): { enabled: boolean; setEnabled: (enabled: boolean) => void } {
+  const read = () => snapshot().dockBadge;
+  const enabled = React.useSyncExternalStore(subscribe, read, read);
+  const setEnabled = React.useCallback((next: boolean) => writeSidebarPreferences({ dockBadge: next }), []);
+  return { enabled, setEnabled };
+}
+
+/**
+ * Tells main whether to show the Needs you badge: only while the Inbox is the
+ * sidebar view and its switch is on. Main counts; this only reports the
+ * setting, on mount and on every change, so a window that opens after the
+ * setting changed elsewhere still reports it.
+ */
+export function useInboxDockBadgeSync(
+  report: (enabled: boolean) => Promise<unknown>,
+  available: boolean,
+): void {
+  const { view } = useSidebarView();
+  const { enabled } = useInboxDockBadge();
+  const show = available && view === "inbox" && enabled;
+  React.useEffect(() => {
+    if (!available) return;
+    // A refused report (an older main with no handler) must never break the
+    // window: there is simply no badge to drive.
+    void Promise.resolve()
+      .then(() => report(show))
+      .catch(() => {});
+  }, [available, report, show]);
+}
