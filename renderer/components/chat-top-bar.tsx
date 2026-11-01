@@ -87,7 +87,8 @@ export function ChatTitleMenu({
   const [renameValue, setRenameValue] = React.useState("");
   const [saving, setSaving] = React.useState(false);
 
-  if (!persisted) return <span className="block truncate">{title}</span>;
+  // A narrow column truncates the title, so hovering shows it in full.
+  if (!persisted) return <span className="block truncate" title={title}>{title}</span>;
 
   const commitRename = async () => {
     const next = renameValue.trim();
@@ -115,7 +116,7 @@ export function ChatTitleMenu({
             style={INSET_FOCUS_RING}
             className="no-drag max-w-full min-w-0 shrink gap-1 px-1.5 text-strong text-primary"
           >
-            <span className="min-w-0 truncate">{title}</span>
+            <span className="min-w-0 truncate" title={title}>{title}</span>
             <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 text-tertiary" />
           </Button>
         </DropdownMenuTrigger>

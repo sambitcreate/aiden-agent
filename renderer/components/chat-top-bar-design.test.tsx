@@ -12,7 +12,7 @@ import { DesignModeControlsContext } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { ariaKeyShortcut, effectiveBindings, prettyAccelerator } from "../shared/keybindings";
-import { DesignModeToggle, WorkspaceToolButtons, type FoldableToolbarAction } from "./chat-top-bar";
+import { ChatTitleMenu, DesignModeToggle, WorkspaceToolButtons, type FoldableToolbarAction } from "./chat-top-bar";
 import { EnvironmentPanelContext, type EnvironmentPanelContextValue } from "./environment-panel";
 
 const WORKSPACE: Workspace = {
@@ -217,4 +217,22 @@ test("a tight header, like the design chat column, moves Quick View and Terminal
     fireEvent.click(items[1]);
   });
   assert.deepEqual(selected, ["terminal"], "the menu row does what the button did");
+});
+
+test("a truncated chat title keeps its full text as the name and on hover", () => {
+  const title = "Design chat for the landing page and its pricing section";
+  for (const persisted of [true, false]) {
+    const { container } = render(
+      <ChatTitleMenu
+        title={title}
+        persisted={persisted}
+        onRename={async () => {}}
+        onDuplicate={async () => {}}
+        duplicateDisabledReason={null}
+      />,
+    );
+    if (persisted) assert.ok(screen.getByRole("button", { name: title }), "the menu button is named by the whole title");
+    assert.equal(container.querySelector(`[title="${title}"]`)?.textContent, title, "hovering the title shows all of it");
+    cleanup();
+  }
 });
