@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as React from "react";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
+import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvasV1, type DesignFrame } from "../shared/design-canvas/schema";
 import { DesignCanvasRegion } from "./design-canvas-region";
 
@@ -146,6 +148,33 @@ test("Delete removes the selected frame and Command-Z brings it back", async () 
 
   fireEvent.keyDown(region, { key: "z", code: "KeyZ", ...commandKey });
   assert.ok(await screen.findByRole("group", { name: "Sticky" }));
+});
+
+/** The chat's composer beside the canvas, taking stray typing the way the chat pane does. */
+function ChatComposer() {
+  const ref = React.useRef<HTMLTextAreaElement>(null);
+  useComposerTypeFocus(ref);
+  return <textarea aria-label="Message" ref={ref} />;
+}
+
+test("canvas keys with a printable character stay with the canvas instead of typing into the chat", async () => {
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 0, y: 0, w: 240, h: 160, text: "hello", createdBy: "person" };
+  setup(canvasWith(sticky));
+  render(<ChatComposer />);
+  const composer = screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+  // happy-dom lays nothing out; the composer counts as on screen, as it is in the app.
+  composer.getClientRects = () => [new DOMRect(0, 0, 400, 40)] as unknown as DOMRectList;
+  const region = await mount();
+  const frame = screen.getByRole("group", { name: "Sticky" }).closest<HTMLElement>(".react-flow__node")!;
+  fireEvent.click(frame);
+  frame.focus();
+
+  fireEvent.keyDown(frame, { key: "h", code: "KeyH" });
+  fireEvent.keyDown(frame, { key: "@", code: "Digit2", shiftKey: true });
+
+  assert.equal(region.getAttribute("data-tool"), "hand", "H picked the hand tool");
+  assert.equal(composer.value, "");
+  assert.notEqual(document.activeElement, composer);
 });
 
 test("Escape leaves an entered frame without leaving design mode", async () => {

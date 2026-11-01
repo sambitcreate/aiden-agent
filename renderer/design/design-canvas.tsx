@@ -370,7 +370,8 @@ function LoadedDesignCanvas({
   );
 
   return (
-    <div ref={wrapper} className="h-full w-full">
+    // Its letter, digit and +/- keys are the canvas's own, so the chat's composer leaves them alone.
+    <div ref={wrapper} data-typing-surface="canvas" className="h-full w-full">
       <DesignNodeContext.Provider value={context}>
         <StudioCanvas<DesignNode>
           label="Design canvas"
