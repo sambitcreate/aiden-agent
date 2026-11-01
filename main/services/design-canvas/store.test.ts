@@ -171,3 +171,23 @@ test("a failed write leaves the stored revision unchanged", async (t) => {
     revision: 2,
   });
 });
+
+test("a canvas too large to read back is refused and the previous one stays", async (t) => {
+  const root = await tempRoot(t);
+  const store = new DesignCanvasStore({ root: () => root, maxDocumentBytes: 4096 });
+  await store.save("chat-1", withNote(emptyDesignCanvas(), "kept"), 0);
+  let big = await store.get("chat-1");
+  for (let index = 0; big.frames.length < 40; index += 1) big = withNote(big, `big-${index}`);
+
+  const result = await store.save("chat-1", big, 1);
+  assert.equal(result.ok, false);
+  if (result.ok || result.reason !== "invalid") return assert.fail("expected invalid");
+  await assert.rejects(store.update("chat-1", () => big));
+
+  const current = await store.get("chat-1");
+  assert.equal(current.revision, 1);
+  assert.deepEqual(
+    current.frames.map((frame) => frame.id),
+    ["kept"],
+  );
+});

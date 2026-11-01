@@ -28,7 +28,7 @@
   - Below 25 % zoom no frame is live.
   - The file watch is debounced by 150 ms.
 - **Scheme:**
-  - URL form: `aiden-design://<grant>/<relative-path>`. A grant is 32 random bytes, base64url encoded.
+  - URL form: `aiden-design://<grant>/<relative-path>`. A grant is 32 random bytes, encoded as 52 lowercase base32 characters (`[a-z2-7]`), because Chromium lowercases URL hosts.
   - Files above 8 MiB are refused.
   - Dotfiles and dot-folders are refused.
   - Allowed extensions: `.html .htm .css .js .mjs .json .svg .png .jpg .jpeg .gif .webp .woff .woff2 .txt`.

@@ -418,6 +418,12 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           await options.assertCurrent?.(chat);
         });
         chatRemoved = true;
+        // A canvas save or grant that passed its chat check before the remove
+        // committed may have landed since the first cleanup; repeat it.
+        deps.designGrants?.revokeChat(chatId);
+        await deps.designCanvasStore?.delete(chatId).catch((error: unknown) => {
+          deps.logError("design", "Could not delete the deleted chat's design canvas.", error);
+        });
         await deps.subagentRunStore.completeChatDeletion(chatId);
         releaseAdmission = true;
         // Scratch cleanup is best effort and must not delay the delete reply.

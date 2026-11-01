@@ -35,11 +35,17 @@ export function assertDesignCanvasChatId(chatId: unknown): asserts chatId is str
 export class DesignCanvasStore {
   private readonly root: () => string;
   private readonly writeJson: typeof writeJsonAtomic;
+  private readonly maxDocumentBytes: number;
   private readonly chains = new Map<string, Promise<unknown>>();
 
-  constructor(options: { root: () => string; writeJson?: typeof writeJsonAtomic }) {
+  constructor(options: {
+    root: () => string;
+    writeJson?: typeof writeJsonAtomic;
+    maxDocumentBytes?: number;
+  }) {
     this.root = options.root;
     this.writeJson = options.writeJson ?? writeJsonAtomic;
+    this.maxDocumentBytes = options.maxDocumentBytes ?? MAX_DOCUMENT_BYTES;
   }
 
   /** The chat's canvas, or `emptyDesignCanvas()` when it has none or its file is unreadable. */
@@ -60,6 +66,9 @@ export class DesignCanvasStore {
     }
     const parsed = parseDesignCanvasV1(isRecord(doc) ? { ...doc, revision: baseRevision } : doc);
     if (!parsed.ok) return { ok: false, reason: "invalid", issues: parsed.issues };
+    if (this.tooLarge(parsed.doc)) {
+      return { ok: false, reason: "invalid", issues: ["The canvas is too large to save."] };
+    }
     return this.serialize(chatId, async () => {
       const current = await this.read(chatId);
       if (current.revision !== baseRevision) return { ok: false, reason: "conflict", doc: current };
@@ -81,6 +90,7 @@ export class DesignCanvasStore {
       const revision = current.revision + 1;
       const parsed = parseDesignCanvasV1(isRecord(next) ? { ...next, revision } : next);
       if (!parsed.ok) throw new Error(`The canvas update is invalid: ${parsed.issues.join(" ")}`);
+      if (this.tooLarge(parsed.doc)) throw new Error("The canvas is too large to save.");
       await this.write(chatId, parsed.doc);
       return parsed.doc;
     });
@@ -101,7 +111,7 @@ export class DesignCanvasStore {
     try {
       const file = this.file(chatId);
       const stat = await fs.stat(file);
-      if (!stat.isFile() || stat.size > MAX_DOCUMENT_BYTES) return emptyDesignCanvas();
+      if (!stat.isFile() || stat.size > this.maxDocumentBytes) return emptyDesignCanvas();
       text = await fs.readFile(file, "utf8");
     } catch (error) {
       if (isMissing(error)) return emptyDesignCanvas();
@@ -115,6 +125,11 @@ export class DesignCanvasStore {
     }
     const parsed = parseDesignCanvasV1(value);
     return parsed.ok ? parsed.doc : emptyDesignCanvas();
+  }
+
+  /** A document the read cap would turn back into an empty canvas is never written. */
+  private tooLarge(doc: DesignCanvasV1): boolean {
+    return Buffer.byteLength(JSON.stringify(doc), "utf8") > this.maxDocumentBytes;
   }
 
   private write(chatId: string, doc: DesignCanvasV1): Promise<void> {

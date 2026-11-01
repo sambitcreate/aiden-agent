@@ -102,3 +102,9 @@ Deviations from the P1 plan:
   - There is a residual parent-directory TOCTOU between realpath and the `O_NOFOLLOW` open.
   - The bridge has no nonce yet (spec P4).
   - The `main-window.html` CSP line will conflict with PR #682 (`aiden-attachment:` in `img-src`).
+- Final review fixes (P2 Tasks 1–3):
+  - `remove()` revokes grants and deletes the canvas a second time after `chatStore.remove`, so a save or grant that raced the delete is not left behind.
+  - Managed worktree deletion, and the worktree-create rollback, call `designGrants.revokeRoot(folderPath)` through `WorkspaceWorktreeApplicationService` deps.
+  - `designCanvas:grant` re-resolves the workspace root after issuing and revokes if it changed or disappeared.
+  - `DesignCanvasStore` refuses a save, or throws on an `update`, when the compact JSON is larger than `maxDocumentBytes` (default 16 MiB, the read cap), so an oversized canvas never reads back as empty.
+  - Deferred for Task 4: `getChat` parses the full transcript on every canvas IPC call; a metadata-only read belongs in `chat-store-core`.

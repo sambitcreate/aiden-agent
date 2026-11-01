@@ -77,9 +77,14 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const root = await deps.workspaceRoot(chat);
     if (!root) return { error: "unavailable" };
     const grant = deps.grants.issue(chat.id, root);
-    // Design mode may have turned off, or the chat moved, while we awaited.
+    // Design mode may have turned off, the chat moved, or its workspace was
+    // removed or re-pointed while we awaited.
     const current = await deps.getChat(chat.id);
-    if (!canFrame(current) || current.workspaceId !== chat.workspaceId) {
+    if (
+      !canFrame(current) ||
+      current.workspaceId !== chat.workspaceId ||
+      (await deps.workspaceRoot(current)) !== root
+    ) {
       deps.grants.revokeChat(chat.id);
       return { error: "unavailable" };
     }

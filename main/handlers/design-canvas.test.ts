@@ -40,6 +40,7 @@ async function fixture(
     enabled?: boolean;
     chats?: Record<string, DesignCanvasChat>;
     roots?: Record<string, string | null>;
+    workspaceRoot?: (chat: DesignCanvasChat) => Promise<string | null>;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
@@ -53,10 +54,13 @@ async function fixture(
   };
   const grants = new DesignGrantRegistry();
   const issued: string[] = [];
+  const issuedGrants: string[] = [];
   const issue = grants.issue.bind(grants);
   grants.issue = (chatId, workspaceRoot) => {
     issued.push(chatId);
-    return issue(chatId, workspaceRoot);
+    const grant = issue(chatId, workspaceRoot);
+    issuedGrants.push(grant);
+    return grant;
   };
   const roots = options.roots ?? { "workspace-1": "/work/site" };
   registerDesignCanvasHandlers({
@@ -69,7 +73,8 @@ async function fixture(
     broadcast: (update) => broadcasts.push(update),
     getChat: async (chatId) => chats[chatId] ?? null,
     grants,
-    workspaceRoot: async (chat) => roots[chat.workspaceId ?? ""] ?? null,
+    workspaceRoot:
+      options.workspaceRoot ?? (async (chat) => roots[chat.workspaceId ?? ""] ?? null),
   });
   const invoke = async (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
@@ -81,6 +86,7 @@ async function fixture(
     store,
     grants,
     issued,
+    issuedGrants,
     chats,
     handlers,
     broadcasts,
@@ -203,4 +209,16 @@ test("the grant handler refuses with the flag off and rejects malformed chat ids
   disable();
   await assert.rejects(invoke("designCanvas:grant", "chat-1"), /Design mode is not available/u);
   assert.deepEqual(issued, []);
+});
+
+test("a workspace removed or re-pointed while the grant is issued leaves no live grant", async (t) => {
+  for (const later of [null, "/work/elsewhere"]) {
+    const answers: Array<string | null> = ["/work/site", later];
+    const { invoke, grants, issuedGrants } = await fixture(t, {
+      workspaceRoot: async () => (answers.length > 1 ? answers.shift()! : answers[0]!),
+    });
+    assert.deepEqual(await invoke("designCanvas:grant", "chat-1"), { error: "unavailable" });
+    assert.equal(issuedGrants.length, 1);
+    assert.equal(grants.resolve(issuedGrants[0]!), null, String(later));
+  }
 });

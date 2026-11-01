@@ -596,3 +596,36 @@ test("a chat's design grant ends when design mode turns off, the chat moves or t
   await service.remove("chat-3");
   assert.equal(designGrants.resolve(bystander), null);
 });
+
+test("a canvas save or grant that lands while the chat is being deleted does not outlive it", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-delete-race-"));
+  try {
+    const designCanvasStore = new DesignCanvasStore({ root: () => root });
+    const designGrants = new DesignGrantRegistry();
+    let lateGrant = "";
+    const { service } = fixture({
+      designCanvasStore,
+      designGrants,
+      chatStore: {
+        listRegular: async () => [],
+        list: async () => [],
+        get: async (id: string) => chat(id),
+        create: async () => chat(),
+        rename: async () => chat(),
+        setChatModelSelection: async () => chat(),
+        setDesignMode: async () => chat(),
+        moveEmptyChatToWorkspace: async () => chat(),
+        // The chat still exists until remove commits, so in-flight IPC passes its checks.
+        remove: async () => {
+          await designCanvasStore.save("chat-1", emptyDesignCanvas(), 0);
+          lateGrant = designGrants.issue("chat-1", "/work/site");
+        },
+      } as ChatApplicationDependencies["chatStore"],
+    });
+    await service.remove("chat-1");
+    assert.deepEqual(await fs.readdir(root), []);
+    assert.equal(designGrants.resolve(lateGrant), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
