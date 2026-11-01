@@ -7,6 +7,7 @@ import {
   emptyDesignCanvas,
   type DesignCanvasV1,
 } from "../../renderer/shared/design-canvas/schema.js";
+import { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import { DesignCanvasStore } from "../services/design-canvas/store.js";
 import {
   registerDesignCanvasHandlers,
@@ -35,7 +36,11 @@ const note: DesignCanvasV1 = {
 
 async function fixture(
   t: TestContext,
-  options: { enabled?: boolean; chats?: Record<string, DesignCanvasChat> } = {},
+  options: {
+    enabled?: boolean;
+    chats?: Record<string, DesignCanvasChat>;
+    roots?: Record<string, string | null>;
+  } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-design-canvas-handlers-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -46,6 +51,14 @@ async function fixture(
   const chats = options.chats ?? {
     "chat-1": { id: "chat-1", workspaceId: "workspace-1", designMode: true },
   };
+  const grants = new DesignGrantRegistry();
+  const issued: string[] = [];
+  const issue = grants.issue.bind(grants);
+  grants.issue = (chatId, workspaceRoot) => {
+    issued.push(chatId);
+    return issue(chatId, workspaceRoot);
+  };
+  const roots = options.roots ?? { "workspace-1": "/work/site" };
   registerDesignCanvasHandlers({
     enabled: () => enabled,
     handle: (channel, handler) => {
@@ -55,13 +68,25 @@ async function fixture(
     store,
     broadcast: (update) => broadcasts.push(update),
     getChat: async (chatId) => chats[chatId] ?? null,
+    grants,
+    workspaceRoot: async (chat) => roots[chat.workspaceId ?? ""] ?? null,
   });
   const invoke = async (channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`${channel} is not registered`);
     return handler({}, ...args);
   };
-  return { root, store, handlers, broadcasts, invoke, disable: () => (enabled = false) };
+  return {
+    root,
+    store,
+    grants,
+    issued,
+    chats,
+    handlers,
+    broadcasts,
+    invoke,
+    disable: () => (enabled = false),
+  };
 }
 
 test("with the flag off no designCanvas channel is registered", async (t) => {
@@ -127,4 +152,55 @@ test("every handler refuses once the flag turns off", async (t) => {
     /Design mode is not available/u,
   );
   assert.deepEqual(await fs.readdir(root), []);
+});
+
+test("a design-mode chat in a folder workspace gets one stable grant for that folder", async (t) => {
+  const { invoke, grants } = await fixture(t);
+  const first = (await invoke("designCanvas:grant", "chat-1")) as { grant: string };
+  assert.match(first.grant, /^[a-z2-7]{52}$/u);
+  assert.deepEqual(await invoke("designCanvas:grant", "chat-1"), first);
+  assert.deepEqual(grants.resolve(first.grant), { chatId: "chat-1", workspaceRoot: "/work/site" });
+});
+
+test("a chat that cannot frame workspace files gets no grant", async (t) => {
+  const { invoke, issued } = await fixture(t, {
+    chats: {
+      off: { id: "off", workspaceId: "workspace-1" },
+      bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+      owned: {
+        id: "owned",
+        workspaceId: "workspace-1",
+        designMode: true,
+        owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"],
+      },
+      loose: { id: "loose", workspaceId: "no-folder", designMode: true },
+    },
+    roots: { "workspace-1": "/work/site", "no-folder": null },
+  });
+  for (const chatId of ["off", "bot", "owned", "loose", "missing"]) {
+    assert.deepEqual(await invoke("designCanvas:grant", chatId), { error: "unavailable" }, chatId);
+  }
+  assert.deepEqual(issued, []);
+});
+
+test("turning design mode off before the grant lands leaves no live grant", async (t) => {
+  const { invoke, grants, chats } = await fixture(t);
+  const issue = grants.issue.bind(grants);
+  let issued = "";
+  grants.issue = (chatId, root) => {
+    issued = issue(chatId, root);
+    chats["chat-1"] = { id: "chat-1", workspaceId: "workspace-1" };
+    return issued;
+  };
+  assert.deepEqual(await invoke("designCanvas:grant", "chat-1"), { error: "unavailable" });
+  assert.equal(grants.resolve(issued), null);
+});
+
+test("the grant handler refuses with the flag off and rejects malformed chat ids", async (t) => {
+  const { invoke, disable, issued } = await fixture(t);
+  await assert.rejects(invoke("designCanvas:grant", "../escape"), /Invalid chat id/u);
+  await assert.rejects(invoke("designCanvas:grant", 7), /Invalid chat id/u);
+  disable();
+  await assert.rejects(invoke("designCanvas:grant", "chat-1"), /Design mode is not available/u);
+  assert.deepEqual(issued, []);
 });

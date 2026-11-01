@@ -3,6 +3,7 @@
 // the way `chats:setDesignMode` does.
 
 import type { DesignCanvasV1 } from "../../renderer/shared/design-canvas/schema.js";
+import type { DesignGrantRegistry } from "../services/design-canvas/grants.js";
 import {
   assertDesignCanvasChatId,
   type DesignCanvasStore,
@@ -18,6 +19,9 @@ export type DesignCanvasChat = Pick<
   "id" | "workspaceId" | "designMode" | "botId" | "owner"
 >;
 
+/** `designCanvas:grant` reply: an `aiden-design://<grant>/` host, or no access. */
+export type DesignCanvasGrantResult = { grant: string } | { error: "unavailable" };
+
 export const DESIGN_CANVAS_UPDATED_CHANNEL = "designCanvas:updated";
 const UNAVAILABLE = "Design mode is not available.";
 
@@ -27,6 +31,9 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   store: Pick<DesignCanvasStore, "get" | "save">;
   broadcast(update: DesignCanvasUpdated): void;
   getChat(chatId: string): Promise<DesignCanvasChat | null>;
+  grants: Pick<DesignGrantRegistry, "issue" | "revokeChat">;
+  /** The chat's workspace folder, or null when the chat has no folder to frame. */
+  workspaceRoot(chat: DesignCanvasChat): Promise<string | null>;
 }): void {
   if (!deps.enabled()) return;
 
@@ -55,5 +62,27 @@ export function registerDesignCanvasHandlers<Event>(deps: {
     const result = await deps.store.save(chat.id, doc as DesignCanvasV1, baseRevision);
     if (result.ok) deps.broadcast({ chatId: chat.id, revision: result.revision });
     return result;
+  });
+
+  // Only an attended desktop chat in design mode may frame its own workspace
+  // folder; Bot and routine chats never get a grant.
+  const canFrame = (chat: DesignCanvasChat | null): chat is DesignCanvasChat =>
+    chat !== null && chat.designMode === true && !chat.botId && !chat.owner;
+
+  deps.handle("designCanvas:grant", async (_event, chatId): Promise<DesignCanvasGrantResult> => {
+    if (!deps.enabled()) throw new Error(UNAVAILABLE);
+    assertDesignCanvasChatId(chatId);
+    const chat = await deps.getChat(chatId);
+    if (!canFrame(chat)) return { error: "unavailable" };
+    const root = await deps.workspaceRoot(chat);
+    if (!root) return { error: "unavailable" };
+    const grant = deps.grants.issue(chat.id, root);
+    // Design mode may have turned off, or the chat moved, while we awaited.
+    const current = await deps.getChat(chat.id);
+    if (!canFrame(current) || current.workspaceId !== chat.workspaceId) {
+      deps.grants.revokeChat(chat.id);
+      return { error: "unavailable" };
+    }
+    return { grant };
   });
 }

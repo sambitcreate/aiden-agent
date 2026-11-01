@@ -47,6 +47,8 @@ export interface WorkspaceApplicationDependencies {
   followThrough?: { closeForWorkspace(workspaceId: string): Promise<void> };
   /** Drops the workspace's artifacts once its record is gone. */
   workspaceArtifacts?: { removeWorkspace(workspaceId: string): Promise<void> };
+  /** Ends aiden-design grants that serve the removed workspace's folder. */
+  designGrants?: { revokeRoot(workspaceRoot: string): void };
   workspaceMutationGate: Pick<typeof workspaceMutationGate, "begin">;
   workspaceOperationRegistry: Pick<typeof workspaceOperationRegistry, "cancelAndSettle">;
   createScratchWorkspaceDirectory: typeof createScratchWorkspaceDirectory;
@@ -406,6 +408,7 @@ export function createWorkspaceApplicationService(deps: WorkspaceApplicationDepe
             await deps.llmClient.cancelWorkspaceAndSettle(id);
             await deps.scheduleService.cancelWorkspace(id);
             await deps.configStore.removeWorkspace(id);
+            if (existing?.folderPath) deps.designGrants?.revokeRoot(existing.folderPath);
             await deps.workspaceArtifacts?.removeWorkspace(id).catch((error: unknown) => {
               deps.logError("workspace", "Could not remove the workspace's artifacts.", error);
             });

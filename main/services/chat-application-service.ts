@@ -91,6 +91,8 @@ export interface ChatApplicationDependencies {
   chatPullRequestStore?: Pick<ChatPullRequestStore, "deleteChat">;
   /** The chat's design canvas document goes with it; forks never copy it. */
   designCanvasStore?: Pick<DesignCanvasStore, "delete">;
+  /** aiden-design grants: a chat's ends when design mode turns off, it moves or it is deleted. */
+  designGrants?: { revokeChat(chatId: string): void };
   /** Queued visual snapshots; a deleted chat's are dropped, not captured. */
   visualSnapshots?: { cancelChat(chatId: string): void };
   /** Stops a deleted chat's background jobs and drops its followed pull requests and check. */
@@ -263,17 +265,17 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
      * affected, because design mode only changes the layout.
      */
     async setDesignMode(chatId: string, enabled: boolean, options: ChatApplicationMutationOptions = {}) {
-      return chatForRenderer(
-        await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
-          assertRenameAllowedFromChat(chat, options);
-          await options.assertCurrent?.(chat);
-          if (!enabled) return;
-          const workspace = await deps.configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
-          if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
-            throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
-          }
-        }),
-      );
+      const updated = await deps.chatStore.setDesignMode(chatId, enabled, async (chat) => {
+        assertRenameAllowedFromChat(chat, options);
+        await options.assertCurrent?.(chat);
+        if (!enabled) return;
+        const workspace = await deps.configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId));
+        if (!workspace || (!workspace.folderPath && workspace.noWorkspace !== true)) {
+          throw new ChatStoreError("design-mode-unavailable", DESIGN_MODE_UNAVAILABLE_MESSAGE);
+        }
+      });
+      if (!enabled) deps.designGrants?.revokeChat(chatId);
+      return chatForRenderer(updated);
     },
 
     async moveEmptyToWorkspace(
@@ -294,18 +296,19 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
         if (!(await deps.configStore.getWorkspace(workspaceId))) {
           throw new Error(`Workspace ${workspaceId} not found.`);
         }
-        return chatForRenderer(
-          await deps.chatStore.moveEmptyChatToWorkspace(
-            chatId,
-            workspaceId,
-            async (chat) => {
-              if (chat.botId) {
-                throw new Error("Bot conversations stay in their Aiden-managed folder.");
-              }
-              await options.assertCurrent?.(chat);
-            },
-          ),
+        const moved = await deps.chatStore.moveEmptyChatToWorkspace(
+          chatId,
+          workspaceId,
+          async (chat) => {
+            if (chat.botId) {
+              throw new Error("Bot conversations stay in their Aiden-managed folder.");
+            }
+            await options.assertCurrent?.(chat);
+          },
         );
+        // A grant names the old workspace root; the canvas asks again for the new one.
+        deps.designGrants?.revokeChat(chatId);
+        return chatForRenderer(moved);
       } finally {
         finishMove();
       }
@@ -402,6 +405,7 @@ export function createChatApplicationService(deps: ChatApplicationDependencies) 
           deps.logError("git", "Could not delete the chat's pull request links.", error);
           throw new Error("Aiden could not delete this chat's pull request links.");
         }
+        deps.designGrants?.revokeChat(chatId);
         try {
           await deps.designCanvasStore?.delete(chatId);
         } catch (error) {

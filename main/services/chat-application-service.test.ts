@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { emptyDesignCanvas } from "../../renderer/shared/design-canvas/schema.js";
+import { DesignGrantRegistry } from "./design-canvas/grants.js";
 import { DesignCanvasStore } from "./design-canvas/store.js";
 import type { Chat, Workspace } from "./types.js";
 import {
@@ -573,4 +574,25 @@ test("deleting a chat deletes its design canvas, and a canvas that cannot be del
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("a chat's design grant ends when design mode turns off, the chat moves or the chat is deleted", async () => {
+  const designGrants = new DesignGrantRegistry();
+  const { service } = fixture({ designGrants });
+  const issue = (chatId: string) => designGrants.issue(chatId, `/work/${chatId}`);
+
+  const kept = issue("chat-1");
+  await service.setDesignMode("chat-1", true);
+  assert.notEqual(designGrants.resolve(kept), null, "turning design mode on keeps the grant");
+  await service.setDesignMode("chat-1", false);
+  assert.equal(designGrants.resolve(kept), null);
+
+  const moving = issue("chat-2");
+  const bystander = issue("chat-3");
+  await service.moveEmptyToWorkspace("chat-2", "workspace-1");
+  assert.equal(designGrants.resolve(moving), null);
+  assert.notEqual(designGrants.resolve(bystander), null);
+
+  await service.remove("chat-3");
+  assert.equal(designGrants.resolve(bystander), null);
 });

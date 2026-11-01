@@ -2214,4 +2214,7 @@ export const designCanvasApi = {
     invoke<DesignCanvasSaveResult>("designCanvas:save", chatId, doc, baseRevision),
   onDesignCanvasUpdated: (handler: (update: { chatId: string; revision: number }) => void) =>
     onNotification<{ chatId: string; revision: number }>("designCanvas:updated", handler),
+  /** The chat's `aiden-design://<grant>/` host for framing its workspace files. */
+  getDesignCanvasGrant: (chatId: string) =>
+    invoke<{ grant: string } | { error: "unavailable" }>("designCanvas:grant", chatId),
 };
