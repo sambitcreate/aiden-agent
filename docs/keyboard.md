@@ -67,6 +67,7 @@ work while Aiden is in the background.
 | `⌘↩` | Allow once, while an approval is waiting and the message box is empty |
 | `⌘⌫` | Deny, under the same conditions |
 | `/` | Slash commands in the message box |
+| `⇧⌘L` | Design mode on / off for this chat (experimental, needs `AIDEN_EXPERIMENTAL_DESIGN_MODE=1`; `/design` and `/design off` do the same). `Esc` never leaves design mode |
 
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as
