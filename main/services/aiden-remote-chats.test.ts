@@ -953,6 +953,11 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   const replay = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0003", { text: "Fix the login bug" });
   assert.deepEqual(replay, moved, "the same key answers again without making another");
   assert.equal(made.length, 1);
+  // The answer was lost, the phone has since read the moved chat, and it
+  // retries on the same key with that newer revision.
+  const refreshed = await app.service.moveToNewWorktree("device-1", "chat-1", moved.chat.revision, "new-worktree-0003", { text: "Fix the login bug" });
+  assert.deepEqual(refreshed, moved, "the same key with the chat's newer revision answers with the worktree");
+  assert.equal(made.length, 1);
   // The phone stopped waiting before that answer, so it still holds the old
   // revision, and its retry carries a new key and the message as edited.
   const late = await app.service.moveToNewWorktree("device-1", "chat-1", revision, "new-worktree-0006", { text: "Fix the login bug on Safari" });

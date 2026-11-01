@@ -1940,7 +1940,10 @@ export class AidenRemoteChatService {
     try {
       return await this.executeIdempotent(
         { deviceId, route: "POST /chats/{id}/worktree", resourceId: safeId(chatId, "chat"), key },
-        { revision, ...parsed },
+        // The revision stays out of the digest: a phone that kept its key after
+        // a lost answer retries with the chat's newer revision, and must get
+        // the worktree rather than a refusal. The action checks the revision.
+        { text: parsed.text },
         async () => {
           const chat = await this.chat(chatId);
           if (chat.messages.length === 0 && chat.workspaceId) {
