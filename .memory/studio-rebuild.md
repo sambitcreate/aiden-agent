@@ -1,5 +1,7 @@
 # Design Studio + Create Images rebuild (started 2026-10-07)
 
+> 2026-10-31: the Design Studio track is superseded by Design mode (`design-mode.md`); its P0 removed the Studio code. Create Images continues under this plan.
+
 Plan: `docs/plans/design-studio-create-images-rebuild-plan.md` (umbrella/orchestration plan).
 
 ## History

@@ -1,6 +1,6 @@
 # Design mode
 
-Status: active 2026-10-31. Spec v2 (infinite canvas) and P0/P1 plans written; build started at P0. P2–P5 plans are written before each phase.
+Status: active 2026-10-31. Spec v2 (infinite canvas) and P0/P1 plans written. P0 (retire Studio) done on branch `claude/design-mode-deep-dive` (3 commits, not yet pushed); P1 is next. P2–P5 plans are written before each phase.
 
 - Spec: `docs/superpowers/specs/2026-10-31-design-mode-design.md`. Plans: `docs/superpowers/plans/2026-10-31-design-mode-p0-retire-studio.md`, `docs/superpowers/plans/2026-10-31-design-mode-p1-layout.md`.
 - It replaces Design Studio (DS-1a, #385). P0 deletes the Studio code. It keeps the canvas, studio assets, the `finishTurn` harness, `generation-stream` and the `ChatOwnerV1` parser, and leaves data on disk.
@@ -22,3 +22,11 @@ Status: active 2026-10-31. Spec v2 (infinite canvas) and P0/P1 plans written; bu
 - Widths: chat 420 (360–560); canvas at least 480. Sidebar collapses below 1100 px; below 840 px the window widens to 1280 or shows a banner. Escape never leaves design mode.
 - open-design (nexu-io) has no infinite canvas; its value is picking, comment anchoring and agent context. Avoid its CDN React/Babel, `allow-same-origin` and foreignObject screenshots.
 - Open: confirm "make it live" does not also cover Create Images.
+
+## P0 notes (2026-10-31)
+
+- Stale `/design` and `/design/$projectId` links use `beforeLoad: redirectRetiredRoute` (in `renderer/main/studio-capability-route.tsx`) and land on `/`. P1 replaces these routes.
+- `llm-client` refuses a chat with any `owner` ("belongs to a feature that is no longer available"), keeping the old `resolveGenerationProfile` refusal for hidden `design-project` chats.
+- `createGenerationHarness(options)` takes no profile now; `chat-run-input-admission`'s generic `inputClosed` stays, but `llm-client` no longer sets it.
+- ⌘⇧D is unbound after P0, but `dictation.toggle` still declares `defaultBinding: "Command+Shift+D"` with `defaultEnabled: false`. P1's ⌘⇧D must resolve that collision.
+- Under Node, TanStack router-core always runs in server mode, so a `beforeLoad` redirect sets `router.state.redirect` without following it; tests follow it with `router.navigate`.

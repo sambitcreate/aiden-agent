@@ -1,4 +1,4 @@
-> 2026-10-31: proposed for replacement by Design mode (see `design-mode.md`). Its P0 removes this code.
+> **Status: removed (2026-10-31).** Design mode P0 (branch `claude/design-mode-deep-dive`) deleted all of the code below: `main/services/design/*`, `main/handlers/design/*`, `renderer/shared/design/*`, `renderer/lib/design-ipc.ts`, `renderer/design/design-route.tsx`, `main/services/generation-profile.ts`, the `designRun` hooks in `llm-client.ts`, the `designProjects:` IPC, the `designStudio` capability, the `design.open` command, the Design nav row and the `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` flag. Stale `/design` and `/design/$projectId` links redirect to the chat home. Kept: `renderer/canvas/*`, studio assets, Pi `finishTurn`, `generation-stream.ts`, and the `ChatOwnerV1` `design-project` parser, so hidden project chats stay hidden; `llm-client` now refuses to run any feature-owned chat. Data on disk (`design-projects/`, hidden chats) is left untouched. Design mode (`design-mode.md`) builds on ordinary workspace chats instead. The rest of this file is history.
 
 # Design Studio DS-1a (headless core)
 

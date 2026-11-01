@@ -1,10 +1,10 @@
 # Studio Foundation (Track F)
 
-Status: merged in PR A (#375) and PR B (#376) on 2026-10-07; shipped in 0.55.0. Binding spec: `docs/plans/studio-foundation-adr.md`. Umbrella: `docs/plans/design-studio-create-images-rebuild-plan.md`. Next: DS-1 (Design Studio) and CI-1 (Create Images) fill the placeholder routes.
+Status: merged in PR A (#375) and PR B (#376) on 2026-10-07; shipped in 0.55.0. Binding spec: `docs/plans/studio-foundation-adr.md`. Umbrella: `docs/plans/design-studio-create-images-rebuild-plan.md`. Next: DS-1 (Design Studio) and CI-1 (Create Images) fill the placeholder routes. 2026-10-31: Design Studio was removed by Design mode P0 (`design-studio.md`); the `/design` routes now redirect to `/`, and only Create Images uses this foundation.
 
 ## Flags
-- `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` and `AIDEN_EXPERIMENTAL_CREATE_IMAGES` (values `1` or `true`, default off). Read in `main/services/studio/feature-flags.ts`, exposed to the renderer as the `designStudio` / `createImages` app capabilities.
-- Run with a flag: `AIDEN_EXPERIMENTAL_DESIGN_STUDIO=1 npm run dev` (add the second variable for Create Images).
+- `AIDEN_EXPERIMENTAL_CREATE_IMAGES` (values `1` or `true`, default off). Read in `main/services/studio/feature-flags.ts`, exposed to the renderer as the `createImages` app capability. `AIDEN_EXPERIMENTAL_DESIGN_STUDIO` was retired in Design mode P0 and turns nothing on.
+- Run with the flag: `AIDEN_EXPERIMENTAL_CREATE_IMAGES=1 npm run dev`.
 - Flags off: no sidebar rows, palette commands, routes, studio chunks, asset store or `aiden-asset:` scheme. The e2e flags-off spec and the sidebar and palette render tests pin this.
 
 ## Route contract
@@ -29,7 +29,7 @@ Status: merged in PR A (#375) and PR B (#376) on 2026-10-07; shipped in 0.55.0. 
 - React Flow and its bundled runtime deps (`@xyflow/system`, d3-*, zustand, classcat) are credited in `THIRD_PARTY_NOTICES.md`.
 
 ## Tests and CI
-- Suites: `test:studio-foundation` (this track), `test:design-studio`, `test:create-images` (later tracks), filed into the existing CI lanes via `scripts/ci-test-registry.json`. No new CI lanes.
+- Suites: `test:studio-foundation` (this track), `test:create-images` (`test:design-studio` was removed with Design Studio), filed into the existing CI lanes via `scripts/ci-test-registry.json`. No new CI lanes.
 - Playwright: `tests/e2e/studio-foundation.spec.ts`.
 - Pre-existing failure on `main`: `main/services/native-menu-command-contract.test.ts` ("every window creation path waits for settled startup shortcut state") in `test:command-system`.
 

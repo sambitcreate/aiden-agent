@@ -208,8 +208,8 @@ test("every test file on disk runs in CI or is allowlisted as manual", () => {
 
 test("manual allowlist entries are required for intentionally manual suites and cannot go stale", () => {
   const withoutPerf = structuredClone(readRegistry());
-  withoutPerf.manual = withoutPerf.manual.filter((entry) => entry.file !== "main/services/design/store.perf.test.ts");
-  assert.throws(() => validateRegistry({ registry: withoutPerf }), /never run in CI: \["main\/services\/design\/store\.perf\.test\.ts"\]/u);
+  withoutPerf.manual = withoutPerf.manual.filter((entry) => entry.file !== "main/services/create-images/run-ledger.perf.test.ts");
+  assert.throws(() => validateRegistry({ registry: withoutPerf }), /never run in CI: \["main\/services\/create-images\/run-ledger\.perf\.test\.ts"\]/u);
 
   const stale = structuredClone(readRegistry());
   stale.manual.push({ file: "main/services/concentrate-provider.test.ts", reason: "already in a lane" });
