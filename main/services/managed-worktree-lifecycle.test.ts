@@ -1191,6 +1191,26 @@ test("a restore finishes when Git's old record cannot be deleted afterwards", as
   );
 });
 
+test("a restore never lets a folder that was moved to the Trash share the new checkout", async (t) => {
+  const repository = await createRepository(t);
+  const root = await temporaryDirectory(t);
+  const trash = await temporaryDirectory(t);
+  const service = new GitService({ cacheTtlMs: 0 });
+  const created = await service.createWorktree(repository, root, "aiden/trashed");
+  const trashed = path.join(trash, path.basename(created.path));
+  await fs.rename(created.path, trashed);
+  const restored = await service.restoreDeletedManagedWorktreeCheckout(
+    repository, root, created.path, "aiden/trashed", created.worktreeGitDir, created.ownershipToken, "",
+    async () => undefined,
+  );
+  assert.equal(await git(restored.path, ["branch", "--show-current"]), "aiden/trashed");
+  // The trashed copy still points at the old record; it must not reach the
+  // new one, or Git commands there would change the restored checkout.
+  await fs.writeFile(path.join(trashed, "stray.txt"), "stray\n");
+  await assert.rejects(git(trashed, ["add", "stray.txt"]));
+  assert.equal(await git(restored.path, ["status", "--porcelain"]), "", "the restored checkout's index is untouched");
+});
+
 test("a workspace in a subfolder the branch no longer has is not restored", async (t) => {
   const repository = await createRepository(t);
   const root = await temporaryDirectory(t);

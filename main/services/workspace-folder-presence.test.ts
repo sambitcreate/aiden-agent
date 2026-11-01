@@ -89,7 +89,7 @@ test("a deleted Aiden-managed worktree is checked at its checkout root and named
     return true;
   });
   const refusal = await workspaceFolderRemoteRefusal(managed);
-  assert.match(refusal ?? "", /worktree folder was deleted on your Mac/u);
+  assert.match(refusal ?? "", /worktree folder is missing on your Mac/u);
   assert.ok(!refusal?.includes(root), "a paired device never hears a path");
   assert.equal(await workspaceFolderRemoteRefusal({ name: "Here", folderPath: root, permission: "ask" }), undefined);
 });

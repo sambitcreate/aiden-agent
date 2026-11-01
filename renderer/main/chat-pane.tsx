@@ -388,7 +388,11 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const newChatInMainCheckout = React.useCallback(
     (mainWorkspaceId: string) => {
       if (!newChatActions) return;
-      const initialText = loadComposerDraft(chatId).text.trim();
+      // A send refused by the folder check may be waiting in the paused queue
+      // with the composer already cleared.
+      const initialText = (
+        loadComposerDraft(chatId).text.trim() || chatMessageQueue(chatId).getSnapshot().messages[0]?.text || ""
+      ).trim();
       void newChatActions
         .openNewChatIn(mainWorkspaceId, { gitMode: "checkout", ...(initialText ? { initialText } : {}) })
         .catch((error: unknown) => {

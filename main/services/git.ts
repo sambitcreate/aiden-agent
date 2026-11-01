@@ -4845,11 +4845,34 @@ export class GitService {
       if (path.resolve(candidate) === recordedGitDir) {
         await fs.rm(markerPath, { force: true });
         await this.persistWorktreeOwnership(candidate, recorded.token);
+      } else if (await this.moveKeptRecordToRecordedName(candidate, recordedGitDir, checkout)) {
+        // Restore made the checkout under a fresh name (see the placeholder in
+        // restoreDeletedManagedWorktreeCheckout); back under its recorded name
+        // it is the checkout the workspace record expects, so Restore can be
+        // tried again once the folder is deleted.
+        await fs.rm(path.join(recordedGitDir, WORKTREE_OWNER_MARKER), { force: true });
+        await this.persistWorktreeOwnership(recordedGitDir, recorded.token);
       } else {
         const setAside = await this.setAsideWorktreeRecord(repo, candidate);
         await fs.rm(setAside, { recursive: true, force: true });
       }
     }
+  }
+
+  /** Renames a kept checkout's Git record to `recordedGitDir` and points the checkout at it. */
+  private async moveKeptRecordToRecordedName(candidate: string, recordedGitDir: string, checkout: string): Promise<boolean> {
+    const dotGit = path.join(checkout, ".git");
+    const pointer = await fs.lstat(dotGit).catch(() => undefined);
+    if (!pointer?.isFile() || (await this.pathExists(recordedGitDir))) return false;
+    await fs.rename(candidate, recordedGitDir);
+    try {
+      await fs.writeFile(dotGit, `gitdir: ${recordedGitDir}\n`);
+    } catch (error) {
+      await fs.rename(recordedGitDir, candidate).catch(() => undefined);
+      throw error;
+    }
+    await this.syncDirectory(path.dirname(recordedGitDir));
+    return true;
   }
 
   private async restoreQuarantinedPath(quarantine: string, original: string): Promise<boolean> {
@@ -7003,6 +7026,20 @@ export class GitService {
           throw new GitServiceError("command_failed", "The worktree folder is already there.");
         }
       }
+      // A folder that was moved rather than deleted (to the Trash, say) still
+      // points at the old record's name. An empty placeholder holds that name
+      // while Git makes the new checkout, so Git picks a fresh one and the
+      // moved copy can never share the new checkout's index and HEAD.
+      let placeholder: string | undefined;
+      if (staleRecord) {
+        try {
+          await fs.mkdir(staleRecord.gitDir);
+          placeholder = staleRecord.gitDir;
+        } catch (error) {
+          await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
+          throw error;
+        }
+      }
       try {
         await this.run(repo.cwd, ["worktree", "add", "--", target, branch], {
           hooksDisabled: true,
@@ -7012,9 +7049,11 @@ export class GitService {
       } catch (error) {
         // A folder put back from the Trash after the last look gets its Git
         // record back: the old record is kept until the new checkout exists.
+        if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
         if (staleRecord) await this.restoreQuarantinedPath(staleRecord.setAside, staleRecord.gitDir);
         throw error;
       }
+      if (placeholder) await fs.rmdir(placeholder).catch(() => undefined);
       // The old record is out of Git's list already; failing to delete it only
       // leaves a stray folder in the Git directory, never a stranded checkout.
       if (staleRecord) await this.discardSetAsideRecord(staleRecord.setAside).catch(() => undefined);

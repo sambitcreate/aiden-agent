@@ -41,7 +41,7 @@ export function managedWorktreeMissingMessage(
   if (!options.restorable) {
     return `The worktree folder for “${name}” is missing${where}, and Aiden can't restore it from its branch ${options.branch}. ${capitalize(elsewhere)}.`;
   }
-  return `The worktree folder for “${name}” is missing${where}. If it's in the Trash, put it back to keep uncommitted changes, then check again. Or restore it from its branch ${options.branch}, or ${elsewhere}.`;
+  return `The worktree folder for “${name}” is missing${where}. If it was moved or is in the Trash, put it back to keep uncommitted changes, then check again. Or restore it from its branch ${options.branch}, or ${elsewhere}.`;
 }
 
 function capitalize(text: string): string {
@@ -63,7 +63,7 @@ export const WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL =
   "This chat's workspace folder is missing on your Mac. It may have been moved, renamed or deleted, or its drive isn't connected. Put it back, then send again.";
 
 export const MANAGED_WORKTREE_MISSING_REMOTE_REFUSAL =
-  "This chat's worktree folder was deleted on your Mac. Restore it from the chat on your Mac, then send again.";
+  "This chat's worktree folder is missing on your Mac. Put it back, or restore it from the chat on your Mac, then send again.";
 
 /**
  * Which workspaces the check covers. A No Access workspace never touches its
