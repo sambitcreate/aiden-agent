@@ -17,7 +17,8 @@ export type DesignCanvasCommand =
   | { type: "duplicate" }
   | { type: "delete" }
   | { type: "fitSelection" }
-  | { type: "escape" };
+  | { type: "escape" }
+  | { type: "enter" };
 
 export function resolveDesignCanvasKey(
   event: CanvasKeyEvent,
@@ -37,6 +38,7 @@ export function resolveDesignCanvasKey(
       return { type: "delete" };
     }
     if (!event.shiftKey && event.code === "Escape") return { type: "escape" };
+    if (!event.shiftKey && (event.code === "Enter" || event.code === "NumpadEnter")) return { type: "enter" };
     if (event.shiftKey && event.code === "Digit2") return { type: "fitSelection" };
   }
   return resolveCanvasKey(event, { editable: false });

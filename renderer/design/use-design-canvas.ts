@@ -7,13 +7,19 @@
 // revision conflict (the same chat edited in another window, or by Aiden) can
 // take the stored canvas and replay this window's edits on top: neither
 // side's change is lost. That replay happens once; a second conflict in a row
-// shows the stored canvas and reports an error rather than looping.
+// shows the stored canvas and reports an error rather than looping. A save the
+// app cannot deliver also reports an error, and its edits wait for the next
+// edit (or leaving the canvas) to try again.
+//
+// Undo and redo are saved as the frames they change, not as whole canvases,
+// and taking in another writer's canvas clears the history, so neither can
+// take back what was changed elsewhere.
 
 import * as React from "react";
 import { designCanvasApi } from "../lib/ipc";
 import { registerLifecycleFlush } from "../lib/lifecycle-guard";
 import type { DesignCanvasV1 } from "../shared/design-canvas/schema";
-import { record, redo, undo, type CanvasHistory } from "./canvas-history-core";
+import { changesBetween, record, redo, undo, type CanvasHistory } from "./canvas-history-core";
 
 export const DESIGN_CANVAS_SAVE_DELAY_MS = 800;
 
@@ -48,6 +54,8 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
   let history = EMPTY_HISTORY;
   let failed = false;
   let disposed = false;
+  /** The newest revision another writer announced. */
+  let announced = 0;
 
   const emit = () => {
     if (disposed) return;
@@ -89,6 +97,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
           failed = false;
         } else if (result.reason === "conflict") {
           server = result.doc;
+          history = EMPTY_HISTORY;
           if (replayed) {
             // Conflicted again straight after a replay: show what is stored, keep only newer edits.
             local = replay(server, unsent);
@@ -113,7 +122,10 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     inFlight = null;
     emit();
     if (retryNow) return save(true);
-    if (unsent.length > 0 && timer === null && !disposed) schedule();
+    // After a failure the edits wait for the next one, so an error the app cannot get past does not loop.
+    if (unsent.length > 0 && timer === null && !disposed && !failed) schedule();
+    // Another writer saved while this save was on its way.
+    if (unsent.length === 0 && timer === null && server && announced > server.revision) refetch();
   };
 
   const apply = (mutate: Mutation, before: DesignCanvasV1 | null, nextHistory: CanvasHistory) => {
@@ -128,10 +140,7 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
     schedule();
   };
 
-  const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
-    if (update.chatId !== chatId || !server || update.revision <= server.revision) return;
-    // A pending edit saves first; its conflict brings the newer canvas with it.
-    if (unsent.length > 0 || inFlight || timer !== null) return;
+  function refetch() {
     void designCanvasApi.getDesignCanvas(chatId).then(
       (fetched) => {
         if (disposed || !server || fetched.revision <= server.revision) return;
@@ -144,6 +153,16 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       },
       () => undefined,
     );
+  }
+
+  const unsubscribe = designCanvasApi.onDesignCanvasUpdated((update) => {
+    if (update.chatId !== chatId) return;
+    announced = Math.max(announced, update.revision);
+    if (!server || update.revision <= server.revision) return;
+    // A pending edit saves first: its conflict brings the newer canvas with it,
+    // and a save already on its way fetches it when it lands.
+    if (unsent.length > 0 || inFlight || timer !== null) return;
+    refetch();
   });
 
   void designCanvasApi.getDesignCanvas(chatId).then(
@@ -167,13 +186,13 @@ function createCanvasSync(chatId: string, publish: (state: SyncState) => void): 
       if (!local) return;
       const step = undo(history, local);
       if (!step) return;
-      apply(() => step.doc, null, step.history);
+      apply(changesBetween(local, step.doc), null, step.history);
     },
     redo() {
       if (!local) return;
       const step = redo(history, local);
       if (!step) return;
-      apply(() => step.doc, null, step.history);
+      apply(changesBetween(local, step.doc), null, step.history);
     },
     async flush() {
       cancelTimer();

@@ -37,3 +37,33 @@ export function redo(
   if (!doc) return null;
   return { doc, history: { past: [...history.past, current], future } };
 }
+
+/**
+ * The edit that turns `from` into `to`, as a function that can also run on a
+ * different canvas: it adds, removes and replaces only the frames that differ
+ * between the two, so frames someone else changed in the meantime are kept.
+ * Run on `from` itself it gives exactly `to`.
+ */
+export function changesBetween(
+  from: DesignCanvasV1,
+  to: DesignCanvasV1,
+): (doc: DesignCanvasV1) => DesignCanvasV1 {
+  const before = new Map(from.frames.map((frame) => [frame.id, frame]));
+  const after = new Map(to.frames.map((frame) => [frame.id, frame]));
+  const viewportChanged =
+    from.viewport.x !== to.viewport.x || from.viewport.y !== to.viewport.y || from.viewport.zoom !== to.viewport.zoom;
+  return (doc) => {
+    if (doc === from) return to;
+    const frames = doc.frames.flatMap((frame) => {
+      if (!before.has(frame.id)) return [frame];
+      const next = after.get(frame.id);
+      if (!next) return [];
+      return [before.get(frame.id) === next ? frame : next];
+    });
+    const present = new Set(frames.map((frame) => frame.id));
+    for (const frame of to.frames) {
+      if (!before.has(frame.id) && !present.has(frame.id)) frames.push(frame);
+    }
+    return { ...doc, frames, ...(viewportChanged ? { viewport: to.viewport } : {}) };
+  };
+}

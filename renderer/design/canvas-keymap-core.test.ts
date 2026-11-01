@@ -32,11 +32,15 @@ test("Control replaces Command elsewhere", () => {
   assert.equal(resolveDesignCanvasKey(key("KeyZ", { metaKey: true }), other), null);
 });
 
-test("unmodified keys delete, fit the selection and escape", () => {
+test("unmodified keys delete, fit the selection, escape and enter", () => {
   assert.deepEqual(resolveDesignCanvasKey(key("Backspace", { key: "Backspace" }), mac), { type: "delete" });
   assert.deepEqual(resolveDesignCanvasKey(key("Delete", { key: "Delete" }), other), { type: "delete" });
   assert.deepEqual(resolveDesignCanvasKey(key("Digit2", { shiftKey: true, key: "@" }), mac), { type: "fitSelection" });
   assert.deepEqual(resolveDesignCanvasKey(key("Escape", { key: "Escape" }), mac), { type: "escape" });
+  assert.deepEqual(resolveDesignCanvasKey(key("Enter", { key: "Enter" }), mac), { type: "enter" });
+  assert.deepEqual(resolveDesignCanvasKey(key("NumpadEnter", { key: "Enter" }), other), { type: "enter" });
+  assert.equal(resolveDesignCanvasKey(key("Enter", { key: "Enter", shiftKey: true }), mac), null);
+  assert.equal(resolveDesignCanvasKey(key("Enter", { key: "Enter", repeat: true }), mac), null);
   assert.equal(resolveDesignCanvasKey(key("Backspace", { key: "Backspace", metaKey: true }), mac), null);
 });
 

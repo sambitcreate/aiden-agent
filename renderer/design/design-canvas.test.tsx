@@ -5,6 +5,7 @@ import { registerHooks } from "node:module";
 import { afterEach, test } from "node:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
+import { Toaster } from "../components/ui";
 import { isMacPlatform } from "../lib/ghostty-terminal/host-platform";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import { emptyDesignCanvas, type DesignCanvasV1, type DesignFrame } from "../shared/design-canvas/schema";
@@ -175,6 +176,37 @@ test("canvas keys with a printable character stay with the canvas instead of typ
   assert.equal(region.getAttribute("data-tool"), "hand", "H picked the hand tool");
   assert.equal(composer.value, "");
   assert.notEqual(document.activeElement, composer);
+});
+
+test("Enter on a selected page enters it, so the keyboard reaches what a double-click does", async () => {
+  const hero: DesignFrame = { id: "f1", kind: "file", title: "Hero", x: 0, y: 0, w: 640, h: 436, path: "design/hero.html", designWidth: 1280, createdBy: "aiden" };
+  const sticky: DesignFrame = { id: "n1", kind: "note", title: "Sticky", x: 700, y: 0, w: 240, h: 160, text: "hello", createdBy: "person" };
+  setup(canvasWith(hero, sticky));
+  const region = await mount();
+  const entered = () => document.querySelector("iframe")?.parentElement?.classList.contains("nodrag") === true;
+
+  fireEvent.click(screen.getByRole("group", { name: "Sticky" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "Enter", code: "Enter" });
+  assert.equal(entered(), false, "a note is not a page to enter");
+
+  fireEvent.click(screen.getByRole("group", { name: "Hero" }));
+  region.focus();
+  fireEvent.keyDown(region, { key: "Enter", code: "Enter" });
+  await waitFor(() => assert.equal(entered(), true));
+  assert.equal(document.querySelector("iframe")!.getAttribute("tabindex"), "0", "Tab now reaches the page");
+});
+
+test("a change the app cannot save says so instead of failing silently", async () => {
+  setup(canvasWith(), {
+    "designCanvas:save": () => {
+      throw new Error("chat is gone");
+    },
+  });
+  render(<Toaster />);
+  await mount();
+  await chooseAdd("Note");
+  assert.ok(await screen.findByText("The canvas couldn't save your latest changes.", {}, SAVE_WAIT));
 });
 
 test("Escape leaves an entered frame without leaving design mode", async () => {

@@ -73,8 +73,9 @@ On the design canvas (with the canvas focused, not a note or an entered
 page): `⌘Z` / `⇧⌘Z` undo and redo, `⌘D` duplicates the selection, `⌫` or
 `Delete` removes it, `⇧1` fits everything, `⇧2` fits the selection, `⇧0`
 resets the zoom, `+` / `-` zoom, `V` / `H` pick the Select or Hand tool and
-`M` shows the minimap. Double-click a page to enter it; `Esc` or a click on
-the canvas leaves.
+`M` shows the minimap. `↩` or a double-click enters the selected page;
+`Esc` with the canvas focused, or a click on the canvas, leaves. Keys typed
+inside an entered page stay with that page.
 
 `↑` works like **Edit in fork**: it forks the chat just before your last
 message and puts that message back in the box, so the original chat stays as

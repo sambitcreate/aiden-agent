@@ -112,6 +112,11 @@ function LoadedDesignCanvas({
     };
   }, [chatId]);
 
+  // A save that fails says so once; the next edit tries again.
+  React.useEffect(() => {
+    if (canvas.status === "error") toast.error("The canvas couldn't save your latest changes.");
+  }, [canvas.status]);
+
   // Watch every framed page and image; a change reloads just that path.
   const watchedKey = React.useMemo(() => {
     const paths: string[] = [];
@@ -321,6 +326,16 @@ function LoadedDesignCanvas({
           ...(selection.size > 0 ? { nodes: [...selection].map((id) => ({ id })) } : {}),
         });
         return true;
+      case "enter": {
+        // Enter does what a double-click does: a selected page or artifact takes input.
+        if (selection.size !== 1) return false;
+        const [id] = selection;
+        const frame = doc.frames.find((entry) => entry.id === id);
+        if (!frame || (frame.kind !== "file" && frame.kind !== "artifact")) return false;
+        if (frame.kind === "file" && missing.get(frame.id) === versionOf(frame.path)) return false;
+        setEntered(frame.id);
+        return true;
+      }
       case "escape":
         if (entered !== null) setEntered(null);
         else if (selection.size > 0) setSelection(new Set());

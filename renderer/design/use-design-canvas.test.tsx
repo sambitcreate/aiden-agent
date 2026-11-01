@@ -194,3 +194,65 @@ test("undo and redo step through recorded edits, and unrecorded edits fold into 
   assert.equal(saves().length, 1, "undo and redo are saved like any edit");
   assert.equal(xOf(saves()[0]!.args[1] as DesignCanvasV1, "a"), 30);
 });
+
+test("an undo waiting to save does not take back a frame another window added", async () => {
+  await mount();
+  await act(async () => controller.change(addNote("b")));
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a"]);
+  // Another window added "c" before this window's edits were saved.
+  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
+  await tick(800);
+
+  const [, retried] = saves()[1]!.args as [string, DesignCanvasV1, number];
+  assert.deepEqual(ids(retried), ["a", "c"], "their frame is saved, and the undone note stays gone");
+  assert.deepEqual(ids(controller.doc), ["a", "c"]);
+});
+
+test("after taking in another window's canvas, undo cannot remove what that window added", async () => {
+  await mount();
+  await act(async () => controller.change(moveTo("a", 10)));
+  saveReplies.push(() => ({ ok: false, reason: "conflict", doc: canvas(5, note("a"), note("c", 900)) }));
+  await tick(800);
+  assert.deepEqual(ids(controller.doc), ["a", "c"]);
+
+  await act(async () => controller.undo());
+  assert.deepEqual(ids(controller.doc), ["a", "c"]);
+  await tick(800);
+  assert.deepEqual(ids(stored), ["a", "c"]);
+});
+
+test("a save the app cannot deliver reports an error and waits for the next edit instead of retrying forever", async () => {
+  await mount();
+  saveReplies.push(() => {
+    throw new Error("chat is gone");
+  });
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  assert.equal(controller.status, "error");
+  await tick(10_000);
+  assert.equal(saves().length, 1, "no retry loop");
+
+  await act(async () => controller.change(addNote("b")));
+  await tick(800);
+  assert.equal(saves().length, 2);
+  const [, doc] = saves()[1]!.args as [string, DesignCanvasV1, number];
+  assert.equal(xOf(doc, "a"), 10, "the failed edit is still saved");
+  assert.deepEqual(ids(doc), ["a", "b"]);
+  assert.equal(controller.status, "ready");
+});
+
+test("an update from elsewhere that lands while a save is in flight is fetched once the save is done", async () => {
+  await mount();
+  saveReplies.push((doc, base) => {
+    // Another window saves straight after this one, while this save is still on its way back.
+    stored = canvas(base + 2, ...doc.frames, note("remote", 900));
+    emitBotTestNotification("designCanvas:updated", { chatId: "chat-1", revision: base + 2 });
+    return { ok: true, revision: base + 1 };
+  });
+  await act(async () => controller.change(moveTo("a", 10)));
+  await tick(800);
+  await settle();
+  assert.deepEqual(ids(controller.doc), ["a", "remote"]);
+  assert.equal(xOf(controller.doc, "a"), 10);
+});
