@@ -263,7 +263,7 @@ class AidenNewWorktreeTest {
     @Test
     fun theMacsBranchListTellsWhetherTheRepositoryHasCommits() = runBlocking {
         // The Mac sends every Git projection under `result`, tagged by `kind`.
-        fun branches(allowed: Boolean, names: List<String>) = JsonObject(mapOf(
+        fun branches(allowed: Boolean, names: List<String>, unborn: Boolean = false) = JsonObject(mapOf(
             "operationId" to JsonPrimitive("op_" + "A".repeat(32)),
             "status" to JsonPrimitive("snapshot"),
             "snapshotId" to JsonPrimitive("git_snapshot_1"),
@@ -271,19 +271,23 @@ class AidenNewWorktreeTest {
                 put("allowed", JsonPrimitive(allowed))
                 if (!allowed) put("reason", JsonPrimitive("This workspace is not a Git repository."))
             }),
-            "result" to JsonObject(mapOf(
-                "kind" to JsonPrimitive("branches"),
-                "current" to JsonPrimitive("main"),
-                "branches" to JsonArray(names.map { JsonPrimitive(it) })
-            ))
+            "result" to JsonObject(buildMap<String, JsonElement> {
+                put("kind", JsonPrimitive("branches"))
+                put("current", JsonPrimitive("main"))
+                put("branches", JsonArray(names.map { JsonPrimitive(it) }))
+                if (unborn) put("unborn", JsonPrimitive(true))
+            })
         ))
         server.enqueue(reply(200, branches(allowed = true, names = listOf("main", "fix"))))
         server.enqueue(reply(200, branches(allowed = false, names = emptyList())))
+        // A repository with no commits still names the branch its first commit will make.
+        server.enqueue(reply(200, branches(allowed = true, names = listOf("main"), unborn = true)))
 
         val repository = client.gitBranches(site.id)
         assertEquals(listOf("main", "fix"), repository.branches?.branches)
         assertNull(repository.result)
         assertEquals(true, AidenNewWorktreeAvailability.hasCommits(repository))
+        assertEquals(false, AidenNewWorktreeAvailability.hasCommits(client.gitBranches(site.id)))
         assertEquals(false, AidenNewWorktreeAvailability.hasCommits(client.gitBranches(site.id)))
         assertEquals("/api/aiden/v1/workspaces/workspace_site/git/branches", server.takeRequest(5, TimeUnit.SECONDS)?.path)
     }

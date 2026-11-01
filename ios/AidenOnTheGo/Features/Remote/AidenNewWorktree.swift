@@ -54,10 +54,11 @@ enum AidenNewWorktreeAvailability {
     }
 
     /// A branch list from `GET /workspaces/{id}/git/branches`: a folder that
-    /// is not a repository, or a repository with no commits, lists none.
+    /// is not a repository lists none, and a repository with no commits is
+    /// marked `unborn` (it still lists its branch).
     static func hasCommits(_ result: AidenGitResult) -> Bool? {
         guard case .branches(let branches)? = result.result else { return nil }
-        return !branches.branches.isEmpty
+        return branches.unborn != true && !branches.branches.isEmpty
     }
 }
 

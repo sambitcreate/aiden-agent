@@ -103,8 +103,8 @@ object AidenNewWorktreeAvailability {
     }
 
     /**
-     * A branch list from `GET /workspaces/{id}/git/branches`: a folder that is not a repository,
-     * or a repository with no commits, lists none.
+     * A branch list from `GET /workspaces/{id}/git/branches`: a folder that is not a repository
+     * lists none, and a repository with no commits is marked `unborn` (it still lists its branch).
      */
-    fun hasCommits(result: AidenGitResult): Boolean? = result.branches?.let { it.branches.isNotEmpty() }
+    fun hasCommits(result: AidenGitResult): Boolean? = result.branches?.let { it.unborn != true && it.branches.isNotEmpty() }
 }

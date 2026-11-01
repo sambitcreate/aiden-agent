@@ -239,7 +239,9 @@ data class AidenGitDiff(
 data class AidenGitBranches(
     val kind: String = "branches",
     val current: String,
-    val branches: List<String>
+    val branches: List<String>,
+    /** The repository has no commits yet; [branches] still lists its current branch. */
+    val unborn: Boolean? = null
 )
 
 @Serializable

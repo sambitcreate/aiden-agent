@@ -114,6 +114,10 @@ final class AidenNewWorktreeTests: XCTestCase {
         XCTAssertEqual(AidenNewWorktreeAvailability.hasCommits(try result(
             #"{"operationId":"op_2","status":"snapshot","snapshotId":"s2","capability":{"allowed":false,"reason":"This workspace is not a Git repository."},"result":{"kind":"branches","current":"HEAD","branches":[]}}"#
         )), false)
+        // A repository with no commits still names the branch its first commit will make.
+        XCTAssertEqual(AidenNewWorktreeAvailability.hasCommits(try result(
+            #"{"operationId":"op_4","status":"snapshot","snapshotId":"s4","capability":{"allowed":true},"result":{"kind":"branches","current":"main","branches":["main"],"unborn":true}}"#
+        )), false)
         XCTAssertNil(AidenNewWorktreeAvailability.hasCommits(try result(#"{"operationId":"op_3","status":"failed"}"#)))
     }
 

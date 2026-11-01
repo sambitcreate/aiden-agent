@@ -13841,6 +13841,10 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "unborn": {
+                "const": true,
+                "description": "Present when the repository has no commits yet; the current branch is listed although it has none."
               }
             },
             "additionalProperties": false

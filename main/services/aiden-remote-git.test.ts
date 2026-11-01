@@ -186,6 +186,7 @@ test("remote Git keeps paths and snapshot internals on the Mac and safely comple
 
     const branchSnapshot = await service.branches("device-1", workspace.id);
     assert.ok(branchSnapshot.snapshotId);
+    assert.equal(branchSnapshot.result?.kind === "branches" ? branchSnapshot.result.unborn : "missing", undefined);
     const created = await service.createBranch(
       "device-1",
       workspace.id,
@@ -389,4 +390,38 @@ test("a changed filename that cannot be projected is omitted instead of failing 
     comparisonId: comparison.result.comparisonId, fileId: comparison.result.files[0]!.id,
   });
   assert.match(comparisonDiff.result?.kind === "diff" ? comparisonDiff.result.diff : "", /\+two/u);
+});
+
+test("a repository with no commits says so in its branch list", async (t) => {
+  const repository = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-git-unborn-"));
+  t.after(() => fs.rm(repository, { recursive: true, force: true }));
+  await git(repository, "init", "-b", "main");
+  await git(repository, "config", "user.email", "aiden@example.test");
+  await git(repository, "config", "user.name", "Aiden Test");
+
+  const workspace: Workspace = {
+    id: "workspace-unborn", name: "Fresh", folderPath: repository, permission: "ask", createdAt: 1, updatedAt: 2,
+  };
+  const service = new AidenRemoteGitService({
+    application: createWorkspaceEnvironmentApplicationService({
+      configStore: { getWorkspace: async (id) => id === workspace.id ? workspace : undefined },
+      workspaceMutationGate: new WorkspaceMutationGate(),
+      workspaceOperationRegistry: new WorkspaceOperationRegistry(),
+      assertManagedWorktreeAdmission: async () => undefined,
+      realpath: fs.realpath,
+      stat: fs.stat,
+    }),
+    owners: new AidenRemoteWorkspaceOwnerRegistry(),
+    git: {
+      review: gitReview, diff: gitDiff, branches: gitBranches, checkout: gitCheckout, createBranch: gitCreateBranch,
+      commit: gitCommit, pushCapability: gitPushCapability, push: gitPush, compare: gitCompare,
+      comparisonDiff: gitComparisonDiff, worktrees: gitWorktrees,
+    },
+    listWorkspaces: async () => [workspace],
+  });
+
+  const fresh = await service.branches("device-1", workspace.id);
+  if (fresh.result?.kind !== "branches") throw new Error("missing branches");
+  assert.equal(fresh.result.unborn, true, "a phone must not offer a worktree from a repository with nothing to branch from");
+  assert.deepEqual(fresh.result.branches, ["main"], "Git still names the branch the first commit will create");
 });
