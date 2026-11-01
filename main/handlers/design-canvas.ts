@@ -37,11 +37,19 @@ export function registerDesignCanvasHandlers<Event>(deps: {
 }): void {
   if (!deps.enabled()) return;
 
+  // Only an attended desktop chat has a canvas: Bot and routine chats never
+  // enter design mode, so they never get a canvas file either.
+  const attended = (chat: DesignCanvasChat): boolean => !chat.botId && !chat.owner;
+
+  // Reading and saving do not require design mode to still be on: turning it
+  // off unmounts the canvas, and the edit that unmount flushes may land after
+  // the flag has cleared. Framing workspace files (`canFrame`) does require it.
   const requireChat = async (chatId: unknown): Promise<DesignCanvasChat> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);
     assertDesignCanvasChatId(chatId);
     const chat = await deps.getChat(chatId);
     if (!chat) throw new Error("This chat is no longer available.");
+    if (!attended(chat)) throw new Error(UNAVAILABLE);
     return chat;
   };
 
@@ -67,7 +75,7 @@ export function registerDesignCanvasHandlers<Event>(deps: {
   // Only an attended desktop chat in design mode may frame its own workspace
   // folder; Bot and routine chats never get a grant.
   const canFrame = (chat: DesignCanvasChat | null): chat is DesignCanvasChat =>
-    chat !== null && chat.designMode === true && !chat.botId && !chat.owner;
+    chat !== null && chat.designMode === true && attended(chat);
 
   deps.handle("designCanvas:grant", async (_event, chatId): Promise<DesignCanvasGrantResult> => {
     if (!deps.enabled()) throw new Error(UNAVAILABLE);

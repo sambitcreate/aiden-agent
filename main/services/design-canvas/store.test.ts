@@ -121,6 +121,17 @@ test("delete removes the canvas file and the chat reads empty again", async (t) 
   await store.delete("chat-1");
 });
 
+test("delete also removes that chat's set-aside corrupt copies and nobody else's", async (t) => {
+  const root = await tempRoot(t);
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, "chat-1.json"), "{ not json");
+  await fs.writeFile(path.join(root, "chat-10.json.corrupt-1"), "other");
+  const store = new DesignCanvasStore({ root: () => root });
+  await store.get("chat-1");
+  await store.delete("chat-1");
+  assert.deepEqual(await fs.readdir(root), ["chat-10.json.corrupt-1"]);
+});
+
 test("a chat id outside the safe pattern throws before touching disk", async () => {
   let touched = false;
   const store = new DesignCanvasStore({
@@ -140,14 +151,36 @@ test("a chat id outside the safe pattern throws before touching disk", async () 
   assert.equal(touched, false);
 });
 
-test("a corrupt canvas file reads as empty and is left in place", async (t) => {
+test("a corrupt canvas file reads as empty and is set aside, not overwritten by the next save", async (t) => {
   const root = await tempRoot(t);
   await fs.mkdir(root, { recursive: true });
   const file = path.join(root, "chat-1.json");
   await fs.writeFile(file, "{ not json");
   const store = new DesignCanvasStore({ root: () => root });
   assert.deepEqual(await store.get("chat-1"), emptyDesignCanvas());
-  assert.equal(await fs.readFile(file, "utf8"), "{ not json");
+
+  assert.deepEqual(await store.save("chat-1", withNote(emptyDesignCanvas(), "fresh"), 0), {
+    ok: true,
+    revision: 1,
+  });
+  const asides = (await fs.readdir(root)).filter((name) => name.startsWith("chat-1.json.corrupt-"));
+  assert.equal(asides.length, 1);
+  assert.equal(await fs.readFile(path.join(root, asides[0]!), "utf8"), "{ not json");
+  assert.deepEqual(
+    (await store.get("chat-1")).frames.map((frame) => frame.id),
+    ["fresh"],
+  );
+});
+
+test("a canvas file that fails the schema is set aside too", async (t) => {
+  const root = await tempRoot(t);
+  await fs.mkdir(root, { recursive: true });
+  await fs.writeFile(path.join(root, "chat-1.json"), JSON.stringify({ version: 9 }));
+  const store = new DesignCanvasStore({ root: () => root });
+  assert.deepEqual(await store.get("chat-1"), emptyDesignCanvas());
+  const names = await fs.readdir(root);
+  assert.equal(names.includes("chat-1.json"), false);
+  assert.equal(names.filter((name) => name.startsWith("chat-1.json.corrupt-")).length, 1);
 });
 
 test("a failed write leaves the stored revision unchanged", async (t) => {
@@ -190,4 +223,17 @@ test("a canvas too large to read back is refused and the previous one stays", as
     current.frames.map((frame) => frame.id),
     ["kept"],
   );
+});
+
+test("a canvas file over the read cap is set aside instead of being overwritten", async (t) => {
+  const root = await tempRoot(t);
+  await fs.mkdir(root, { recursive: true });
+  const big = JSON.stringify({ ...emptyDesignCanvas(), padding: "x".repeat(8192) });
+  await fs.writeFile(path.join(root, "chat-1.json"), big);
+  const store = new DesignCanvasStore({ root: () => root, maxDocumentBytes: 4096 });
+  assert.deepEqual(await store.get("chat-1"), emptyDesignCanvas());
+  await store.save("chat-1", withNote(emptyDesignCanvas(), "fresh"), 0);
+  const asides = (await fs.readdir(root)).filter((name) => name.startsWith("chat-1.json.corrupt-"));
+  assert.equal(asides.length, 1);
+  assert.equal(await fs.readFile(path.join(root, asides[0]!), "utf8"), big);
 });

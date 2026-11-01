@@ -1,6 +1,5 @@
 import * as React from "react";
 import { cn } from "../lib/ui-utils";
-import { DesignCanvasEmpty } from "./design-canvas-empty";
 
 const DesignCanvas = React.lazy(() => import("./design-canvas"));
 
@@ -45,16 +44,22 @@ export function DesignCanvasRegion({
             : undefined
       }
     >
-      <React.Suspense
-        fallback={
-          <div className="flex h-full items-center justify-center">
-            <DesignCanvasEmpty />
-          </div>
-        }
-      >
+      <React.Suspense fallback={<DesignCanvasLoading />}>
         {/* Each chat has its own canvas, so its tool and viewport never carry over. */}
         <DesignCanvas key={chatId} />
       </React.Suspense>
     </section>
+  );
+}
+
+/**
+ * Shown while the canvas chunk loads. Deliberately neutral: it must not look
+ * like an empty canvas that is missing its tools.
+ */
+function DesignCanvasLoading() {
+  return (
+    <div role="status" aria-label="Loading canvas" className="flex h-full items-center justify-center">
+      <div aria-hidden className="h-24 w-40 animate-pulse rounded-button bg-control motion-reduce:animate-none" />
+    </div>
   );
 }

@@ -149,6 +149,38 @@ test("a chat that does not exist has no canvas to read or write", async (t) => {
   assert.deepEqual(await fs.readdir(root), []);
 });
 
+test("a Bot or feature-owned chat has no canvas to read or write", async (t) => {
+  const { invoke, root, broadcasts } = await fixture(t, {
+    chats: {
+      bot: { id: "bot", workspaceId: "workspace-1", designMode: true, botId: "bot-1" },
+      owned: {
+        id: "owned",
+        workspaceId: "workspace-1",
+        owner: { kind: "routine" } as unknown as DesignCanvasChat["owner"],
+      },
+    },
+  });
+  for (const chatId of ["bot", "owned"]) {
+    await assert.rejects(invoke("designCanvas:get", chatId), /Design mode is not available/u);
+    await assert.rejects(
+      invoke("designCanvas:save", chatId, note, 0),
+      /Design mode is not available/u,
+    );
+  }
+  assert.deepEqual(await fs.readdir(root), []);
+  assert.deepEqual(broadcasts, []);
+});
+
+test("a regular chat's last edit still saves after design mode turns off", async (t) => {
+  // Turning design mode off unmounts the canvas, which flushes its pending edit;
+  // that save may land after the chat's flag has already cleared.
+  const { invoke } = await fixture(t, {
+    chats: { "chat-1": { id: "chat-1", workspaceId: "workspace-1" } },
+  });
+  assert.deepEqual(await invoke("designCanvas:save", "chat-1", note, 0), { ok: true, revision: 1 });
+  assert.equal(((await invoke("designCanvas:get", "chat-1")) as DesignCanvasV1).revision, 1);
+});
+
 test("every handler refuses once the flag turns off", async (t) => {
   const { invoke, disable, root } = await fixture(t);
   disable();

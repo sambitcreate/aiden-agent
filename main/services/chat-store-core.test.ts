@@ -2012,3 +2012,34 @@ test("a stored design mode value other than true reads as off", async (t) => {
   assert.ok(restored);
   assert.equal("designMode" in restored, false);
 });
+
+test("getMeta answers from the index without reading the chat's transcript", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-chat-meta-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const seeding = createChatStore(async () => directory);
+  const chat = await seeding.create({ workspaceId: "workspace-1", title: "Landing hero" });
+  await seeding.setDesignMode(chat.id, true);
+
+  const transcriptReads: string[] = [];
+  const store = createChatStore(async () => directory, undefined, {
+    readFile: async (target) => {
+      if (path.basename(target) === `${chat.id}.json`) transcriptReads.push(target);
+      return fs.readFile(target, "utf-8");
+    },
+  });
+  // Opening the store verifies the index against its payloads once; per-chat reads come after.
+  await store.list();
+  transcriptReads.length = 0;
+  const meta = await store.getMeta(chat.id);
+  assert.equal(meta?.id, chat.id);
+  assert.equal(meta?.workspaceId, "workspace-1");
+  assert.equal(meta?.designMode, true);
+  assert.equal(meta?.title, "Landing hero");
+  assert.deepEqual(transcriptReads, []);
+  await store.get(chat.id);
+  assert.equal(transcriptReads.length > 0, true, "a full read does open the transcript");
+
+  assert.equal(await store.getMeta("no-such-chat"), null);
+  await store.setDesignMode(chat.id, false);
+  assert.equal("designMode" in (await store.getMeta(chat.id))!, false);
+});

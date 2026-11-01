@@ -14,7 +14,8 @@ export function registerDesignCanvasIpc(): void {
     handle: (channel, handler) => ipcMain.handle(channel, handler),
     store: designCanvasStore,
     broadcast: (update) => ipcMain.broadcast(DESIGN_CANVAS_UPDATED_CHANNEL, update),
-    getChat: (chatId) => chatStore.get(chatId),
+    // Index metadata only: these checks never need the transcript.
+    getChat: (chatId) => chatStore.getMeta(chatId),
     grants: designGrants,
     workspaceRoot: async (chat) =>
       (await configStore.getWorkspace(persistedChatWorkspaceId(chat.workspaceId)))?.folderPath ??

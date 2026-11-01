@@ -1191,6 +1191,14 @@ export function createChatStore(
       return shared([id], false, () => readChat(id, "owner"));
     },
 
+    /** One chat's index metadata, without reading its transcript. Null when unknown. */
+    async getMeta(id: string): Promise<ChatMeta | null> {
+      return shared([id], true, () => withIndexLock(async () => {
+        const meta = (await loadIndex()).find((entry) => entry.id === id);
+        return meta ? { ...meta, workspaceId: meta.workspaceId ?? DEFAULT_WORKSPACE_ID } : null;
+      }));
+    },
+
     /** Install the first user message and sidebar metadata as one recoverable transaction. */
     async createWithFirstMessage(input: {
       id: string;

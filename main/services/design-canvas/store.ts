@@ -96,10 +96,20 @@ export class DesignCanvasStore {
     });
   }
 
-  /** Removes the chat's canvas file. Missing is fine. */
+  /** Removes the chat's canvas file and any copies set aside as corrupt. Missing is fine. */
   async delete(chatId: string): Promise<void> {
     assertDesignCanvasChatId(chatId);
-    return this.serialize(chatId, () => fs.rm(this.file(chatId), { force: true }));
+    return this.serialize(chatId, async () => {
+      await fs.rm(this.file(chatId), { force: true });
+      const prefix = `${chatId}.json.corrupt-`;
+      const names = await fs.readdir(this.root()).catch((error: unknown) => {
+        if (isMissing(error)) return [] as string[];
+        throw error;
+      });
+      for (const name of names) {
+        if (name.startsWith(prefix)) await fs.rm(path.join(this.root(), name), { force: true });
+      }
+    });
   }
 
   private file(chatId: string): string {
@@ -111,7 +121,8 @@ export class DesignCanvasStore {
     try {
       const file = this.file(chatId);
       const stat = await fs.stat(file);
-      if (!stat.isFile() || stat.size > this.maxDocumentBytes) return emptyDesignCanvas();
+      if (!stat.isFile()) return emptyDesignCanvas();
+      if (stat.size > this.maxDocumentBytes) return this.setAside(chatId);
       text = await fs.readFile(file, "utf8");
     } catch (error) {
       if (isMissing(error)) return emptyDesignCanvas();
@@ -121,10 +132,23 @@ export class DesignCanvasStore {
     try {
       value = JSON.parse(text);
     } catch {
-      return emptyDesignCanvas();
+      return this.setAside(chatId);
     }
     const parsed = parseDesignCanvasV1(value);
-    return parsed.ok ? parsed.doc : emptyDesignCanvas();
+    return parsed.ok ? parsed.doc : this.setAside(chatId);
+  }
+
+  /**
+   * Moves an unreadable canvas to `<chatId>.json.corrupt-<ms>` so the next
+   * save starts a fresh canvas without destroying what was there. Runs on the
+   * chat's chain, so the file it moves is the one it just read.
+   */
+  private async setAside(chatId: string): Promise<DesignCanvasV1> {
+    const file = this.file(chatId);
+    await fs.rename(file, `${file}.corrupt-${Date.now()}`).catch((error: unknown) => {
+      if (!isMissing(error)) throw error;
+    });
+    return emptyDesignCanvas();
   }
 
   /** A document the read cap would turn back into an empty canvas is never written. */
