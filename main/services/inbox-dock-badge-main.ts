@@ -16,6 +16,7 @@ import {
   createInboxBadgeDriver,
   distinctFailureReporter,
   inboxBadgeCount,
+  registerInboxBadgeRequest,
   type BadgeApp,
   type InboxBadgeDriver,
   type InboxBadgeLocal,
@@ -59,7 +60,10 @@ async function botsNeedingYou(): Promise<string[]> {
       while (next < ids.length) {
         const id = ids[next++]!;
         // `needsYou` alone, never the transcript: this runs on every recount. A Bot whose
-        // attention can't be read is left out, as the host feed does.
+        // attention read fails is left out. A Bot with no open feed whose transcript
+        // can't be read is still counted when it waits on the person, though the host
+        // feed (built from `summary`, which then throws) sends its row without
+        // `needsYou`: the person does owe it an answer.
         if (await live.needsYou(id).catch(() => false)) waiting.push(id);
       }
     }),
@@ -131,18 +135,17 @@ let detachers: (() => void)[] = [];
 let requested = false;
 
 /**
- * `app:setInboxDockBadge(enabled)`: a window reports whether the badge should
- * show (the Inbox is the sidebar view and its switch is on). The latest report
- * wins, and the badge stays put when every window closes, so the Dock keeps
- * counting with no window open. Only the main window reports, as for
- * `app:setDockIcon`; any other sender is ignored.
+ * Registers `app:setInboxDockBadge` (see `registerInboxBadgeRequest`). The
+ * badge stays put when every window closes, so the Dock keeps counting with no
+ * window open.
  */
 export function registerInboxDockBadgeIpc(options: { isMainWindow: (event: Electron.IpcMainInvokeEvent) => boolean }): void {
-  ipcMain.handle("app:setInboxDockBadge", (event, enabled: unknown) => {
-    if (!options.isMainWindow(event)) return;
-    if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
-    requested = enabled;
-    driver?.setEnabled(enabled);
+  registerInboxBadgeRequest<Electron.IpcMainInvokeEvent>(ipcMain, {
+    isMainWindow: options.isMainWindow,
+    apply: (enabled) => {
+      requested = enabled;
+      driver?.setEnabled(enabled);
+    },
   });
 }
 

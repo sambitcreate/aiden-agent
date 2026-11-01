@@ -6,6 +6,7 @@ import {
   badgeSurface,
   createInboxBadgeDriver,
   inboxBadgeCount,
+  registerInboxBadgeRequest,
   type InboxBadgeLocal,
   type InboxBadgeLocalChat,
   type InboxBadgePeer,
@@ -305,4 +306,38 @@ test("a failed count keeps the last badge and reports each distinct failure once
   assert.deepEqual(h.shown, [2, 3, 0]);
   h.driver.setEnabled(true);
   assert.equal(h.timers.length, 0, "a disposed driver stays off");
+});
+
+test("only the main window's request turns the badge on or off; other senders leave it as it was", async () => {
+  interface Sender {
+    main: boolean;
+  }
+  const handlers = new Map<string, (event: Sender, enabled: unknown) => void>();
+  const h = harness([3]);
+  registerInboxBadgeRequest<Sender>(
+    { handle: (channel, listener) => void handlers.set(channel, listener) },
+    { isMainWindow: (event) => event.main, apply: (enabled) => h.driver.setEnabled(enabled) },
+  );
+  const invoke = (event: Sender, enabled: unknown) => handlers.get("app:setInboxDockBadge")!(event, enabled);
+  const other = { main: false };
+  const mainWindow = { main: true };
+
+  invoke(other, true);
+  assert.equal(h.driver.enabled, false, "another window can't turn the badge on");
+  await h.flush();
+  assert.deepEqual(h.shown, []);
+
+  invoke(mainWindow, true);
+  await h.flush();
+  assert.deepEqual(h.shown, [3], "the main window's request takes effect");
+
+  invoke(other, false);
+  assert.equal(h.driver.enabled, true, "another window can't turn it off either");
+  assert.deepEqual(h.shown, [3]);
+
+  assert.throws(() => invoke(mainWindow, "yes"), /Expected a boolean/u);
+  assert.equal(h.driver.enabled, true, "a malformed request changes nothing");
+
+  invoke(mainWindow, false);
+  assert.deepEqual(h.shown, [3, 0]);
 });

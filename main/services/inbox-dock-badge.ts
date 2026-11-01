@@ -187,6 +187,29 @@ export interface InboxBadgeDriver {
 
 export const INBOX_BADGE_DEBOUNCE_MS = 250;
 
+export const INBOX_BADGE_REQUEST_CHANNEL = "app:setInboxDockBadge";
+
+export interface InboxBadgeRequestIpc<Event> {
+  handle(channel: typeof INBOX_BADGE_REQUEST_CHANNEL, listener: (event: Event, enabled: unknown) => void): void;
+}
+
+/**
+ * `app:setInboxDockBadge(enabled)`: a window reports whether the badge should
+ * show (the Inbox is the sidebar view and its switch is on). The latest report
+ * wins. Only the main window reports, as for `app:setDockIcon`; any other
+ * sender is ignored and leaves the request as it was.
+ */
+export function registerInboxBadgeRequest<Event>(
+  ipc: InboxBadgeRequestIpc<Event>,
+  options: { isMainWindow: (event: Event) => boolean; apply: (enabled: boolean) => void },
+): void {
+  ipc.handle(INBOX_BADGE_REQUEST_CHANNEL, (event, enabled) => {
+    if (!options.isMainWindow(event)) return;
+    if (typeof enabled !== "boolean") throw new Error("Expected a boolean.");
+    options.apply(enabled);
+  });
+}
+
 export interface DistinctFailureReporter {
   /** Report this failure unless the last one reported had the same message. */
   failed(error: unknown): void;

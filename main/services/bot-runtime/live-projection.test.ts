@@ -876,7 +876,7 @@ test("a waiting question reaches subscribers and late joiners, and its answer re
   }
 });
 
-test("needsYou agrees with the summary without reading the transcript of a Bot with no open feed", async () => {
+test("needsYou agrees with the summary, with or without an open feed, and never reads the transcript", async () => {
   let service: BotSessionRuntime | undefined;
   let transcriptReads = 0;
   let issueOpen = false;
@@ -892,23 +892,41 @@ test("needsYou agrees with the summary without reading the transcript of a Bot w
     },
   });
   service = live.service;
+  const agree = async (expected: boolean, label: string) => {
+    const before = transcriptReads;
+    const needsYou = await live.projection.needsYou("bot:a");
+    assert.equal(transcriptReads, before, `the cheap read opens no transcript (${label})`);
+    assert.equal(needsYou, expected, label);
+    assert.equal((await live.projection.summary("bot:a")).needsYou, expected, `the summary agrees (${label})`);
+  };
+  const states = [
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ] as const;
   try {
-    for (const [open, gone] of [
-      [false, false],
-      [true, false],
-      [true, true],
-    ] as const) {
+    for (const [open, gone] of states) {
       issueOpen = open;
       unavailable = gone;
-      const before = transcriptReads;
-      const needsYou = await live.projection.needsYou("bot:a");
-      assert.equal(transcriptReads, before, "the cheap read opens no transcript");
-      assert.equal(needsYou, (await live.projection.summary("bot:a")).needsYou, `issue ${open}, unavailable ${gone}`);
+      // With no open feed, an unavailable Bot never needs the person.
+      await agree(open && !gone, `no feed, issue ${open}, unavailable ${gone}`);
     }
-    issueOpen = true;
+
+    issueOpen = false;
     unavailable = false;
-    assert.equal(await live.projection.needsYou("bot:a"), true, "an open issue needs the person");
-    assert.ok(transcriptReads > 0, "the summary itself still reads the transcript");
+    const watching = await live.projection.subscribe("bot:a", recorder().sink);
+    for (const [open, gone] of states) {
+      issueOpen = open;
+      unavailable = gone;
+      // An open feed keeps its own state, so an open issue counts whatever the session reports.
+      await agree(open, `open feed, issue ${open}, unavailable ${gone}`);
+    }
+
+    watching.unsubscribe();
+    issueOpen = true;
+    unavailable = true;
+    await agree(false, "feed closed, issue open, unavailable");
   } finally {
     await live.close();
   }
