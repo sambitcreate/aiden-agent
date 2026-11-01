@@ -214,7 +214,20 @@ export const AIDEN_REMOTE_WORKSPACE_CLONE_CONTRACT_REVISION = 48 as const;
  * list. Older phones see nothing new.
  */
 export const AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION = 49 as const;
-export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_BACKGROUND_JOBS_CONTRACT_REVISION;
+/**
+ * Contract revision 50 (provisional; re-claim the next revision after `main`'s
+ * at merge by changing only `AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION`):
+ * picture uploads as raw bytes (`attachments:raw`, an opt-in capability like
+ * `chat:jobs`, since phones already hear the most feature tokens shipped
+ * clients accept). `POST /chats/{chatId}/attachments` and
+ * `POST /bots/{botId}/attachments` also take an `image/png` or `image/jpeg`
+ * body with an exact `Content-Length` and the file name in
+ * `Aiden-Attachment-Name`, and return the same single-use reference as the
+ * JSON upload, which stays for older clients. No base64, so uploads are about
+ * a third smaller and clients can show byte progress.
+ */
+export const AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION = 50 as const;
+export const AIDEN_REMOTE_CONTRACT_REVISION = AIDEN_REMOTE_RAW_UPLOADS_CONTRACT_REVISION;
 export const AIDEN_REMOTE_BASE_PATH = "/api/aiden/v1" as const;
 export const AIDEN_REMOTE_MAX_SSE_FRAME_BYTES = 1_048_576;
 export const AIDEN_REMOTE_MAX_JSON_RESPONSE_BYTES = 1_048_576;
@@ -449,14 +462,25 @@ export const AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES = ["schedule:cards"] as con
 export const AIDEN_REMOTE_CHAT_JOB_CAPABILITIES = ["chat:jobs"] as const;
 
 /**
+ * Contract revision 50: a device holding `attachments:raw` may upload a
+ * picture as its raw bytes to the chat and Bot attachment routes. Those
+ * uploads still need the route's own grant (`chat:write`, or `bot:write` with
+ * `bot:attachments`), so it widens nothing those grants allow.
+ */
+export const AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES = ["attachments:raw"] as const;
+
+/**
  * Every opt-in a paired device may persist. Each changes what a device is
  * shown; `chat:jobs` also opens its two routes, which still need the chat
- * grant (`chat:read`, `chat:write`) and so widen nothing that grant allows.
+ * grant (`chat:read`, `chat:write`), and `attachments:raw` opens a second body
+ * type on the upload routes, which still need their own grants. Neither
+ * widens anything those grants allow.
  */
 export const AIDEN_REMOTE_OPT_IN_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_OPT_IN_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 /** Vocabulary a paired device may add after pairing through `POST /device/capabilities`. */
@@ -472,6 +496,7 @@ export const AIDEN_REMOTE_NEGOTIABLE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteNegotiableCapability =
@@ -491,6 +516,7 @@ export const AIDEN_REMOTE_CAPABILITIES = [
   ...AIDEN_REMOTE_BOT_ISSUE_CAPABILITIES,
   ...AIDEN_REMOTE_SCHEDULE_CARD_CAPABILITIES,
   ...AIDEN_REMOTE_CHAT_JOB_CAPABILITIES,
+  ...AIDEN_REMOTE_RAW_UPLOAD_CAPABILITIES,
 ] as const;
 
 export type AidenRemoteCapability = (typeof AIDEN_REMOTE_CAPABILITIES)[number];
