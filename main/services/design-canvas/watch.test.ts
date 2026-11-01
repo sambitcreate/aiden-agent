@@ -12,6 +12,14 @@ import {
 } from "./watch.js";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** macOS starts a file-system event stream asynchronously; a write in its first moments can go unseen. */
+const streamStarted = () => sleep(100);
+
+/** Waits up to two seconds for a report, so a busy machine does not fail the test. */
+async function eventually(check: () => boolean) {
+  const deadline = Date.now() + 2000;
+  while (!check() && Date.now() < deadline) await sleep(25);
+}
 
 async function workspace(t: TestContext, files: Record<string, string>) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), "aiden-design-watch-"));
@@ -50,6 +58,7 @@ test("five quick writes to a watched file are reported once, after the quiet per
   const root = await workspace(t, { "design/hero.html": "<p>1</p>" });
   const { instance, updates } = watcher(t);
   await instance.set("chat-1", root, ["design/hero.html"]);
+  await streamStarted();
   const started = Date.now();
   for (let index = 0; index < 5; index += 1) {
     await fsp.writeFile(path.join(root, "design/hero.html"), `<p>${index}</p>`);
@@ -72,14 +81,15 @@ test("a change to an asset in the same folder reports the watched page", async (
   });
   const { instance, updates } = watcher(t);
   await instance.set("chat-1", root, ["design/hero.html", "other/page.html"]);
+  await streamStarted();
   await fsp.writeFile(path.join(root, "design/hero.css"), "body{color:red}");
-  await sleep(400);
+  await eventually(() => updates.length >= 1);
   assert.deepEqual(
     updates.map((update) => update.paths),
     [["design/hero.html"]],
   );
   await fsp.writeFile(path.join(root, "design/assets/logo.svg"), "<svg></svg>");
-  await sleep(400);
+  await eventually(() => updates.length >= 2);
   assert.deepEqual(updates[1]?.paths, ["design/hero.html"], "assets in a subfolder count too");
 });
 
@@ -90,11 +100,12 @@ test("replacing the watched set closes the old watchers", async (t) => {
   assert.equal(open(), 1);
   await instance.set("chat-1", root, ["b/two.html"]);
   assert.equal(open(), 1, "the old folder's watcher is closed");
+  await streamStarted();
   await fsp.writeFile(path.join(root, "a/one.html"), "changed");
   await sleep(400);
   assert.equal(updates.length, 0);
   await fsp.writeFile(path.join(root, "b/two.html"), "changed");
-  await sleep(400);
+  await eventually(() => updates.length >= 1);
   assert.deepEqual(
     updates.map((update) => update.paths),
     [["b/two.html"]],
@@ -109,8 +120,10 @@ test("at most 50 paths are watched", async (t) => {
   const { instance, updates } = watcher(t);
   const paths = Object.keys(files);
   await instance.set("chat-1", root, paths);
+  await streamStarted();
   await fsp.writeFile(path.join(root, "design/f59.html"), "changed");
-  await sleep(400);
+  await eventually(() => updates.length >= 1);
+  await sleep(DESIGN_WATCH_DEBOUNCE_MS * 2);
   assert.equal(updates.length, 1);
   assert.equal(updates[0]!.paths.length, DESIGN_WATCH_LIMIT);
   assert.deepEqual(updates[0]!.paths, paths.slice(0, 50));
