@@ -1,4 +1,4 @@
-import { DESIGN_WIDE_WINDOW_MIN, DESIGN_WIDEN_TARGET } from "../../renderer/lib/environment-panel-layout.js";
+import { DESIGN_WIDEN_TARGET } from "../../renderer/lib/environment-panel-layout.js";
 
 export interface Rectangle {
   x: number;
@@ -19,16 +19,16 @@ export interface DesignWindow {
 /**
  * Bounds for a window widened for design mode: as close to `target` as the
  * display's work area allows, sliding left only as far as it must to keep the
- * right edge on screen. Null when even the whole work area is narrower than the
- * chat and canvas minimums (840 px).
+ * right edge on screen. Null when the work area is narrower than the target, so
+ * widening could not make room anyway.
  */
 export function widenedBounds(
   current: Rectangle,
   workArea: Rectangle,
   target = DESIGN_WIDEN_TARGET,
 ): Rectangle | null {
-  const width = Math.max(current.width, Math.min(target, workArea.width));
-  if (width < DESIGN_WIDE_WINDOW_MIN) return null;
+  if (workArea.width < target) return null;
+  const width = Math.max(current.width, target);
   const maxX = workArea.x + workArea.width - width;
   const x = Math.max(workArea.x, Math.min(current.x, maxX));
   return { x, y: current.y, width, height: current.height };
@@ -55,7 +55,8 @@ export interface WidenOptions {
 }
 
 /**
- * Widen a window for design mode. A full-screen or maximized window keeps its
+ * Widen a window for design mode. A window that `canWidenForDesign` rules out
+ * (full screen, maximized, already wide, or on a too-narrow display) keeps its
  * size and reports `widened: false`.
  */
 export function widenWindowForDesign(
@@ -63,7 +64,7 @@ export function widenWindowForDesign(
   workAreaFor: (bounds: Rectangle) => Rectangle,
   options: WidenOptions = {},
 ): { widened: boolean } {
-  if (!window || window.isDestroyed() || window.isFullScreen() || window.isMaximized()) return { widened: false };
+  if (!window || !canWidenForDesign(window, workAreaFor)) return { widened: false };
   const current = window.getBounds();
   const next = widenedBounds(current, workAreaFor(current));
   if (!next) return { widened: false };

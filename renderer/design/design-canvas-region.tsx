@@ -5,29 +5,36 @@ import { DesignCanvasEmpty } from "./design-canvas-empty";
 const DesignCanvas = React.lazy(() => import("./design-canvas"));
 
 /**
- * The right-hand side of design mode. Inline it sits beside the chat column;
- * as an overlay (a window too narrow for both) it floats over the chat like a
- * floating Environment panel, leaving a strip of the chat uncovered.
+ * The canvas side of design mode. Split, it sits beside the chat column.
+ * Stacked (content too narrow for both), it fills the chat area below the top
+ * bar while the Chat | Canvas switch shows it, and is hidden from sight, focus
+ * and assistive tech while the chat is shown. It stays mounted either way, so
+ * the canvas keeps its viewport. The canvas inside names the landmark, so this
+ * wrapper adds none of its own.
  */
 export function DesignCanvasRegion({
   chatId,
   width,
-  overlay,
+  placement,
+  hidden,
 }: {
   chatId: string;
   width: number;
-  overlay: boolean;
+  placement: "split" | "stacked";
+  hidden: boolean;
 }) {
   return (
     <section
-      aria-label="Design"
-      data-design-canvas-region={overlay ? "overlay" : "inline"}
+      data-design-canvas-region={placement}
       data-chat-id={chatId}
+      inert={hidden}
+      aria-hidden={hidden || undefined}
       className={cn(
         "design-canvas-region min-h-0 overflow-hidden bg-background",
-        overlay ? "absolute bottom-3 right-3 top-14 z-30 rounded-sheet shadow-dialog" : "relative h-full shrink-0",
+        placement === "stacked" ? "absolute inset-x-0 bottom-0 top-13 z-20" : "relative h-full shrink-0",
+        hidden && "invisible",
       )}
-      style={{ width }}
+      style={placement === "split" ? { width } : undefined}
     >
       <React.Suspense
         fallback={

@@ -194,6 +194,12 @@ export interface EnvironmentPanelContextValue {
   reportSurfaceLayout: (
     layout: { inline: boolean; width: number; stacked?: boolean } | null,
   ) => void;
+  /**
+   * How far from the right edge design mode wants the Live pill, or null when
+   * design mode is not showing its canvas. Split, this is the canvas width, so
+   * the pill sits at the chat column's edge clear of the canvas controls.
+   */
+  reportDesignDockInset: (inset: number | null) => void;
   setTab: (tab: EnvironmentPanelTab) => void;
   /** `returnTarget` is where focus goes when the panel closes, for callers whose own control is about to unmount. */
   showTools: (tab?: EnvironmentPanelTab, returnTarget?: HTMLElement | null) => void;
@@ -449,6 +455,11 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
     },
     [],
   );
+
+  const [designDockInset, setDesignDockInset] = React.useState<number | null>(null);
+  const reportDesignDockInset = React.useCallback((inset: number | null) => {
+    setDesignDockInset(inset !== null && Number.isFinite(inset) && inset >= 0 ? Math.round(inset) : null);
+  }, []);
 
   const reportSurfaceLayout = React.useCallback(
     (layout: { inline: boolean; width: number; stacked?: boolean } | null) => {
@@ -1120,7 +1131,9 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       : "tools-floating";
   // Floating layouts do not have enough guaranteed room for both the tools
   // surface and Assistant. Let Assistant layer at the normal chat edge there.
-  const dockRightInset = surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0;
+  // Design mode keeps the pill clear of its canvas controls.
+  const dockRightInset =
+    designDockInset ?? (surfaceState.toolsOpen && surfaceLayout.inline ? surfaceLayout.width : 0);
   const toolsPresented =
     surfaceState.toolsOpen && (!surfaceLayout.stacked || surfaceState.frontSurface === "tools");
 
@@ -1150,6 +1163,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       closeTools,
       closeQuickView,
       reportSurfaceLayout,
+      reportDesignDockInset,
       setTab,
       showTools,
       showQuickView,
@@ -1226,6 +1240,7 @@ export function EnvironmentPanelProvider({ children }: React.PropsWithChildren) 
       reviewMode,
       retrySubagentDetail,
       reportSurfaceLayout,
+      reportDesignDockInset,
       stopSubagent,
       selectSubagent,
       selectedSubagentRunId,
@@ -2053,8 +2068,8 @@ function readSavedWorkbench(): SavedWorkbench | null {
 export type WorkbenchDesignState = "active" | "inactive" | "pending";
 
 /**
- * Closes the panel and Quick View when design mode begins and puts their tab,
- * width and open state back when it ends. It reacts to the current state, not
+ * Always closes the panel and Quick View when design mode begins and puts
+ * their tab, width and open state back when it ends. It reacts to the current state, not
  * to a transition, so switching between a design chat and a normal chat (or a
  * reload in design mode) lands in the right place. It runs before paint, so
  * the wrong layout never shows.
@@ -2070,12 +2085,16 @@ function useDesignWorkbenchSuspension(
     if (design === "pending") return;
     const saved = readSavedWorkbench();
     if (design === "active") {
-      if (saved) return;
-      const snapshot: SavedWorkbench = { version: 1, tab, toolsOpen, quickViewOpen, width: preferredWidth };
-      try {
-        localStorage.setItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY, JSON.stringify(snapshot));
-      } catch {
-        // Without storage the panel still closes; it reopens as it was only in this window.
+      // A saved snapshot outlives a reload (or crash) mid-design; it still holds
+      // what the person had before entry only while both surfaces are still
+      // closed. An open surface means it is stale, so the current state wins.
+      if (!saved || toolsOpen || quickViewOpen) {
+        const snapshot: SavedWorkbench = { version: 1, tab, toolsOpen, quickViewOpen, width: preferredWidth };
+        try {
+          localStorage.setItem(DESIGN_SAVED_WORKBENCH_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch {
+          // Without storage the panel still closes; it reopens as it was only in this window.
+        }
       }
       if (toolsOpen) closeTools();
       if (quickViewOpen) closeQuickView();
@@ -2294,9 +2313,10 @@ export function EnvironmentPanelToggle({ disabled = false }: { disabled?: boolea
   );
 }
 
-function QuickViewIcon() {
+export function QuickViewIcon({ className }: { className?: string }) {
   return (
     <svg
+      className={className}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"

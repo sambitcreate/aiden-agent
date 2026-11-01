@@ -142,7 +142,7 @@ export function slashCommandAvailability(
       if (context.followThroughBlockedReason) return unavailable(context.followThroughBlockedReason);
       break;
     case "design-chat":
-      if (!context.designModeAvailable) return unavailable("Design mode works in project chats.");
+      if (!context.designModeAvailable) return unavailable("Design mode isn't available in this chat.");
       break;
     case "idle-workspace":
       if (!context.hasWorkspace) return unavailable("Open a workspace first.");

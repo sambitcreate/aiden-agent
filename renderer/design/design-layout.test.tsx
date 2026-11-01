@@ -15,12 +15,13 @@ import { WorkspaceTerminalProvider } from "../components/terminal-drawer";
 import { SplitView } from "../components/ui";
 import { AppCapabilitiesProvider, DISABLED_APP_CAPABILITIES } from "../lib/app-capabilities";
 import { CommandSystemProvider } from "../lib/command-system";
-import { applyDesignModeToCache } from "../lib/design-mode";
+import { applyDesignModeToCache, useDesignModeControls } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
 import { effectiveBindings } from "../shared/keybindings";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { WorkspaceProvider } from "../lib/workspace-context";
-import { DesignWorkbench, useDesignChatState } from "./design-layout";
+import { DesignPaneSwitch } from "../components/chat-top-bar";
+import { DesignChatBody, DesignWorkbench, useDesignChatState } from "./design-layout";
 
 // The lazy canvas imports React Flow's CSS, which Node cannot load; tests get an empty module.
 registerHooks({
@@ -33,6 +34,7 @@ registerHooks({
 const ENVIRONMENT_WIDTH_KEY = "aiden-agent.environment.width";
 const DESIGN_CHAT_WIDTH_KEY = "aiden-agent.design.chat-width";
 const SIDEBAR_COLLAPSED_KEY = "aiden-agent.sidebar-collapsed";
+const SAVED_WORKBENCH_KEY = "aiden-agent.design.saved-workbench";
 
 const WORKSPACE: Workspace = {
   id: "site",
@@ -50,6 +52,8 @@ function chat(id: string, overrides: Partial<Chat> = {}): Chat {
 let queryClient: QueryClient;
 let containerWidth = 1400;
 let widenCalls = 0;
+let widenResult = { widened: true };
+let canWidenResult = { canWiden: false };
 let panel!: EnvironmentPanelContextValue;
 let savedDesignModes: Array<[string, boolean]> = [];
 const realRect = HTMLElement.prototype.getBoundingClientRect;
@@ -57,6 +61,8 @@ const realRect = HTMLElement.prototype.getBoundingClientRect;
 beforeEach(() => {
   containerWidth = 1400;
   widenCalls = 0;
+  widenResult = { widened: true };
+  canWidenResult = { canWiden: false };
   savedDesignModes = [];
   // happy-dom does no layout, so every measured box reports the test's width.
   HTMLElement.prototype.getBoundingClientRect = function () {
@@ -64,6 +70,7 @@ beforeEach(() => {
   };
   const chats = [
     chat("design-chat", { designMode: true }),
+    chat("second-design-chat", { designMode: true }),
     chat("plain-chat"),
     chat("bot-chat", { botId: "bot-1" }),
   ];
@@ -84,8 +91,9 @@ beforeEach(() => {
     },
     "app:widenForDesign": () => {
       widenCalls += 1;
-      return { widened: true };
+      return widenResult;
     },
+    "app:designWindowCanWiden": () => canWidenResult,
   });
   queryClient = createBotTestQueryClient();
   for (const entry of chats) queryClient.setQueryData(queryKeys.chat(entry.id), entry);
@@ -105,11 +113,27 @@ function PanelProbe() {
   return null;
 }
 
+/** The design toggle as the top bar wires it: a person's click. */
+function ToggleProbe({ chatId }: { chatId: string }) {
+  const controls = useDesignModeControls(chatId);
+  return controls ? (
+    <button type="button" onClick={() => controls.toggle("toggle")}>
+      Design mode
+    </button>
+  ) : null;
+}
+
 function DesignChat({ chatId }: { chatId: string }) {
   const design = useDesignChatState(chatId, true);
   return (
     <DesignWorkbench chatId={chatId} design={design} suppressed={false}>
-      <main aria-label={`Chat ${chatId}`} />
+      <main aria-label={`Chat ${chatId}`}>
+        <ToggleProbe chatId={chatId} />
+        <DesignPaneSwitch />
+      </main>
+      <DesignChatBody>
+        <button type="button">Terminal drawer</button>
+      </DesignChatBody>
     </DesignWorkbench>
   );
 }
@@ -154,23 +178,43 @@ async function renderWithTerminalPanel(chatId: string) {
 async function setDesignMode(chatId: string, on: boolean) {
   await act(async () => applyDesignModeToCache(queryClient, chatId, on));
   // The query cache tells its subscribers on a timer, so wait for the layout to follow.
-  await waitFor(() =>
-    assert.equal(document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout"), on ? "on" : "off"),
-  );
+  await waitFor(() => assert.equal(layoutState() === "off", !on));
 }
 
-test("a design chat on a wide window splits into a 420 px chat column and an inline canvas", async () => {
+const layoutState = () => document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout");
+const isHidden = (element: Element | null | undefined) =>
+  Boolean(element?.closest("[inert]")) && Boolean(element?.closest('[aria-hidden="true"]'));
+/** Lets the debounced resize handler run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+
+test("a design chat on a wide window splits into a 420 px chat column and the canvas", async () => {
   await act(async () => {
     render(<Shell chatId="design-chat" />);
   });
+  assert.equal(layoutState(), "split");
   assert.equal(chatColumn()?.style.width, "420px");
-  assert.equal(canvasRegion()?.dataset.designCanvasRegion, "inline");
+  assert.equal(canvasRegion()?.dataset.designCanvasRegion, "split");
   assert.equal(canvasRegion()?.style.width, "980px");
   assert.equal(panel.toolsOpen, false, "the canvas takes the panel's place");
   assert.equal(toolsSurface()?.dataset.state ?? "closed", "closed");
   await waitFor(() => screen.getByRole("region", { name: "Design canvas" }));
-  screen.getByText("Ask Aiden to design something, or add a note.");
+  assert.equal(screen.getAllByRole("region", { name: "Design canvas" }).length, 1, "one landmark, named once");
+  screen.getByText("Designs will appear here.");
+  assert.equal(panel.dockRightInset, 980, "the Live pill stays inside the chat column, off the canvas controls");
+  assert.equal(screen.queryByRole("radiogroup", { name: "Design mode view" }), null, "no pane switch while split");
   assert.equal(widenCalls, 0, "a wide window is left alone");
+});
+
+test("the split holds down to 680 px of content, with the canvas at least 320 px", async () => {
+  containerWidth = 700;
+  localStorage.setItem(DESIGN_CHAT_WIDTH_KEY, "560");
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  assert.equal(layoutState(), "split");
+  assert.equal(chatColumn()?.style.width, "380px", "the chat gives way so the canvas keeps 320 px");
+  assert.equal(canvasRegion()?.style.width, "320px");
+  assert.equal(screen.getByRole("separator", { name: "Resize chat" }).getAttribute("aria-valuemax"), "380");
 });
 
 test("leaving design mode puts back the panel's tab, width and open state", async () => {
@@ -180,15 +224,54 @@ test("leaving design mode puts back the panel's tab, width and open state", asyn
   await setDesignMode("plain-chat", true);
   assert.equal(panel.toolsOpen, false, "entering closes the panel");
   assert.ok(canvasRegion(), "the canvas shows");
-  // happy-dom's window is 1024 px wide, under the 1100 px sidebar rule.
-  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1", "entry collapses the sidebar");
 
   await setDesignMode("plain-chat", false);
   assert.deepEqual([panel.toolsOpen, panel.tab], [true, "terminal"], "Terminal is open again");
   assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
   assert.equal(canvasRegion(), null);
   assert.equal(chatColumn(), null);
-  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "the sidebar design mode collapsed reopens");
+});
+
+test("entering closes Quick View as well, and leaving opens it again", async () => {
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  await act(async () => panel.showQuickView());
+  assert.equal(panel.quickViewOpen, true);
+  await setDesignMode("plain-chat", true);
+  assert.equal(panel.quickViewOpen, false);
+  await setDesignMode("plain-chat", false);
+  assert.equal(panel.quickViewOpen, true);
+});
+
+test("a snapshot left from an earlier session is replaced when the panel is open at entry", async () => {
+  // An old snapshot says Files at 500 px, closed; the person has Terminal open at 700.
+  await renderWithTerminalPanel("plain-chat");
+  // Another window's design mode left this snapshot in the shared storage.
+  localStorage.setItem(
+    SAVED_WORKBENCH_KEY,
+    JSON.stringify({ version: 1, tab: "files", toolsOpen: false, quickViewOpen: false, width: 500 }),
+  );
+  await setDesignMode("plain-chat", true);
+  assert.equal(panel.toolsOpen, false);
+  await setDesignMode("plain-chat", false);
+  assert.deepEqual([panel.toolsOpen, panel.tab], [true, "terminal"], "what the person had at entry comes back");
+  assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
+});
+
+test("after a reload mid-design, leaving restores what the person had before entry", async () => {
+  // Entry saved Terminal at 700, open, then closed the panel; the window reloaded.
+  localStorage.setItem(
+    SAVED_WORKBENCH_KEY,
+    JSON.stringify({ version: 1, tab: "terminal", toolsOpen: true, quickViewOpen: false, width: 700 }),
+  );
+  await act(async () => {
+    render(<Shell chatId="design-chat" />);
+  });
+  assert.equal(panel.toolsOpen, false, "the panel stays closed while design mode is on");
+  await setDesignMode("design-chat", false);
+  assert.deepEqual([panel.toolsOpen, panel.tab], [true, "terminal"]);
+  assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
 });
 
 test("a sidebar the person had collapsed stays collapsed after design mode", async () => {
@@ -245,17 +328,155 @@ test("switching from a design chat to a normal chat never shows the canvas for t
   assert.equal(panel.toolsOpen, false);
 });
 
-test("on a narrow window the canvas floats over the chat instead of squeezing it", async () => {
-  containerWidth = 800;
+test("below 680 px the layout stacks: one pane at a time behind the Chat | Canvas switch", async () => {
+  containerWidth = 600;
+  const view = render(<Shell chatId="design-chat" />);
+  await act(async () => undefined);
+  assert.equal(layoutState(), "stacked");
+  assert.equal(chatColumn()?.style.width, "", "the chat keeps the whole width");
+  assert.equal(screen.queryByRole("separator", { name: "Resize chat" }), null, "nothing to drag when stacked");
+  const switcher = screen.getByRole("radiogroup", { name: "Design mode view" });
+  assert.equal(screen.getByRole("radio", { name: "Chat" }).getAttribute("aria-checked"), "true");
+  assert.ok(isHidden(canvasRegion()), "the hidden canvas is inert and hidden from assistive tech");
+  assert.equal(isHidden(screen.getByRole("button", { name: "Terminal drawer" })), false);
+  assert.equal(panel.dockRightInset, 0, "the Live pill sits in its usual place over the chat");
+
   await act(async () => {
-    render(<Shell chatId="design-chat" />);
+    fireEvent.click(screen.getByRole("radio", { name: "Canvas" }));
   });
-  assert.equal(canvasRegion()?.dataset.designCanvasRegion, "overlay");
-  const column = chatColumn();
-  assert.ok(column);
-  // The column is not given a fixed width, so it keeps the whole 800 px.
-  assert.equal(column.style.width, "");
-  assert.equal(screen.queryByRole("separator", { name: "Resize chat" }), null, "nothing to drag in overlay");
+  assert.equal(isHidden(canvasRegion()), false, "the canvas shows");
+  assert.ok(isHidden(screen.getByText("Terminal drawer", { ignore: false })), "the chat body is inert and hidden");
+  assert.ok(switcher.isConnected && !isHidden(switcher), "the switch stays usable in the top bar");
+  assert.equal(panel.dockRightInset, 600 - 128, "the Live pill moves to the canvas's bottom-left corner");
+
+  // Each chat keeps its own choice for the session.
+  await act(async () => {
+    view.rerender(<Shell chatId="second-design-chat" />);
+  });
+  await waitFor(() => assert.equal(canvasRegion()?.dataset.chatId, "second-design-chat"));
+  assert.equal(screen.getByRole("radio", { name: "Chat" }).getAttribute("aria-checked"), "true");
+  await act(async () => {
+    view.rerender(<Shell chatId="design-chat" />);
+  });
+  await waitFor(() => assert.equal(canvasRegion()?.dataset.chatId, "design-chat"));
+  assert.equal(screen.getByRole("radio", { name: "Canvas" }).getAttribute("aria-checked"), "true");
+});
+
+test("the wider-window banner shows only when main says widening can work", async () => {
+  containerWidth = 600;
+  const view = render(<Shell chatId="design-chat" />);
+  await act(async () => undefined);
+  assert.equal(screen.queryByText("Design mode needs a wider window"), null, "no banner when widening can't work");
+  view.unmount();
+
+  canWidenResult = { canWiden: true };
+  render(<Shell chatId="design-chat" />);
+  await waitFor(() => screen.getByText("Design mode needs a wider window"));
+  assert.equal(widenCalls, 0, "opening a design chat never resizes the window");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+  });
+  assert.equal(screen.queryByText("Design mode needs a wider window"), null);
+});
+
+test("Widen window keeps or hides the banner by what main reports", async () => {
+  containerWidth = 600;
+  canWidenResult = { canWiden: true };
+  widenResult = { widened: false };
+  const view = render(<Shell chatId="design-chat" />);
+  await waitFor(() => screen.getByText("Design mode needs a wider window"));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Widen window" }));
+  });
+  await waitFor(() => assert.equal(screen.queryByText("Design mode needs a wider window"), null));
+  assert.equal(widenCalls, 1);
+  view.unmount();
+
+  widenResult = { widened: true };
+  render(<Shell chatId="design-chat" />);
+  await waitFor(() => screen.getByText("Design mode needs a wider window"));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Widen window" }));
+  });
+  await waitFor(() => assert.equal(screen.queryByText("Design mode needs a wider window"), null));
+  assert.equal(widenCalls, 2);
+});
+
+test("design mode that the person did not just turn on never collapses the sidebar or widens", async () => {
+  containerWidth = 600;
+  const view = render(<Shell chatId="design-chat" />);
+  await act(async () => undefined);
+  await act(async () => {
+    view.rerender(<Shell chatId="second-design-chat" />);
+  });
+  // Another window (or main's echo) turns it on for this chat.
+  await act(async () => {
+    view.rerender(<Shell chatId="plain-chat" />);
+  });
+  await setDesignMode("plain-chat", true);
+  assert.equal(layoutState(), "stacked");
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), null, "the sidebar stays open");
+  assert.equal(widenCalls, 0);
+});
+
+test("the person's own entry collapses the sidebar when that is enough for the split", async () => {
+  // 600 px of content plus the open sidebar (the rest of happy-dom's 1024 px window) fits the split.
+  containerWidth = 600;
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  const toggle = await screen.findByRole("button", { name: "Design mode" });
+  await act(async () => {
+    fireEvent.click(toggle);
+  });
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  assert.equal(widenCalls, 0, "no widen when collapsing is enough");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Design mode" }));
+  });
+  await waitFor(() => assert.equal(layoutState(), "off"));
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0", "the sidebar design mode collapsed reopens");
+});
+
+test("the person's own entry widens the window when the sidebar is already collapsed", async () => {
+  containerWidth = 600;
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, "1");
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  let taken = false;
+  await act(async () => {
+    taken = pressDesignShortcut();
+  });
+  assert.equal(taken, true);
+  await waitFor(() => assert.equal(widenCalls, 1));
+});
+
+test("after a widen, the sidebar design mode collapsed reopens once it fits again", async () => {
+  containerWidth = 600;
+  canWidenResult = { canWiden: true };
+  await act(async () => {
+    render(<Shell chatId="plain-chat" />);
+  });
+  const toggle = await screen.findByRole("button", { name: "Design mode" });
+  await act(async () => {
+    fireEvent.click(toggle);
+  });
+  // Collapsing was enough on paper; here the content stays 600 px, so it stacks.
+  await waitFor(() => assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "1"));
+  await waitFor(() => screen.getByText("Design mode needs a wider window"));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Widen window" }));
+  });
+  await waitFor(() => assert.equal(screen.queryByText("Design mode needs a wider window"), null));
+  // The window grows: 1300 px of content leaves room for the 424 px sidebar and the split.
+  containerWidth = 1300;
+  await act(async () => {
+    window.dispatchEvent(new Event("resize"));
+    await settle();
+  });
+  assert.equal(localStorage.getItem(SIDEBAR_COLLAPSED_KEY), "0");
 });
 
 test("dragging the divider saves the design chat width and leaves the panel width alone", async () => {
@@ -277,11 +498,27 @@ test("dragging the divider saves the design chat width and leaves the panel widt
   assert.equal(chatColumn()?.style.width, "560px");
   assert.equal(localStorage.getItem(ENVIRONMENT_WIDTH_KEY), "700");
 
-  divider.focus();
+});
+
+test("the divider resizes from the keyboard and saves each width", async () => {
   await act(async () => {
-    fireEvent.keyDown(divider, { key: "Home" });
+    render(<Shell chatId="design-chat" />);
   });
-  assert.equal(localStorage.getItem(DESIGN_CHAT_WIDTH_KEY), "360");
+  const divider = screen.getByRole("separator", { name: "Resize chat" });
+  divider.focus();
+  const press = async (key: string, shiftKey = false) => {
+    await act(async () => {
+      fireEvent.keyDown(divider, { key, shiftKey });
+    });
+    return [chatColumn()?.style.width, localStorage.getItem(DESIGN_CHAT_WIDTH_KEY)];
+  };
+  assert.deepEqual(await press("ArrowRight"), ["436px", "436"]);
+  assert.deepEqual(await press("ArrowRight", true), ["476px", "476"]);
+  assert.deepEqual(await press("ArrowLeft"), ["460px", "460"]);
+  assert.deepEqual(await press("End"), ["560px", "560"]);
+  assert.deepEqual(await press("ArrowRight"), ["560px", "560"], "never past the maximum");
+  assert.deepEqual(await press("Home"), ["360px", "360"]);
+  assert.deepEqual(await press("ArrowLeft", true), ["360px", "360"], "never under the minimum");
 });
 
 /** ⌘⇧L as the person presses it in the message box; true when Aiden took the key. */
@@ -298,8 +535,6 @@ function pressDesignShortcut(): boolean {
   return event.defaultPrevented;
 }
 
-const layoutState = () => document.querySelector("[data-design-layout]")?.getAttribute("data-design-layout");
-
 test("⌘⇧L turns design mode on and off for the open chat and saves each change", async () => {
   await act(async () => {
     render(<Shell chatId="plain-chat" />);
@@ -310,7 +545,7 @@ test("⌘⇧L turns design mode on and off for the open chat and saves each chan
     taken = pressDesignShortcut();
   });
   assert.equal(taken, true);
-  await waitFor(() => assert.equal(layoutState(), "on"));
+  await waitFor(() => assert.equal(layoutState(), "split"));
   await act(async () => {
     pressDesignShortcut();
   });

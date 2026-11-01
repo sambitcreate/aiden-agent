@@ -12,7 +12,8 @@ import { DesignModeControlsContext } from "../lib/design-mode";
 import { queryKeys } from "../lib/queries";
 import type { Chat, ChatMeta, Workspace } from "../lib/types";
 import { ariaKeyShortcut, effectiveBindings, prettyAccelerator } from "../shared/keybindings";
-import { DesignModeToggle } from "./chat-top-bar";
+import { DesignModeToggle, WorkspaceToolButtons, type FoldableToolbarAction } from "./chat-top-bar";
+import { EnvironmentPanelContext, type EnvironmentPanelContextValue } from "./environment-panel";
 
 const WORKSPACE: Workspace = {
   id: "site",
@@ -129,4 +130,91 @@ test("there is no Design mode button while the flag is off, in a Bot chat, or fo
   await renderTopBar({ chatId: "plain-chat", barChatId: "bot-chat" });
   assert.equal(toggle(), null, "another chat's controls");
   assert.deepEqual(saved, []);
+});
+
+/** Only the panel fields the workspace tools read. */
+const STUB_PANEL = {
+  devicesEnabled: false,
+  subagentsEnabled: false,
+  subagents: { chatId: "plain-chat" },
+  subagentViews: [],
+  artifacts: { views: [] },
+  toolsPresented: false,
+  tab: "browser",
+  gitOperationBusy: false,
+  showTools: () => {},
+  closeTools: () => {},
+} as unknown as EnvironmentPanelContextValue;
+
+/** The header at `width` px of content, with Quick View and Terminal as the chat pane passes them. */
+function renderToolbarAt(width: number, selected: string[]) {
+  const realWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.hasAttribute("data-toolbar") ? width : 0;
+    },
+  });
+  const action = (key: string, label: string): FoldableToolbarAction => ({
+    key,
+    label,
+    icon: () => null,
+    onSelect: () => selected.push(key),
+    placement: key === "quick-view" ? "leading" : "tools",
+    button: (
+      <button type="button" onClick={() => selected.push(key)}>
+        {label}
+      </button>
+    ),
+  });
+  try {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CommandSystemProvider>
+          <EnvironmentPanelContext.Provider value={STUB_PANEL}>
+            <div data-toolbar>
+              <WorkspaceToolButtons
+                chatId="plain-chat"
+                hasWorkspace
+                hasFolder
+                hasFolderAccess
+                isRepo={false}
+                foldable={[action("quick-view", "Show Quick View"), action("terminal", "Show terminal")]}
+              />
+            </div>
+          </EnvironmentPanelContext.Provider>
+        </CommandSystemProvider>
+      </QueryClientProvider>,
+    );
+  } finally {
+    if (realWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", realWidth);
+    else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+  }
+}
+
+test("a tight header, like the design chat column, moves Quick View and Terminal into the tools menu", async () => {
+  const selected: string[] = [];
+  renderToolbarAt(1000, selected);
+  assert.ok(screen.getByRole("button", { name: "Show Quick View" }), "a roomy header keeps both buttons");
+  assert.ok(screen.getByRole("button", { name: "Show terminal" }));
+  cleanup();
+
+  // 360 px of header: the design column at its narrowest.
+  renderToolbarAt(360, selected);
+  assert.equal(screen.queryByRole("button", { name: "Show Quick View" }) === null, true, "Quick View folds away");
+  assert.equal(screen.queryByRole("button", { name: "Show terminal" }) === null, true, "Terminal folds away");
+  const menu = screen.getByRole("button", { name: "More workspace tools" });
+  await act(async () => {
+    fireEvent.keyDown(menu, { key: "Enter" });
+  });
+  const items = await screen.findAllByRole("menuitem");
+  assert.deepEqual(
+    items.slice(0, 2).map((item) => item.textContent),
+    ["Show Quick View", "Show terminal"],
+    "they lead the menu",
+  );
+  await act(async () => {
+    fireEvent.click(items[1]);
+  });
+  assert.deepEqual(selected, ["terminal"], "the menu row does what the button did");
 });

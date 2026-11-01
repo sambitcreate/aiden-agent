@@ -1,25 +1,92 @@
 import * as React from "react";
 import { DesignModeBanner } from "../components/design-mode-banner";
-import { EnvironmentWorkbench, type WorkbenchDesignState } from "../components/environment-panel";
+import {
+  EnvironmentWorkbench,
+  useEnvironmentPanel,
+  type WorkbenchDesignState,
+} from "../components/environment-panel";
 import { useSplitViewSidebar } from "../components/ui";
 import { useWorkbenchWidth } from "../components/workbench-panel";
 import { useCommandHandler } from "../lib/command-system";
-import { DesignModeControlsContext, useDesignMode, type DesignModeControls } from "../lib/design-mode";
 import {
-  DESIGN_CANVAS_MIN_WIDTH,
+  consumePendingDesignEntry,
+  DesignModeControlsContext,
+  useDesignMode,
+  type DesignModeControls,
+} from "../lib/design-mode";
+import {
   DESIGN_CHAT_WIDTH_BOUNDS,
-  DESIGN_SIDEBAR_COLLAPSE_BELOW,
-  DESIGN_WIDE_WINDOW_MIN,
+  DESIGN_SPLIT_MIN_WIDTH,
+  designChatMaxWidth,
   resolveDesignCanvasLayout,
-  resolveDesignWindowPolicy,
+  resolveDesignEntryAction,
 } from "../lib/environment-panel-layout";
 import { appApi } from "../lib/ipc";
 import { DesignCanvasRegion } from "./design-canvas-region";
 import { DesignChatDivider } from "./design-chat-divider";
 
 export const DESIGN_CHAT_WIDTH_STORAGE_KEY = "aiden-agent.design.chat-width";
-/** Set while the sidebar is collapsed because design mode collapsed it, so exit reopens only that. */
+/**
+ * Set while the sidebar is collapsed because design mode collapsed it, so exit
+ * reopens only that. Holds the sidebar's open width, so a later widen can tell
+ * whether the sidebar fits again.
+ */
 const SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY = "aiden-agent.design.sidebar-collapsed-by-design";
+/** Used when an older build saved the flag without the sidebar's width. */
+const FALLBACK_SIDEBAR_WIDTH = 272;
+/** Resizes settle (a widen animates) before Aiden asks main again or re-checks the sidebar. */
+const RESIZE_SETTLE_MS = 150;
+
+export type DesignPane = "chat" | "canvas";
+
+/** The stacked layout's one visible pane, for the top bar's Chat | Canvas switch and the chat body. */
+export interface DesignPaneState {
+  /** True while design mode is on and the content is too narrow to split. */
+  stacked: boolean;
+  pane: DesignPane;
+  setPane(pane: DesignPane): void;
+}
+
+const DesignPaneContext = React.createContext<DesignPaneState>({
+  stacked: false,
+  pane: "chat",
+  setPane: () => {},
+});
+
+/** The stacked design layout's visible pane; outside design mode the chat is always shown. */
+export function useDesignPane(): DesignPaneState {
+  return React.useContext(DesignPaneContext);
+}
+
+/** True while the stacked design layout shows the canvas, so the chat's body is hidden. */
+export function useDesignChatBodyHidden(): boolean {
+  const { stacked, pane } = useDesignPane();
+  return stacked && pane === "canvas";
+}
+
+/**
+ * Hides chat-column content (the terminal drawer) from sight, focus and
+ * assistive tech while the stacked layout shows the canvas, without
+ * unmounting it.
+ */
+export function DesignChatBody({ children }: React.PropsWithChildren) {
+  const hidden = useDesignChatBodyHidden();
+  return (
+    <div className={hidden ? "contents invisible" : "contents"} inert={hidden} aria-hidden={hidden || undefined}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * While the stacked layout shows the canvas, the Live pill moves to the
+ * canvas's bottom-left corner, this far from the content's left edge, so it
+ * stays clear of the zoom controls and overview at the bottom right.
+ */
+const STACKED_DOCK_LANE = 128;
+
+/** Each chat's stacked pane, for this app session. */
+const stackedPaneByChat = new Map<string, DesignPane>();
 
 /** Design mode for the open chat, as the chat area and the sidebar both use it. */
 export interface DesignChatState {
@@ -80,8 +147,10 @@ export function DesignWorkbench({
 
 /**
  * Splits the chat area into the design chat column and the canvas while
- * design mode is active. The chat content keeps one place in the tree, so
- * entering or leaving never remounts the conversation.
+ * design mode is active. Content narrower than 680 px stacks the two instead,
+ * showing one at a time behind the top bar's Chat | Canvas switch. The chat
+ * content keeps one place in the tree, so entering, leaving or switching
+ * panes never remounts the conversation.
  */
 export function DesignLayout({
   chatId,
@@ -93,7 +162,30 @@ export function DesignLayout({
   const [containerWidth, setContainerWidth] = React.useState(() => window.innerWidth);
   const chatWidth = useWorkbenchWidth(DESIGN_CHAT_WIDTH_STORAGE_KEY, DESIGN_CHAT_WIDTH_BOUNDS);
   const layout = resolveDesignCanvasLayout(chatWidth.preferredWidth, containerWidth);
-  const windowPolicy = useDesignWindowPolicy(state);
+  const stacked = on && layout.mode === "stacked";
+  const windowPolicy = useDesignWindowPolicy(state, chatId, containerRef, stacked);
+  const [, rerender] = React.useReducer((count: number) => count + 1, 0);
+  const pane: DesignPane = (chatId && stackedPaneByChat.get(chatId)) || "chat";
+  const setPane = React.useCallback(
+    (next: DesignPane) => {
+      if (!chatId) return;
+      stackedPaneByChat.set(chatId, next);
+      rerender();
+    },
+    [chatId],
+  );
+  const paneState = React.useMemo<DesignPaneState>(() => ({ stacked, pane, setPane }), [pane, setPane, stacked]);
+  const canvasHidden = stacked && pane === "chat";
+  const dockInset = !on
+    ? null
+    : !stacked
+      ? layout.canvasWidth
+      : pane === "canvas"
+        ? Math.max(0, containerWidth - STACKED_DOCK_LANE)
+        : null;
+  const { reportDesignDockInset } = useEnvironmentPanel();
+  React.useLayoutEffect(() => reportDesignDockInset(dockInset), [dockInset, reportDesignDockInset]);
+  React.useLayoutEffect(() => () => reportDesignDockInset(null), [reportDesignDockInset]);
 
   React.useLayoutEffect(() => {
     const element = containerRef.current;
@@ -106,117 +198,188 @@ export function DesignLayout({
   }, []);
 
   return (
-    <div ref={containerRef} data-design-layout={on ? "on" : "off"} className="relative flex h-full min-h-0 w-full">
+    <DesignPaneContext.Provider value={paneState}>
       <div
-        data-design-mode={on ? "true" : undefined}
-        className="h-full min-h-0 min-w-0 flex-1"
-        style={on && layout.inline ? { width: layout.chatWidth, flex: "none" } : undefined}
+        ref={containerRef}
+        data-design-layout={on ? layout.mode : "off"}
+        className="relative flex h-full min-h-0 w-full"
       >
-        {children}
-      </div>
-      {on && chatId ? (
-        <>
-          {layout.inline ? (
-            <DesignChatDivider
-              width={layout.chatWidth}
-              min={DESIGN_CHAT_WIDTH_BOUNDS.min}
-              max={Math.max(
-                DESIGN_CHAT_WIDTH_BOUNDS.min,
-                Math.min(DESIGN_CHAT_WIDTH_BOUNDS.max, containerWidth - DESIGN_CANVAS_MIN_WIDTH),
-              )}
-              onWidthChange={chatWidth.setPreferredWidth}
-              onWidthCommit={chatWidth.commitPreferredWidth}
-              onResizingChange={chatWidth.setResizing}
+        <div
+          data-design-mode={on ? "true" : undefined}
+          className="h-full min-h-0 min-w-0 flex-1"
+          style={on && !stacked ? { width: layout.chatWidth, flex: "none" } : undefined}
+        >
+          {children}
+        </div>
+        {on && chatId ? (
+          <>
+            {stacked ? null : (
+              <DesignChatDivider
+                width={layout.chatWidth}
+                min={DESIGN_CHAT_WIDTH_BOUNDS.min}
+                max={designChatMaxWidth(containerWidth)}
+                onWidthChange={chatWidth.setPreferredWidth}
+                onWidthCommit={chatWidth.commitPreferredWidth}
+                onResizingChange={chatWidth.setResizing}
+              />
+            )}
+            <DesignCanvasRegion
+              chatId={chatId}
+              width={layout.canvasWidth}
+              placement={stacked ? "stacked" : "split"}
+              hidden={canvasHidden}
             />
-          ) : null}
-          <DesignCanvasRegion chatId={chatId} width={layout.canvasWidth} overlay={!layout.inline} />
-          {windowPolicy.bannerVisible ? (
-            <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center px-3">
-              <div className="pointer-events-auto">
-                <DesignModeBanner onWiden={windowPolicy.widen} />
+            {stacked && windowPolicy.bannerVisible ? (
+              <div className="pointer-events-none absolute inset-x-0 top-14 z-40 flex justify-center px-3">
+                <div className="pointer-events-auto">
+                  <DesignModeBanner onWiden={windowPolicy.widen} onDismiss={windowPolicy.dismiss} />
+                </div>
               </div>
-            </div>
-          ) : null}
-        </>
-      ) : null}
-    </div>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+    </DesignPaneContext.Provider>
   );
 }
 
-function readFlag(key: string): boolean {
+function readSidebarCollapsedByDesign(): number | null {
   try {
-    return localStorage.getItem(key) === "1";
+    const value = localStorage.getItem(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY);
+    if (value === null) return null;
+    const width = Number(value);
+    return Number.isFinite(width) && width > 1 ? width : FALLBACK_SIDEBAR_WIDTH;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function writeFlag(key: string, on: boolean): void {
+function writeSidebarCollapsedByDesign(width: number | null): void {
   try {
-    if (on) localStorage.setItem(key, "1");
-    else localStorage.removeItem(key);
+    if (width === null) localStorage.removeItem(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY);
+    else localStorage.setItem(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY, String(Math.round(width)));
   } catch {
     // The flag only decides whether exit reopens the sidebar.
   }
 }
 
 /**
- * The window rules for design mode: below 1100 px the sidebar collapses (and
- * reopens on exit only if design mode collapsed it); below 840 px Aiden asks
- * main to widen the window and shows a banner when it cannot.
+ * The window rules for design mode. Only a person's own entry (the toggle,
+ * ⌘⇧L or /design) may make room: it collapses the sidebar when that is enough
+ * for the split, and otherwise asks main to widen the window. Launch, reload,
+ * chat switches and other windows' changes never resize anything. While the
+ * layout is stacked, a banner offers to widen, but only when main says that
+ * can work (not full screen, not maximized, a display at least 1280 px wide).
  */
-function useDesignWindowPolicy(state: WorkbenchDesignState): { bannerVisible: boolean; widen(): void } {
+function useDesignWindowPolicy(
+  state: WorkbenchDesignState,
+  chatId: string | undefined,
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  stacked: boolean,
+): { bannerVisible: boolean; widen(): void; dismiss(): void } {
   const sidebar = useSplitViewSidebar();
   const sidebarRef = React.useRef(sidebar);
   sidebarRef.current = sidebar;
-  const [bannerVisible, setBannerVisible] = React.useState(false);
-  const activeRef = React.useRef(false);
-  activeRef.current = state === "active";
+  const [canWiden, setCanWiden] = React.useState(false);
+  const [dismissed, setDismissed] = React.useState(false);
+  const [widenFailed, setWidenFailed] = React.useState(false);
+  const active = state === "active";
+  const activeRef = React.useRef(active);
+  activeRef.current = active;
+  /** Set after a successful widen, so the next settled resize re-checks the sidebar. */
+  const recheckSidebarRef = React.useRef(false);
+
+  const refreshCanWiden = React.useCallback(() => {
+    void appApi.designWindowCanWiden().then(
+      (result) => {
+        if (activeRef.current) setCanWiden(result?.canWiden === true);
+      },
+      () => {
+        if (activeRef.current) setCanWiden(false);
+      },
+    );
+  }, []);
 
   const widen = React.useCallback(() => {
     void appApi.widenForDesign().then(
       (result) => {
         if (!activeRef.current) return;
-        setBannerVisible(!result?.widened || window.innerWidth < DESIGN_WIDE_WINDOW_MIN);
+        if (result?.widened) {
+          // The resize that follows decides the layout; the banner goes with the stacked mode.
+          recheckSidebarRef.current = true;
+          setCanWiden(false);
+        } else {
+          setWidenFailed(true);
+        }
       },
       () => {
-        if (activeRef.current) setBannerVisible(true);
+        if (activeRef.current) setWidenFailed(true);
       },
     );
   }, []);
 
-  const collapseSidebar = React.useCallback(() => {
+  const recheckSidebar = React.useCallback(() => {
     const current = sidebarRef.current;
-    if (!current || current.collapsed) return;
-    current.setCollapsed(true);
-    writeFlag(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY, true);
-  }, []);
+    const element = containerRef.current;
+    const sidebarWidth = readSidebarCollapsedByDesign();
+    if (!current?.collapsed || !element || sidebarWidth === null) return;
+    if (element.getBoundingClientRect().width - sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH) {
+      writeSidebarCollapsedByDesign(null);
+      current.setCollapsed(false);
+    }
+  }, [containerRef]);
+
+  // A person's entry makes room once; every other way into design mode leaves the window alone.
+  React.useLayoutEffect(() => {
+    if (!active || !chatId) return;
+    const source = consumePendingDesignEntry(chatId);
+    const element = containerRef.current;
+    if (!source || !element) return;
+    const containerWidth = element.getBoundingClientRect().width;
+    const current = sidebarRef.current;
+    const sidebarWidth = current && !current.collapsed ? Math.max(0, window.innerWidth - containerWidth) : 0;
+    const action = resolveDesignEntryAction({ containerWidth, sidebarWidth, canWiden: true });
+    if (action === "collapseSidebar" && current) {
+      current.setCollapsed(true);
+      writeSidebarCollapsedByDesign(sidebarWidth);
+    } else if (action === "widenWindow") {
+      // Main refuses (and says so) when widening cannot work, which leaves no banner.
+      widen();
+    }
+  }, [active, chatId, containerRef, widen]);
 
   React.useLayoutEffect(() => {
     if (state === "pending") return;
     if (state === "inactive") {
-      setBannerVisible(false);
-      if (readFlag(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY)) {
-        writeFlag(SIDEBAR_COLLAPSED_BY_DESIGN_STORAGE_KEY, false);
+      setCanWiden(false);
+      setDismissed(false);
+      setWidenFailed(false);
+      recheckSidebarRef.current = false;
+      if (readSidebarCollapsedByDesign() !== null) {
+        writeSidebarCollapsedByDesign(null);
         if (sidebarRef.current?.collapsed) sidebarRef.current.setCollapsed(false);
       }
       return;
     }
-    const policy = resolveDesignWindowPolicy(window.innerWidth);
-    if (policy.collapseSidebar) collapseSidebar();
-    if (policy.needsWiderWindow) widen();
-
-    let previousWidth = window.innerWidth;
+    refreshCanWiden();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const onResize = () => {
-      const width = window.innerWidth;
-      if (previousWidth >= DESIGN_SIDEBAR_COLLAPSE_BELOW && width < DESIGN_SIDEBAR_COLLAPSE_BELOW) collapseSidebar();
-      if (width >= DESIGN_WIDE_WINDOW_MIN) setBannerVisible(false);
-      else if (previousWidth >= DESIGN_WIDE_WINDOW_MIN) setBannerVisible(true);
-      previousWidth = width;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (recheckSidebarRef.current) {
+          recheckSidebarRef.current = false;
+          recheckSidebar();
+        }
+        refreshCanWiden();
+      }, RESIZE_SETTLE_MS);
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [collapseSidebar, state, widen]);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [recheckSidebar, refreshCanWiden, state]);
 
-  return { bannerVisible, widen };
+  const dismiss = React.useCallback(() => setDismissed(true), []);
+  return { bannerVisible: stacked && canWiden && !dismissed && !widenFailed, widen, dismiss };
 }

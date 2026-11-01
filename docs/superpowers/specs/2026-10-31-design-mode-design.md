@@ -56,7 +56,7 @@ Design mode is a per-chat layout on an ordinary workspace chat. In it, the right
 
 ```
 ┌ sidebar (scoped) ┬ chat column ─┬ design canvas (infinite) ─────────────┐
-│ ‹ All projects   │ 420 px       │  ┌ A · Calm ─┐ ┌ B · Bold ─┐   ▢ note │
+│ ‹ All workspaces │ 420 px       │  ┌ A · Calm ─┐ ┌ B · Bold ─┐   ▢ note │
 │ aiden-site       │ (360–560,    │  │  frame    │ │  frame  ①│           │
 │  · Landing hero  │  draggable)  │  └───────────┘ └───────────┘           │
 │  · Pricing page  │              │                                        │
@@ -65,21 +65,26 @@ Design mode is a per-chat layout on an ordinary workspace chat. In it, the right
 ```
 
 - **Sidebar:**
-  - It shows only the chat's project: a "‹ All projects" back row, the project name and path, and that project's chats.
-  - The back row clears the scope for this window session. It does not leave design mode.
+  - It shows only the chat's project: an "‹ All workspaces" back row, then a heading styled like a workspace row (folder icon and workspace name, with the branch and path in tertiary text), then that project's drafts and chats.
+  - The back row clears the scope for this window session. It does not leave design mode. While the scope is cleared, a "Show only <workspace>" row at the top of the full list brings it back.
+  - While the scoped list has nothing to show (for example while the chat list briefly reloads empty, or the workspace was removed), the full list renders in its place and the scope is kept, so it comes back on its own.
   - For a private-folder chat it shows the Chats group.
 - **Chat column:**
   - Default 420 px, minimum 360, maximum 560, with a drag divider.
   - The width is renderer-local and global, not per chat (`aiden-agent.design.chat-width`).
-  - Messages fill the column: `--chat-content-max-width: none`, with a 16 px gutter.
+  - Messages fill the column: `--chat-content-max-width: none`, with a 16 px left gutter and the usual Live-pill clearance on the right.
+  - The terminal drawer stays in the chat column.
+  - The top bar keeps its actions whole: the title may shrink to nothing, the actions never shrink, and when the header is narrower than 480 px of content, Quick View and Terminal move into the ••• tools menu.
 - **Canvas region:**
-  - It takes everything left over, with a minimum of 480 px.
-  - It replaces the side panel while design mode is on. The panel's tab, width and open state are saved and restored on exit.
+  - It takes everything left over, with a minimum of 320 px. It is one region named "Design canvas"; while empty it reads "Designs will appear here."
+  - It replaces the side panel while design mode is on. On entry the panel and Quick View always close, and their state is saved only if the saved copy is missing or stale. Both are restored on exit.
   - The browser panel stays reachable through **Open in browser** on a frame, which leaves design mode's canvas visible and opens the panel overlaid.
-- **Small windows** (measured on the window width):
-  - Below 1100 px, the sidebar collapses on entry. On exit it reopens only if design mode collapsed it.
-  - Below 840 px (chat minimum 360 plus canvas minimum 480), entry first tries to widen the window to 1280 px within the display's work area.
-  - If the window cannot widen, a banner reads "Design mode needs a wider window" with a **Widen window** button, and the canvas overlays the chat.
+- **Live pill:** it stays inside the chat column's bottom-right corner, clear of the canvas zoom, fit and minimap controls. In the stacked layout showing the canvas it sits at the canvas's bottom-left.
+- **Narrow windows** (decided from the width of the content container, not the window):
+  - At 680 px or more (chat minimum 360 plus canvas minimum 320) the chat and canvas sit side by side ("split").
+  - Below 680 px they stack: a "Chat | Canvas" segmented control in the top bar shows one of them, and the hidden one is `inert` and hidden from assistive tech while staying mounted. The choice is remembered per chat for the window session.
+  - While stacked, a banner reads "Design mode needs a wider window" with **Widen window** and a dismiss button. It shows only when widening can work: the window is not fullscreen or maximized and the display's work area is at least 1280 px wide. A widen that fails hides it; a widen that succeeds lets the next resize decide.
+- **Resizing is only for a person's entry.** Turning design mode on in this window with the toggle, ⇧⌘L or `/design` may collapse the sidebar (when that alone makes room for the split) or, when it would not, widen the window to 1280 px within the work area (not animated under Reduce Motion). Launch, reload, switching chats and a change broadcast from another window never resize anything; they only show the banner when it applies. After a widen, the sidebar reopens if the split still fits with it. On exit the sidebar reopens only if design mode collapsed it.
 - **Exit** restores the previous panel tab, panel width, open state and sidebar.
 
 ## 5. The canvas

@@ -973,9 +973,16 @@ export function ScrollArea({
   scrollRestorationId,
   focusRegion,
   overlay,
+  bodyHidden = false,
   className,
   children,
 }: React.PropsWithChildren<{
+  /**
+   * Hides everything below the toolbar from sight, focus and assistive tech
+   * while keeping it mounted (and its scroll position), such as design mode's
+   * stacked layout showing the canvas in the chat's place.
+   */
+  bodyHidden?: boolean;
   /**
    * Marks the scrollport as the conversation F6 moves to, so arrow keys and
    * Page Up/Down scroll it once it has focus.
@@ -1327,7 +1334,7 @@ export function ScrollArea({
           </h1>
           {titleAccessory}
         </div>
-        <div className="no-drag flex items-center gap-2">{actions}</div>
+        <div className="no-drag flex shrink-0 items-center gap-2">{actions}</div>
       </header>
     ) : null);
 
@@ -1344,118 +1351,125 @@ export function ScrollArea({
           {resolvedToolbar}
         </div>
       ) : null}
+      {/* Always rendered so hiding the body never remounts (or rescrolls) the transcript. */}
       <div
-        ref={viewport}
-        data-scroll-restoration-id={scrollRestorationId}
-        data-scroll-top={atTop}
-        data-scroll-bottom={atScrollEnd}
-        data-follow={autoScrollToBottom ? following : undefined}
-        {...(focusRegion
-          ? {
-              "data-focus-region": focusRegion,
-              "data-focus-region-entry": "",
-              role: "region",
-              "aria-label": "Conversation",
-              tabIndex: -1,
-            }
-          : {})}
-        className={cn(
-          "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
-          focusRegion && "conversation-scrollport",
-        )}
-        style={{
-          paddingTop: toolbarHeight,
-          paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
-          // While following, the latch owns the bottom edge; browser scroll
-          // anchoring would fight it by holding a mid-transcript node still.
-          // A reader who has scrolled away keeps anchoring, so content changing
-          // above their place does not shift what they are reading.
-          overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
-        }}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
-          const previous = scrollSampleRef.current;
-          const clamped = previous !== null &&
-            (sample.height < previous.height || sample.viewport !== previous.viewport);
-          // Sandboxed frame input cannot reach our wheel/touch listeners. Its
-          // chained host scroll can still reveal the reader moving upward.
-          // Fractional upward movement adds up across events, including across
-          // a streaming snap; a downward move or a jump starts over.
-          if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
-            upwardDriftRef.current = 0;
-          } else {
-            upwardDriftRef.current += previous.top - sample.top;
-          }
-          const movedUp = upwardDriftRef.current > 1;
-          if (movedUp) upwardDriftRef.current = 0;
-          scrollSampleRef.current = sample;
-          if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
-            dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
-          }
-          dispatchFollow({
-            type: clamped ? "contentResize" : "settle",
-            distance: measureDistance(element),
-            scrollTop: element.scrollTop,
-          });
-        }}
+        className={bodyHidden ? "contents invisible" : "contents"}
+        inert={bodyHidden}
+        aria-hidden={bodyHidden || undefined}
       >
-        <div ref={content} data-scroll-content className="min-h-full">
-          {children}
-        </div>
-      </div>
-      {focusRegion ? (
-        // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
-        <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
-      ) : null}
-      {overlay ? (
         <div
-          className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
-          style={{ top: toolbarHeight + 8 }}
-        >
-          <div className="pointer-events-auto">{overlay}</div>
-        </div>
-      ) : null}
-      {showScrollToBottomButton && offerJump ? (
-        // The button floats over the scrollport like the footer, but is centred
-        // on the same chat column as the composer, so it follows the column
-        // when Quick View insets it (and through that transition) and when a
-        // classic scrollbar takes a gutter.
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
-          style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
-        >
-          <div className="aiden-dock-inset chat-content-column relative">
-            <Button
-              iconOnly
-              size="medium"
-              variant="filled"
-              onClick={() => scrollToBottom()}
-              aria-label="Scroll to bottom"
-              className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
-              style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
-            >
-              <ArrowDownToLine />
-            </Button>
-          </div>
-        </div>
-      ) : null}
-      {footer ? (
-        // Nothing scrolls the footer, so it never grows under the toolbar; a child
-        // that opts in with min-h-0 (a tall approval) shrinks to the room left.
-        // Anything still too tall overflows through the top, keeping the
-        // composer's input and actions at the bottom in view.
-        <div
-          ref={footerRef}
-          className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+          ref={viewport}
+          data-scroll-restoration-id={scrollRestorationId}
+          data-scroll-top={atTop}
+          data-scroll-bottom={atScrollEnd}
+          data-follow={autoScrollToBottom ? following : undefined}
+          {...(focusRegion
+            ? {
+                "data-focus-region": focusRegion,
+                "data-focus-region-entry": "",
+                role: "region",
+                "aria-label": "Conversation",
+                tabIndex: -1,
+              }
+            : {})}
+          className={cn(
+            "scroll-edge-mask relative z-0 h-full w-full overflow-y-auto overscroll-contain",
+            focusRegion && "conversation-scrollport",
+          )}
           style={{
-            maxHeight: `calc(100% - ${toolbarHeight}px)`,
-            ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            paddingTop: toolbarHeight,
+            paddingBottom: footerHeight + Math.max(0, scrollContentBottomOffset),
+            // While following, the latch owns the bottom edge; browser scroll
+            // anchoring would fight it by holding a mid-transcript node still.
+            // A reader who has scrolled away keeps anchoring, so content changing
+            // above their place does not shift what they are reading.
+            overflowAnchor: autoScrollToBottom && following ? "none" : undefined,
+          }}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            const sample = { top: element.scrollTop, height: element.scrollHeight, viewport: element.clientHeight };
+            const previous = scrollSampleRef.current;
+            const clamped = previous !== null &&
+              (sample.height < previous.height || sample.viewport !== previous.viewport);
+            // Sandboxed frame input cannot reach our wheel/touch listeners. Its
+            // chained host scroll can still reveal the reader moving upward.
+            // Fractional upward movement adds up across events, including across
+            // a streaming snap; a downward move or a jump starts over.
+            if (!previous || clamped || followRef.current.jumpPending || sample.top > previous.top) {
+              upwardDriftRef.current = 0;
+            } else {
+              upwardDriftRef.current += previous.top - sample.top;
+            }
+            const movedUp = upwardDriftRef.current > 1;
+            if (movedUp) upwardDriftRef.current = 0;
+            scrollSampleRef.current = sample;
+            if (autoScrollRef.current && movedUp && !followRef.current.jumpPending && !followRef.current.scrollbarHeld) {
+              dispatchFollow({ type: "userIntent", intent: "drag", at: performance.now(), canScrollUp: true });
+            }
+            dispatchFollow({
+              type: clamped ? "contentResize" : "settle",
+              distance: measureDistance(element),
+              scrollTop: element.scrollTop,
+            });
           }}
         >
-          {footer}
+          <div ref={content} data-scroll-content className="min-h-full">
+            {children}
+          </div>
         </div>
-      ) : null}
+        {focusRegion ? (
+          // The conversation's keyboard focus ring, drawn below the overlaid toolbar.
+          <div aria-hidden className="conversation-focus-ring pointer-events-none absolute inset-x-0 bottom-0 z-20" style={{ top: toolbarHeight }} />
+        ) : null}
+        {overlay ? (
+          <div
+            className="pointer-events-none absolute inset-x-0 z-30 flex justify-end px-4"
+            style={{ top: toolbarHeight + 8 }}
+          >
+            <div className="pointer-events-auto">{overlay}</div>
+          </div>
+        ) : null}
+        {showScrollToBottomButton && offerJump ? (
+          // The button floats over the scrollport like the footer, but is centred
+          // on the same chat column as the composer, so it follows the column
+          // when Quick View insets it (and through that transition) and when a
+          // classic scrollbar takes a gutter.
+          <div
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-20"
+            style={alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined}
+          >
+            <div className="aiden-dock-inset chat-content-column relative">
+              <Button
+                iconOnly
+                size="medium"
+                variant="filled"
+                onClick={() => scrollToBottom()}
+                aria-label="Scroll to bottom"
+                className="pointer-events-auto absolute left-1/2 -translate-x-1/2 bg-popover/95 shadow-popover hover:bg-popover"
+                style={{ bottom: footerHeight + 12 + Math.max(0, scrollToBottomButtonOffset) }}
+              >
+                <ArrowDownToLine />
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {footer ? (
+          // Nothing scrolls the footer, so it never grows under the toolbar; a child
+          // that opts in with min-h-0 (a tall approval) shrinks to the room left.
+          // Anything still too tall overflows through the top, keeping the
+          // composer's input and actions at the bottom in view.
+          <div
+            ref={footerRef}
+            className="absolute inset-x-0 bottom-0 z-10 flex flex-col justify-end"
+            style={{
+              maxHeight: `calc(100% - ${toolbarHeight}px)`,
+              ...(alignFooterToScrollContent ? { insetInlineEnd: scrollbarGutter } : undefined),
+            }}
+          >
+            {footer}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

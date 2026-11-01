@@ -179,28 +179,30 @@ export function storedWorkbenchWidth(
 
 /** Design mode's chat column: renderer-local and shared by every design-mode chat. */
 export const DESIGN_CHAT_WIDTH_BOUNDS: PanelWidthBounds = { min: 360, max: 560, default: 420 };
-/** The design canvas never sits inline narrower than this. */
-export const DESIGN_CANVAS_MIN_WIDTH = 480;
-/** Entering design mode collapses the sidebar on windows narrower than this. */
-export const DESIGN_SIDEBAR_COLLAPSE_BELOW = 1100;
-/** Narrower windows cannot hold the chat and canvas minimums side by side. */
-export const DESIGN_WIDE_WINDOW_MIN = DESIGN_CHAT_WIDTH_BOUNDS.min + DESIGN_CANVAS_MIN_WIDTH;
-/** Entry on a too-narrow window first tries to widen it to this width. */
+/** The design canvas never sits beside the chat narrower than this. */
+export const DESIGN_CANVAS_MIN_WIDTH = 320;
+/**
+ * Content narrower than this cannot hold the chat and canvas minimums side by
+ * side, so design mode stacks them and shows one at a time.
+ */
+export const DESIGN_SPLIT_MIN_WIDTH = DESIGN_CHAT_WIDTH_BOUNDS.min + DESIGN_CANVAS_MIN_WIDTH;
+/** Widening for design mode aims for this window width, and is offered only when the display allows it. */
 export const DESIGN_WIDEN_TARGET = 1280;
 
+export type DesignLayoutMode = "split" | "stacked";
+
 export interface DesignCanvasLayout {
+  /** Split puts the chat and canvas side by side; stacked shows one of them at the full width. */
+  mode: DesignLayoutMode;
   chatWidth: number;
   canvasWidth: number;
-  /** False when the canvas floats over a full-width chat instead of sitting beside it. */
-  inline: boolean;
 }
 
 /**
  * Split the main content (after the sidebar) between the design chat column and
  * the canvas. The chat keeps its preferred width within 360–560 and gives way to
- * the canvas minimum first; once even 360 + 480 does not fit, the chat takes the
- * whole width and the canvas overlays it, keeping the same thin uncovered strip
- * as a floating Environment panel.
+ * the canvas minimum first; once even 360 + 320 does not fit, the two stack and
+ * each takes the whole width while it is shown.
  */
 export function resolveDesignCanvasLayout(
   preferredChatWidth: number | undefined,
@@ -212,21 +214,38 @@ export function resolveDesignCanvasLayout(
     typeof preferredChatWidth === "number" && Number.isFinite(preferredChatWidth)
       ? preferredChatWidth
       : bounds.default;
-  if (container < bounds.min + DESIGN_CANVAS_MIN_WIDTH) {
-    return { chatWidth: container, canvasWidth: Math.max(0, container - PANEL_EDGE_GUTTER), inline: false };
+  if (container < DESIGN_SPLIT_MIN_WIDTH) {
+    return { mode: "stacked", chatWidth: container, canvasWidth: container };
   }
   const clamped = Math.min(bounds.max, Math.max(bounds.min, preferred));
   const chatWidth = Math.min(clamped, container - DESIGN_CANVAS_MIN_WIDTH);
-  return { chatWidth, canvasWidth: container - chatWidth, inline: true };
+  return { mode: "split", chatWidth, canvasWidth: container - chatWidth };
 }
 
-/** Window-level rules applied when design mode is entered, measured on the window width. */
-export function resolveDesignWindowPolicy(windowWidth: number): {
-  collapseSidebar: boolean;
-  needsWiderWindow: boolean;
-} {
-  return {
-    collapseSidebar: windowWidth < DESIGN_SIDEBAR_COLLAPSE_BELOW,
-    needsWiderWindow: windowWidth < DESIGN_WIDE_WINDOW_MIN,
-  };
+/** The widest the design chat divider may go in a container this wide. */
+export function designChatMaxWidth(containerWidth: number): number {
+  const bounds = DESIGN_CHAT_WIDTH_BOUNDS;
+  return Math.max(bounds.min, Math.min(bounds.max, containerWidth - DESIGN_CANVAS_MIN_WIDTH));
+}
+
+export type DesignEntryAction = "none" | "collapseSidebar" | "widenWindow";
+
+/**
+ * What a person's own entry into design mode may do to make room for the split,
+ * measured on the content container. Collapsing an open sidebar is tried first
+ * when the content would then fit; otherwise the window is widened, but only
+ * when main says widening can work. Launch, reload and chat switches never get
+ * here, so nothing resizes on its own.
+ */
+export function resolveDesignEntryAction(input: {
+  containerWidth: number;
+  /** The sidebar's width while open, or 0 when it is already collapsed. */
+  sidebarWidth: number;
+  canWiden: boolean;
+}): DesignEntryAction {
+  if (input.containerWidth >= DESIGN_SPLIT_MIN_WIDTH) return "none";
+  if (input.sidebarWidth > 0 && input.containerWidth + input.sidebarWidth >= DESIGN_SPLIT_MIN_WIDTH) {
+    return "collapseSidebar";
+  }
+  return input.canWiden ? "widenWindow" : "none";
 }

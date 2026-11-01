@@ -16,16 +16,13 @@ test("a narrow window widens to 1280 and moves left only as far as the work area
   assert.equal(nearRight?.x, 160, "a window near the right edge slides left to fit");
 });
 
-test("a small display gives its whole width, and one that cannot hold 840 px gives nothing", () => {
-  assert.deepEqual(
-    widenedBounds({ x: 100, y: 0, width: 800, height: 700 }, { x: 0, y: 0, width: 1024, height: 768 }),
-    { x: 0, y: 0, width: 1024, height: 700 },
-  );
-  assert.equal(widenedBounds({ x: 0, y: 0, width: 700, height: 600 }, { x: 0, y: 0, width: 800, height: 600 }), null);
+test("a display narrower than the 1280 px target gives nothing, so widening is never a half measure", () => {
+  assert.equal(widenedBounds({ x: 100, y: 0, width: 800, height: 700 }, { x: 0, y: 0, width: 1024, height: 768 }), null);
+  assert.equal(widenedBounds({ x: 0, y: 0, width: 700, height: 600 }, { x: 0, y: 0, width: 1279, height: 600 }), null);
   // A second display to the left of the primary one has negative coordinates.
   assert.deepEqual(
-    widenedBounds({ x: -900, y: 0, width: 800, height: 600 }, { x: -1024, y: 0, width: 1024, height: 768 }),
-    { x: -1024, y: 0, width: 1024, height: 600 },
+    widenedBounds({ x: -900, y: 0, width: 800, height: 600 }, { x: -1440, y: 0, width: 1440, height: 900 }),
+    { x: -1280, y: 0, width: 1280, height: 600 },
   );
 });
 

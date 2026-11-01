@@ -122,10 +122,12 @@ import { useNewChatMachines } from "../lib/hosts/use-new-chat-machines";
 import {
   ChatTitleMenu,
   DesignModeToggle,
+  DesignPaneSwitch,
   WorkspaceChip,
   WorkspaceToolButtons,
 } from "../components/chat-top-bar";
 import { OpenInEditorPicker } from "../components/open-in-editor-picker";
+import { useDesignChatBodyHidden } from "../design/design-layout";
 import { useCommandHandler, useCommandSystem, useShortcutBinding, useShortcutLabel } from "../lib/command-system";
 import { useComposerTypeFocus } from "../lib/use-composer-type-focus";
 import {
@@ -182,6 +184,7 @@ import { useActiveWorkspace } from "../lib/workspace-context";
 import { useWorkspaceTerminal } from "../components/terminal-drawer";
 import {
   EnvironmentPanelToggle,
+  QuickViewIcon,
   QuickViewToggle,
   useEnvironmentPanel,
 } from "../components/environment-panel";
@@ -381,6 +384,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
   const terminal = useWorkspaceTerminal();
   const git = useGitInfo(effectiveWorkspace?.id);
   const environmentPanel = useEnvironmentPanel();
+  const designChatBodyHidden = useDesignChatBodyHidden();
   const settingsBlockedReason = environmentPanel.gitOperationBusy
     ? "Wait for the current Git operation to finish"
     : environmentPanel.editorState.saving
@@ -3466,6 +3470,7 @@ export function ChatPane({ chatId }: { chatId: string }) {
     <>
       <ScrollArea
         focusRegion="chat"
+        bodyHidden={designChatBodyHidden}
         overlay={findBar}
         className="h-full min-h-0"
         alignFooterToScrollContent
@@ -3519,25 +3524,45 @@ export function ChatPane({ chatId }: { chatId: string }) {
             leading={
               <>
                 <DesignModeToggle chatId={chatId} />
-                <QuickViewToggle disabled={!effectiveWorkspace} />
+                <DesignPaneSwitch />
               </>
             }
-            terminalButton={
-              <Button
-                iconOnly
-                variant="bar"
-                size="small"
-                onClick={terminal.toggle}
-                disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
-                aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
-                aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
-                aria-pressed={terminal.open}
-                title={`Toggle terminal (${terminalShortcut})`}
-                data-terminal-toggle
-              >
-                <TerminalSquare />
-              </Button>
-            }
+            foldable={[
+              {
+                key: "quick-view",
+                placement: "leading",
+                button: <QuickViewToggle disabled={!effectiveWorkspace} />,
+                label: environmentPanel.quickViewOpen ? "Hide Quick View" : "Show Quick View",
+                icon: QuickViewIcon,
+                onSelect: environmentPanel.toggleQuickView,
+                disabled: !effectiveWorkspace || environmentPanel.gitOperationBusy,
+                active: environmentPanel.quickViewOpen,
+              },
+              {
+                key: "terminal",
+                button: (
+                  <Button
+                    iconOnly
+                    variant="bar"
+                    size="small"
+                    onClick={terminal.toggle}
+                    disabled={!effectiveWorkspace?.folderPath || !terminal.canOpen}
+                    aria-label={terminal.open ? "Hide terminal" : "Show terminal"}
+                    aria-keyshortcuts={ariaKeyShortcut(terminalShortcutBinding)}
+                    aria-pressed={terminal.open}
+                    title={`Toggle terminal (${terminalShortcut})`}
+                    data-terminal-toggle
+                  >
+                    <TerminalSquare />
+                  </Button>
+                ),
+                label: terminal.open ? "Hide terminal" : "Show terminal",
+                icon: TerminalSquare,
+                onSelect: terminal.toggle,
+                disabled: !effectiveWorkspace?.folderPath || !terminal.canOpen,
+                active: terminal.open,
+              },
+            ]}
             trailing={
               <OpenInEditorPicker
                 workspaceId={effectiveWorkspace?.id}

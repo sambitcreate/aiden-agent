@@ -2815,11 +2815,18 @@ textarea {
   margin-inline: auto;
 }
 
-/* Design mode's narrow chat column fills its width; the dock pill sits over
-   the canvas instead, so the column only keeps a small gutter. */
+/* Design mode's narrow chat column fills its width. The Live pill sits at the
+   column's bottom-right edge (clear of the canvas controls), so the column
+   keeps the usual pill clearance on the right only and a small gutter on the
+   left. The title may shrink to nothing so the actions never overlap it. */
 [data-design-mode] {
   --chat-content-max-width: none;
-  --aiden-dock-gutter: 16px;
+}
+[data-design-mode] .aiden-dock-inset {
+  padding-inline: 16px var(--aiden-dock-gutter);
+}
+[data-design-mode] .scroll-area-header h1 {
+  min-width: 0;
 }
 
 /* The pane around the transcript column is the size container wide inline
