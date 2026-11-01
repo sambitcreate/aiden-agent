@@ -8,7 +8,7 @@
 - **State:** a `designMode` flag on the chat record in main. It has a store setter, an application-service method, an IPC call, and the metadata broadcast.
 - **Hook:** the renderer reads it through an optimistic `useDesignMode` hook.
 - **Layout:** a pure resolver decides widths and small-window policy. A new `DesignCanvasRegion` replaces the workbench while design mode is on; the workbench state is saved and restored.
-- **Entry points:** the top-bar toggle, ⌘⇧D and `/design`.
+- **Entry points:** the top-bar toggle, ⌘⇧L and `/design`.
 
 **Tech Stack:** Electron, React 19, TanStack Router and Query, `tsx --test`, Testing Library and `renderToStaticMarkup`, Playwright.
 
@@ -16,7 +16,7 @@
 
 ## Global Constraints
 
-- P0 has merged first. `design.open`, the `designStudio` capability and ⌘⇧D are free.
+- P0 has merged first. `design.open` and the `designStudio` capability are gone. ⌘⇧L (`Command+Shift+L`) is unclaimed by any command or built-in key; ⌘⇧D stays reserved for `dictation.toggle`'s default.
 - **Flag:** `AIDEN_EXPERIMENTAL_DESIGN_MODE` ("1" or "true") gates everything in this plan through capability `designMode`. With the flag off, no toggle, command, shortcut or layout change exists.
 - **Eligible chats:** a chat with a folder workspace or an Aiden private folder, no `botId`, and not the Assistant workspace. `setDesignMode` on any other chat throws `ChatStoreError("design-mode-unavailable")` (or the store's existing error type with that code).
 - **Widths:**
@@ -268,7 +268,7 @@
 - [ ] **Step 4: Run the tests again.** Expected: PASS.
 - [ ] **Step 5: Commit** with the message `Scope the sidebar to the project in design mode`.
 
-### Task 7: Entry points (toggle, ⌘⇧D, `/design`)
+### Task 7: Entry points (toggle, ⌘⇧L, `/design`)
 
 **Files:**
 - Modify: `renderer/components/chat-top-bar.tsx`, `renderer/shared/keybindings.ts`, `renderer/main/root-view.tsx`, `renderer/shared/slash-commands.ts` (next to `/visualize`, around lines 545–557), `renderer/lib/slash-command-actions.ts`
@@ -277,7 +277,7 @@
 **Interfaces:**
 - Consumes: `useDesignMode` and `DesignModeSource` (Task 4).
 - Produces:
-  - Keybinding id `design.toggle` (⌘⇧D, `requiresCapability: "designMode"`).
+  - Keybinding id `design.toggle` (`defaultBinding: "Command+Shift+L"`, `requiresCapability: "designMode"`, scope `app`, not global). Add it to `INTRODUCED_DEFAULT_COMMANDS` in `renderer/shared/keybindings.ts` so a saved custom ⌘⇧L wins and the new command starts disabled. Test with `repairKeybindingOverrides`: a stored custom `Command+Shift+L` on another command keeps it and disables `design.toggle`; enabling `dictation.toggle` at its default never conflicts.
   - Slash command `design` with `availability: "workspace-chat"`, an optional argument whose only accepted value is `off`, and copy "Design mode" / "Chat on the left, canvas on the right".
   - Top-bar button with accessible name "Design mode" and `aria-pressed`.
 
@@ -287,7 +287,7 @@
     - Running `/design` calls `set(true, "slash")`.
     - `/design off` calls `set(false, "slash")`.
     - `/design foo` shows the existing invalid-argument hint and does not change state.
-  - **Shortcut sheet:** it lists ⌘⇧D as "Toggle design mode" only when `designMode` is on.
+  - **Shortcut sheet:** it lists ⌘⇧L as "Toggle design mode" only when `designMode` is on.
   - **Command palette:** "Toggle design mode" runs the same action.
 - [ ] **Step 2: Run the tests and confirm they fail.**
   - Run: `npx tsx --test renderer/components/chat-top-bar-design.test.tsx renderer/components/composer-slash-palette.test.tsx renderer/lib/shortcut-sheet.test.ts renderer/lib/command-system-core.test.ts`
@@ -309,7 +309,7 @@
   - `/design` in a workspace chat gives a chat column 420 ± 2 px wide, a canvas region at least 980 px wide, and a sidebar that lists only that workspace's chats under "‹ All projects".
   - Reloading the window keeps design mode on.
   - Opening a chat in another workspace shows the normal layout. Coming back shows design mode again.
-  - ⌘⇧D leaves design mode. The panel and sidebar return to their state before entry.
+  - ⌘⇧L leaves design mode. The panel and sidebar return to their state before entry.
   - Resizing the window to 1000 px while in design mode collapses the sidebar. Resizing to 800 px then entering widens the window to at least 1024 px.
   - Pressing Escape in design mode keeps it on.
 - [ ] **Step 2: Run it.**

@@ -105,7 +105,7 @@ The canvas reuses `StudioCanvas` with its own node registry (`renderer/design/`)
   2. It leaves an entered frame.
   3. It returns to the Select tool.
   4. It never leaves design mode.
-- **Leaving design mode** is explicit: the toggle, ⌘⇧D, the pill's ✕, or `/design off`.
+- **Leaving design mode** is explicit: the toggle, ⌘⇧L, the pill's ✕, or `/design off`.
 
 ### 5.2 Frame kinds
 
@@ -267,7 +267,7 @@ Rules:
 People can enter design mode three ways:
 
 - the top-bar **Design** toggle (`aria-pressed`);
-- ⌘⇧D, as keybinding `design.toggle`, which reuses Studio's binding;
+- ⌘⇧L, as keybinding `design.toggle`. ⌘⇧D is not used because it is the default of the off-by-default global `dictation.toggle`; ⌘⇧G is find-previous and ⌘⌥D is the macOS Dock toggle;
 - `/design`, which turns it on, or `/design off`.
 
 The command is available only in desktop chats with a workspace.
@@ -354,7 +354,7 @@ Studio data already on disk is left untouched: no migration and no deletion.
 | Phase | Delivers | Done when |
 |---|---|---|
 | P0 | Studio retired | No design route, row, IPC or store. `npm run test` and type-check pass. Create Images still works behind its flag. |
-| P1 | Shell and state | Toggle, ⌘⇧D and `/design` enter and leave. The chat column and an empty canvas region resize, the sidebar is scoped, small-window rules work, and the state survives a reload. Covered by an E2E spec. |
+| P1 | Shell and state | Toggle, ⌘⇧L and `/design` enter and leave. The chat column and an empty canvas region resize, the sidebar is scoped, small-window rules work, and the state survives a reload. Covered by an E2E spec. |
 | P2 | Canvas and frames | Pan, zoom, select, move, resize, undo. Note, group, image and file frames can be added by hand ("Add frame" picks a workspace file). The `aiden-design:` scheme, the live-iframe pool, snapshots, the interaction shield and reload on change all work. The document persists with revision CAS. |
 | P3 | Aiden on the canvas | The canvas tools, artifact auto-placement, the `design_mode` tool and consent card, the `aiden-design` skill, and the prompt section. |
 | P4 | Point, annotate, comment | The bridge, picking, the comment and draw tools, pins with their three anchor states, the tray, batch send with crops and the scoped block, and resolution after reload. |
@@ -382,7 +382,7 @@ Plans are written before each phase starts: [P0](../plans/2026-10-31-design-mode
 2. She adds a note ("3 steps: welcome, connect, done") and drags in `assets/brand/logo.svg` with **Add frame**.
 3. She asks "lay out the three screens at phone width next to my note". Aiden reads the canvas, writes three files, and places them at 390 px design width to the right of her note, in a group named "Onboarding".
 4. She presses D, circles the second screen's button, notes "primary, not ghost", and sends. Aiden edits `design/onboarding-2.html`.
-5. She presses ⌘⇧D to leave. Her sidebar and panel come back as they were.
+5. She presses ⌘⇧L to leave. Her sidebar and panel come back as they were.
 
 ## 12. Open questions and resolutions
 
