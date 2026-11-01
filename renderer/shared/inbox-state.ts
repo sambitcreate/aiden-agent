@@ -114,6 +114,58 @@ export function inboxState(
   return hidden;
 }
 
+/**
+ * The Inbox bucket a host reports on a Chat Summary row (`inboxBucket`,
+ * Remote `inbox-signals-v1`): the shelves, with the hidden shelf split into
+ * the triage that hides the row. `earlier` also covers chats older than the
+ * recent window, because the host leaves that window to the reader.
+ */
+export const INBOX_BUCKETS = ["needs_you", "pinned", "updates", "earlier", "working", "snoozed", "done"] as const;
+export type InboxBucket = (typeof INBOX_BUCKETS)[number];
+
+export function isInboxBucket(value: unknown): value is InboxBucket {
+  return typeof value === "string" && (INBOX_BUCKETS as readonly string[]).includes(value);
+}
+
+/**
+ * What a host knows about one of its chats: every signal but the viewer's.
+ * `attention` (a detached or interrupted local prompt) is left out: it can be
+ * retried only in this host's own window, so its own Inbox shows it and its
+ * summaries do not.
+ */
+export type HostInboxSignals = Omit<InboxSignals, "isOpen" | "hostOnline" | "attention">;
+
+export interface HostInboxPlacement {
+  bucket: InboxBucket;
+  /**
+   * The time the row orders by within its bucket (see the plan's
+   * "Ordering"). A Done or snoozed row carries the time it orders by where
+   * it returns to, as a search lists it.
+   */
+  sortAt: number;
+}
+
+/**
+ * The bucket a host computes for a summary row, from `inboxState` itself. A
+ * host can't know which chat a viewer has open, so the row counts as not
+ * open (the reader keeps its own open chat out of unread), and it applies no
+ * recent window, so an old read chat is `earlier` and the reader ages it out
+ * against its own clock. Done holds until newer output, so it outranks a
+ * snooze that holds too; a reader shows a `snoozed` row past its
+ * `snoozedUntil` (on the reader's clock) as awake.
+ */
+export function hostInboxPlacement(signals: Readonly<HostInboxSignals>, now: number): HostInboxPlacement {
+  const asHost: InboxSignals = { ...signals, isOpen: false, hostOnline: true };
+  const placement = inboxState(asHost, now, Number.POSITIVE_INFINITY);
+  if (placement.shelf !== "hidden") return { bucket: placement.shelf, sortAt: placement.sortAt };
+  const hold = inboxTriageHold(asHost, now);
+  const awake = inboxState(asHost, now, Number.POSITIVE_INFINITY, true);
+  if (hold.done) return { bucket: "done", sortAt: awake.sortAt };
+  if (hold.snoozed) return { bucket: "snoozed", sortAt: awake.sortAt };
+  // Not reached: with no recent window, only triage hides a row.
+  return { bucket: "earlier", sortAt: signals.updatedAt };
+}
+
 /** A triage entry as the placement signals read it. */
 export function triageSignals(
   entry: ChatTriageEntry | null | undefined,

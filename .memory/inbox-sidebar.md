@@ -184,3 +184,10 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - No re-pair: a pre-2d desktop gets host grants via automatic `POST /device/capabilities` on its next connection after Aiden starts (relaunch if already connected); proven in inbox-host test 2.
 - Review fixes: `remoteHostCapabilities` grants `steer` only with `chat-run-input-v1` and `answerQuestion` only with `chat-question-prompts-v1` (desktop host always advertises both; CLI neither). CLI approve refuses scope other than `once` (400 invalid_request). CLI revoke drains hostFeed/hostRuns/botSessions before and after the fence. Phones on CLI keep phone-run-control-v1 + read state; iOS/Android need no change (no foreign-run steer, run input gated on the token).
 - Test: `packages/cli/tests/inbox-host.test.mjs` (in the CLI `test` script, port 49376), plus `peer-remote-chat-control.test.ts` for the steer gate.
+
+### Phase 3a host-computed bucket (2026-11-01)
+- Summary rows carry `inboxBucket` (needs_you|pinned|updates|earlier|working|snoozed|done) + `inboxSortAt`, always together, revision 48 / `inbox-signals-v1` (no new token, phone token still unspent for 3b).
+- `hostInboxPlacement` (`renderer/shared/inbox-state.ts`) wraps `inboxState`: not open, host online, infinite recent window, no local `attention`; hidden rows split into done (wins) / snoozed with their awake sortAt. Computed in `freezeSummaryPage` (`aiden-remote-chats.ts`), so CLI and host feed share it.
+- Unread is per host (shared read markers). Tier not sent; clients derive from rowState. Clients recheck snooze expiry and the recent window on their own clock.
+- Parser (`parseInboxSignalFields`): unknown bucket dropped with its sort time (peer page parse is strict); bucket without sort time, or sort time alone, throws. Desktop peer client ignores the bucket.
+- Fixtures: summary_02 needs_you @ attentionSince; summary_01 needs_you @ updatedAt (failed unread outranks snooze/pin). iOS + Android fixture tests pass unchanged.

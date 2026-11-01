@@ -389,6 +389,17 @@ Claim the revision after the one on `main` at merge time. It is 47 today (`AIDEN
 
 **3a. Host-computed bucket.** Summary rows gain `inboxBucket` (`needs_you`, `pinned`, `updates`, `earlier`, `working`, `snoozed` or `done`) and `inboxSortAt`. Both come from the same `inboxState` code in `renderer/shared/`, so the CLI build shares it. The bucket is computed from state only; clients recheck the time-based parts (snooze expiry, `recentWindowMs`) against their own clock. It ships under the `inbox-signals-v1` token. It shares 2b's revision if both merge together, or claims the next one otherwise.
 
+*3a as built (2026-11-01).* Built on the plan branch, at revision 48 with 2b, under `inbox-signals-v1` (no new token; phones decode the optional fields without it).
+
+- `hostInboxPlacement` in `renderer/shared/inbox-state.ts` wraps `inboxState`. It runs with the row counted as not open (the host can't know a viewer's open chat), the host online, no recent window (an old read chat is `earlier` and the client ages it out), and no `attention` (a detached or interrupted prompt is retried only in the host's own window).
+- A row `inboxState` hides becomes `done` (Done wins when both hold) or `snoozed`, with the sort time of its awake placement, as search lists it.
+- `freezeSummaryPage` in `main/services/aiden-remote-chats.ts` computes both fields for `GET /chat-summaries` and the host feed, so the CLI build serves them unchanged.
+- Unread is per host (the host's read markers), not per device.
+- The Needs you tier is not sent; clients read it from `rowState`.
+- The desktop parser drops an unknown bucket with its sort time, so newer hosts can add buckets without breaking a peer's page parse. It refuses a bucket without a sort time, or a sort time without a bucket.
+- The desktop peer client keeps placing peer rows from the raw signals and ignores the bucket.
+- Tests: the summaries suite places every kind of row through the real service (including a snooze that lapses on the host clock), the parser cases, and `packages/cli/tests/inbox-host.test.mjs` reads `needs_you`, `updates`, `earlier`, `pinned` and `done` from `aiden serve`.
+
 **3b. iOS and Android Inbox.**
 
 - An Inbox option in each platform's workspace sidebar projection.

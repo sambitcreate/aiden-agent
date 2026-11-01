@@ -9,6 +9,7 @@ import {
 } from "node:crypto";
 import { ASSISTANT_WORKSPACE_ID } from "../../renderer/shared/assistant.js";
 import { chatSurface } from "../../renderer/shared/chat-visibility.js";
+import { hostInboxPlacement, type HostInboxSignals, type InboxBucket } from "../../renderer/shared/inbox-state.js";
 import { persistedChatWorkspaceId } from "../../renderer/shared/chat-workspace.js";
 import { WORKSPACE_FOLDER_MISSING_REMOTE_REFUSAL } from "../../renderer/shared/workspace-folder-presence.js";
 import { isGenerationThinkingLevel } from "../../renderer/shared/generation-thinking.js";
@@ -285,6 +286,16 @@ export interface AidenRemoteChatSummaryProjection {
   pinnedAt?: string;
   doneAt?: string;
   snoozedUntil?: string;
+  /**
+   * Additive (protocol revision 48, `inbox-signals-v1`): the Inbox bucket the
+   * host's own placement rules give the row (`hostInboxPlacement`), with the
+   * time it orders by within that bucket. Computed from state as the host
+   * knows it: the row counts as not open, no recent window applies (an old
+   * read chat is `earlier`), and a snooze is judged on the host's clock, so a
+   * client rechecks `snoozedUntil` and the recent window against its own.
+   */
+  inboxBucket?: InboxBucket;
+  inboxSortAt?: string;
 }
 
 /** The revision-48 fields `freezeSummaryPage` adds to a row. */
@@ -295,7 +306,9 @@ type InboxSignalField =
   | "triageRevision"
   | "pinnedAt"
   | "doneAt"
-  | "snoozedUntil";
+  | "snoozedUntil"
+  | "inboxBucket"
+  | "inboxSortAt";
 
 type SafeSummaryRow = Omit<
   AidenRemoteChatSummaryProjection,
@@ -344,14 +357,42 @@ function isoTime(at: number | undefined): string | undefined {
 /**
  * A summary row's revision-48 fields: each time in RFC 3339, and the triage
  * entry's revision with whichever of Pin, Done and Snooze it holds. A field
- * whose time is unknown or out of range is left out.
+ * whose time is unknown or out of range is left out. With `placement` (the
+ * row's state and the host's clock) it adds `inboxBucket` and `inboxSortAt`,
+ * placed from exactly the fields the row reports.
  */
 export function inboxSignalFields(
   lastAssistantAt: number | undefined,
   run: AidenRemoteChatRunTimes | undefined,
   triage: ChatTriageEntry | undefined,
+  placement?: { rowState: ChatRowState; unread: boolean; failed: boolean; updatedAt: string; now: number },
 ): Pick<AidenRemoteChatSummaryProjection, InboxSignalField> {
   const fields: Pick<AidenRemoteChatSummaryProjection, InboxSignalField> = {};
+  const updatedAt = placement ? Date.parse(placement.updatedAt) : Number.NaN;
+  if (placement && Number.isSafeInteger(updatedAt)) {
+    // Only the times this row reports, so the bucket never reads a time the row leaves out.
+    const optional = (key: keyof HostInboxSignals, at: number | undefined) =>
+      isoTime(at) === undefined ? {} : { [key]: at };
+    const triageUsable = triage && Number.isSafeInteger(triage.revision) && triage.revision > 0 ? triage : undefined;
+    const signals: HostInboxSignals = {
+      rowState: placement.rowState,
+      unread: placement.unread,
+      failed: placement.failed,
+      updatedAt,
+      ...optional("lastAssistantAt", lastAssistantAt),
+      ...optional("attentionSince", run?.attentionSince),
+      ...optional("runStartedAt", run?.runStartedAt),
+      ...optional("pinnedAt", triageUsable?.pinnedAt),
+      ...optional("doneAt", triageUsable?.doneAt),
+      ...optional("snoozedUntil", triageUsable?.snoozedUntil),
+    };
+    const { bucket, sortAt } = hostInboxPlacement(signals, placement.now);
+    const inboxSortAt = isoTime(sortAt);
+    if (inboxSortAt) {
+      fields.inboxBucket = bucket;
+      fields.inboxSortAt = inboxSortAt;
+    }
+  }
   const attentionSince = isoTime(run?.attentionSince);
   const runStartedAt = isoTime(run?.runStartedAt);
   const lastAssistant = isoTime(lastAssistantAt);
@@ -1566,23 +1607,29 @@ export class AidenRemoteChatService {
       this.options.readMarkers?.snapshot().catch(() => null),
       this.options.triage?.snapshot().catch(() => null),
     ]);
-    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => ({
-      ...summary,
-      ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
-      titlePending: this.options.isTitlePending?.(summary.id) === true,
-      activity: activeChatIds.has(summary.id) ? "active" : "idle",
-      rowState: chatRowState({
+    const now = this.summaryNow();
+    return summaries.map(({ lastAssistantAt, lastAssistantSequence, lastAssistantFailed, ...summary }) => {
+      const rowState = chatRowState({
         active: activeChatIds.has(summary.id),
         needsApproval: approvalChatIds.has(summary.id),
         needsInput: inputChatIds.has(summary.id),
-      }),
-      unread: isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence),
-      ...inboxSignalFields(
-        lastAssistantAt,
-        activeChatIds.has(summary.id) ? this.options.runTimes?.(summary.id) : undefined,
-        triage?.chats[summary.id],
-      ),
-    }));
+      });
+      const unread = isChatUnread(lastAssistantAt, markers, summary.id, lastAssistantSequence);
+      return {
+        ...summary,
+        ...(lastAssistantFailed === true ? { lastRunFailed: true as const } : {}),
+        titlePending: this.options.isTitlePending?.(summary.id) === true,
+        activity: activeChatIds.has(summary.id) ? "active" : "idle",
+        rowState,
+        unread,
+        ...inboxSignalFields(
+          lastAssistantAt,
+          activeChatIds.has(summary.id) ? this.options.runTimes?.(summary.id) : undefined,
+          triage?.chats[summary.id],
+          { rowState, unread, failed: lastAssistantFailed === true, updatedAt: summary.updatedAt, now },
+        ),
+      };
+    });
   }
 
   /** Whether this host can record read markers for `POST /chats/{chatId}/read`. */

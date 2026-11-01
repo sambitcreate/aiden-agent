@@ -187,6 +187,8 @@ test("summary pages are transcript-free, deterministic, and exclude reserved cha
     "activity",
     "createdAt",
     "id",
+    "inboxBucket",
+    "inboxSortAt",
     "revision",
     "rowState",
     "title",
@@ -284,6 +286,88 @@ test("revision 48 summaries carry a live run's times and the chat's triage", asy
   assert.equal("triageRevision" in byId["chat-waiting"]!, false);
 });
 
+test("summaries carry the host's Inbox bucket and sort time for each kind of row", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-buckets-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const N = Date.parse("2026-11-01T12:00:00.000Z");
+  let triageNow = N - day;
+  const triage = new ChatTriageStore(() => directory, { now: () => triageNow });
+  // A snooze set before the approval: the live prompt still wins.
+  await triage.set("chat-approve", { snoozeUntil: N + 3 * hour });
+  triageNow = N - 30 * minute;
+  await triage.set("chat-pinned", { pinned: true });
+  triageNow = N - 3 * hour;
+  await triage.set("chat-done", { done: true });
+  triageNow = N - 2 * hour;
+  await triage.set("chat-done-then-output", { done: true });
+  triageNow = N - 6 * hour;
+  await triage.set("chat-snoozed", { snoozeUntil: N + 3 * hour });
+  const readThrough = {
+    "chat-failed-seen": N - 2 * hour,
+    "chat-pinned": N - 3 * day,
+    "chat-snoozed": N - 5 * hour,
+    "chat-recent": N - day,
+    "chat-old": N - 30 * day,
+  };
+  const times: Record<string, AidenRemoteChatRunTimes> = {
+    "chat-approve": { runStartedAt: N - 10 * minute, attentionSince: N - 5 * minute },
+    "chat-working": { runStartedAt: N - 2 * minute },
+  };
+  let now = N;
+  const fixture = summaryService([
+    metadata("chat-approve", N - 4 * minute),
+    metadata("chat-working", N - minute),
+    metadata("chat-failed", N - hour, { lastAssistantAt: N - hour, lastAssistantFailed: true }),
+    metadata("chat-failed-seen", N - 2 * hour, { lastAssistantAt: N - 2 * hour, lastAssistantFailed: true }),
+    metadata("chat-pinned", N - 3 * day, { lastAssistantAt: N - 3 * day }),
+    metadata("chat-done", N - 4 * hour, { lastAssistantAt: N - 4 * hour }),
+    metadata("chat-done-then-output", N - hour, { lastAssistantAt: N - hour }),
+    metadata("chat-snoozed", N - 5 * hour, { lastAssistantAt: N - 5 * hour }),
+    metadata("chat-new", N - 20 * minute, { lastAssistantAt: N - 20 * minute }),
+    metadata("chat-recent", N - day, { lastAssistantAt: N - day }),
+    metadata("chat-old", N - 30 * day, { lastAssistantAt: N - 30 * day }),
+  ], {
+    now: () => now,
+    activity: () => ({
+      revision: 1,
+      activeChatIds: ["chat-approve", "chat-working"],
+      approvalChatIds: ["chat-approve"],
+      inputChatIds: [],
+    }),
+    readMarkers: { snapshot: async () => ({ revision: 1, baselineAt: 0, readThrough }), markRead: async () => true },
+    triage,
+    runTimes: (chatId) => times[chatId],
+  });
+  const placed = async () => {
+    const page = parseAidenRemoteChatSummaryPage(await fixture.service.listSummaries());
+    return Object.fromEntries(page.summaries.map((row) => [row.id, [row.inboxBucket, row.inboxSortAt]]));
+  };
+  const iso = (at: number) => new Date(at).toISOString();
+  assert.deepEqual(await placed(), {
+    // Needs you orders by the wait, falling back to the row's update time.
+    "chat-approve": ["needs_you", iso(N - 5 * minute)],
+    "chat-failed": ["needs_you", iso(N - hour)],
+    // A failure the person has seen is an ordinary read chat.
+    "chat-failed-seen": ["earlier", iso(N - 2 * hour)],
+    "chat-working": ["working", iso(N - 2 * minute)],
+    "chat-pinned": ["pinned", iso(N - 30 * minute)],
+    // Done and snoozed rows carry the time they order by once they come back.
+    "chat-done": ["done", iso(N - 4 * hour)],
+    "chat-done-then-output": ["updates", iso(N - hour)],
+    "chat-snoozed": ["snoozed", iso(N - 5 * hour)],
+    "chat-new": ["updates", iso(N - 20 * minute)],
+    "chat-recent": ["earlier", iso(N - day)],
+    // The host applies no recent window: an old read chat is still Earlier.
+    "chat-old": ["earlier", iso(N - 30 * day)],
+  });
+  // The snooze is judged on the host's clock when the row is computed.
+  now = N + 4 * hour;
+  assert.deepEqual((await placed())["chat-snoozed"], ["earlier", iso(N - 5 * hour)]);
+});
+
 test("a failing marker store hides unread dots instead of failing the list", async () => {
   const fixture = summaryService([metadata("chat-a", 2_000, { lastAssistantAt: 1_900 })], {
     readMarkers: {
@@ -331,6 +415,16 @@ test("summary parser accepts additive row state and rejects unknown values", () 
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, pinnedAt: "2026-08-30T21:10:00.000Z" }), /triageRevision/u);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, triageRevision: 0 }), /triageRevision/u);
   assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, runStartedAt: 1_700_000_000_000 }), /runStartedAt/u);
+  // The host's bucket travels with its sort time; a bucket from a later host is dropped with it.
+  const bucketed = parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "snoozed", inboxSortAt: "2026-08-30T21:00:00Z" });
+  assert.equal(bucketed.inboxBucket, "snoozed");
+  assert.equal(bucketed.inboxSortAt, "2026-08-30T21:00:00Z");
+  const later = parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "archived", inboxSortAt: "2026-08-30T21:00:00Z" });
+  assert.equal("inboxBucket" in later, false);
+  assert.equal("inboxSortAt" in later, false);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: "done" }), /inboxSortAt/u);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxSortAt: "2026-08-30T21:00:00Z" }), /inboxBucket/u);
+  assert.throws(() => parseAidenRemoteChatSummaryProjection({ ...summary, inboxBucket: 3, inboxSortAt: "2026-08-30T21:00:00Z" }), /inboxBucket/u);
 });
 
 test("equal timestamps use ordinal chat ID ordering", async () => {

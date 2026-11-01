@@ -147,6 +147,8 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and answers i
   const waiting = await until(summaryRow, (row) => row?.rowState === "needs_approval", "a needs_approval row");
   assert.equal(waiting.activity, "active");
   assert.ok(Date.parse(waiting.attentionSince) >= Date.parse(waiting.runStartedAt), JSON.stringify(waiting));
+  // The host places the row by the desktop's own Inbox rules, ordered by the wait.
+  assert.equal(waiting.inboxBucket, "needs_you"); assert.equal(waiting.inboxSortAt, waiting.attentionSince);
   const runState = await feed.next((frame) => frame.type === "run.state" && frame.payload.chatId === chatId && frame.payload.state === "needs_approval", "needs_approval run.state");
   assert.equal(runState.payload.attentionSummary, "List folder: .");
 
@@ -161,9 +163,11 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and answers i
   const replied = await until(summaryRow, (row) => row?.rowState === "idle" && row.unread === true, "an unread idle row");
   assert.ok(replied.lastAssistantAt, JSON.stringify(replied));
   assert.equal(replied.attentionSince, undefined);
+  assert.equal(replied.inboxBucket, "updates"); assert.equal(replied.inboxSortAt, replied.lastAssistantAt);
   const read = await mac.request(`/chats/${chatId}/read`, "POST", {}, "read-inbox-test-000001");
   assert.ok(read.status === 200 || read.status === 204, JSON.stringify(read));
-  assert.equal((await summaryRow()).unread, false);
+  const seen = await summaryRow();
+  assert.equal(seen.unread, false); assert.equal(seen.inboxBucket, "earlier"); assert.equal(seen.inboxSortAt, seen.updatedAt);
 
   // Triage: idempotent by key, and a stale revision is refused.
   const pinned = await mac.request(`/chats/${chatId}/triage`, "POST", { pinned: true, ifRevision: 0 }, "triage-inbox-test-0001");
@@ -175,6 +179,7 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and answers i
   assert.equal(stale.data.error.code, "revision_conflict");
   const triaged = await summaryRow();
   assert.equal(triaged.pinnedAt, pinned.data.pinnedAt); assert.equal(triaged.triageRevision, 1); assert.equal(triaged.doneAt, undefined);
+  assert.equal(triaged.inboxBucket, "pinned"); assert.equal(triaged.inboxSortAt, pinned.data.pinnedAt);
   await feed.next((frame) => frame.type === "chat.upsert" && frame.payload.id === chatId && frame.payload.pinnedAt === pinned.data.pinnedAt, "a pinned chat.upsert");
 
   // Read markers and triage live in this data dir and survive a restart.
@@ -183,6 +188,11 @@ test("a desktop paired to aiden serve reads its chats' Inbox state and answers i
   await startServer(t, dir);
   const after = await summaryRow();
   assert.equal(after.unread, false); assert.equal(after.pinnedAt, pinned.data.pinnedAt); assert.equal(after.triageRevision, 1);
+  // Done with no newer output outranks the pin, and keeps the pin's time for when it comes back.
+  const done = await mac.request(`/chats/${chatId}/triage`, "POST", { done: true, ifRevision: 1 }, "triage-inbox-test-0003");
+  assert.equal(done.status, 200, JSON.stringify(done));
+  const doneRow = await summaryRow();
+  assert.equal(doneRow.inboxBucket, "done"); assert.equal(doneRow.inboxSortAt, pinned.data.pinnedAt);
 });
 
 test("a desktop paired before host grants existed picks them up without pairing again; a phone controls foreign runs; revoke closes streams", async (t) => {

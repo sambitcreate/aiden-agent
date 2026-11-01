@@ -11300,6 +11300,23 @@
             "description": "Additive in contract revision 48. The revision of the chat's triage entry (chat-triage-v1); absent when the chat has never been triaged. Clients send it as ifRevision and drop their own pending write once the host reports it.",
             "type": "integer",
             "minimum": 1
+          },
+          "inboxBucket": {
+            "description": "Additive in contract revision 48 (inbox-signals-v1). The Inbox bucket the host's own placement rules give the row, computed from the state the host holds: needs_you (a pending approval or question, or unread output from a failed run), working, done (marked done with no newer output), snoozed, pinned, updates (unread), or earlier (read and idle, however old). The host can't know which chat a device has open, so the row counts as not open, and it applies no recent window. Clients recheck the time-based parts against their own clock: a snoozed row past its snoozedUntil is awake, and an earlier row older than the client's recent window ages out. Needs you rows order by tier from rowState (approval, question, then failed). A client that doesn't know a value places the row itself. Present only with inboxSortAt.",
+            "enum": [
+              "needs_you",
+              "pinned",
+              "updates",
+              "earlier",
+              "working",
+              "snoozed",
+              "done"
+            ]
+          },
+          "inboxSortAt": {
+            "description": "Additive in contract revision 48. The time the row orders by within its inboxBucket: needs_you by attentionSince (else updatedAt), oldest first; pinned by pinnedAt and updates by lastAssistantAt, newest first; earlier by updatedAt, newest first; working by runStartedAt, oldest first. A done or snoozed row carries the time it orders by in the bucket it returns to. Present only with inboxBucket.",
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": true

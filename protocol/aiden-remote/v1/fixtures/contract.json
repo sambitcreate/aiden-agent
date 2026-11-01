@@ -129,7 +129,9 @@
         "unread": false,
         "attentionSince": "2026-08-18T19:01:08.000Z",
         "runStartedAt": "2026-08-18T19:01:00.000Z",
-        "lastAssistantAt": "2026-08-18T19:01:05.000Z"
+        "lastAssistantAt": "2026-08-18T19:01:05.000Z",
+        "inboxBucket": "needs_you",
+        "inboxSortAt": "2026-08-18T19:01:08.000Z"
       },
       {
         "id": "chat_fixture_summary_01",
@@ -146,7 +148,9 @@
         "lastAssistantAt": "2026-08-18T19:01:00.000Z",
         "triageRevision": 3,
         "pinnedAt": "2026-08-18T18:45:00.000Z",
-        "snoozedUntil": "2026-08-19T09:00:00.000Z"
+        "snoozedUntil": "2026-08-19T09:00:00.000Z",
+        "inboxBucket": "needs_you",
+        "inboxSortAt": "2026-08-18T19:01:00.000Z"
       }
     ],
     "nextCursor": "cur_eyJ2IjoxLCJzbmFwc2hvdElkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBIiwib2Zmc2V0IjoyLCJleHBpcmVzQXQiOjE3ODcwNzk5MDAwMDB9.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"

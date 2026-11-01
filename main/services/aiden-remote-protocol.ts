@@ -18,6 +18,7 @@ import {
   type AskUserQuestionV1,
 } from "../../renderer/shared/ask-user-question.js";
 import { CHAT_ROW_STATES } from "../../renderer/shared/chat-row-state.js";
+import { isInboxBucket } from "../../renderer/shared/inbox-state.js";
 import { DEVICE_ID_PATTERN } from "../../renderer/shared/devices.js";
 import { parseBotRoutineSchedule } from "../../renderer/shared/bot-routine-schedule.js";
 import { BOT_MEMORY_LIMITS } from "../../renderer/shared/bot-memory.js";
@@ -3739,14 +3740,33 @@ const INBOX_SIGNAL_TIME_FIELDS = [
 
 /**
  * Contract revision 48 (`inbox-signals-v1`): each RFC 3339 time a summary
- * row carries for the Inbox, and the triage revision those triage times
- * belong to. Every field is additive; the triage times need the revision.
+ * row carries for the Inbox, the triage revision those triage times belong
+ * to, and the host's `inboxBucket` with its `inboxSortAt`. Every field is
+ * additive; the triage times need the revision, and a bucket needs its sort
+ * time. A bucket this client doesn't know (a later host's) is dropped with
+ * its sort time, so the reader places the row itself.
  */
 function parseInboxSignalFields(
   value: Record<string, unknown>,
   label: string,
-): Partial<Pick<AidenRemoteChatSummaryProjection, (typeof INBOX_SIGNAL_TIME_FIELDS)[number] | "triageRevision">> {
-  const fields: Partial<Record<(typeof INBOX_SIGNAL_TIME_FIELDS)[number], string>> & { triageRevision?: number } = {};
+): Partial<
+  Pick<
+    AidenRemoteChatSummaryProjection,
+    (typeof INBOX_SIGNAL_TIME_FIELDS)[number] | "triageRevision" | "inboxBucket" | "inboxSortAt"
+  >
+> {
+  const fields: Partial<Record<(typeof INBOX_SIGNAL_TIME_FIELDS)[number], string>> &
+    Pick<AidenRemoteChatSummaryProjection, "triageRevision" | "inboxBucket" | "inboxSortAt"> = {};
+  if (hasOwn(value, "inboxBucket")) {
+    const bucket = boundedText(value.inboxBucket, `${label} inboxBucket`, 64);
+    if (isInboxBucket(bucket)) {
+      if (!hasOwn(value, "inboxSortAt")) throw new Error(`${label} inboxBucket needs an inboxSortAt.`);
+      fields.inboxBucket = bucket;
+      fields.inboxSortAt = dateTimeValue(value.inboxSortAt, `${label} inboxSortAt`);
+    }
+  } else if (hasOwn(value, "inboxSortAt")) {
+    throw new Error(`${label} inboxSortAt needs an inboxBucket.`);
+  }
   for (const field of INBOX_SIGNAL_TIME_FIELDS) {
     if (hasOwn(value, field)) fields[field] = dateTimeValue(value[field], `${label} ${field}`);
   }
