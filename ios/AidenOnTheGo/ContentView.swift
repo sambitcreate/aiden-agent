@@ -273,7 +273,9 @@ struct ContentView: View {
         let archived = AidenWorkspaceArchiveStore().archivedWorkspaceIDs(for: instanceID)
         let candidates: [AidenIntentWorkspaceRecord]
         if coordinator.activeInstanceId == instanceID {
-            candidates = coordinator.workspaces.map { .init(id: $0.id, instanceId: instanceID, name: $0.name) }
+            candidates = AidenNoWorkspace.grouped(coordinator.workspaces).map {
+                .init(id: $0.id, instanceId: instanceID, name: $0.name)
+            }
         } else {
             candidates = AidenIntentCatalogStore.shared.load().workspaces.filter { $0.instanceId == instanceID }
         }

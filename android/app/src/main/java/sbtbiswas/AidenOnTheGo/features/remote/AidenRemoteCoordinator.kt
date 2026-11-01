@@ -704,7 +704,9 @@ class AidenRemoteCoordinator(
                 if (!isCurrent(expectedGeneration, installationId, currentClient)) return@launch
                 _workspaces.value = list
                 if (instanceId != null) {
-                    archiveStore.prune(instanceId, list.map { it.id }.toSet())
+                    // A hidden No workspace record can't be archived (the Chats group has no
+                    // Unarchive), so a flag an older build left on one is dropped here.
+                    archiveStore.prune(instanceId, AidenNoWorkspace.choices(list).map { it.id }.toSet())
                     readSnapshotCache.store(instanceId, AidenReadSnapshotKeys.WORKSPACES, list, workspaceListSerializer)
                 }
                 refreshIntentCatalog()
