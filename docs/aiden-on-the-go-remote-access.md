@@ -79,6 +79,30 @@ If a computer reached over the local network presents a different identity, Aide
 
 The **Usage** row on the Aiden On The Go home screen reads aggregate usage from the paired Mac. It reflects Aiden Agent's device-local usage store and sends only aggregate request, token, activity, and estimated-cost totals to the phone. Chat content, workspace paths, and provider credentials are not included.
 
+## Add a local project to a paired computer
+
+In a new chat with a repository-root project selected, open the machine menu and
+choose **Add this project to another machine…**. Pick a connected desktop that
+supports project cloning (contract revision 48), then browse its approved folders and choose the parent
+folder for the new repository. The target uses its own Git authentication.
+The item is not offered in a No workspace chat, a scratch folder, or any folder
+outside a Git repository.
+
+Environment files may contain secrets. All choices start unchecked. Select only
+files you want on that computer. Aiden offers ignored root-level `.env*` and
+`.dev.vars*` text files, skips symlinks, hard links and files over 128 KiB, and caps
+the transfer at 16 files and 512 KiB. Nothing existing is overwritten. The cloned
+project becomes available after the selected files arrive. The new chat opens on
+the destination; a typed prompt and attachments carry over when that computer has
+no saved draft. An existing remote draft is retained, with the local prompt still
+saved here.
+
+The flow clones committed history from the remote. Local edits and unpushed commits
+stay here. Nested project folders must first be opened as repository-root projects.
+A clone can run for up to 90 seconds. **Stop** requests cancellation; if the
+connection is interrupted, check the destination project list before trying again.
+Phones and CLI daemons do not offer this desktop setup action.
+
 ## Bot hand-offs and pause on the phone
 
 When the paired Mac offers it (contract revision 37), Aiden On The Go for iPhone and Android shows a step a Bot hands back to you ("Your turn: Enter the code your bank sent you") as a card in the Bot's chat. **Done** marks it done: to add a note, type it in the composer and send it. A step your password-or-code rule hands back takes no note, so the composer waits and says "Enter it yourself, then tap Done": a code typed there would reach the Bot. **Skip** skips the step, and **Open** opens the page it names in the phone's browser. A sign-in step is finished in the Bot's own browser on the Mac: **Finish on your Mac** brings it forward there, or you can **Skip** it. A step in the Bot's own browser or on its own computer (a newer Mac) reads "This step is on the Bot’s own screen on your Mac": **Finish on your Mac** opens the Bot's screen there, and **Done** or **Skip** answers it from the phone. If the Bot's chat is open while the app is in the background, a notification says the Bot needs you. The Bot's profile menu offers **Pause Bot** and **Resume Bot**. A paused Bot reads "Paused" in the Bots list, and its chat shows a Resume card and takes no messages until you resume it. An interrupted Bot reads "Interrupted — tap to resume". With an older Mac, the step appears as a "needs you on your Mac" message, and you answer it on the Mac.

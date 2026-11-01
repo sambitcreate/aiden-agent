@@ -1,3 +1,4 @@
+import { PEER_PROJECT_CLONE_FEATURE } from "../../renderer/shared/peer-project-clone.js";
 import type { remoteAppControls } from "./aiden-remote-app-controls.js";
 import type { AidenRemoteBotSessionService } from "./aiden-remote-bot-session.js";
 import { projectBotDetailForAudience, projectBotSummaryForAudience } from "./aiden-remote-bot-handoffs.js";
@@ -199,7 +200,7 @@ export interface AidenRemoteRouterDependencies {
     AidenRemotePairingRequestService,
     "accepting" | "create" | "reveal" | "poll" | "cancel"
   >;
-  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove">;
+  workspaces?: Pick<AidenRemoteWorkspaceService, "list" | "get" | "create" | "update" | "remove"> & { supportsClone?: boolean };
   workspaceBrowser?: Pick<
     AidenRemoteWorkspaceBrowserService,
     "listRoots" | "listChildren" | "createSelection"
@@ -1644,6 +1645,7 @@ export interface AidenRemoteServerFeatureSupport {
   botAttachments: boolean;
   spending: boolean;
   mobileSimulators: boolean;
+  workspaceClone?: boolean;
 }
 
 /**
@@ -1662,6 +1664,7 @@ export function aidenRemoteServerFeatures(
   return [
     ...(phone && support.appControls ? ["chat-ui-panels-v1"] : []),
     ...(phone && support.appControlsEnabled ? ["chat-ui-panels-enabled-v1"] : []),
+    ...(desktop && support.workspaceClone ? [PEER_PROJECT_CLONE_FEATURE] : []),
     ...(desktop && support.peerRoutes ? ["peer-routes-v1"] : []),
     ...(phone && support.providers ? [AIDEN_REMOTE_PROVIDER_CREATE_FEATURE] : []),
     ...(phone && support.readAloud ? [REMOTE_TTS_FEATURE] : []),
@@ -2307,6 +2310,7 @@ export function createAidenRemoteRequestHandler(
             : {}),
           connectionMode: dependencies.connectionMode(),
           features: aidenRemoteServerFeatures(device, {
+            workspaceClone: dependencies.workspaces?.supportsClone === true,
             appControls: Boolean(dependencies.appControls),
             appControlsEnabled: (await dependencies.appControls?.enabled()) === true,
             peerRoutes: peerRoutes !== undefined,
@@ -3229,11 +3233,18 @@ export function createAidenRemoteRequestHandler(
         deviceIdSuffix = device.id.slice(-8);
         if (!dependencies.workspaces) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
         const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
-        writeJson(
-          response,
-          201,
-          await dependencies.workspaces.create(device.id, key, body),
-        );
+        const cloning = body !== null && typeof body === "object" && (body as { mode?: unknown }).mode === "clone";
+        if (cloning && (!isDesktopDevice(device) || !device.capabilities.has("workspace:browse"))) throw new AidenRemoteServiceError("capability_denied", "Cloning projects requires a paired desktop with folder browsing access.", 403);
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        if (cloning) {
+          response.once("close", abort);
+          if (response.destroyed || request.aborted) abort();
+        }
+        try {
+          const result = await dependencies.workspaces.create(device.id, key, body, controller.signal);
+          if (!controller.signal.aborted) writeJson(response, 201, result);
+        } finally { response.off("close", abort); }
         return;
       }
       const workspaceMatch = /^\/workspaces\/([A-Za-z0-9_-]{1,128})$/u.exec(path);

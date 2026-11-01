@@ -1,3 +1,4 @@
+import { workspaceIntakeService } from "./workspace-intake-main.js";
 import { mcpLiveStatus } from "./mcp-status-events.js";
 import { remoteAppControls } from "./aiden-remote-app-controls.js";
 import { publishAppControlsChanged } from "./app-controls-events-main.js";
@@ -1131,6 +1132,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             hostRuns,
             settle: () => { readAloud.suspend(); return streams.settlePersistence(); },
             workspaces: new AidenRemoteWorkspaceService({
+              clone: workspaceIntakeService.clone,
               application: workspaceApplicationService,
               browser: workspaceBrowser,
               idempotency,
