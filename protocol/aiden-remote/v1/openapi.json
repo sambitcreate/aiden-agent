@@ -944,6 +944,95 @@
         }
       }
     },
+    "/chats/{chatId}/triage": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ProtocolVersion"
+        }
+      ],
+      "post": {
+        "operationId": "setChatTriage",
+        "description": "Pin, mark done or snooze a chat in the Inbox. Each field present is set and the others are kept (last writer wins per field); snoozeUntil null wakes the chat. The acting device computes snooze presets in its own time zone and sends an absolute time. With ifRevision, the write lands only when the chat's triage revision still matches (0 for a chat with no triage), so an Undo never overwrites a newer change; a mismatch answers 409 revision_conflict with currentRevision. Triage lives outside the chat and never changes its revision. Bot chats are refused. Available only when the server advertises chat-triage-v1.",
+        "x-aiden-archived-access": "mutation_blocked",
+        "x-aiden-capability": "chat:write",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChatId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "pinned": {
+                    "type": "boolean"
+                  },
+                  "done": {
+                    "type": "boolean"
+                  },
+                  "snoozeUntil": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "format": "date-time",
+                        "maxLength": 40
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ifRevision": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "anyOf": [
+                  {
+                    "required": [
+                      "pinned"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "done"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "snoozeUntil"
+                    ]
+                  }
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chat's triage after the write",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatTriage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/chats/{chatId}/move": {
       "parameters": [
         {
@@ -11054,6 +11143,43 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
+      "ChatTriage": {
+        "type": "object",
+        "description": "A chat's Inbox triage on its host (chat-triage-v1). revision starts at 1 and rises with every write; pass it back as ifRevision.",
+        "required": [
+          "chatId",
+          "revision",
+          "updatedAt"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "pinnedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "doneAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snoozedUntil": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false

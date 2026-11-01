@@ -126,6 +126,28 @@ test("remote entries leave out blocked hosts and name an unnamed host", () => {
   );
 });
 
+test("a chat's triage places its local and remote rows", () => {
+  const triage = { revision: 2, updatedAt: NOW, pinnedAt: NOW - MINUTE };
+  const [local] = localInboxEntries({
+    chats: [chat("a")],
+    workspaces,
+    rowState: () => "idle",
+    unread: () => false,
+    pending: new Map(),
+    triage: (chatId) => (chatId === "a" ? triage : undefined),
+  });
+  assert.equal(inboxState(local!.signals, NOW, 24 * HOUR).shelf, "pinned");
+  const rows: RemoteSidebarRows[] = [{
+    projects: [],
+    chats: [{ key: projectOrderKey("studio", "c1"), chatId: "c1", hostId: "studio", hostLabel: "Studio", projectKey: "x", title: "Deploy", rowState: "idle", unread: true, lastRunFailed: false, stale: false, createdAt: NOW - HOUR, lastActivityAt: NOW - 10 * MINUTE } as never],
+  }];
+  const hosts = [{ id: "studio", label: "Studio", availability: "online" }] as unknown as SidebarHost[];
+  const [remote] = remoteInboxEntries(rows, hosts, () => false, (row) =>
+    row.chatId === "c1" ? { revision: 1, updatedAt: NOW, snoozedUntil: NOW + HOUR } : undefined);
+  assert.equal(inboxState(remote!.signals, NOW, 24 * HOUR).shelf, "hidden");
+  assert.equal(inboxState(remote!.signals, NOW + 2 * HOUR, 24 * HOUR).shelf, "updates");
+});
+
 test("search matches title, project and host, and the machine filter narrows to one machine", () => {
   const entries = [
     entry("a", {}, { project: "aiden" }),
@@ -236,8 +258,8 @@ test("shortcut order follows the visible sections, skips held-over rows, and lea
     working: [key("w")],
   }));
   const withLeaving = { ...held, earlier: [held.earlier[0]!, { ...held.earlier[1]!, leaving: true }] };
-  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: true }), [key("n"), key("u"), key("e1"), key("w")]);
-  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: false }), [key("n"), key("u"), key("e1")]);
+  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: true }), [key("n"), key("p"), key("u"), key("e1"), key("w")]);
+  assert.deepEqual(inboxShortcutOrder(withLeaving, { workingExpanded: false }), [key("n"), key("p"), key("u"), key("e1")]);
 });
 
 test("the pending attention request asks about live chats first, then the newest, and never Bot chats", () => {

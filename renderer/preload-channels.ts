@@ -107,6 +107,8 @@ export const NOTIFICATION_CHANNEL_VALUES = [
   "devices:recordings",
   "chats:activity-changed",
   "chats:read-markers-changed",
+  /** Inbox Pin, Done or Snooze changed: the full triage snapshot. */
+  "chats:triage-changed",
   "chats:changed",
   "chats:metadata-updated",
   "chats:fork-summary-changed",

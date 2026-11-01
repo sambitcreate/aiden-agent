@@ -46,6 +46,8 @@ export type HostChatCapability =
   | "forkSummary"
   /** Read the chat's next-request context pressure for the composer meter. */
   | "contextPressure"
+  /** Pin, mark done and snooze the chat in the Inbox (`chat-triage-v1`). */
+  | "triage"
   // Host-wide: starting new work on the host.
   | "createChat"
   | "browseFolders"

@@ -17,9 +17,15 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   SidebarListItem,
 } from "../ui";
 import { ChatRowStatus } from "../chat-row-status";
@@ -30,14 +36,33 @@ import { openContextMenuFromKeyboard } from "../../lib/keyboard-context-menu";
 import { cn } from "../../lib/ui-utils";
 import type { ChatRowState } from "../../shared/chat-row-state";
 
+/** One surface's submenu parts, for a row menu that nests (Snooze). */
+export interface ChatRowSubMenu {
+  Sub: typeof DropdownMenuSub | typeof ContextMenuSub;
+  Trigger: typeof DropdownMenuSubTrigger | typeof ContextMenuSubTrigger;
+  Content: typeof DropdownMenuSubContent | typeof ContextMenuSubContent;
+}
+
+const DROPDOWN_SUB: ChatRowSubMenu = {
+  Sub: DropdownMenuSub,
+  Trigger: DropdownMenuSubTrigger,
+  Content: DropdownMenuSubContent,
+};
+const CONTEXT_SUB: ChatRowSubMenu = {
+  Sub: ContextMenuSub,
+  Trigger: ContextMenuSubTrigger,
+  Content: ContextMenuSubContent,
+};
+
 /**
  * Builds a row's actions once for both surfaces that show them: the
  * right-click context menu and the ••• dropdown. Each call gets that
- * surface's item and separator components.
+ * surface's item, separator and submenu components.
  */
 export type ChatRowMenu = (
   Item: typeof DropdownMenuItem | typeof ContextMenuItem,
   Separator: typeof DropdownMenuSeparator | typeof ContextMenuSeparator,
+  SubMenu: ChatRowSubMenu,
 ) => React.ReactNode;
 
 /**
@@ -243,7 +268,7 @@ export function ChatRow({
           <ContextMenuTrigger asChild onKeyDown={openContextMenuFromKeyboard}>
             {item}
           </ContextMenuTrigger>
-          <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator)}</ContextMenuContent>
+          <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}</ContextMenuContent>
         </ContextMenu>
       ) : (
         item
@@ -254,7 +279,7 @@ export function ChatRow({
           triggerClassName={OVERFLOW_TRIGGER_CLASS}
           contentClassName="w-56"
         >
-          {menu(DropdownMenuItem, DropdownMenuSeparator)}
+          {menu(DropdownMenuItem, DropdownMenuSeparator, DROPDOWN_SUB)}
         </SidebarOverflowMenu>
       ) : null}
     </div>
@@ -441,7 +466,7 @@ function InboxChatRow({
           {item}
         </ContextMenuTrigger>,
       )}
-      <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator)}</ContextMenuContent>
+      <ContextMenuContent>{menu(ContextMenuItem, ContextMenuSeparator, CONTEXT_SUB)}</ContextMenuContent>
     </ContextMenu>
   ) : (
     withTooltip(item)
@@ -472,7 +497,7 @@ function InboxChatRow({
           triggerClassName={OVERFLOW_TRIGGER_CLASS}
           contentClassName="w-56"
         >
-          {menu(DropdownMenuItem, DropdownMenuSeparator)}
+          {menu(DropdownMenuItem, DropdownMenuSeparator, DROPDOWN_SUB)}
         </SidebarOverflowMenu>
       ) : null}
     </div>

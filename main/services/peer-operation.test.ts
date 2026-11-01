@@ -50,6 +50,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
     [{ operation: "botConversations", query: "release notes & more", botId: "bot_1", limit: 20 }, "listBotConversations"],
     [{ operation: "botCapabilities", botId: "bot_1" }, "getBotCapabilityCatalog"],
     [{ operation: "markRead", resourceId: "chat_1", idempotencyKey: KEY, body: { throughMessageId: "m1" } }, "markChatRead"],
+    [{ operation: "setTriage", resourceId: "chat_1", idempotencyKey: KEY, body: { done: true, ifRevision: 2 } }, "setChatTriage"],
     [{ operation: "interruptAgent", resourceId: "chat_1", itemId: "agent_1", idempotencyKey: KEY }, "interruptChatAgent"],
     [{ operation: "respondQuestion", resourceId: "prompt_1", idempotencyKey: KEY }, "respondQuestion"],
     [{ operation: "inputs", resourceId: "stream_1", idempotencyKey: KEY }, "submitStreamInput"],
@@ -97,6 +98,7 @@ test("expanded peer operations resolve to the contract's routes, not arbitrary U
 
 test("expanded peer mutations demand a client-minted key and reject malformed parameters", () => {
   for (const operation of [
+    "setTriage",
     "markRead",
     "interruptAgent",
     "respondQuestion",
@@ -216,6 +218,7 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
     "bot",
     "botConversations",
     "botCapabilities",
+    "setTriage",
     "markRead",
     "interruptAgent",
     "respondQuestion",
@@ -241,6 +244,9 @@ test("expanded peer reads reject malformed DTOs and attachment bytes stay bounde
   assert.equal(await peerOperationResult({ operation: "removeAttachment" }, undefined), undefined);
   // `markRead` is a 204: only an empty body satisfies it.
   assert.equal(await peerOperationResult({ operation: "markRead" }, undefined), undefined);
+  const triage = { chatId: "chat_1", revision: 3, updatedAt: "2026-11-02T10:00:00.000Z", doneAt: "2026-11-02T10:00:00.000Z" };
+  assert.deepEqual(await peerOperationResult({ operation: "setTriage" }, triage), triage);
+  await assert.rejects(peerOperationResult({ operation: "setTriage" }, { ...triage, revision: 0 }));
 
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
   const content = (await peerOperationResult(

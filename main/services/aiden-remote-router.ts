@@ -34,6 +34,7 @@ import {
   AIDEN_REMOTE_CHAT_SUMMARY_DEFAULT_LIMIT,
   AIDEN_REMOTE_CHAT_SUMMARY_FEATURE,
   AIDEN_REMOTE_CHAT_READ_STATE_FEATURE,
+  AIDEN_REMOTE_CHAT_TRIAGE_FEATURE,
   AIDEN_REMOTE_BOT_CONNECTION_REQUESTS_FEATURE,
   AIDEN_REMOTE_BOT_DELETE_FEATURE,
   AIDEN_REMOTE_BOT_DURABLE_SESSION_FEATURE,
@@ -207,7 +208,7 @@ export interface AidenRemoteRouterDependencies {
   chats?: Pick<
     AidenRemoteChatService,
     "list" | "classify" | "authorizeRetainedBotChat" | "runMutation" | "get" | "create" | "rename" | "move" | "remove" | "startTurn"
-  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
+  > & Partial<Pick<AidenRemoteChatService, "listSummaries" | "uploadAttachment" | "removeAttachment" | "attachmentContent" | "visualDocument" | "supportsVisualViewer" | "browserRecording" | "supportsBrowserRecordings" | "chatSkillCatalog" | "markRead" | "supportsReadMarkers" | "setTriage" | "supportsTriage" | "messagesWindow" | "fork" | "supportsForks" | "supportsForkSummaries" | "retryForkSummary" | "skipForkSummary" | "cancelForkSummary" | "contextPressure" | "supportsContextPressure">>;
   /**
    * Chat-scoped task/agent progress projections (Phase 2 runtime). When
    * absent, the contract routes return `not_found` and `/server` omits the
@@ -455,6 +456,7 @@ export type AidenRemoteRouteLabel =
   | "chatFork"
   | "chatForkSummary"
   | "chatRead"
+  | "chatTriage"
   | "chatTasks"
   | "chatAgents"
   | "chatAgentInterrupt"
@@ -561,6 +563,7 @@ export const AIDEN_REMOTE_ROUTE_TEMPLATES: Readonly<Record<AidenRemoteRouteLabel
   chatFork: ["/chats/:id/fork"],
   chatForkSummary: ["/chats/:id/fork-summary/:action"],
   chatRead: ["/chats/:id/read"],
+  chatTriage: ["/chats/:id/triage"],
   chatTasks: ["/chats/:id/tasks"],
   chatAgents: ["/chats/:id/agents"],
   chatAgentInterrupt: ["/chats/:id/agents/:agentId/interrupt"],
@@ -1617,6 +1620,8 @@ export interface AidenRemoteServerFeatureSupport {
   speech: boolean;
   chatSummaries: boolean;
   readState: boolean;
+  /** `POST /chats/{chatId}/triage` (desktop-only token while phones' list is full). */
+  triage: boolean;
   tasks: boolean;
   agents: boolean;
   agentInterrupt: boolean;
@@ -1668,6 +1673,8 @@ export function aidenRemoteServerFeatures(
     ...(phone && support.speech ? [AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE] : []),
     ...(support.chatSummaries ? [AIDEN_REMOTE_CHAT_SUMMARY_FEATURE] : []),
     ...(support.readState ? [AIDEN_REMOTE_CHAT_READ_STATE_FEATURE] : []),
+    // Inbox triage: phones already hear AIDEN_REMOTE_MAX_SERVER_FEATURES tokens.
+    ...(desktop && support.triage ? [AIDEN_REMOTE_CHAT_TRIAGE_FEATURE] : []),
     ...(support.tasks ? [AIDEN_REMOTE_CHAT_TASKS_FEATURE] : []),
     ...(support.agents ? [AIDEN_REMOTE_CHAT_AGENTS_FEATURE] : []),
     ...(support.agentInterrupt ? [AIDEN_REMOTE_CHAT_AGENT_INTERRUPT_FEATURE] : []),
@@ -2315,6 +2322,7 @@ export function createAidenRemoteRequestHandler(
             speech: Boolean(dependencies.speech),
             chatSummaries: Boolean(dependencies.chats?.listSummaries),
             readState: Boolean(dependencies.chats?.markRead) && dependencies.chats?.supportsReadMarkers === true,
+            triage: Boolean(dependencies.chats?.setTriage) && dependencies.chats?.supportsTriage === true,
             tasks: progressCapabilitySupported(dependencies, "tasks:read"),
             agents: progressCapabilitySupported(dependencies, "agents:read"),
             agentInterrupt: agentInterruptSupported(dependencies),
@@ -3873,6 +3881,26 @@ export function createAidenRemoteRequestHandler(
         await chats.markRead(readMatch[1]!, body);
         response.writeHead(204, responseHeaders());
         response.end();
+        return;
+      }
+      const triageMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/triage$/u.exec(path);
+      if (triageMatch && request.method === "POST") {
+        requireNoQuery(query);
+        route = "chatTriage";
+        const body = await readJsonBody(request, 1_024);
+        const device = await authenticate(request, dependencies.devices, "chat:write");
+        deviceIdSuffix = device.id.slice(-8);
+        const chats = dependencies.chats;
+        if (!chats?.setTriage || chats.supportsTriage !== true) {
+          throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+        }
+        const key = requiredHeader(request, "idempotency-key", /^[\x21-\x7e]{16,128}$/u);
+        writeJson(
+          response,
+          200,
+          await runChatMutation(chats, device, triageMatch[1]!, "chat", () =>
+            chats.setTriage!(device.id, triageMatch[1]!, key, body)),
+        );
         return;
       }
       const moveMatch = /^\/chats\/([A-Za-z0-9._:-]{1,128})\/move$/u.exec(path);

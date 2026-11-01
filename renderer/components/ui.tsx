@@ -16,7 +16,7 @@ import {
 } from "radix-ui";
 import { Command as CommandPrimitive } from "cmdk";
 import { createPortal } from "react-dom";
-import { ArrowDownToLine, PanelLeft, Check, ChevronDown, Search } from "lucide-react";
+import { ArrowDownToLine, PanelLeft, Check, ChevronDown, ChevronRight, Search } from "lucide-react";
 import { Toaster as SonnerToaster, toast } from "sonner";
 import { reportRendererDiagnostic } from "../lib/dev-log";
 import {
@@ -1767,6 +1767,45 @@ export const DropdownMenuItem = React.forwardRef<
     />
   );
 });
+// A submenu row: its trigger highlights while the submenu is open, and its
+// chevron points the way the submenu opens.
+const menuSubTriggerClass = cn(
+  menuItemClass,
+  "data-[state=open]:bg-fill-accent data-[state=open]:text-fill-accent-foreground data-[state=open]:**:text-current",
+);
+const menuSubChevron = <ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-tertiary" />;
+export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
+export const DropdownMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubTrigger> & { icon?: string }
+>(function SubTrigger({ className, icon: _icon, children, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+      {children}
+      {menuSubChevron}
+    </DropdownMenuPrimitive.SubTrigger>
+  );
+});
+export const DropdownMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof DropdownMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.SubContent>
+>(function SubContent({ className, sideOffset = 4, ...props }, ref) {
+  return (
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-dropdown-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
+  );
+});
 export const DropdownMenuCheckboxItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.CheckboxItem>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.CheckboxItem> & { sublabel?: string }
@@ -1907,6 +1946,39 @@ export const ContextMenuItem = React.forwardRef<
         (color === "red" || color === "status-red") && destructiveHighlightClass, className)}
       {...props}
     />
+  );
+});
+
+export const ContextMenuSub = ContextMenuPrimitive.Sub;
+export const ContextMenuSubTrigger = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubTrigger>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubTrigger> & { icon?: string }
+>(function ContextSubTrigger({ className, icon: _icon, children, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.SubTrigger ref={ref} className={cn(menuSubTriggerClass, className)} {...props}>
+      {children}
+      {menuSubChevron}
+    </ContextMenuPrimitive.SubTrigger>
+  );
+});
+export const ContextMenuSubContent = React.forwardRef<
+  React.ElementRef<typeof ContextMenuPrimitive.SubContent>,
+  React.ComponentPropsWithoutRef<typeof ContextMenuPrimitive.SubContent>
+>(function ContextSubContent({ className, sideOffset = 4, ...props }, ref) {
+  return (
+    <ContextMenuPrimitive.Portal>
+      <ContextMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="popover-content"
+        sideOffset={sideOffset}
+        className={cn(
+          menuContentClass,
+          "origin-[var(--radix-context-menu-content-transform-origin)]",
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
   );
 });
 

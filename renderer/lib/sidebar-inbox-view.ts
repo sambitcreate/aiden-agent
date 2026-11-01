@@ -2,6 +2,8 @@ import { ASSISTANT_WORKSPACE_ID } from "../shared/assistant";
 import { DEFAULT_CHAT_WORKSPACE_ID } from "../shared/chat-workspace";
 import type { ChatPendingAttention } from "../shared/chat-pending-attention";
 import type { ChatRowState } from "../shared/chat-row-state";
+import type { ChatTriageEntry } from "../shared/chat-triage";
+import { triageSignals } from "./inbox-triage";
 import { isNoWorkspace, NO_WORKSPACE_GROUP_LABEL } from "./no-workspace";
 import {
   INBOX_SECTIONS,
@@ -69,6 +71,8 @@ export interface LocalInboxInput {
   rowState: (chatId: string) => ChatRowState;
   unread: (chat: ChatMeta) => boolean;
   pending: ReadonlyMap<string, ChatPendingAttention>;
+  /** The chat's Pin, Done and Snooze, from this Mac's triage store and this device's own writes. */
+  triage?: (chatId: string) => ChatTriageEntry | undefined;
 }
 
 /**
@@ -117,6 +121,7 @@ export function localInboxEntries(input: LocalInboxInput): InboxEntry[] {
           ...(chat.lastAssistantAt !== undefined ? { lastAssistantAt: chat.lastAssistantAt } : {}),
           ...(pending?.since !== undefined ? { attentionSince: pending.since } : {}),
           ...(pending?.runStartedAt !== undefined ? { runStartedAt: pending.runStartedAt } : {}),
+          ...triageSignals(input.triage?.(chat.id)),
         },
       },
     ];
@@ -215,6 +220,7 @@ export function remoteInboxEntries(
   rows: readonly RemoteSidebarRows[],
   hosts: readonly SidebarHost[],
   isOpen: (hostId: string, chatId: string) => boolean = () => false,
+  triage?: (chat: RemoteSidebarChat) => ChatTriageEntry | undefined,
 ): InboxEntry[] {
   const hostsById = new Map(hosts.map((host) => [host.id, host]));
   return rows.flatMap(({ projects, chats }) => {
@@ -238,6 +244,7 @@ export function remoteInboxEntries(
             isOpen: isOpen(chat.hostId, chat.chatId),
             hostOnline: !chat.stale,
             updatedAt: chat.lastActivityAt ?? chat.createdAt ?? 0,
+            ...triageSignals(triage?.(chat)),
           },
         },
       ];
@@ -507,8 +514,8 @@ export function debounceNeedsYouLeave(input: NeedsYouLeaveInput): NeedsYouLeaveR
   return { order, leftAt, nextCheckAt };
 }
 
-/** The sections the Inbox shows, top to bottom. Pinned arrives in Phase 2. */
-export const INBOX_VISIBLE_SECTIONS = ["needs_you", "updates", "earlier", "working"] as const satisfies readonly InboxSection[];
+/** The sections the Inbox shows, top to bottom. */
+export const INBOX_VISIBLE_SECTIONS = ["needs_you", "pinned", "updates", "earlier", "working"] as const satisfies readonly InboxSection[];
 
 /**
  * ⌘1–9 and previous/next follow the rows on screen, in the frozen order:

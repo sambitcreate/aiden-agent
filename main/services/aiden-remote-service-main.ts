@@ -6,6 +6,7 @@ import { reconcilePendingProviderCredentialRotation, saveProviderWithCredentialR
 import { providerConnectionSnapshot } from "./provider-credential-rotation-core.js";
 import { secrets } from "./secrets.js";
 import { ttsService } from "./tts/service-main.js";
+import { chatTriage } from "./chat-triage-main.js";
 import { chatReadMarkers, markChatRead } from "./chat-read-markers-main.js";
 import { chatForkService } from "./chat-fork-service-main.js";
 import { forkSummaryService } from "./fork-summary-service-main.js";
@@ -663,6 +664,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
               snapshot: () => chatReadMarkers.snapshot(),
               markRead: (chatId, throughMessageId) => markChatRead(chatId, throughMessageId),
             },
+            triage: chatTriage,
             forks: {
               service: chatForkService,
               admitWorkspace: (workspaceId) => {
@@ -1068,6 +1070,7 @@ async function createRuntime(): Promise<AidenRemoteRuntime> {
             "chats:metadata-updated",
             "chats:activity-changed",
             "chats:read-markers-changed",
+            "chats:triage-changed",
             "chats:fork-summary-changed",
             "workspaces:changed",
             "bots:changed",

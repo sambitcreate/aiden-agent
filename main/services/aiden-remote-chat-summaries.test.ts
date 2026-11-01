@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { AidenRemoteChatService, type AidenRemoteChatReadMarkers } from "./aiden-remote-chats.js";
+import {
+  AidenRemoteChatService,
+  type AidenRemoteChatReadMarkers,
+  type AidenRemoteChatTriage,
+} from "./aiden-remote-chats.js";
+import { ChatTriageStore } from "./chat-triage.js";
 import type { ChatActivitySnapshot } from "../../renderer/shared/chat-activity.js";
 import { createAidenRemoteRequestHandler } from "./aiden-remote-router.js";
 import {
@@ -39,6 +44,7 @@ function summaryService(
     cursorSecretByte?: number;
     activity?: () => ChatActivitySnapshot;
     readMarkers?: AidenRemoteChatReadMarkers;
+    triage?: AidenRemoteChatTriage;
   } = {},
 ) {
   let rows = structuredClone(initial);
@@ -82,6 +88,7 @@ function summaryService(
     activeChatIds: () => [...(options.active ?? [])],
     ...(options.activity ? { activitySnapshot: options.activity } : {}),
     ...(options.readMarkers ? { readMarkers: options.readMarkers } : {}),
+    ...(options.triage ? { triage: options.triage } : {}),
   });
   return {
     service,
@@ -601,6 +608,96 @@ test("read reports require chat:read, validate the body, and advertise only when
     features?: string[];
   };
   assert.ok(serverProjection.features?.includes("chat-read-state-v1"));
+});
+
+test("triage writes need chat:write and an Idempotency-Key, replay, and refuse a stale ifRevision", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "aiden-remote-triage-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  let now = Date.parse("2026-11-02T10:00:00.000Z");
+  const triage = new ChatTriageStore(() => directory, { now: () => now });
+  const fixture = summaryService([metadata("chat-a", 2_000), metadata("bot-chat", 2_100, { botId: "bot-1" })], { triage });
+  const writer = "a".repeat(43);
+  const reader = "b".repeat(43);
+  const phone = "c".repeat(43);
+  const handler = createAidenRemoteRequestHandler({
+    instanceId: "instance-1",
+    displayName: () => "Test Mac",
+    appVersion: "0.1.0",
+    devices: {
+      acquireDeviceAuthorization: () => () => undefined,
+      authenticate: async (credential) => credential === writer
+        ? { id: "device-1", type: "mac" as const, revoked: false, capabilities: new Set(["chat:read", "chat:write", "server:read"] as const) }
+        : credential === reader
+          ? { id: "device-2", type: "mac" as const, revoked: false, capabilities: new Set(["chat:read", "server:read"] as const) }
+          : credential === phone
+            ? { id: "device-3", type: "iphone" as const, revoked: false, capabilities: new Set(["chat:read", "chat:write", "server:read"] as const) }
+            : null,
+    },
+    pairing: { exchange: async () => { throw new Error("unused"); } },
+    chats: fixture.service,
+    connectionMode: () => "lan",
+    now: () => 1_000,
+    log: () => undefined,
+  });
+  const server = createServer(handler);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const base = `http://127.0.0.1:${address.port}/api/aiden/v1`;
+  const post = (chatId: string, body: unknown, key: string | null, credential = writer) =>
+    fetch(`${base}/chats/${chatId}/triage`, {
+      method: "POST",
+      headers: {
+        "aiden-protocol-version": "1",
+        "content-type": "application/json",
+        authorization: `Bearer ${credential}`,
+        ...(key ? { "idempotency-key": key } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+  const snoozed = await post("chat-a", { snoozeUntil: "2026-11-02T18:00:00+00:00", ifRevision: 0 }, "triage-key-0000001");
+  assert.equal(snoozed.status, 200);
+  assert.deepEqual(await snoozed.json(), {
+    chatId: "chat-a",
+    revision: 1,
+    updatedAt: "2026-11-02T10:00:00.000Z",
+    snoozedUntil: "2026-11-02T18:00:00.000Z",
+  });
+
+  // The same key replays the first answer instead of writing again.
+  now += 60_000;
+  const replay = await post("chat-a", { snoozeUntil: "2026-11-02T18:00:00+00:00", ifRevision: 0 }, "triage-key-0000001");
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).revision, 1);
+  assert.equal((await triage.get("chat-a"))?.revision, 1);
+
+  // An Undo built on an older revision is refused with the current one.
+  assert.equal((await post("chat-a", { done: true }, "triage-key-0000002")).status, 200);
+  const stale = await post("chat-a", { snoozeUntil: null, ifRevision: 1 }, "triage-key-0000003");
+  assert.equal(stale.status, 409);
+  const conflict = await stale.json() as { error: { code: string; details?: { currentRevision?: string } } };
+  assert.equal(conflict.error.code, "revision_conflict");
+  assert.equal(conflict.error.details?.currentRevision, "2");
+  assert.equal((await triage.get("chat-a"))?.snoozedUntil, Date.parse("2026-11-02T18:00:00.000Z"));
+
+  // Writing needs chat:write and a key; the body is closed and bounded.
+  assert.equal((await post("chat-a", { pinned: true }, "triage-key-0000004", reader)).status, 403);
+  assert.equal((await post("chat-a", { pinned: true }, null)).status, 400);
+  for (const body of [{}, { pinned: "yes" }, { snoozeUntil: "tomorrow" }, { done: true, archived: true }, { done: true, ifRevision: -1 }, []]) {
+    assert.equal((await post("chat-a", body, "triage-key-0000005")).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await post("chat-a", { snoozeUntil: "2028-11-02T18:00:00Z" }, "triage-key-0000006")).status, 400);
+  assert.equal((await post("chat-missing", { done: true }, "triage-key-0000007")).status, 404);
+  assert.equal((await post("bot-chat", { done: true }, "triage-key-0000008")).status, 404);
+  assert.equal((await triage.get("chat-a"))?.pinnedAt, undefined);
+
+  const features = async (credential: string) => ((await (await fetch(`${base}/server`, {
+    headers: { "aiden-protocol-version": "1", authorization: `Bearer ${credential}` },
+  })).json()) as { features?: string[] }).features ?? [];
+  assert.ok((await features(writer)).includes("chat-triage-v1"));
+  assert.equal((await features(phone)).includes("chat-triage-v1"), false, "phones' feature list is full");
 });
 
 test("feature-owned chats never reach summaries or the host feed", async () => {

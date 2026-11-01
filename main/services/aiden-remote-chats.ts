@@ -49,6 +49,13 @@ import {
   type ChatReadMarkersSnapshot,
   type ChatRowState,
 } from "../../renderer/shared/chat-row-state.js";
+import type {
+  ChatTriageEntry,
+  ChatTriagePatch,
+  ChatTriageResult,
+  ChatTriageSnapshot,
+  ChatTriageWrite,
+} from "../../renderer/shared/chat-triage.js";
 import {
   appendChatMessageWithReconciliation,
   isAppendReconciliationRequiredError,
@@ -271,6 +278,34 @@ export interface AidenRemoteChatReadMarkers {
   snapshot(): Promise<ChatReadMarkersSnapshot>;
   /** Resolves false when the chat or message no longer exists. */
   markRead(chatId: string, throughMessageId?: string): Promise<boolean>;
+}
+
+/** Shared, main-owned Inbox triage (Pin, Done, Snooze) behind `POST /chats/{chatId}/triage`. */
+export interface AidenRemoteChatTriage {
+  snapshot(): Promise<ChatTriageSnapshot>;
+  set(chatId: string, patch: ChatTriagePatch, write?: ChatTriageWrite): Promise<ChatTriageResult>;
+}
+
+/** The answer to a triage write: the chat's triage after it, times in RFC 3339. */
+export interface AidenRemoteChatTriageProjection {
+  chatId: string;
+  revision: number;
+  updatedAt: string;
+  pinnedAt?: string;
+  doneAt?: string;
+  snoozedUntil?: string;
+}
+
+export function projectAidenRemoteChatTriage(chatId: string, entry: ChatTriageEntry | null): AidenRemoteChatTriageProjection {
+  const iso = (at: number) => new Date(at).toISOString();
+  return {
+    chatId,
+    revision: entry?.revision ?? 0,
+    updatedAt: iso(entry?.updatedAt ?? 0),
+    ...(entry?.pinnedAt !== undefined ? { pinnedAt: iso(entry.pinnedAt) } : {}),
+    ...(entry?.doneAt !== undefined ? { doneAt: iso(entry.doneAt) } : {}),
+    ...(entry?.snoozedUntil !== undefined ? { snoozedUntil: iso(entry.snoozedUntil) } : {}),
+  };
 }
 
 export interface AidenRemoteChatSummaryPage {
@@ -1003,6 +1038,43 @@ function parseMarkRead(input: unknown): { throughMessageId?: string } {
     : {};
 }
 
+const RFC3339_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * `POST /chats/{chatId}/triage` body: `{pinned?, done?, snoozeUntil?, ifRevision?}`.
+ * The acting device computes a snooze preset on its own clock and sends the
+ * absolute time; `snoozeUntil: null` wakes the chat.
+ */
+export function parseAidenRemoteChatTriage(input: unknown): { patch: ChatTriagePatch; ifRevision?: number } {
+  const invalid = () => new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+  const record = ownRecord(input);
+  if (!record || !exactKeys(record, [], ["pinned", "done", "snoozeUntil", "ifRevision"])) throw invalid();
+  const patch: ChatTriagePatch = {};
+  if (hasOwnKey(record, "pinned")) {
+    if (typeof record.pinned !== "boolean") throw invalid();
+    patch.pinned = record.pinned;
+  }
+  if (hasOwnKey(record, "done")) {
+    if (typeof record.done !== "boolean") throw invalid();
+    patch.done = record.done;
+  }
+  if (hasOwnKey(record, "snoozeUntil")) {
+    const value = record.snoozeUntil;
+    if (value === null) patch.snoozeUntil = null;
+    else {
+      if (typeof value !== "string" || value.length > 40 || !RFC3339_TIME.test(value)) throw invalid();
+      const at = Date.parse(value);
+      if (!Number.isSafeInteger(at) || at <= 0) throw invalid();
+      patch.snoozeUntil = at;
+    }
+  }
+  if (Object.keys(patch).length === 0) throw invalid();
+  if (!hasOwnKey(record, "ifRevision")) return { patch };
+  const ifRevision = record.ifRevision;
+  if (typeof ifRevision !== "number" || !Number.isSafeInteger(ifRevision) || ifRevision < 0) throw invalid();
+  return { patch, ifRevision };
+}
+
 function hasOwnKey(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
@@ -1276,6 +1348,8 @@ export class AidenRemoteChatService {
       activitySnapshot?: () => ChatActivitySnapshot;
       /** Enables `unread` summaries and `POST /chats/{chatId}/read`. */
       readMarkers?: AidenRemoteChatReadMarkers;
+      /** Enables `POST /chats/{chatId}/triage` (`chat-triage-v1`). */
+      triage?: AidenRemoteChatTriage;
       /** Enables `POST /chats/{chatId}/fork` (`chat-fork-v1`). */
       forks?: {
         service: Pick<ChatForkService, "fork" | "supportsSummaries">;
@@ -1442,6 +1516,46 @@ export class AidenRemoteChatService {
       throw new AidenRemoteServiceError("not_found", "Chat read state is unavailable on this host.", 404);
     }
     await readMarkers.markRead(chatId, throughMessageId);
+  }
+
+  /** Whether this host keeps Inbox triage (`chat-triage-v1`). */
+  get supportsTriage(): boolean {
+    return this.options.triage !== undefined;
+  }
+
+  /**
+   * Pin, mark done or snooze a chat for every surface paired to this host.
+   * Replays of the same Idempotency-Key answer with the first result, and an
+   * `ifRevision` that no longer matches is a `revision_conflict` carrying the
+   * chat's current triage revision.
+   */
+  async setTriage(deviceId: string, chatId: string, key: string, input: unknown): Promise<AidenRemoteChatTriageProjection> {
+    const triage = this.options.triage;
+    if (!triage) throw new AidenRemoteServiceError("not_found", "This endpoint is unavailable.", 404);
+    const resourceId = safeId(chatId, "chat");
+    const parsed = parseAidenRemoteChatTriage(input);
+    const classification = await this.classify(chatId);
+    if (classification.botId) {
+      throw new AidenRemoteServiceError("not_found", "This Aiden chat no longer exists.", 404);
+    }
+    return this.executeIdempotent(
+      { deviceId, route: "POST /chats/{id}/triage", resourceId, key },
+      parsed,
+      async () => {
+        const result = await triage.set(chatId, parsed.patch, parsed.ifRevision === undefined ? {} : { ifRevision: parsed.ifRevision });
+        if (result.ok) return projectAidenRemoteChatTriage(chatId, result.entry);
+        if (result.code === "revision_conflict") {
+          throw new AidenRemoteServiceError(
+            "revision_conflict",
+            "The chat changed since this was read.",
+            409,
+            false,
+            { currentRevision: String(result.entry?.revision ?? 0) },
+          );
+        }
+        throw new AidenRemoteServiceError("invalid_request", "The chat triage request is invalid.", 400);
+      },
+    );
   }
 
   private async executeIdempotent<T>(

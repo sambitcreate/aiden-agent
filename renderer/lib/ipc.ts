@@ -291,6 +291,7 @@ import type {
   PeerRunSubscription,
   PeerRunTarget,
 } from "../shared/peer-host";
+import type { ChatTriagePatch, ChatTriageResult } from "../shared/chat-triage";
 import type { PeerOperation } from "../shared/peer-operation";
 import type { PeerBotSessionMessage, PeerBotSessionSubscription } from "../shared/peer-bot-session";
 import type { LocalRunCursor, LocalRunFrameMessage } from "../shared/local-run-frames";
@@ -1432,6 +1433,9 @@ export const chatsApi = {
   readMarkers: () => invoke<unknown>("chats:readMarkers"),
   markRead: (id: string, throughMessageId?: string) =>
     invoke<boolean>("chats:markRead", id, throughMessageId),
+  triage: () => invoke<unknown>("chats:triage"),
+  setTriage: (id: string, patch: ChatTriagePatch, ifRevision?: number) =>
+    invoke<ChatTriageResult>("chats:setTriage", id, patch, ifRevision),
   list: (workspaceId?: string) => invoke<ChatMeta[]>("chats:list", workspaceId),
   get: async (id: string) => {
     const response = parseChatReadResponse(await invoke<ChatReadResponse>("chats:get", id));

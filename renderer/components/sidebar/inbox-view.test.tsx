@@ -132,6 +132,39 @@ test("rows sort into Needs you, Updates, Earlier and the Working shelf, each a l
   assert.equal(screen.queryByText("Nothing needs you"), null);
 });
 
+test("pinned rows get their own group between Needs you and Updates; done and snoozed rows hide", () => {
+  render(view([
+    entry("approval", { rowState: "needs_approval", attentionSince: NOW - 3 * MINUTE, pinnedAt: NOW - HOUR }),
+    entry("old-pin", { pinnedAt: NOW - 2 * HOUR }),
+    entry("new-pin", { pinnedAt: NOW - MINUTE, unread: true, lastAssistantAt: NOW - 5 * MINUTE }),
+    entry("news", { unread: true, lastAssistantAt: NOW - 10 * MINUTE }),
+    entry("done", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, doneAt: NOW - 5 * MINUTE }),
+    entry("snoozed", { unread: true, lastAssistantAt: NOW - 10 * MINUTE, snoozedUntil: NOW + HOUR }),
+  ]));
+  const groups = screen.getAllByRole("group").map((group) => group.getAttribute("aria-label"));
+  assert.deepEqual(groups.slice(0, 3), ["Needs you", "Pinned", "Updates"]);
+  // A pinned chat that needs you still shows in Needs you; the newest pin leads.
+  assert.deepEqual(rowTitles(section("Needs you")), ["Chat approval"]);
+  assert.deepEqual(rowTitles(section("Pinned")), ["Chat new-pin", "Chat old-pin"]);
+  assert.deepEqual(rowTitles(section("Updates")), ["Chat news"]);
+  assert.equal(screen.queryByText("Chat done"), null);
+  assert.equal(screen.queryByText("Chat snoozed"), null);
+});
+
+test("a done chat comes back with new output, and a snoozed one when it wakes or needs you", () => {
+  const { rerender } = render(view([
+    entry("done", { unread: true, lastAssistantAt: NOW + MINUTE, doneAt: NOW - MINUTE }),
+    entry("snoozed", { snoozedUntil: NOW + HOUR }),
+    entry("asks", { rowState: "needs_input", attentionSince: NOW, snoozedUntil: NOW + HOUR }),
+  ]));
+  assert.deepEqual(rowTitles(section("Updates")), ["Chat done"]);
+  assert.deepEqual(rowTitles(section("Needs you")), ["Chat asks"]);
+  assert.equal(screen.queryByText("Chat snoozed"), null);
+  nowMs = NOW + HOUR + MINUTE;
+  rerender(view([entry("snoozed", { snoozedUntil: NOW + HOUR })]));
+  assert.deepEqual(rowTitles(section("Earlier")), ["Chat snoozed"]);
+});
+
 test("Needs you rows name their reason and wait, and carry the request only as a description", () => {
   render(view([
     entry(

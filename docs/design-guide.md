@@ -204,6 +204,20 @@ accessible name leads with the title, then meta, status, wait and "Unread":
 "Fix the build, aiden, 2h, Unread". While ⌘ is held, the trailing status gives
 way to the row's shortcut hint.
 
+Triage (**Pin** or **Unpin**, **Mark done**, and a **Snooze** submenu) lives
+only in an Inbox row's overflow and context menus, never as an inline row
+button, and never on a Bot row. The Snooze submenu lists its presets (1 hour,
+This evening, Tomorrow, Next week) with each one's time as trailing tertiary
+`text-small` ("6:00 PM", "tomorrow, 9:00 AM"), worked out when the submenu
+opens. A host that can't take writes shows the items disabled rather than
+hiding them. Pinned chats get their own **Pinned** group between Needs you and
+Updates, and a pinned chat that needs the person still sits in Needs you. An
+action moves its row at once and then shows one Undo toast for five seconds;
+actions of the same kind inside that window merge into it ("3 chats marked
+done") instead of stacking toasts. A failed write puts the row back with one
+error toast, and an Undo that finds the chat changed elsewhere leaves it alone
+and says so in the toast.
+
 ## Verification
 
 Check shared and custom actions in onboarding, the chat toolbar and composer,

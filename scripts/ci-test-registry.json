@@ -52,6 +52,8 @@
         "main/services/chat-pull-request-service.test.ts",
         "main/services/chat-pull-request-store.test.ts",
         "main/services/chat-read-markers.test.ts",
+        "main/services/chat-triage.test.ts",
+        "renderer/lib/inbox-triage.test.ts",
         "main/services/chat-run-input-admission.test.ts",
         "main/services/chat-session-copy.test.ts",
         "main/services/chat-fork-service.test.ts",

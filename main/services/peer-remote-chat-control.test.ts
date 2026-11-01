@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HostRunRegistry } from "./host-run-registry.js";
 import { PEER_WAKE_COALESCE_MS } from "./peer-host-manager.js";
-import { FakeHost, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { projectAidenRemoteChatTriage } from "./aiden-remote-chats.js";
+import { AidenRemoteServiceError } from "./aiden-remote-errors.js";
+import { ChatTriageStore } from "./chat-triage.js";
+import { PeerTransportError } from "./peer-transport.js";
+import { FakeHost, FEATURES, UNHANDLED, hostControls, numbered, settle, setup, type FakeHostEffects } from "./peer-remote-chat-test-host.js";
 import { ChatIntentLedger } from "../../renderer/lib/hosts/chat-intent-ledger.js";
 import { ChatSessionControl } from "../../renderer/lib/hosts/chat-session-control.js";
 import { HostChatControlError, isOutcomeUnknown, type HostChatAdapter } from "../../renderer/lib/hosts/host-chat-adapter.js";
@@ -406,6 +413,63 @@ test("an unreachable host refuses every mutation, and nothing is sent once it is
     assert.equal(harness.adapter.status().availability, "online");
     assert.deepEqual(host.turnRequests(), [], "no message was queued for later");
     assert.deepEqual(host.effects, { cancels: [], approvals: [], answers: [], inputs: [] });
+  } finally {
+    harness.close();
+  }
+});
+
+test("triage from this Mac lands once on the host across a lost answer, and a stale Undo is refused", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "aiden-peer-triage-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ChatTriageStore(() => directory, { now: () => Date.parse("2026-11-02T10:00:00.000Z") });
+  const host = new FakeHost("host_b", numbered(2));
+  host.features = [...FEATURES, "chat-triage-v1"];
+  let dropNext = 0;
+  let writes = 0;
+  host.routes = async (input, deviceId) => {
+    if (input.path !== "/chats/chat-1/triage" || input.method !== "POST") return UNHANDLED;
+    const body = input.body as { pinned?: boolean; done?: boolean; snoozeUntil?: string | null; ifRevision?: number };
+    const entry = await host.idempotent(
+      { deviceId, route: "POST /chats/{id}/triage", resourceId: "chat-1", key: input.idempotencyKey ?? "" },
+      body,
+      async () => {
+        writes += 1;
+        const result = await store.set(
+          "chat-1",
+          {
+            ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+            ...(body.done !== undefined ? { done: body.done } : {}),
+            ...(body.snoozeUntil !== undefined ? { snoozeUntil: body.snoozeUntil === null ? null : Date.parse(body.snoozeUntil) } : {}),
+          },
+          body.ifRevision === undefined ? {} : { ifRevision: body.ifRevision },
+        );
+        if (result.ok) return projectAidenRemoteChatTriage("chat-1", result.entry);
+        throw new AidenRemoteServiceError("revision_conflict", "Changed.", 409, false, {
+          currentRevision: String(result.code === "revision_conflict" ? result.entry?.revision ?? 0 : 0),
+        });
+      },
+    );
+    if (dropNext > 0) {
+      dropNext -= 1;
+      throw new PeerTransportError("unavailable");
+    }
+    return JSON.parse(JSON.stringify(entry));
+  };
+  const harness = await setup(host);
+  try {
+    assert.ok(harness.adapter.capabilities().has("triage"));
+    // The answer is lost after the host applied it; the retry replays it.
+    dropNext = 1;
+    const snoozeUntil = Date.parse("2026-11-02T18:00:00.000Z");
+    const snoozed = await harness.adapter.setTriage("chat-1", { snoozeUntil }, 0);
+    assert.deepEqual(snoozed, { ok: true, entry: { revision: 1, updatedAt: Date.parse("2026-11-02T10:00:00.000Z"), snoozedUntil: snoozeUntil } });
+    assert.equal(writes, 1, "the host applied the snooze once");
+
+    // Another device marks it done; an Undo of the snooze built on revision 1 is refused.
+    await store.set("chat-1", { done: true });
+    const undo = await harness.adapter.setTriage("chat-1", { snoozeUntil: null }, 1);
+    assert.deepEqual(undo, { ok: false, code: "revision_conflict", entry: { revision: 2, updatedAt: 0 } });
+    assert.equal((await store.get("chat-1"))?.snoozedUntil, snoozeUntil, "the stale Undo changed nothing");
   } finally {
     harness.close();
   }

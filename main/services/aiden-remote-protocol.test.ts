@@ -569,6 +569,7 @@ test("OpenAPI freezes every planned route under authenticated Aiden v1 semantics
     "/chats",
     "/chats/{chatId}",
     "/chats/{chatId}/read",
+    "/chats/{chatId}/triage",
     "/chats/{chatId}/move",
     "/chats/{chatId}/fork",
     "/chats/{chatId}/fork-summary/{action}",
@@ -1375,6 +1376,7 @@ test("mutation contracts require idempotency or revision preconditions", async (
 
   for (const [route, method] of [
     ["/workspaces", "post"],
+    ["/chats/{chatId}/triage", "post"],
     ["/chats", "post"],
     ["/chats/{chatId}/move", "post"],
     ["/chats/{chatId}/fork", "post"],

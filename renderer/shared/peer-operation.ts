@@ -37,6 +37,8 @@ export type PeerWriteOperation =
   | "selectFolder"
   | "createWorkspace"
   | "markRead"
+  /** Inbox triage (`chat-triage-v1`): Pin, Done and Snooze. */
+  | "setTriage"
   | "interruptAgent"
   | "respondQuestion"
   | "inputs"

@@ -62,6 +62,7 @@ export interface RendererChatMutationDeps {
   hostPlatformCapabilities(): { bots: boolean };
   closeDeviceSessionsForChat(chatId: string): void;
   chatReadMarkers: { remove(chatId: string): Promise<unknown> };
+  chatTriage?: { remove(chatId: string): Promise<unknown> };
   rendererDocumentOwner(event: IpcMainInvokeEvent, invalidRequest: () => Error): RendererDocumentOwner;
   llmClient: {
     requiresAppendReconciliation(ownerId: string): boolean;
@@ -84,6 +85,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
     chatReadMarkers,
+    chatTriage,
     rendererDocumentOwner,
     llmClient,
     unresolvedGuiArtifactMessage,
@@ -122,6 +124,7 @@ export function createRendererChatMutationHandlers(deps: RendererChatMutationDep
         : await chatApplicationService.remove(chatId, { rejectFeatureOwned: true });
       closeDeviceSessionsForChat(chatId);
       void chatReadMarkers.remove(chatId).catch(() => undefined);
+      void chatTriage?.remove(chatId).catch(() => undefined);
       return result;
     },
 

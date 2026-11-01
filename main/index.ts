@@ -15,6 +15,7 @@ import path from "node:path";
 
 import { registerHandlers } from "./handlers/index.js";
 import { prepareLocalSpeechStorage } from "./services/local-speech-models.js";
+import { startChatTriage } from "./services/chat-triage-main.js";
 import { terminalService } from "./services/terminal.js";
 import { browserService } from "./services/browser/service.js";
 import { externalUrl } from "./services/browser/core.js";
@@ -2209,6 +2210,9 @@ if (!ownsSingleInstanceLock) {
       ) {
         app.dock?.setBadge("DEV");
       }
+      // Inbox snoozes: one timer for the next wake, plus the early wake when
+      // a run needs an approval, an answer, or fails. Local only.
+      startChatTriage();
       // Local-only housekeeping for on-device speech storage; no network.
       void prepareLocalSpeechStorage().catch((error: unknown) => {
         logger.warn("local-speech", `Speech storage cleanup failed: ${String(error)}`);

@@ -27,8 +27,8 @@ import {
 } from "../../lib/sidebar-inbox-view";
 
 /**
- * The Inbox sidebar view (docs/plans/inbox-sidebar-plan.md, Phase 1b): Needs
- * you, Updates and Earlier, then the collapsible Working shelf. The list holds
+ * The Inbox sidebar view (docs/plans/inbox-sidebar-plan.md, Phases 1b and 2a):
+ * Needs you, Pinned, Updates and Earlier, then the collapsible Working shelf. The list holds
  * still while the person uses it (see `useListInUse`), and rows slide when they
  * move outside a freeze.
  */
@@ -90,6 +90,7 @@ const OVERLAY_SELECTOR = '[role="menu"], [role="dialog"], [role="alertdialog"]';
 
 const MAIN_SECTIONS = [
   { id: "needs_you", label: "Needs you" },
+  { id: "pinned", label: "Pinned" },
   { id: "updates", label: "Updates" },
   { id: "earlier", label: "Earlier" },
 ] as const satisfies readonly { id: InboxSection; label: string }[];
@@ -238,10 +239,14 @@ function useSidebarHeight(ref: React.RefObject<HTMLElement | null>): number | nu
   return height;
 }
 
-/** The section a row's status reads from: where its live state places it. */
+/**
+ * The section a row's status reads from: where its live state places it. A
+ * pinned row reads as Updates while it has unseen output, else as Earlier.
+ */
 function liveStatusSection(entry: InboxEntry, now: number): InboxSection {
   const { shelf } = inboxState(entry.signals, now, Number.POSITIVE_INFINITY);
-  return shelf === "hidden" || shelf === "pinned" ? "earlier" : shelf;
+  if (shelf === "pinned") return entry.signals.unread && !entry.signals.isOpen ? "updates" : "earlier";
+  return shelf === "hidden" ? "earlier" : shelf;
 }
 
 export function InboxView({
@@ -338,6 +343,7 @@ export function InboxView({
     });
   const sectionRows = {
     needs_you: shownRows("needs_you"),
+    pinned: shownRows("pinned"),
     updates: shownRows("updates"),
     earlier: shownRows("earlier"),
     working: shownRows("working"),

@@ -97,6 +97,8 @@ import { RowGroup } from "./sidebar/row-group";
 import { SectionHeader } from "./sidebar/section-header";
 import { SidebarOverflowMenu } from "./sidebar/sidebar-overflow-menu";
 import { remoteChatRowMenu } from "./sidebar/remote-chat-row-menu";
+import { inboxTriageMenuItems } from "./sidebar/inbox-triage-menu";
+import { useInboxTriage, type InboxTriageRow } from "../lib/use-inbox-triage";
 import { RemoteHostAdapter, remoteHostCapabilities } from "../lib/hosts/remote-host-adapter";
 import { isRevisionConflict, type HostChatCapability } from "../lib/hosts/host-chat-adapter";
 import { ChatRowContextGlyphs } from "./chat-row-context";
@@ -428,6 +430,11 @@ function GeneratedTitleReveal({ previousTitle, title }: { previousTitle: string;
  * `bots.open`, All Bots) until they leave Bots. Only one of the two sidebars
  * mounts, so only one registers the jump shortcuts.
  */
+/** A paired host's chat as a triage target. */
+function remoteTriageRow(chat: RemoteSidebarChat): InboxTriageRow {
+  return { key: chat.key, hostId: chat.hostId, chatId: chat.chatId };
+}
+
 export function ChatSidebar(props: ChatSidebarProps) {
   const capabilities = useAppCapabilities();
   const { view } = useSidebarView();
@@ -516,6 +523,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ),
     [peerHosts.views],
   );
+  const triage = useInboxTriage({ views: peerHosts.views });
   const shownMachines = effectiveMachineFilter(machineFilter, peerHosts.hosts);
   const initializedExpansionRef = React.useRef(false);
   const [renaming, setRenaming] = React.useState<ChatMeta | null>(null);
@@ -642,11 +650,14 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
           chat.id !== activeChatId &&
           isChatUnread(chat.lastAssistantAt, readMarkers, chat.id, chat.lastAssistantSequence),
         pending,
+        triage: (chatId) =>
+          triage.entryFor({ key: projectOrderKey(LOCAL_SIDEBAR_HOST_ID, chatId), hostId: LOCAL_SIDEBAR_HOST_ID, chatId }),
       }),
       ...remoteInboxEntries(
         remoteRows,
         peerHosts.hosts,
         (hostId, chatId) => activeRemoteChat?.hostId === hostId && activeRemoteChat.chatId === chatId,
+        (chat) => triage.entryFor(remoteTriageRow(chat)),
       ),
       ...botInbox.listed,
     ];
@@ -662,6 +673,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     pendingAttention.data,
     readMarkers,
     remoteRows,
+    triage,
     workspaces,
   ]);
   const inboxEntries = React.useMemo(
@@ -1402,6 +1414,23 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     };
   };
 
+  // Pin, Mark done and Snooze: in an Inbox row's ••• and context menus only.
+  const inboxTriageItems = (
+    parts: Parameters<ChatRowMenu>,
+    entry: InboxEntry,
+    context: InboxRowContext,
+    row: InboxTriageRow,
+    disabled: boolean,
+  ) =>
+    inboxTriageMenuItems(parts, {
+      pinned: entry.signals.pinnedAt !== undefined,
+      disabled,
+      onAct: (kind, until) => {
+        context.touch();
+        void triage.act(kind, [row], until);
+      },
+    });
+
   const renderChatRow = (
     chat: ChatMeta,
     indented = false,
@@ -1438,13 +1467,25 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       ? inboxRowParts(inbox.entry, inbox.context, () => void markLocalChatRead(chat))
       : undefined;
     const inboxAction = inboxParts?.action;
-    const menuItems: ChatRowMenu = (Item, Separator) => (
+    const menuItems: ChatRowMenu = (Item, Separator, SubMenu) => (
       <>
       {inboxAction ? (
         <>
           <Item icon={CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].menuIcon} onSelect={inboxAction.onSelect}>
             {CHAT_ROW_INBOX_ACTIONS[inboxAction.kind].label}
           </Item>
+          {inbox ? null : <Separator />}
+        </>
+      ) : null}
+      {inbox ? (
+        <>
+          {inboxTriageItems(
+            [Item, Separator, SubMenu],
+            inbox.entry,
+            inbox.context,
+            { key: inbox.entry.key, hostId: LOCAL_SIDEBAR_HOST_ID, chatId: chat.id },
+            inbox.context.dimmed,
+          )}
           <Separator />
         </>
       ) : null}
@@ -1585,7 +1626,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
     const shortcutBinding = shortcutNumber
       ? commandBinding(`chat.jump.${shortcutNumber}` as CommandId)
       : null;
-    const menuItems = remoteChatRowMenu(actions, {
+    const baseMenu = remoteChatRowMenu(actions, {
       ...(inboxParts ? { inboxAction: inboxParts.action ?? null } : {}),
       onOpen: () => void openRemoteChat(chat),
       onMarkRead: () => void markRemoteChatRead(chat),
@@ -1594,6 +1635,24 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
         setRemoteRenaming({ hostId: chat.hostId, chatId: chat.chatId, hostLabel: chat.hostLabel });
       },
     });
+    // Triage needs the host's `chat-triage-v1` grant; a host that isn't online
+    // (`hostControlRefusal`) shows the items disabled rather than queueing them.
+    const triageable = inbox !== undefined && (remoteCapabilities.get(chat.hostId)?.has("triage") ?? false);
+    const menuItems: ChatRowMenu = triageable
+      ? (Item, Separator, SubMenu) => (
+          <>
+            {baseMenu(Item, Separator, SubMenu)}
+            <Separator />
+            {inboxTriageItems(
+              [Item, Separator, SubMenu],
+              inbox.entry,
+              inbox.context,
+              remoteTriageRow(chat),
+              chat.stale || inbox.context.dimmed,
+            )}
+          </>
+        )
+      : baseMenu;
     return (
       <ChatRow
         key={chat.key}

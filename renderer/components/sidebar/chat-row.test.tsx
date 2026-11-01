@@ -9,6 +9,7 @@ import { TooltipProvider } from "../ui.js";
 import { RowGroup } from "./row-group.js";
 import { SectionHeader } from "./section-header.js";
 import { remoteChatRowMenu } from "./remote-chat-row-menu.js";
+import { inboxTriageMenuItems } from "./inbox-triage-menu.js";
 import { remoteChatRowActions, type RemoteSidebarChat } from "../../lib/sidebar-remote-groups.js";
 import type { HostChatCapability } from "../../lib/hosts/host-chat-adapter.js";
 
@@ -331,4 +332,36 @@ test("an Inbox remote row's menu offers the same one action as its hover icon", 
   fireEvent.contextMenu(inboxRowButton());
   const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
   assert.deepEqual(items.map((item) => item.textContent), ["Open", "Rename"]);
+});
+
+test("an Inbox row's triage lives in its menus only, and Snooze sends an absolute time", async () => {
+  // Saturday 31 October 2026, 15:00 on this device's clock.
+  const now = new Date(2026, 9, 31, 15, 0);
+  const acts: [string, number | undefined][] = [];
+  const triageMenu = (pinned: boolean, disabled = false): ChatRowMenu => (...parts) =>
+    inboxTriageMenuItems(parts, { pinned, disabled, now: () => now, onAct: (kind, until) => void acts.push([kind, until]) });
+  inboxRow({ unread: true }, { menu: triageMenu(false) });
+  // No inline triage button on the row itself.
+  assert.equal(screen.queryByRole("button", { name: /\b(Pin|Mark done|Snooze)\b/u }), null);
+
+  fireEvent.contextMenu(inboxRowButton());
+  const menu = await screen.findByRole("menu");
+  assert.deepEqual(within(menu).getAllByRole("menuitem").map((item) => item.textContent), ["Pin", "Mark done", "Snooze"]);
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Snooze" }));
+  const presets = [...document.querySelectorAll<HTMLElement>("[data-snooze-preset]")];
+  assert.deepEqual(presets.map((item) => item.dataset.snoozePreset), ["hour", "evening", "tomorrow", "next_week"]);
+  fireEvent.click(presets[2]!);
+  assert.deepEqual(acts, [["snooze", new Date(2026, 10, 1, 9, 0).getTime()]]);
+  cleanup();
+
+  // A pinned row offers Unpin; a host that can't take writes disables every item.
+  inboxRow({}, { menu: triageMenu(true, true) });
+  fireEvent.contextMenu(inboxRowButton());
+  const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+  assert.deepEqual(
+    items.map((item) => [item.textContent, item.getAttribute("aria-disabled") === "true"]),
+    [["Unpin", true], ["Mark done", true], ["Snooze", true]],
+  );
+  fireEvent.click(items[0]!);
+  assert.equal(acts.length, 1, "a disabled item never acts");
 });

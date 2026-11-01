@@ -210,6 +210,13 @@ export const AIDEN_REMOTE_SPEECH_REQUEST_GZIP_FEATURE = "speech-request-gzip-v1"
  * every summary reports `unread: false` and clients must not send read reports.
  */
 export const AIDEN_REMOTE_CHAT_READ_STATE_FEATURE = "chat-read-state-v1" as const;
+/**
+ * Server feature token for Inbox triage (`POST /chats/{chatId}/triage`):
+ * Pin, Done and Snooze kept by the host for every paired surface. Announced
+ * to desktops only while phones' feature list is full; phones gain it once a
+ * later revision frees a slot.
+ */
+export const AIDEN_REMOTE_CHAT_TRIAGE_FEATURE = "chat-triage-v1" as const;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURES = 32;
 export const AIDEN_REMOTE_MAX_SERVER_FEATURE_LENGTH = 64;
 /**

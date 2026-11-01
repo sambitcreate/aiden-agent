@@ -57,6 +57,8 @@ import {
 import { chatForRenderer } from "../services/visible-chat-projection.js";
 import { chatActivityRegistry } from "../services/chat-activity.js";
 import { chatReadMarkers, markChatRead } from "../services/chat-read-markers-main.js";
+import { chatTriage } from "../services/chat-triage-main.js";
+import { parseChatTriageRequest } from "./chat-triage-params.js";
 import { contextLifecycleService } from "../services/context-lifecycle-service-main.js";
 import { forkSummaryService } from "../services/fork-summary-service-main.js";
 import { chatForkService } from "../services/chat-fork-service-main.js";
@@ -89,6 +91,7 @@ export function registerChatHistoryHandlers(): void {
     hostPlatformCapabilities,
     closeDeviceSessionsForChat,
     chatReadMarkers,
+    chatTriage,
     rendererDocumentOwner,
     llmClient,
     unresolvedGuiArtifactMessage,
@@ -174,6 +177,11 @@ export function registerChatHistoryHandlers(): void {
   let chatExportActive = false;
   ipcMain.handle("chats:activitySnapshot", () => chatActivityRegistry.snapshot());
   ipcMain.handle("chats:readMarkers", () => chatReadMarkers.snapshot());
+  ipcMain.handle("chats:triage", () => chatTriage.snapshot());
+  ipcMain.handle("chats:setTriage", async (_event, id: unknown, patch: unknown, ifRevision?: unknown) => {
+    const request = parseChatTriageRequest(id, patch, ifRevision);
+    return chatTriage.set(request.chatId, request.patch, { ifRevision: request.ifRevision });
+  });
   ipcMain.handle("chats:markRead", async (_event, id: unknown, throughMessageId?: unknown) => {
     const chatId = asString(id, "id");
     if (throughMessageId !== undefined && (typeof throughMessageId !== "string" || !throughMessageId)) {
