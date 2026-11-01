@@ -82,4 +82,11 @@ Plan: `docs/plans/inbox-sidebar-plan.md`. Before/after page: https://claude.ai/a
 - Tests: freeze/portal/menu/removal/shelf-host/search cases in `inbox-view.test.tsx`; inbox row cases and the remote menu in `chat-row.test.tsx`; `pendingAttentionRequest` in `sidebar-inbox-view.test.ts`; `touch` in `chat-activity-core.test.ts`. E2e helpers move the pointer to the centre of `<main>` and focus the window before hovering.
 - Known gap for 1d: with `view=inbox` stored, Bot routes still show the Inbox, so the Bot list isn't reachable there.
 
+### 1b/1c re-review fixes (2026-10-31)
+- useFlip (supersedes "cancels running animations before measuring"): measures each row's layout top with its running slide's `translateY` (computed-transform m42) taken out, and touches only rows whose layout place changed: their old slide is cancelled and the new one starts from where the row shows on screen (≤40 px, 150 ms). Rows that didn't move keep their slide, so the re-render from `onShortcutOrderChange` or streaming no longer kills it. Skip (reset/release), >40 moves, Reduce Motion and a frame change cancel the moved rows' slides instead. `chat-sidebar.tsx` keeps the same `inboxShortcutKeys` array when the order is unchanged.
+- The `data-inbox-shelf-host` div is `dimmable` (a sibling of the dimmed viewport, so nothing dims twice).
+- Shelf focus-ring room: the header wrapper is `-mt-1 py-1` inside its `overflow-hidden`, the rows scroller `-mt-1 py-1`; the header and first row stay where they were (a collapsed shelf is 4 px taller).
+- `CHAT_ROW_INBOX_ACTIONS` gained `icon` (lucide component); the hover button draws it.
+- Tests: FLIP test in `inbox-view.test.tsx` (stubbed rects/`animate`/`getAnimations`; fails on the old hook); the unread row test asserts the accessible name (it reads "aiden 2h Fix the build , Unread": meta and status come before the title); the remote-menu parity test renders the hover action and matches its title to the menu item. The Inbox e2e in `chat-shell-interactions.spec.ts` checks ≥4 px ring room for the shelf toggle and first row and equal blurred opacity for shelf and list rows.
+
 Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control]].

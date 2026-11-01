@@ -263,16 +263,18 @@ function inboxRowButton(): HTMLElement {
   return button;
 }
 
-test("an unread Inbox row says so to screen readers and sets its title in medium weight", () => {
+test("an unread Inbox row says Unread once, at the end of its name", () => {
   inboxRow({ unread: true });
-  assert.match(inboxRowButton().textContent ?? "", /Fix the build, Unread$/u);
-  const title = inboxRowButton().querySelector<HTMLElement>("[data-inbox-title]")!;
-  assert.ok(title.classList.contains("font-medium"));
+  // The row's accessible name ends with the title, then ", Unread" exactly once.
+  assert.equal(
+    screen.getByRole("button", { name: /^(?:(?!Unread).)*\bFix the build\s*, Unread$/u }),
+    inboxRowButton(),
+  );
   cleanup();
 
   inboxRow({ unread: false });
-  assert.doesNotMatch(inboxRowButton().textContent ?? "", /Unread/u);
-  assert.equal(inboxRowButton().querySelector("[data-inbox-title]")!.classList.contains("font-medium"), false);
+  assert.ok(screen.getByRole("button", { name: /\bFix the build$/u }));
+  assert.equal(screen.queryByRole("button", { name: /Unread/u }), null);
 });
 
 test("an Inbox row's action runs without opening the chat, and a dimmed row offers none", () => {
@@ -302,25 +304,30 @@ test("an Inbox row describes its request and keeps its leading icon", () => {
 
 test("an Inbox remote row's menu offers the same one action as its hover icon", async () => {
   const actions = remoteChatRowActions(remoteChat(), new Set(["markRead", "rename"]));
-  for (const [inboxAction, expected] of [
-    [{ kind: "acknowledge", onSelect: () => {} }, ["Open", "Acknowledge", "Rename"]],
-    [null, ["Open", "Rename"]],
-  ] as const) {
-    let acknowledged = 0;
-    const handlers = {
-      onOpen: () => {},
-      onMarkRead: () => {},
-      onRename: () => {},
-      inboxAction: inboxAction && { ...inboxAction, onSelect: () => (acknowledged += 1) },
-    };
-    inboxRow({}, { menu: remoteChatRowMenu(actions, handlers) });
+  for (const kind of ["acknowledge", "mark_read"] as const) {
+    let fromMenu = 0;
+    const action = { kind, onSelect: () => (fromMenu += 1) };
+    const handlers = { onOpen: () => {}, onMarkRead: () => {}, onRename: () => {}, inboxAction: action };
+    inboxRow({ unread: true, action }, { menu: remoteChatRowMenu(actions, handlers) });
+    const hover = screen.getByRole("button", { name: /^(Acknowledge|Mark read): Fix the build$/u });
+    const hoverLabel = hover.getAttribute("title");
+    assert.ok(hoverLabel);
+
     fireEvent.contextMenu(inboxRowButton());
     const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
-    assert.deepEqual(items.map((item) => item.textContent), expected);
-    if (inboxAction) {
-      fireEvent.click(items[1]!);
-      assert.equal(acknowledged, 1);
-    }
+    // Open first, then the row's one action, named as the hover icon names it; no separate Mark read.
+    assert.deepEqual(items.map((item) => item.textContent), ["Open", hoverLabel, "Rename"]);
+    fireEvent.click(items[1]!);
+    assert.equal(fromMenu, 1);
     cleanup();
   }
+
+  // Without an Inbox action, the menu has none either.
+  inboxRow({}, {
+    menu: remoteChatRowMenu(actions, { onOpen: () => {}, onMarkRead: () => {}, onRename: () => {}, inboxAction: null }),
+  });
+  assert.equal(document.querySelector("[data-inbox-action]"), null);
+  fireEvent.contextMenu(inboxRowButton());
+  const items = within(await screen.findByRole("menu")).getAllByRole("menuitem");
+  assert.deepEqual(items.map((item) => item.textContent), ["Open", "Rename"]);
 });

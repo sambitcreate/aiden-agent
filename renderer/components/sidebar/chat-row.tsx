@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, CheckCheck, CircleAlert, GitFork, Loader2, MessageCircleQuestion, ShieldAlert, Unplug } from "lucide-react";
+import { Check, CheckCheck, CircleAlert, GitFork, Loader2, MessageCircleQuestion, ShieldAlert, Unplug, type LucideIcon } from "lucide-react";
 import {
   Button,
   ContextMenu,
@@ -246,14 +246,15 @@ export function ChatRow({
 }
 
 /**
- * The Inbox row action's label and menu icon, for the hover icon and the
- * row's menus alike, so the two always name the same action.
+ * The Inbox row action's label and icon, for the hover icon (`icon`) and the
+ * row's menus (`label`, `menuIcon`) alike, so the two always name and draw the
+ * same action.
  */
 export const CHAT_ROW_INBOX_ACTIONS: Readonly<
-  Record<ChatRowInboxAction["kind"], { label: string; menuIcon: string }>
+  Record<ChatRowInboxAction["kind"], { label: string; icon: LucideIcon; menuIcon: string }>
 > = {
-  mark_read: { label: "Mark read", menuIcon: "check-check" },
-  acknowledge: { label: "Acknowledge", menuIcon: "check" },
+  mark_read: { label: "Mark read", icon: CheckCheck, menuIcon: "check-check" },
+  acknowledge: { label: "Acknowledge", icon: Check, menuIcon: "check" },
 };
 
 function InboxStatusIcon({ status }: { status: ChatRowInbox["status"] }) {
@@ -337,6 +338,7 @@ function InboxChatRow({
   const overflowShown = Boolean(menu) && !shortcutsRevealed;
   // A row held in place after it left, or whose host is offline, offers no action.
   const action = shortcutsRevealed || inbox.dimmed ? undefined : inbox.action;
+  const ActionIcon = action ? CHAT_ROW_INBOX_ACTIONS[action.kind].icon : null;
   // Room on the right for whichever hover controls the row has.
   const hoverControls = (overflowShown ? 1 : 0) + (action ? 1 : 0);
   const item = (
@@ -410,7 +412,7 @@ function InboxChatRow({
   return (
     <div data-roving-row className="group/chat-row relative">
       {row}
-      {action ? (
+      {action && ActionIcon ? (
         <Button
           variant="transparent"
           size="small"
@@ -424,7 +426,7 @@ function InboxChatRow({
             action.onSelect();
           }}
         >
-          {action.kind === "acknowledge" ? <Check aria-hidden="true" /> : <CheckCheck aria-hidden="true" />}
+          <ActionIcon aria-hidden="true" />
         </Button>
       ) : null}
       {menu && overflowShown ? (

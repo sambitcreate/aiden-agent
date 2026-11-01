@@ -512,6 +512,40 @@ test.describe("with a workspace", () => {
       })
       .toBe(true);
 
+    // The Working shelf's header toggle and first row leave room for the 2px +
+    // 2px focus ring inside whatever clips them, and a blurred window dims the
+    // shelf exactly as much as the list.
+    const shelf = sidebar.getByRole("group", { name: "Working" });
+    const shelfGeometry = await shelf.evaluate((section) => {
+      const ringRoom = (element: Element) => {
+        const box = element.getBoundingClientRect();
+        let clip = element.parentElement;
+        while (clip && getComputedStyle(clip).overflowY === "visible" && getComputedStyle(clip).overflowX === "visible") {
+          clip = clip.parentElement;
+        }
+        const bounds = clip!.getBoundingClientRect();
+        return Math.min(box.top - bounds.top, bounds.bottom - box.bottom, box.left - bounds.left, bounds.right - box.right);
+      };
+      const opacity = (element: Element) => {
+        let product = 1;
+        for (let node: Element | null = element; node; node = node.parentElement) {
+          product *= Number(getComputedStyle(node).opacity);
+        }
+        return product;
+      };
+      const toggle = section.querySelector("button[aria-expanded]")!;
+      const firstRow = section.querySelector("[data-inbox-row] [data-roving-item]")!;
+      const listRow = document.querySelector("[data-inbox-view] [data-inbox-row] [data-roving-item]")!;
+      document.documentElement.classList.add("window-blurred");
+      const blurred = { shelf: opacity(firstRow), list: opacity(listRow) };
+      document.documentElement.classList.remove("window-blurred");
+      return { toggle: ringRoom(toggle), firstRow: ringRoom(firstRow), blurred };
+    });
+    expect(shelfGeometry.toggle).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.firstRow).toBeGreaterThanOrEqual(4);
+    expect(shelfGeometry.blurred.shelf).toBeLessThan(1);
+    expect(shelfGeometry.blurred.shelf).toBeCloseTo(shelfGeometry.blurred.list, 3);
+
     // The view is a local preference and survives a reload.
     await page.reload();
     await expect(page.locator("textarea")).toBeVisible();

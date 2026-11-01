@@ -414,8 +414,11 @@ export function InboxView({
       style={{ maxHeight: shelfMaxHeight }}
     >
       {/* Apart from the list, the shelf pads itself like the list and keeps
-          the same scrollbar gutter, so its rows' edges line up with the list's. */}
-      <div className={cn("shrink-0", apart && "overflow-hidden px-2.5 [scrollbar-gutter:stable]")}>
+          the same scrollbar gutter, so its rows' edges line up with the list's.
+          The header's clip box and the rows' scroller each leave 4px above and
+          below for the 2px + 2px focus ring; the negative margins keep the
+          header and the first row where they were. */}
+      <div className={cn("shrink-0", apart && "-mt-1 overflow-hidden px-2.5 py-1 [scrollbar-gutter:stable]")}>
         <div className="flex h-6 items-center px-2.5 text-small-strong font-medium text-tertiary">
           <div className="min-w-0 flex-1">
             <SectionHeader
@@ -429,7 +432,7 @@ export function InboxView({
       {workingCollapsed ? null : (
         <div
           data-inbox-flip-root=""
-          className={cn("flex min-h-0 flex-col gap-0.5 overflow-y-auto", apart && "px-2.5 pb-1")}
+          className={cn("flex min-h-0 flex-col gap-0.5 overflow-y-auto", apart && "-mt-1 px-2.5 py-1")}
         >
           {workingRows.map((shown) => renderEntry("working", shown))}
         </div>
@@ -499,6 +502,12 @@ export function InboxView({
  * FLIP: a row that moved slides from its old place for 150 ms, at most 40 px.
  * Skipped under Reduce Motion, when more than 40 rows move at once, and right
  * after a reset or a freeze releases.
+ *
+ * Runs after every render but only touches rows whose layout place changed, so
+ * a re-render that moves nothing (a streaming update, the parent taking the
+ * new shortcut order) leaves running slides alone. Places are measured without
+ * the slide's own transform; a row that moves again mid-slide restarts from
+ * where it is on screen.
  */
 function useFlip(
   rootRef: React.RefObject<HTMLElement | null>,
@@ -510,37 +519,53 @@ function useFlip(
     const root = rootRef.current;
     if (!root) return;
     const next = new Map<string, { frame: Element; top: number }>();
+    const shifts = new Map<HTMLElement, number>();
     const rows = inboxRows(regions);
-    // A slide still running would be measured mid-flight; settle it first.
-    for (const row of rows) for (const animation of row.getAnimations?.() ?? []) animation.cancel();
     for (const row of rows) {
       const frame = row.parentElement?.closest("[data-inbox-flip-root]") ?? root;
+      const shift = translateY(row);
+      shifts.set(row, shift);
       next.set(row.dataset.inboxRow!, {
         frame,
-        top: row.getBoundingClientRect().top - frame.getBoundingClientRect().top + frame.scrollTop,
+        top: row.getBoundingClientRect().top - shift - frame.getBoundingClientRect().top + frame.scrollTop,
       });
     }
     const previous = positionsRef.current;
     positionsRef.current = next;
-    if (skip || previous.size === 0 || prefersReducedMotion()) return;
-    const moves: { row: HTMLElement; delta: number }[] = [];
+    const moves: { row: HTMLElement; offset: number }[] = [];
     for (const row of rows) {
       const before = previous.get(row.dataset.inboxRow!);
       const after = next.get(row.dataset.inboxRow!)!;
-      if (!before || before.frame !== after.frame) continue;
-      const delta = before.top - after.top;
-      if (Math.abs(delta) >= 1) moves.push({ row, delta });
+      if (!before) continue;
+      if (before.frame !== after.frame) {
+        moves.push({ row, offset: Number.NaN });
+        continue;
+      }
+      // Where the row shows now, relative to its new place.
+      if (Math.abs(before.top - after.top) >= 1) moves.push({ row, offset: before.top + shifts.get(row)! - after.top });
     }
-    if (moves.length === 0 || moves.length > FLIP_MAX_ROWS) return;
-    for (const { row, delta } of moves) {
-      if (typeof row.animate !== "function") continue;
-      const offset = Math.max(-FLIP_MAX_OFFSET_PX, Math.min(FLIP_MAX_OFFSET_PX, delta));
+    if (moves.length === 0) return;
+    const animate = !skip && moves.length <= FLIP_MAX_ROWS && !prefersReducedMotion();
+    for (const { row, offset } of moves) {
+      for (const animation of row.getAnimations?.() ?? []) animation.cancel();
+      if (!animate || !Number.isFinite(offset) || Math.abs(offset) < 1 || typeof row.animate !== "function") continue;
+      const from = Math.max(-FLIP_MAX_OFFSET_PX, Math.min(FLIP_MAX_OFFSET_PX, offset));
       row.animate(
-        [{ transform: `translateY(${offset}px)` }, { transform: "translateY(0)" }],
+        [{ transform: `translateY(${from}px)` }, { transform: "translateY(0)" }],
         { duration: FLIP_DURATION_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" },
       );
     }
   });
+}
+
+/** The vertical offset a running slide has the row at, from its computed transform. */
+function translateY(element: HTMLElement): number {
+  const transform = typeof getComputedStyle === "function" ? getComputedStyle(element).transform : "";
+  const values = /^matrix(3d)?\(([^)]*)\)$/u.exec(transform ?? "");
+  if (!values) return 0;
+  const parts = values[2]!.split(",").map(Number);
+  const y = values[1] ? parts[13] : parts[5];
+  return y !== undefined && Number.isFinite(y) ? y : 0;
 }
 
 /** When the focused row goes (a delete), focus moves to the row now in its place. */

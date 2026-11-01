@@ -645,6 +645,11 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
       : null;
   // The Inbox reports its visible rows in on-screen (frozen) order.
   const [inboxShortcutKeys, setInboxShortcutKeys] = React.useState<readonly string[]>([]);
+  // Keep the same array when the order didn't change, so the sidebar doesn't re-render for nothing.
+  const updateInboxShortcutKeys = React.useCallback((keys: readonly string[]) => {
+    setInboxShortcutKeys((current) =>
+      current.length === keys.length && current.every((key, index) => key === keys[index]) ? current : keys);
+  }, []);
   const inboxShortcutNumbers = React.useMemo(
     () => new Map(inboxShortcutKeys.slice(0, 9).map((key, index) => [key, index + 1] as const)),
     [inboxShortcutKeys],
@@ -1692,7 +1697,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
             <div
               ref={setInboxShelfHost}
               data-inbox-shelf-host=""
-              className="relative z-1 flex min-h-0 shrink-0 flex-col empty:hidden"
+              className="dimmable relative z-1 flex min-h-0 shrink-0 flex-col empty:hidden"
             />
           ) : undefined
         }
@@ -2090,7 +2095,7 @@ function WorkspaceChatSidebar({ activeChatId, activeRemoteChat = null, titleReve
               }
               headerActions={sidebarOrganizationMenu}
               shelfHost={inboxShelfHost}
-              onShortcutOrderChange={setInboxShortcutKeys}
+              onShortcutOrderChange={updateInboxShortcutKeys}
               renderRow={(entry, context) =>
                 entry.source.kind === "remote"
                   ? renderRemoteChatRow(entry.source.chat, false, { entry, context })

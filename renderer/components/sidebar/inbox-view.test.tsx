@@ -321,3 +321,70 @@ test("given a shelf host, the Working shelf renders there and the pointer over i
     host.remove();
   }
 });
+
+/**
+ * Lays rows out 32px apart in document order and records slides, so a test can
+ * watch which rows animate and which slides get cancelled.
+ */
+function stubRowLayout() {
+  type Slide = { row: string; from: string; cancelled: boolean; cancel: () => void };
+  const slides: Slide[] = [];
+  const proto = HTMLElement.prototype;
+  const original = {
+    rect: proto.getBoundingClientRect,
+    animate: proto.animate,
+    getAnimations: proto.getAnimations,
+  };
+  proto.getBoundingClientRect = function (this: HTMLElement) {
+    const rows = [...document.querySelectorAll("[data-inbox-row]")];
+    const top = this.hasAttribute("data-inbox-row") ? rows.indexOf(this) * 32 : 0;
+    return { top, bottom: top + 32, left: 0, right: 200, width: 200, height: 32, x: 0, y: top, toJSON: () => ({}) };
+  };
+  proto.animate = function (this: HTMLElement, keyframes: Keyframe[]) {
+    const slide: Slide = {
+      row: this.dataset.inboxRow ?? "",
+      from: String(keyframes[0]?.transform),
+      cancelled: false,
+      cancel: () => { slide.cancelled = true; },
+    };
+    slides.push(slide);
+    return slide as unknown as Animation;
+  } as typeof proto.animate;
+  proto.getAnimations = function (this: HTMLElement) {
+    return slides.filter((slide) => !slide.cancelled && slide.row === this.dataset.inboxRow) as unknown as Animation[];
+  };
+  return {
+    slides,
+    restore() {
+      proto.getBoundingClientRect = original.rect;
+      proto.animate = original.animate;
+      proto.getAnimations = original.getAnimations;
+    },
+  };
+}
+
+test("a reorder slides the moved rows, and a re-render that moves nothing leaves the slides running", () => {
+  const layout = stubRowLayout();
+  try {
+    const a = projectOrderKey("local", "a");
+    const b = projectOrderKey("local", "b");
+    const { rerender } = render(view([entry("a", { updatedAt: NOW - MINUTE }), entry("b", { updatedAt: NOW - HOUR })]));
+    assert.equal(layout.slides.length, 0);
+
+    // b becomes the newer chat: the two swap, each sliding from its old place.
+    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
+    assert.deepEqual(rowTitles(section("Earlier")), ["Chat b", "Chat a"]);
+    assert.deepEqual(
+      layout.slides.map(({ row, from }) => [row, from]).sort(),
+      [[a, "translateY(-32px)"], [b, "translateY(32px)"]].sort(),
+    );
+
+    // Re-renders that move nothing (a streaming update, the parent taking the shortcut order).
+    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
+    rerender(view([entry("a", { updatedAt: NOW - HOUR }), entry("b", { updatedAt: NOW - MINUTE })]));
+    assert.equal(layout.slides.length, 2);
+    assert.ok(layout.slides.every((slide) => !slide.cancelled));
+  } finally {
+    layout.restore();
+  }
+});
