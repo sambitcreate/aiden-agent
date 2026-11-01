@@ -541,9 +541,12 @@ export function createHookService(deps: HookServiceDeps): HookService {
           // that can no longer be read may still hold an approved guard, so it
           // fails like an unreadable store rather than reading as no hooks.
           if (repoHasApprovals(scope)) {
-            // Only this event's approved hooks can run, so only their scripts are read.
-            const approved = new Set(trust.approvalsFor(scope).filter((record) => record.event === event).map((record) => record.hookId));
-            const file = await readRepo(workspaceRootOf(scope) as string, cwd, (hook) => hook.event === event && approved.has(hook.id));
+            // Only this event's hooks can run, so only their scripts are read.
+            // Every one is scanned, not just those whose saved id still matches:
+            // ids follow position, and approval follows the full digest, so a
+            // hook moved within the file still runs.
+            const eventApproved = trust.approvalsFor(scope).some((record) => record.event === event);
+            const file = await readRepo(workspaceRootOf(scope) as string, cwd, (hook) => eventApproved && hook.event === event);
             if (file.unreadable) throw new Error(`.aiden/hooks.json could not be loaded: ${file.problems.join(" ")}`);
             listings.push(...file.hooks.map(statusOf));
           }

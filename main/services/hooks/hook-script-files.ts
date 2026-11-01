@@ -124,8 +124,12 @@ export function scanHookCommand(command: string): HookCommandScan {
   let current = "";
   let inWord = false;
   let atCommand = true;
-  /** The next word is the file a redirection writes (`output`) or reads (`input`). */
-  let redirect: "output" | "input" | undefined;
+  /**
+   * The next word is the file a redirection writes (`output`) or reads
+   * (`input`). After `>&` or `<&` (`duplicate-*`) a number or `-` names a
+   * descriptor, not a file, and any other word is the file.
+   */
+  let redirect: "output" | "input" | "duplicate-output" | "duplicate-input" | undefined;
 
   const end = () => {
     if (!inWord) return;
@@ -137,7 +141,11 @@ export function scanHookCommand(command: string): HookCommandScan {
     }
     if (redirect) {
       // A redirection's target is a file, never the program, and leaves the command position alone.
-      words.push({ text: current, commandPosition: false, ...(redirect === "output" ? { outputTarget: true } : { inputTarget: true }) });
+      const duplicatesDescriptor = redirect.startsWith("duplicate-") && /^(?:\d+-?|-)$/u.test(current);
+      if (!duplicatesDescriptor) {
+        const output = redirect === "output" || redirect === "duplicate-output";
+        words.push({ text: current, commandPosition: false, ...(output ? { outputTarget: true } : { inputTarget: true }) });
+      }
       redirect = undefined;
       current = "";
       return;
@@ -197,10 +205,12 @@ export function scanHookCommand(command: string): HookCommandScan {
       const start = index;
       while (index + 1 < command.length && "<>&|".includes(command[index + 1] as string)) index += 1;
       const operator = command.slice(start, index + 1);
-      // `>&2` and `<&0` duplicate a descriptor rather than naming a file.
+      // `>&2` and `<&0` duplicate a descriptor; `>& log.txt` writes that file.
       // `<>` opens its file for reading too (`sh <> ./x.sh` runs it), so only a
       // redirection with no `<` writes without reading.
-      if (!/[<>]&$/u.test(operator)) redirect = operator.includes(">") && !operator.includes("<") ? "output" : "input";
+      const writesOnly = operator.includes(">") && !operator.includes("<");
+      if (/[<>]&$/u.test(operator)) redirect = writesOnly ? "duplicate-output" : "duplicate-input";
+      else redirect = writesOnly ? "output" : "input";
       continue;
     }
     if (COMMAND_SEPARATORS.has(char)) {

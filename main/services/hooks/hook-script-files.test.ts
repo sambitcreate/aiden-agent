@@ -84,6 +84,13 @@ test("a file the hook writes doesn't change its digest, and a file it reads does
   const writeOnlyBefore = digestWithScriptFiles("base", (await scan(root, writeOnly)).files);
   await fs.appendFile(path.join(root, "hook.log"), "ran\n");
   assert.equal(digestWithScriptFiles("base", (await scan(root, writeOnly)).files), writeOnlyBefore);
+  // `>& file` writes that file too; `2>&1` and `>&-` name descriptors, not files.
+  await fs.writeFile(path.join(root, "1"), "");
+  const duplicates = "./check.sh >& hook.log; ./check.sh 2>&1 >&-";
+  assert.deepEqual((await scan(root, duplicates)).paths, ["check.sh"]);
+  const duplicatesBefore = digestWithScriptFiles("base", (await scan(root, duplicates)).files);
+  await fs.appendFile(path.join(root, "hook.log"), "ran again\n");
+  assert.equal(digestWithScriptFiles("base", (await scan(root, duplicates)).files), duplicatesBefore);
   // A file it reads can change what it does.
   await fs.writeFile(path.join(root, "patterns.txt"), "nothing\n");
   assert.notEqual(await digest(), before);

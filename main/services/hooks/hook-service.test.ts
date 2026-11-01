@@ -426,6 +426,27 @@ test("turning off a repo hook follows the hook, not its place in the file", asyn
   assert.deepEqual(commands, ["echo inserted"]);
 });
 
+test("an approved repo hook that runs a script keeps running after a hook is added above it", async (t) => {
+  const f = await fixture(t);
+  const { run, commands } = recordingRun();
+  await fs.writeFile(path.join(f.workspace, "guard.sh"), "#!/bin/sh\nexit 2\n");
+  await writeRepoHooks(f.workspace, { hooks: { Stop: [{ hooks: [{ type: "command", command: "sh ./guard.sh" }] }] } });
+  const service = await f.create({ run });
+  const original = (await service.listHooks(f.scopes)).hooks[0];
+  assert.ok(original && (await service.approveDigest(original.id, original.digest)).ok);
+
+  await writeRepoHooks(f.workspace, {
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "echo inserted" }] }, { hooks: [{ type: "command", command: "sh ./guard.sh" }] }] },
+  });
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.deepEqual(commands, ["sh ./guard.sh"], "the moved guard runs; the new hook waits for approval");
+
+  // Editing the script still stops it.
+  await fs.writeFile(path.join(f.workspace, "guard.sh"), "#!/bin/sh\nexit 0\n");
+  await service.dispatcher.dispatch("Stop", stopPayload(), f.context);
+  assert.deepEqual(commands, ["sh ./guard.sh"]);
+});
+
 test("removing the approval of a repo hook that moved stops it, and leaves the hook now in its old place alone", async (t) => {
   const f = await fixture(t);
   const { run, commands } = recordingRun();
