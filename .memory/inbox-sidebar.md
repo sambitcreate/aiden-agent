@@ -198,7 +198,7 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - `Features/Remote/AidenInboxViews.swift`: `AidenWorkingIndicator` (3/4 ring, 0.6 opacity, 1.5 s turn, paused under aidenReduceMotion), `AidenBetaBadge`, `AidenInboxRowStatus`, `AidenInboxRowView`, `AidenInboxSectionHeader`, `AidenInboxListRow` (swipes + accessibilityActions only when non-nil), `AidenInboxNoticeBanner`, DEBUG `AidenInboxFixtureView` (launch arg `-AidenInboxFixture`, wired in AidenOnTheGoApp) for screenshots.
 - Shell: `AidenWorkspaceSidebarOrganization.inbox`; `aidenNeedsAttentionFirst` removed (Workspaces/Recents plain recency). `AidenHomeModel.markRead` / `setTriage` optimistic with rollback banner; 409 revision_conflict reloads. `AidenRemoteClient.setChatTriage` (Idempotency-Key, ifRevision = triageRevision ?? 0), `supportsChatTriage`.
 - Cache keeps `inbox`; detail reconcile keeps signals but `invalidateHostPlacement()`.
-- Gap (closed by the 3b host change below): hosts announced `chat-triage-v1` to desktops only. No UI test target. Android 3b/3c not started.
+- Gap (closed by the 3b host change below): hosts announced `chat-triage-v1` to desktops only. No UI test target. Android 3b/3c: see below.
 - pbxproj: manual entries A1B0C0DE...0001-0003 / 0011-0013 for the three new files.
 - Simulators: other sessions share "iPhone 17 Pro"; tests launch-failed there. Use a throwaway `simctl create` (iOS 26.5; 27.1 refuses the iPhone 17 Pro type) and delete it after. Swipes driven with `/opt/homebrew/bin/axe`.
 
@@ -206,3 +206,11 @@ Related: [[chat-row-states]], [[sidebar-chat-row-context]], [[multi-host-control
 - Mac host and `aiden serve` now announce `chat-triage-v1` to phones too (`aidenRemoteServerFeatures`, no `desktop &&` guard). Phones' 32-token list was full, so the never-read `chat-ui-panels-v1` (rev 32, phone-only, appControls) was retired and dropped; `appControls` left `AidenRemoteServerFeatureSupport`. Revision stays 48 (still provisional).
 - Authority unchanged: the triage route needs `chat:write` (403 `capability_denied`), so phones write under their existing grant, no re-pair. Fixture `server.features` swapped the token.
 - Tests: router (phones hear token, POST 200, no chat:write 403, no store 404), chat-summaries phone POST, CLI inbox-host phone POST + Reader 403.
+
+### 3b/3c Android (2026-11-01)
+- `models/AidenInbox.kt` (bucket enum, placement port, projection, triage change/result, snooze presets, durations); `models/AidenChat.kt` tolerant serializers for the rev 48 fields, `inboxBucket`/`inboxSortAt` getters valid only as a pair, `withoutHostPlacement`, `withInboxSignals` (cache keeps signals on saveChat, drops placement).
+- `features/workspaces/AidenInboxTriage.kt`: optimistic writer (publish/rollback/409 reload/isCurrent guard, Done on unseen failure also reads). `AidenInboxViews.kt`: row status, notice text, Beta badge, section header, swipe row (custom draggable + Animatable, 84dp actions, RTL-aware, snaps under reduce motion), snooze ModalBottomSheet, `LazyListScope.aidenInboxItems`. Test tags `inbox_row_<id>`, `inbox_mark_read_<id>`, `inbox_done_<id>`, `inbox_snooze_<id>`.
+- Shell: `AidenWorkspaceSidebarOrganization.INBOX`; ViewModel `inboxNotice`, `markInboxRead`, `setInboxTriage`; snackbar with Undo in `AidenWorkspaceHomeScreen`. Attention-first ranking removed from `AidenChatRowStatus.kt`; Working uses `AidenWorkingIndicator` (ring, `AidenWorkingIndicatorMotion`).
+- Tests: `AidenInboxTest`, `features/workspaces/AidenInboxTriageTest`, `AidenChatSummaryTest` (decode, triage request, cache), instrumented `features/workspaces/AidenInboxUiTest` (also writes the screenshots to the app's external files dir; pull with adb). Android tests are not in `scripts/ci-test-registry.json` (that registry covers the npm suites only).
+- Headless AVD: `emulator -avd Medium_Phone_API_36.1 -no-window -port 5584 -read-only`, `ANDROID_SERIAL=emulator-5584`; a bare `adb devices` can hang, so always pass `-s`.
+- 3d (onboarding) deferred until Inbox leaves Beta.

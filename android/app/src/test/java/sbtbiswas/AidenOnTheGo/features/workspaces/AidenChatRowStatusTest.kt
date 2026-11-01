@@ -90,71 +90,7 @@ class AidenChatRowStatusTest {
     )
 
     @Test
-    fun chatsNeedingTheUserSortAboveNewerWorkingAndIdleChats() {
-        val newestFirst = listOf(
-            summary("idle-newest", 50),
-            summary("running", 40, active = true, rowState = "working"),
-            summary("idle-middle", 30),
-            summary("question", 20, active = true, rowState = "needs_input"),
-            summary("approval", 10, active = true, rowState = "needs_approval")
-        )
-
-        assertEquals(
-            listOf("approval", "question", "running", "idle-newest", "idle-middle"),
-            aidenNeedsAttentionFirst(newestFirst).map { it.id }
-        )
-    }
-
-    @Test
-    fun unseenFailuresSortBetweenChatsNeedingTheUserAndWorkingChats() {
-        val newestFirst = listOf(
-            summary("idle-newest", 60),
-            summary("running", 50, active = true, rowState = "working"),
-            summary("seen-failure", 40, lastRunFailed = true),
-            summary("unseen-failure", 30, unread = true, lastRunFailed = true),
-            summary("unread-reply", 25, unread = true),
-            summary("question", 20, active = true, rowState = "needs_input")
-        )
-
-        assertEquals(
-            listOf("question", "unseen-failure", "running", "idle-newest", "seen-failure", "unread-reply"),
-            aidenNeedsAttentionFirst(newestFirst).map { it.id }
-        )
-    }
-
-    @Test
-    fun tiesKeepTheIncomingRecencyOrder() {
-        val newestFirst = listOf(
-            summary("idle-c", 30),
-            summary("run-b", 25, active = true),
-            summary("idle-b", 20),
-            summary("run-a", 15, active = true, rowState = "working"),
-            summary("idle-a", 10)
-        )
-
-        assertEquals(
-            listOf("run-b", "run-a", "idle-c", "idle-b", "idle-a"),
-            aidenNeedsAttentionFirst(newestFirst).map { it.id }
-        )
-    }
-
-    @Test
-    fun staleAttentionStateOnAnIdleChatDoesNotJumpTheQueue() {
-        // The local activity signal is authoritative for idleness, so a server
-        // attention state left on a finished chat must not promote it.
-        val newestFirst = listOf(
-            summary("newer", 20),
-            summary("stale-approval", 10, active = false, rowState = "needs_approval")
-        )
-
-        assertEquals(
-            listOf("newer", "stale-approval"),
-            aidenNeedsAttentionFirst(newestFirst).map { it.id }
-        )
-    }
-
-    @Test
-    fun workspaceSidebarSurfacesAttentionFirstWithoutReorderingWorkspaces() {
+    fun workspaceSidebarAndRecentsListChatsNewestFirstWhateverTheyWaitOn() {
         val workspaces = listOf(
             AidenWorkspace(
                 id = "alpha",
@@ -183,16 +119,17 @@ class AidenChatRowStatusTest {
         // Workspaces stay ordered by their newest activity, not by attention.
         assertEquals(listOf("alpha", "beta"), projection.sections.map { it.workspace.id })
         assertEquals(base.plusSeconds(100), projection.sections.first().newestActivityAt)
+        // Waiting chats no longer jump the list; the Inbox is where they surface.
         assertEquals(
-            listOf("alpha-approval", "alpha-newest"),
+            listOf("alpha-newest", "alpha-approval"),
             projection.sections.first().chats.map { it.id }
         )
         assertEquals(
-            listOf("beta-working", "beta-idle"),
+            listOf("beta-idle", "beta-working"),
             projection.sections.last().chats.map { it.id }
         )
         assertEquals(
-            listOf("alpha-approval", "beta-working", "alpha-newest", "beta-idle"),
+            listOf("alpha-newest", "beta-idle", "beta-working", "alpha-approval"),
             projection.recents.map { it.id }
         )
     }

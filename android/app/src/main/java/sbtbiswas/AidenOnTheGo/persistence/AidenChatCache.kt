@@ -394,9 +394,12 @@ class AidenChatCache(
                 // A freshly admitted chat is the one being viewed, so it is read;
                 // the server row state is kept until the next summary refresh.
                 // unread and lastRunFailed reset, so a viewed failure stops saying Failed.
+                // A chat detail carries no triage; the row's Inbox signals are kept,
+                // without the host placement that described the row before.
                 val existing = visibleSummaries[chat.id]
-                visibleSummaries[chat.id] = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
+                val admitted = AidenChatSummary.fromChat(chat, existing?.activity ?: AidenChatSummaryActivity.IDLE)
                     .copy(rowStateWire = existing?.rowStateWire)
+                visibleSummaries[chat.id] = existing?.let(admitted::withInboxSignals) ?: admitted
             }
             publishSummaries(instanceId, visibleSummaries.values.toList())
         }

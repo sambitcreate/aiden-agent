@@ -22,6 +22,8 @@ import sbtbiswas.AidenOnTheGo.features.scheduled.AidenScheduledRunIdempotencyKey
 import sbtbiswas.AidenOnTheGo.features.shared.AidenRevalidation
 import sbtbiswas.AidenOnTheGo.models.AidenChat
 import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
+import sbtbiswas.AidenOnTheGo.models.AidenChatTriageChange
+import sbtbiswas.AidenOnTheGo.models.AidenInbox
 import sbtbiswas.AidenOnTheGo.models.AidenScheduledTask
 import sbtbiswas.AidenOnTheGo.models.AidenModelCatalog
 import sbtbiswas.AidenOnTheGo.models.AidenUsageSummary
@@ -314,12 +316,69 @@ class AidenWorkspaceHomeViewModel(
     fun accept(chat: AidenChat) {
         // An accepted chat is the one being viewed, so its row is read (and no
         // longer says Failed); the next summary refresh restores server flags.
-        val summary = AidenChatSummary.fromChat(chat)
-            .copy(rowStateWire = _chats.value.firstOrNull { it.id == chat.id }?.rowStateWire)
+        val existing = _chats.value.firstOrNull { it.id == chat.id }
+        val admitted = AidenChatSummary.fromChat(chat).copy(rowStateWire = existing?.rowStateWire)
+        val summary = existing?.let(admitted::withInboxSignals) ?: admitted
         _chats.value = regularNewestFirst(_chats.value.filterNot { it.id == summary.id } + summary)
         coordinator.activeInstanceId?.let { instanceId ->
             val writeToken = chatCache.reserveSummaryMutation(instanceId)
             viewModelScope.launch(cacheWriteDispatcher) { runCatching { chatCache.saveChat(chat, instanceId, writeToken) } }
+        }
+    }
+
+    private val _inboxNotice = MutableStateFlow<AidenInboxNotice?>(null)
+    /** The Inbox snackbar after a swipe: a confirmation with Undo, or a rollback. */
+    val inboxNotice: StateFlow<AidenInboxNotice?> = _inboxNotice.asStateFlow()
+
+    fun dismissInboxNotice(id: java.util.UUID? = null) {
+        if (id == null || _inboxNotice.value?.id == id) _inboxNotice.value = null
+    }
+
+    /** Mark read is offered only on unread rows of a host that takes read markers. */
+    fun offersMarkRead(chat: AidenChatSummary): Boolean =
+        chat.unread && coordinator.serverInfo.value?.supportsChatReadState == true
+
+    /** Done and Snooze need `chat-triage-v1`, chat:write, and an idle row. */
+    fun offersTriage(chat: AidenChatSummary): Boolean =
+        coordinator.serverInfo.value?.supportsChatTriage == true &&
+            coordinator.installationStore.activeInstallation
+                ?.hasNegotiatedAccess(AidenRemoteCapability.CHAT_WRITE) == true &&
+            AidenInbox.offersDoneAndSnooze(chat)
+
+    private fun inboxTriage(): AidenInboxTriage? {
+        val client = coordinator.client.value ?: return null
+        val instanceId = coordinator.activeInstanceId ?: return null
+        return AidenInboxTriage(
+            row = { id -> _chats.value.firstOrNull { it.id == id } },
+            publish = { row ->
+                if (coordinator.activeInstanceId == instanceId) {
+                    _chats.value = regularNewestFirst(_chats.value.map { if (it.id == row.id) row else it })
+                    withContext(cacheWriteDispatcher) { runCatching { chatCache.upsertSummary(row, instanceId) } }
+                }
+            },
+            isCurrent = { coordinator.activeInstanceId == instanceId && coordinator.client.value === client },
+            writeTriage = { id, change, ifRevision -> client.setChatTriage(id, change, ifRevision) },
+            writeRead = { id -> client.markChatRead(id) },
+            reload = { load(force = true) }
+        )
+    }
+
+    fun markInboxRead(chatId: String) {
+        val triage = inboxTriage() ?: return
+        viewModelScope.launch { triage.markRead(chatId)?.let { _inboxNotice.value = it } }
+    }
+
+    /** Done, Snooze or an Undo. Undo itself offers no further Undo. */
+    fun setInboxTriage(chatId: String, change: AidenChatTriageChange, offersUndo: Boolean = true) {
+        val triage = inboxTriage() ?: return
+        _inboxNotice.value = null
+        viewModelScope.launch {
+            triage.setTriage(
+                chatId,
+                change,
+                readsFailures = coordinator.serverInfo.value?.supportsChatReadState == true,
+                offersUndo = offersUndo
+            )?.let { _inboxNotice.value = it }
         }
     }
 
@@ -463,9 +522,9 @@ fun projectAidenWorkspaceSidebar(
 ): AidenWorkspaceSidebarProjection {
     val query = searchQuery.trim()
     val workspacesById = workspaces.associateBy { it.id }
-    val regularChats = aidenNeedsAttentionFirst(
-        regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
-    )
+    // By workspace and Recent sort plainly by recency, as on the desktop;
+    // attention ordering belongs to the Inbox organization.
+    val regularChats = regularNewestFirst(chats).filter { workspacesById.containsKey(it.workspaceId) }
     val chatsByWorkspace = regularChats.groupBy { it.workspaceId }
     val sections = workspaces.mapNotNull { workspace ->
         val allChats = chatsByWorkspace[workspace.id].orEmpty()

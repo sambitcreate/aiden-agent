@@ -10,6 +10,10 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -210,10 +214,8 @@ class AidenChatSummaryTest {
     }
 
     @Test
-    fun inboxSignalsAreDesktopOnlyAndNeverChangeThePhonesRows() = runBlocking {
-        // Revision 48 summaries carry the desktop Inbox's run times and triage.
-        // Phones neither request nor render them, so a row reads the same with
-        // them, without them, or with a malformed one from a buggy host.
+    fun inboxSignalsDecodeAndAMalformedOneLeavesTheRestOfTheRow() = runBlocking {
+        // Revision 48 summaries carry the host's Inbox placement, run times and triage.
         val waiting = "\"rowState\":\"needs_approval\","
         val signals = waiting +
             "\"attentionSince\":\"2026-09-01T12:00:40Z\",\"runStartedAt\":\"2026-09-01T12:00:30Z\"," +
@@ -222,19 +224,119 @@ class AidenChatSummaryTest {
             "\"inboxBucket\":\"needs_you\",\"inboxSortAt\":\"2026-09-01T12:00:40Z\","
         val malformed = waiting +
             "\"attentionSince\":7,\"triageRevision\":\"three\",\"snoozedUntil\":{\"at\":\"tomorrow\"}," +
-            "\"inboxBucket\":3,\"inboxSortAt\":false,"
-        for (extra in listOf(signals, waiting, malformed)) {
+            "\"pinnedAt\":\"2026-09-01T11:00:00Z\",\"inboxBucket\":3,\"inboxSortAt\":false,"
+        // An unknown bucket from a newer host drops the pair, not the row.
+        val unknownBucket = "\"inboxBucket\":\"later\",\"inboxSortAt\":\"2026-09-01T12:00:40Z\","
+        for (extra in listOf(signals, waiting, malformed, unknownBucket)) {
             server.enqueue(MockResponse().setResponseCode(200).setBody(
                 """{"summaries":[${summaryJson("chat-1", extra, "active")}]}"""
             ))
         }
 
         val current = client.chatSummaryPage(limit = 100).summaries.single()
+        assertEquals(AidenInboxBucket.NEEDS_YOU, current.inboxBucket)
+        assertEquals(Instant.parse("2026-09-01T12:00:40Z"), current.inboxSortAt)
+        assertEquals(Instant.parse("2026-09-01T12:00:40Z"), current.attentionSince)
+        assertEquals(Instant.parse("2026-09-01T12:00:30Z"), current.runStartedAt)
+        assertEquals(Instant.parse("2026-09-01T12:00:35Z"), current.lastAssistantAt)
+        assertEquals(Instant.parse("2026-09-01T11:00:00Z"), current.pinnedAt)
+        assertEquals(Instant.parse("2026-09-02T09:00:00Z"), current.snoozedUntil)
+        assertEquals(3, current.triageRevision)
+
         val older = client.chatSummaryPage(limit = 100).summaries.single()
+        assertNull(older.inboxBucket)
+        assertNull(older.inboxSortAt)
+        assertNull(older.triageRevision)
+        assertNull(older.pinnedAt)
+
         val broken = client.chatSummaryPage(limit = 100).summaries.single()
-        assertEquals(older, current)
-        assertEquals(older, broken)
-        assertEquals(AidenChatRowState.NEEDS_APPROVAL, current.displayRowState)
+        assertEquals(AidenChatRowState.NEEDS_APPROVAL, broken.displayRowState)
+        assertNull(broken.inboxBucket)
+        assertNull(broken.inboxSortAt)
+        assertNull(broken.attentionSince)
+        assertNull(broken.triageRevision)
+        assertNull(broken.snoozedUntil)
+        // A well-formed neighbour of a malformed field still reads.
+        assertEquals(Instant.parse("2026-09-01T11:00:00Z"), broken.pinnedAt)
+
+        val unknown = client.chatSummaryPage(limit = 100).summaries.single()
+        assertNull(unknown.inboxBucket)
+        assertNull(unknown.inboxSortAt)
+        assertEquals(older.title, unknown.title)
+    }
+
+    @Test
+    fun triageWritePostsTheChangeWithItsKeyAndRevisionAndReadsTheResult() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-1","revision":4,"updatedAt":"2026-09-01T12:05:00Z","doneAt":"2026-09-01T12:05:00Z"}"""
+        ))
+        val key = java.util.UUID.fromString("00000000-0000-4000-8000-000000000001")
+        val result = client.setChatTriage("chat-1", AidenChatTriageChange.done(true), ifRevision = 3, idempotencyKey = key)
+        val done = server.takeRequest()
+        assertEquals("POST", done.method)
+        assertEquals("/api/aiden/v1/chats/chat-1/triage", done.requestUrl!!.encodedPath)
+        assertEquals(key.toString(), done.getHeader("Idempotency-Key"))
+        val doneBody = json.parseToJsonElement(done.body.readUtf8()).jsonObject
+        assertEquals(true, doneBody["done"]?.jsonPrimitive?.boolean)
+        assertEquals(3, doneBody["ifRevision"]?.jsonPrimitive?.int)
+        assertFalse(doneBody.containsKey("snoozeUntil"))
+        assertEquals(4, result.revision)
+        assertEquals(Instant.parse("2026-09-01T12:05:00Z"), result.doneAt)
+        assertNull(result.snoozedUntil)
+
+        // Wake sends an explicit null; a snooze sends the time.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-1","revision":5,"updatedAt":"2026-09-01T12:06:00Z"}"""
+        ))
+        client.setChatTriage("chat-1", AidenChatTriageChange.wake, ifRevision = 4)
+        val wake = json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue(wake.containsKey("snoozeUntil"))
+        assertEquals(kotlinx.serialization.json.JsonNull, wake["snoozeUntil"])
+
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-1","revision":6,"updatedAt":"2026-09-01T12:07:00Z","snoozedUntil":"2026-09-02T09:00:00Z"}"""
+        ))
+        val snoozed = client.setChatTriage("chat-1", AidenChatTriageChange.snooze(Instant.parse("2026-09-02T09:00:00Z")), ifRevision = 5)
+        val snoozeBody = json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertEquals("2026-09-02T09:00:00.000Z", snoozeBody["snoozeUntil"]?.jsonPrimitive?.content)
+        assertEquals(Instant.parse("2026-09-02T09:00:00Z"), snoozed.snoozedUntil)
+
+        // An answer about another chat is refused, and a stale revision is a conflict.
+        server.enqueue(MockResponse().setResponseCode(200).setBody(
+            """{"chatId":"chat-2","revision":7,"updatedAt":"2026-09-01T12:08:00Z"}"""
+        ))
+        assertTrue(runCatching { client.setChatTriage("chat-1", AidenChatTriageChange.done(false), ifRevision = 6) }
+            .exceptionOrNull() is AidenRemoteContractException)
+        server.takeRequest()
+        server.enqueue(MockResponse().setResponseCode(409).setBody(
+            """{"error":{"code":"revision_conflict","message":"The chat changed.","requestId":"triage","retryable":false}}"""
+        ))
+        val conflict = runCatching { client.setChatTriage("chat-1", AidenChatTriageChange.done(true), ifRevision = 1) }.exceptionOrNull()
+        assertTrue(conflict != null && sbtbiswas.AidenOnTheGo.features.chat.AidenChatForkErrors.isRevisionConflict(conflict))
+    }
+
+    @Test
+    fun openingAChatKeepsItsTriageButDropsTheHostPlacement() {
+        val cache = AidenChatCache(root = tempFolder.newFolder())
+        val triaged = summary("chat-1", "workspace-1", "Triaged", AidenChatSummaryActivity.IDLE).copy(
+            unread = true,
+            inboxBucketWire = "pinned",
+            inboxSortAtWire = Instant.parse("2026-09-01T11:00:00Z"),
+            pinnedAt = Instant.parse("2026-09-01T11:00:00Z"),
+            doneAt = Instant.parse("2026-09-01T11:30:00Z"),
+            triageRevision = 2
+        )
+        cache.saveSummaries(listOf(triaged), "instance", writeToken = cache.reserveSummaryMutation("instance"))
+        cache.saveChat(fullChat("chat-1", "workspace-1", "Triaged", canonicalRevision("opened")), "instance")
+
+        val row = cache.loadSummaries("instance")!!.single()
+        assertFalse(row.unread)
+        assertEquals(Instant.parse("2026-09-01T11:00:00Z"), row.pinnedAt)
+        assertEquals(Instant.parse("2026-09-01T11:30:00Z"), row.doneAt)
+        assertEquals(2, row.triageRevision)
+        // The host's bucket described the unread row; the phone places it now.
+        assertNull(row.inboxBucket)
+        assertNull(row.inboxSortAt)
     }
 
     @Test

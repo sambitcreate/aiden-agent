@@ -30,46 +30,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import sbtbiswas.AidenOnTheGo.config.AidenPalette
 import sbtbiswas.AidenOnTheGo.models.AidenChatRowState
-import sbtbiswas.AidenOnTheGo.models.AidenChatSummary
-import sbtbiswas.AidenOnTheGo.ui.theme.AidenActivityDot
+import sbtbiswas.AidenOnTheGo.ui.theme.AidenWorkingIndicator
 import sbtbiswas.AidenOnTheGo.ui.theme.AidenMotion
 import sbtbiswas.AidenOnTheGo.ui.theme.aidenReduceMotion
-
-/**
- * Triage rank used to order chat lists, most urgent first. Mirrors the
- * desktop Inbox's Needs you tiers (`INBOX_TIERS`, with row status from
- * `inboxRowStatus`), which sit above its Updates and Earlier sections: a chat
- * blocked on the user outranks one that is merely working, and everything
- * else keeps its existing order.
- */
-fun AidenChatRowState.attentionRank(): Int = when (this) {
-    AidenChatRowState.NEEDS_APPROVAL -> 0
-    AidenChatRowState.NEEDS_INPUT -> 1
-    AidenChatRowState.WORKING -> 2
-    AidenChatRowState.IDLE -> 3
-}
-
-/**
- * Triage rank for a whole row. Mirrors the desktop Inbox's Needs you tiers:
- * approval, input, then an idle chat whose unseen output is a failed turn
- * (it needs a look; a working chat needs nothing), then working, then the rest.
- */
-fun AidenChatSummary.attentionRank(): Int {
-    val state = displayRowState
-    return when {
-        state == AidenChatRowState.NEEDS_APPROVAL || state == AidenChatRowState.NEEDS_INPUT -> state.attentionRank()
-        state == AidenChatRowState.IDLE && showsFailed -> 2
-        else -> state.attentionRank() + 1
-    }
-}
-
-/**
- * Moves chats that need the user, then unseen failures, then working chats,
- * ahead of idle ones. The sort is stable, so rows within a tier keep the
- * incoming (recency) order and do not jitter between refreshes.
- */
-fun aidenNeedsAttentionFirst(chats: List<AidenChatSummary>): List<AidenChatSummary> =
-    chats.sortedBy { it.attentionRank() }
 
 /** Semantic tone for a row-status pill; resolved against the active palette. */
 enum class AidenChatRowStatusTone { WARNING, ACCENT, DANGER }
@@ -78,7 +41,7 @@ enum class AidenChatRowStatusTone { WARNING, ACCENT, DANGER }
 data class AidenChatRowStatusPresentation(
     val pillTitle: String?,
     val pillTone: AidenChatRowStatusTone?,
-    /** Working shows a breathing activity dot; Aiden never uses a spinner for it. */
+    /** Working shows the desktop's turning Working ring. */
     val showsActivity: Boolean,
     val showsUnreadDot: Boolean,
     /**
@@ -125,11 +88,11 @@ data class AidenChatRowStatusPresentation(
 
 /**
  * Trailing chat-row status. Attention states use soft semantic fills with no
- * borders, Working shows a breathing activity dot, and the unread dot is independent
+ * borders, Working shows the desktop's turning ring, and the unread dot is independent
  * because a chat can be working while holding unseen earlier output. When that unseen
  * output is a failed turn, a soft danger Failed pill takes the dot's place. State changes
  * morph with a snappy spring; with reduced motion they swap instantly and the
- * Working dot holds still. The whole status is spoken once, for example "Working".
+ * Working ring holds still. The whole status is spoken once, for example "Working".
  */
 @Composable
 fun AidenChatRowStatus(
@@ -189,13 +152,8 @@ private fun AidenChatRowStatusContent(
             )
         }
         if (presentation.showsActivity) {
-            // A soft ring keeps the working dot distinct from the solid unread dot beside it.
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.size(16.dp).background(palette.accent.copy(alpha = 0.14f), CircleShape)
-            ) {
-                AidenActivityDot(color = palette.accent, size = 8.dp)
-            }
+            // The desktop's turning ring; open, so it never reads as the solid unread dot.
+            AidenWorkingIndicator(color = palette.accent, size = 16.dp)
         }
         if (presentation.showsFailed) {
             // Same soft 12% semantic fill as the attention pills, with no border.

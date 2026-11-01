@@ -17,7 +17,9 @@ enum class AidenProductArea {
 @Serializable
 enum class AidenWorkspaceSidebarOrganization {
     WORKSPACE,
-    RECENT
+    RECENT,
+    /** The Inbox (Beta): triage sections from the host's buckets. */
+    INBOX
 }
 
 @Serializable
