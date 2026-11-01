@@ -1,10 +1,11 @@
 // Exact-shape request parsers for the Create Images channels. Anything else is
 // rejected with one generic message before any store is touched.
 import { hasExactKeys, isRecord } from "../../shared/guards.js";
-import { IMAGE_IMPORT_MAX_BYTES } from "../../../renderer/shared/images/ipc-types.js";
+import { IMAGE_IMPORT_MAX_BYTES, SAVE_ALL_MAX_IMAGES, type ImageActionRequest } from "../../../renderer/shared/images/ipc-types.js";
 import type { RunScope } from "../../../renderer/shared/images/run-types.js";
 import { IMAGE_WORKFLOW_ID_PATTERN, IMAGE_WORKFLOW_LIMITS } from "../../../renderer/shared/images/schema.js";
 import { hasControlCharacter } from "../../services/create-images/workflow-schema.js";
+import { isStudioAssetId } from "../../services/studio-assets/contract.js";
 
 const INVALID = "Invalid Create Images request.";
 const CONSENT_ID = /^[A-Za-z0-9_-]{16,64}$/u;
@@ -125,4 +126,36 @@ export function parseListRunsRequest(value: unknown): { workflowId: string; limi
   const limit = request.limit;
   if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 50) invalid();
   return { workflowId: id(request.workflowId), limit: limit as number };
+}
+
+export function parseGalleryRequest(value: unknown): { workflowId?: string } {
+  if (value === undefined) return {};
+  const request = shape(value, [], ["workflowId"]);
+  return request.workflowId === undefined ? {} : { workflowId: id(request.workflowId) };
+}
+
+function assetId(value: unknown): string {
+  return isStudioAssetId(value) ? value : invalid();
+}
+
+export function parseImageActionRequest(value: unknown): ImageActionRequest {
+  if (!plain(value)) invalid();
+  switch (value.op) {
+    case "view":
+    case "save-as":
+    case "copy":
+    case "reveal":
+    case "drag":
+      return { op: value.op, assetId: assetId(shape(value, ["op", "assetId"]).assetId) };
+    case "save-all": {
+      const ids = shape(value, ["op", "assetIds"]).assetIds;
+      if (!Array.isArray(ids) || ids.length === 0 || ids.length > SAVE_ALL_MAX_IMAGES) invalid();
+      return { op: "save-all", assetIds: Array.from(ids, (entry) => assetId(entry)) };
+    }
+    case "reveal-folder":
+      shape(value, ["op"]);
+      return { op: "reveal-folder" };
+    default:
+      return invalid();
+  }
 }

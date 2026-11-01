@@ -54,8 +54,12 @@ function parseImageRef(input: unknown): ImageRef {
  * Finder), or leading dots.
  */
 export function safeImageFileStem(name: string): string {
-  const withoutExtension = name.replace(/\.[a-z0-9]{1,5}$/iu, "");
-  const cleaned = withoutExtension
+  return safeFileNameStem(name.replace(/\.[a-z0-9]{1,5}$/iu, ""));
+}
+
+/** `safeImageFileStem` for text that has no extension to strip, such as a title. */
+export function safeFileNameStem(name: string, fallback = "Image"): string {
+  const cleaned = name
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069/\\:*?"<>|]+/gu, " ")
     .replace(/\s+/gu, " ")
@@ -63,7 +67,7 @@ export function safeImageFileStem(name: string): string {
     .replace(/^[.\s]+/u, "")
     .slice(0, MAX_FILE_STEM)
     .trim();
-  return cleaned || "Image";
+  return cleaned || fallback;
 }
 
 export function createChatImageActions(deps: ChatImageActionDeps) {

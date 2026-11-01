@@ -13,8 +13,9 @@ import { IMAGE_WORKFLOW_LIMITS, type WorkflowDocV1 } from "../../../renderer/sha
 import { createThrottledTrigger } from "../portable-config-watch-core.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
 import { RunConsentStore } from "./consent-core.js";
+import type { CreateImagesExports } from "./image-export.js";
 import { executeRun } from "./run-executor.js";
-import { RUN_RETENTION, type ImageRunLedger } from "./run-ledger.js";
+import { RUN_RETENTION, type GeneratedAttempt, type ImageRunLedger } from "./run-ledger.js";
 import { clampRunConcurrency, planDigest, planRun, staleNodeIds, type PlanIssue, type RunPlan } from "./scheduler-core.js";
 import type { ImageWorkflowStore } from "./workflow-store.js";
 
@@ -29,6 +30,8 @@ export interface RunCoordinatorDependencies {
     Partial<Pick<StudioAssetStore, "usage" | "release">>;
   workflows: Pick<ImageWorkflowStore, "get" | "delete" | "imageInputAssets">;
   notify(snapshot: RunSnapshot): void;
+  /** Auto-saves each stored Generate output, in the background. Without it nothing is saved to a folder. */
+  exports?: Pick<CreateImagesExports, "autoSave" | "whenIdle">;
   /** Receives failures that have no caller to throw to: a run that crashed, a ledger that would not close. */
   reportIssue?(message: string, error: unknown): void;
   now?: () => number;
@@ -218,6 +221,16 @@ export class ImageRunCoordinator {
     return this.deps.ledger.latestOutputs(workflowId);
   }
 
+  /** Succeeded Generate attempts, newest first, for the gallery. */
+  generatedAttempts(workflowId: string | undefined, limit: number): GeneratedAttempt[] {
+    return this.deps.ledger.generatedAttempts(workflowId, limit);
+  }
+
+  /** The newest Generate attempt that produced this asset, or undefined if the ledger never generated it. */
+  generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
+    return this.deps.ledger.generatedAsset(assetId);
+  }
+
   /** Nodes whose output is older than a newer upstream Generate result, e.g. after a node-only run. */
   staleNodeIds(doc: WorkflowDocV1): string[] {
     return staleNodeIds(doc, this.deps.ledger.latestOutputSequence(doc.id));
@@ -300,9 +313,10 @@ export class ImageRunCoordinator {
     }
   }
 
-  /** Resolves once every active run has settled. Used by tests and by the perf lane. */
+  /** Resolves once every active run, and every auto-save it started, has settled. Used by tests and by the perf lane. */
   async whenIdle(): Promise<void> {
     while (this.active.size > 0) await Promise.all([...this.active.values()].map((run) => run.done));
+    await this.deps.exports?.whenIdle();
   }
 
   private launch(doc: WorkflowDocV1, plan: RunPlan, requestLimit: number): string {
@@ -338,6 +352,7 @@ export class ImageRunCoordinator {
           this.inFlight -= 1;
         },
         ...(this.deps.reportIssue ? { reportIssue: (error: unknown) => this.deps.reportIssue!("An image run hit a secondary failure.", error) } : {}),
+        ...(this.deps.exports ? { onImagesStored: (_step: unknown, output: readonly OutputRef[]) => this.deps.exports!.autoSave(output, doc.title) } : {}),
       },
       { runId, plan, concurrency: clampRunConcurrency(doc.settings.concurrency), signal: controller.signal },
     )

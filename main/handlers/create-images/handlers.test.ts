@@ -1,26 +1,29 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ImageGenerationPort } from "../../../renderer/shared/images/port.js";
 import type {
+  GalleryResponse,
   GetRunResponse,
   GetWorkflowResponse,
+  ImageActionResponse,
   ImportImageResponse,
   ListWorkflowsResponse,
   PrepareRunResponse,
   WorkflowResponse,
 } from "../../../renderer/shared/images/ipc-types.js";
 import type { WorkflowDocV1 } from "../../../renderer/shared/images/schema.js";
+import type { ExportFileSystem } from "../../services/create-images/image-export.js";
 import { createPiImageGenerationPort } from "../../services/create-images/image-port.js";
 import type { CreateImagesServices } from "../../services/create-images/runtime.js";
 import { CreateImagesRuntime } from "../../services/create-images/runtime.js";
 import { fakeImageModels, until, type FakeImageReply } from "../../services/create-images/test-fixture.js";
-import { StudioAssetGrants, type StudioAssetGrantOwner } from "../../services/studio-assets/delivery-core.js";
+import { StudioAssetGrants, studioAssetGrantToken, type StudioAssetGrantOwner } from "../../services/studio-assets/delivery-core.js";
 import { StudioAssetStore } from "../../services/studio-assets/store.js";
 import { fakeThumbnailer, pngBytes } from "../../services/studio-assets/test-fixture.js";
-import { readPickedImage, registerCreateImagesHandlers, type CreateImagesOwner } from "./register.js";
+import { readPickedImage, registerCreateImagesHandlers, type CreateImagesFileActions, type CreateImagesOwner } from "./register.js";
 
 /** `owner: null` is a document that is not an Aiden window: the production owner check throws for it. */
 interface FakeEvent { owner: CreateImagesOwner | null }
@@ -38,10 +41,34 @@ function ownerOf(event: FakeEvent): CreateImagesOwner {
 }
 
 const CHANNELS = [
-  "imageWorkflows:cancel-run", "imageWorkflows:create", "imageWorkflows:get", "imageWorkflows:get-run",
-  "imageWorkflows:import-image", "imageWorkflows:list", "imageWorkflows:list-models", "imageWorkflows:list-runs",
-  "imageWorkflows:mutate", "imageWorkflows:prepare-run", "imageWorkflows:save", "imageWorkflows:start-run",
+  "imageWorkflows:cancel-run", "imageWorkflows:create", "imageWorkflows:gallery", "imageWorkflows:get", "imageWorkflows:get-run",
+  "imageWorkflows:image-action", "imageWorkflows:import-image", "imageWorkflows:list", "imageWorkflows:list-models",
+  "imageWorkflows:list-runs", "imageWorkflows:mutate", "imageWorkflows:prepare-run", "imageWorkflows:save", "imageWorkflows:start-run",
 ];
+
+/** Records every Electron-side file action; the dialogs answer with whatever the test sets. */
+function fakeFiles() {
+  const calls: { op: string; arg?: unknown }[] = [];
+  const answers: { savePath: string | null; folder: string | null; copyDecodes: boolean } = { savePath: null, folder: null, copyDecodes: true };
+  const files: CreateImagesFileActions<FakeEvent> = {
+    chooseSavePath: async (_event, options) => {
+      calls.push({ op: "save-dialog", arg: options });
+      return answers.savePath;
+    },
+    chooseFolder: async (_event, options) => {
+      calls.push({ op: "folder-dialog", arg: options });
+      return answers.folder;
+    },
+    copyImage: (bytes) => {
+      calls.push({ op: "copy", arg: Buffer.from(bytes) });
+      return answers.copyDecodes;
+    },
+    showItemInFolder: (file) => void calls.push({ op: "show", arg: file }),
+    openFolder: async (folder) => void calls.push({ op: "open-folder", arg: folder }),
+    startDrag: (_event, file) => void calls.push({ op: "drag", arg: file }),
+  };
+  return { files, calls, answers };
+}
 
 /**
  * Handlers may read the provider catalog and nothing else: generation is reachable only through
@@ -56,8 +83,9 @@ function listModelsOnly(port: ImageGenerationPort): ImageGenerationPort {
   });
 }
 
-async function harness(t: TestContext, reply?: (index: number) => FakeImageReply) {
+async function harness(t: TestContext, reply?: (index: number) => FakeImageReply, options: { exportFs?: ExportFileSystem } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "aiden-image-ipc-"));
+  const saveRoot = path.join(root, "Pictures", "Aiden", "Create Images");
   t.after(() => rm(root, { recursive: true, force: true }));
   const assets = new StudioAssetStore({ root: () => path.join(root, "assets"), thumbnailer: fakeThumbnailer().thumbnailer });
   await assets.initialize();
@@ -68,6 +96,8 @@ async function harness(t: TestContext, reply?: (index: number) => FakeImageReply
     assets,
     port: () => createPiImageGenerationPort({ models: fake.models, providerLabel: () => "OpenRouter" }),
     notify: () => undefined,
+    saveRoot: () => saveRoot,
+    ...(options.exportFs ? { exportFs: options.exportFs } : {}),
   });
   assert.equal(await runtime.initialize({ enabled: true, onError: (error) => assert.fail(String(error)) }), true);
   t.after(async () => {
@@ -82,16 +112,19 @@ async function harness(t: TestContext, reply?: (index: number) => FakeImageReply
   const listeners = new Map<string, (event: FakeEvent, input: unknown) => unknown>();
   let picked: Uint8Array | null = null;
   let pickCalls = 0;
+  const grants = new StudioAssetGrants();
+  const files = fakeFiles();
   const registered = registerCreateImagesHandlers<FakeEvent>({
     enabled: true,
     handle: (channel, listener) => listeners.set(channel, listener),
     owner: ownerOf,
     services: guardedServices,
-    grants: new StudioAssetGrants(),
+    grants,
     pickImage: async () => {
       pickCalls += 1;
       return picked;
     },
+    files: files.files,
   });
   const invoke = async <T>(channel: string, input: unknown, event: FakeEvent = WINDOW_A): Promise<T> => {
     const listener = listeners.get(channel);
@@ -99,7 +132,7 @@ async function harness(t: TestContext, reply?: (index: number) => FakeImageReply
     return (await listener(event, input)) as T;
   };
   return {
-    invoke, listeners, registered, fake, runtime, assets,
+    invoke, listeners, registered, fake, runtime, assets, grants, root, saveRoot, files,
     pick: (bytes: Uint8Array | null) => (picked = bytes),
     pickCalls: () => pickCalls,
   };
@@ -114,9 +147,9 @@ async function starter(env: Awaited<ReturnType<typeof harness>>, prompt = "A red
   return (await env.invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId: workflow.id })).workflow;
 }
 
-test("the inventory is exactly the twelve ADR channels, and the flag gates all of them", async (t) => {
+test("the inventory is exactly the fourteen ADR channels, and the flag gates all of them", async (t) => {
   const env = await harness(t);
-  assert.equal(env.registered, 12);
+  assert.equal(env.registered, 14);
   assert.deepEqual([...env.listeners.keys()].sort(), CHANNELS);
   let calls = 0;
   const none = registerCreateImagesHandlers<FakeEvent>({
@@ -126,6 +159,7 @@ test("the inventory is exactly the twelve ADR channels, and the flag gates all o
     services: () => env.runtime.services(),
     grants: new StudioAssetGrants(),
     pickImage: async () => null,
+    files: fakeFiles().files,
   });
   assert.deepEqual([none, calls], [0, 0]);
 });
@@ -161,6 +195,8 @@ test("every channel refuses a valid request from a document that is not an Aiden
     "imageWorkflows:cancel-run": { runId: "a-run-that-does-not-exist" },
     "imageWorkflows:get-run": { workflowId: doc.id },
     "imageWorkflows:list-runs": { workflowId: doc.id, limit: 5 },
+    "imageWorkflows:gallery": {},
+    "imageWorkflows:image-action": { op: "reveal-folder" },
   };
   assert.deepEqual(Object.keys(valid).sort(), CHANNELS);
   const before = await env.invoke<ListWorkflowsResponse>("imageWorkflows:list", {});
@@ -170,6 +206,7 @@ test("every channel refuses a valid request from a document that is not an Aiden
   }
   await assert.rejects(env.invoke("imageWorkflows:import-image", { source: "dialog" }, FOREIGN), { message: FOREIGN_OWNER });
   assert.equal(env.pickCalls(), 0);
+  assert.deepEqual(env.files.calls, []);
   assert.deepEqual(await env.invoke<ListWorkflowsResponse>("imageWorkflows:list", {}), before);
   assert.deepEqual((await env.invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId: doc.id })).workflow, doc);
   assert.deepEqual(env.assets.usage(), assetsBefore);
@@ -370,4 +407,203 @@ test("a picked image is read through one handle and never beyond the import limi
   const folder = path.join(root, "folder.png");
   await mkdir(folder);
   await assert.rejects(readPickedImage(folder, 8), /8 MiB or less/u);
+});
+
+async function generate(env: Awaited<ReturnType<typeof harness>>, prompt: string, title?: string): Promise<{ doc: WorkflowDocV1; runId: string }> {
+  let doc = await starter(env, prompt);
+  if (title) {
+    await env.invoke("imageWorkflows:mutate", { op: "rename", workflowId: doc.id, title });
+    doc = (await env.invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId: doc.id })).workflow;
+  }
+  const prepared = await env.invoke<PrepareRunResponse>("imageWorkflows:prepare-run", { workflowId: doc.id, revision: doc.revision, scope: { kind: "all" } });
+  assert.ok("plan" in prepared);
+  const started = await env.invoke<{ runId: string }>("imageWorkflows:start-run", { consentId: prepared.plan.consentId });
+  await env.runtime.services().coordinator.whenIdle();
+  return { doc, runId: started.runId };
+}
+
+async function savedFiles(root: string): Promise<string[]> {
+  const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name)).sort();
+}
+
+test("a generated image is auto-saved under its workflow title, and the gallery shows what made it", async (t) => {
+  const env = await harness(t);
+  const { doc, runId } = await generate(env, "A secret prompt about a red bicycle", "Bikes");
+  const saved = await savedFiles(env.saveRoot);
+  assert.equal(saved.length, 1);
+  const relative = path.relative(env.saveRoot, saved[0]!);
+  assert.match(relative, /^\d{4}-\d{2}-\d{2}\/\d{6} Bikes [0-9a-f]{8}\.png$/u);
+  assert.equal(relative.includes("secret"), false);
+
+  const gallery = await env.invoke<GalleryResponse>("imageWorkflows:gallery", {});
+  assert.equal(gallery.saveFolderLabel, "Pictures › Aiden › Create Images");
+  assert.equal(gallery.items.length, 1);
+  const [item] = gallery.items;
+  const stored = await env.assets.read(item!.assetId);
+  assert.deepEqual(await readFile(saved[0]!), Buffer.from(stored.bytes));
+  assert.equal(path.basename(saved[0]!).includes(item!.assetId.slice(0, 8)), true);
+  assert.deepEqual(
+    { runId: item!.runId, workflowId: item!.workflowId, workflowTitle: item!.workflowTitle, nodeTitle: item!.nodeTitle, prompt: item!.prompt, provider: item!.provider, model: item!.model, saved: item!.saved, index: item!.index },
+    { runId, workflowId: doc.id, workflowTitle: "Bikes", nodeTitle: "Generate Image", prompt: "A secret prompt about a red bicycle", provider: "openrouter", model: "google/gemini-3.1-flash-image", saved: true, index: 0 },
+  );
+  assert.equal(item!.nodeId, doc.nodes.find((node) => node.type === "generate-image")!.id);
+  // The run snapshot shows the same prompt.
+  const run = await env.invoke<GetRunResponse>("imageWorkflows:get-run", { runId });
+  assert.equal(run.snapshot?.attempts.find((attempt) => attempt.nodeId === item!.nodeId)?.prompt, "A secret prompt about a red bicycle");
+
+  // A moved copy is reported as unsaved; Reveal writes it again and shows the new file.
+  await rm(saved[0]!);
+  assert.equal((await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items[0]?.saved, false);
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal", assetId: item!.assetId }), { ok: true });
+  const rewritten = await savedFiles(env.saveRoot);
+  assert.equal(rewritten.length, 1);
+  assert.deepEqual(env.files.calls, [{ op: "show", arg: rewritten[0] }]);
+  assert.equal((await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items[0]?.saved, true);
+});
+
+test("the gallery lists one workflow or all of them newest first, and drops titles that no longer exist", async (t) => {
+  const env = await harness(t);
+  const first = await generate(env, "First", "Alpha");
+  const second = await generate(env, "Second", "Beta");
+  const all = await env.invoke<GalleryResponse>("imageWorkflows:gallery", {});
+  assert.deepEqual(all.items.map((item) => item.workflowTitle), ["Beta", "Alpha"]);
+  assert.ok(all.items[0]!.createdAt >= all.items[1]!.createdAt);
+  const only = await env.invoke<GalleryResponse>("imageWorkflows:gallery", { workflowId: first.doc.id });
+  assert.deepEqual(only.items.map((item) => item.runId), [first.runId]);
+
+  // The gallery names the Generate node by its current title.
+  const current = (await env.invoke<GetWorkflowResponse>("imageWorkflows:get", { workflowId: second.doc.id })).workflow;
+  const generateId = current.nodes.find((node) => node.type === "generate-image")!.id;
+  const renamed = structuredClone(current);
+  renamed.nodes = renamed.nodes.map((node) => (node.id === generateId ? { ...node, title: "Hero shot" } : node));
+  assert.equal((await env.invoke<{ ok: boolean }>("imageWorkflows:save", { workflowId: current.id, baseRevision: current.revision, document: renamed })).ok, true);
+  assert.equal((await env.invoke<GalleryResponse>("imageWorkflows:gallery", { workflowId: second.doc.id })).items[0]?.nodeTitle, "Hero shot");
+
+  await env.invoke("imageWorkflows:mutate", { op: "delete", workflowId: first.doc.id });
+  assert.deepEqual((await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items.map((item) => item.runId), [second.runId]);
+  assert.deepEqual((await env.invoke<GalleryResponse>("imageWorkflows:gallery", { workflowId: first.doc.id })).items, []);
+});
+
+test("gallery thumbnails and the full-size view are bound to the document that asked", async (t) => {
+  const env = await harness(t);
+  await generate(env, "Bound");
+  const fromA = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {}, WINDOW_A)).items[0]!;
+  const fromB = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {}, WINDOW_B)).items[0]!;
+  const view = await env.invoke<ImageActionResponse>("imageWorkflows:image-action", { op: "view", assetId: fromA.assetId }, WINDOW_A);
+  assert.ok(view.ok && view.url);
+  const resolve = (url: string) => env.grants.resolve(studioAssetGrantToken(url) ?? "");
+  assert.deepEqual(resolve(fromA.thumbUrl), { assetId: fromA.assetId, rendition: "thumb-512" });
+  assert.deepEqual(resolve(view.url), { assetId: fromA.assetId, rendition: "original" });
+  assert.notEqual(fromA.thumbUrl, fromB.thumbUrl);
+  // Closing document A revokes its URLs; B's keep working.
+  env.grants.revokeDocument("1:doc-a");
+  assert.equal(resolve(fromA.thumbUrl), undefined);
+  assert.equal(resolve(view.url), undefined);
+  assert.deepEqual(resolve(fromB.thumbUrl), { assetId: fromA.assetId, rendition: "thumb-512" });
+});
+
+test("image actions refuse assets Create Images neither generated nor holds for a workflow", async (t) => {
+  const env = await harness(t);
+  await starter(env);
+  // In the asset store, but only as an unplaced import: no run made it and no workflow holds it.
+  const loose = await env.invoke<ImportImageResponse>("imageWorkflows:import-image", { source: "bytes", name: "l.png", mimeType: "image/png", data: pngBytes(7, 7, 9) });
+  assert.ok("assetId" in loose);
+  const unknown = "0".repeat(64);
+  for (const assetId of [loose.assetId, unknown]) {
+    for (const op of ["view", "save-as", "copy", "reveal", "drag"]) {
+      assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op, assetId }), { ok: false, reason: "not-found" }, `${op} ${assetId}`);
+    }
+    assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds: [assetId] }), { ok: false, reason: "not-found" });
+  }
+  assert.deepEqual(env.files.calls, []);
+  assert.deepEqual(await savedFiles(env.saveRoot), []);
+});
+
+test("an Image Input a workflow holds can be viewed, copied and revealed", async (t) => {
+  const env = await harness(t);
+  const doc = await starter(env);
+  const imported = await env.invoke<ImportImageResponse>("imageWorkflows:import-image", { source: "bytes", name: "r.png", mimeType: "image/png", data: pngBytes(10, 6, 5) });
+  assert.ok("assetId" in imported);
+  const withImage = { ...doc, nodes: [...doc.nodes, { id: "in", type: "image-input" as const, position: { x: 0, y: 0 }, data: { assetId: imported.assetId } }] };
+  await env.invoke("imageWorkflows:save", { workflowId: doc.id, baseRevision: doc.revision, document: withImage });
+  const view = await env.invoke<ImageActionResponse>("imageWorkflows:image-action", { op: "view", assetId: imported.assetId });
+  assert.ok(view.ok && view.url?.startsWith("aiden-asset://grant/"));
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "copy", assetId: imported.assetId }), { ok: true });
+  assert.deepEqual(env.files.calls[0], { op: "copy", arg: Buffer.from(pngBytes(10, 6, 5)) });
+  env.files.answers.copyDecodes = false;
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "copy", assetId: imported.assetId }), {
+    ok: false, reason: "unsupported", message: "This image can't be copied.",
+  });
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal", assetId: imported.assetId }), { ok: true });
+  const [file] = await savedFiles(env.saveRoot);
+  // Named after the workflow that holds it.
+  assert.ok(path.basename(file!).endsWith(` ${doc.title} ${imported.assetId.slice(0, 8)}.png`), path.basename(file!));
+  assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "show", arg: file });
+});
+
+test("save-as, save-all, drag and reveal-folder write through main and honour a cancelled dialog", async (t) => {
+  const env = await harness(t);
+  await generate(env, "One", "Saver");
+  await generate(env, "Two", "Saver");
+  const items = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items;
+  assert.equal(items.length, 2);
+  const [newest, older] = items as [typeof items[0], typeof items[0]];
+  const autoSaved = await savedFiles(env.saveRoot);
+
+  // Save As offers the auto-saved name in the auto-save folder; cancelling writes nothing.
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-as", assetId: newest.assetId }), { ok: false, reason: "cancelled" });
+  const offered = env.files.calls[env.files.calls.length - 1]?.arg as { defaultPath: string; mediaType: string };
+  assert.ok(autoSaved.includes(offered.defaultPath), offered.defaultPath);
+  assert.equal(offered.mediaType, "image/png");
+  const target = path.join(env.root, "chosen", "mine.png");
+  await mkdir(path.dirname(target));
+  env.files.answers.savePath = target;
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-as", assetId: newest.assetId }), { ok: true });
+  assert.deepEqual(await readFile(target), Buffer.from((await env.assets.read(newest.assetId)).bytes));
+
+  // Save All de-duplicates, keeps every name distinct, and reports the count.
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds: [newest.assetId] }), { ok: false, reason: "cancelled" });
+  assert.equal((env.files.calls[env.files.calls.length - 1]?.arg as { defaultPath: string }).defaultPath, env.saveRoot);
+  const folder = path.join(env.root, "export-folder");
+  await mkdir(folder);
+  env.files.answers.folder = folder;
+  const assetIds = [newest.assetId, older.assetId, newest.assetId];
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds }), { ok: true, count: 2 });
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "save-all", assetIds }), { ok: true, count: 2 });
+  assert.equal((await readdir(folder)).length, 4);
+
+  // Drag and reveal reuse the existing auto-saved copy rather than writing another.
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "drag", assetId: older.assetId }), { ok: true });
+  const dragged = env.files.calls[env.files.calls.length - 1];
+  assert.equal(dragged?.op, "drag");
+  assert.ok(autoSaved.includes(dragged?.arg as string));
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal-folder" }), { ok: true });
+  assert.deepEqual(env.files.calls[env.files.calls.length - 1], { op: "open-folder", arg: env.saveRoot });
+  assert.deepEqual(await savedFiles(env.saveRoot), autoSaved);
+});
+
+test("an auto-save that fails never fails the run", async (t) => {
+  const denied: ExportFileSystem = {
+    mkdir: async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    },
+    open: async () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    },
+    rm: async () => undefined,
+    stat: async () => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    },
+  };
+  const env = await harness(t, undefined, { exportFs: denied });
+  const { runId } = await generate(env, "Still works");
+  const run = await env.invoke<GetRunResponse>("imageWorkflows:get-run", { runId });
+  assert.equal(run.snapshot?.run.state, "succeeded");
+  const [item] = (await env.invoke<GalleryResponse>("imageWorkflows:gallery", {})).items;
+  assert.equal(item?.saved, false);
+  assert.deepEqual(await env.invoke("imageWorkflows:image-action", { op: "reveal", assetId: item!.assetId }), {
+    ok: false, reason: "failed", message: "Aiden couldn't finish that image action.",
+  });
+  assert.deepEqual(env.files.calls, []);
 });

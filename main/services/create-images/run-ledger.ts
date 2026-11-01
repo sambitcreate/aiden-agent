@@ -90,6 +90,18 @@ const LATEST_PER_NODE = `
   )
 `;
 
+/**
+ * Additions made after schema v1 shipped. Pre-1.0 there is no migration code and `user_version`
+ * stays 1: every open adds whatever is missing, so a ledger from an older build gains them.
+ * `attempts.prompt` is the prompt text sent with a Generate request (removed with its run);
+ * `exports` maps an image asset to Aiden's auto-saved copy of it in the Pictures folder.
+ */
+function ensureAdditions(db: DatabaseSync): void {
+  const columns = (db.prepare("PRAGMA table_info(attempts)").all() as unknown as { name: string }[]).map((row) => row.name);
+  if (!columns.includes("prompt")) db.exec("ALTER TABLE attempts ADD COLUMN prompt TEXT");
+  db.exec("CREATE TABLE IF NOT EXISTS exports (asset_id TEXT PRIMARY KEY, path TEXT NOT NULL, exported_at INTEGER NOT NULL)");
+}
+
 const OLDER_THAN_RECENT = `
   WITH recent AS (SELECT id FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?)
   SELECT id FROM runs WHERE state <> 'running' AND id NOT IN (SELECT id FROM recent)
@@ -124,6 +136,47 @@ interface AttemptRow {
   cost_usd: number | null;
   cost_status: AttemptCostStatus | null;
   output: string | null;
+  prompt: string | null;
+}
+
+/** One succeeded Generate attempt with its images, for the gallery. */
+export interface GeneratedAttempt {
+  runId: string;
+  workflowId: string;
+  nodeId: string;
+  variant: number;
+  provider: string;
+  model: string;
+  prompt?: string;
+  finishedAt: number;
+  output: OutputRef[];
+}
+
+interface GeneratedAttemptRow {
+  run_id: string;
+  workflow_id: string;
+  node_id: string;
+  variant: number;
+  provider: string;
+  model: string | null;
+  prompt: string | null;
+  finished_at: number | null;
+  created_at: number;
+  output: string;
+}
+
+function generatedAttemptFrom(row: GeneratedAttemptRow): GeneratedAttempt {
+  return {
+    runId: row.run_id,
+    workflowId: row.workflow_id,
+    nodeId: row.node_id,
+    variant: Number(row.variant),
+    provider: row.provider,
+    model: row.model ?? "",
+    ...(row.prompt !== null ? { prompt: row.prompt } : {}),
+    finishedAt: Number(row.finished_at ?? row.created_at),
+    output: parseOutput(row.output),
+  };
 }
 
 const MAY_BE_BILLED = new Set<AttemptState>(["failed", "cancelled", "interrupted"]);
@@ -196,6 +249,7 @@ function attemptFrom(row: AttemptRow): AttemptSnapshot {
     ...(row.cost_status !== null ? { costStatus: row.cost_status } : {}),
     output: parseOutput(row.output),
     mayHaveBeenBilled: row.submitted_at !== null && MAY_BE_BILLED.has(row.state),
+    ...(row.prompt !== null ? { prompt: row.prompt } : {}),
   };
 }
 
@@ -211,7 +265,7 @@ function statements(db: DatabaseSync) {
       "UPDATE runs SET requests_sent = requests_sent + 1 WHERE id = ? AND state = 'running' AND requests_sent < request_limit",
     ),
     submit: db.prepare(
-      "UPDATE attempts SET state = 'running', submitted_at = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state = 'queued' AND cancel_requested = 0",
+      "UPDATE attempts SET state = 'running', submitted_at = ?, prompt = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state = 'queued' AND cancel_requested = 0",
     ),
     finish: db.prepare(
       "UPDATE attempts SET state = ?, finished_at = ?, error_code = ?, error_message = ?, truncated = ?, cost_usd = ?, cost_status = ?, output = ? WHERE run_id = ? AND node_id = ? AND variant = ? AND state IN ('queued', 'running')",
@@ -227,7 +281,7 @@ function statements(db: DatabaseSync) {
     ),
     run: db.prepare("SELECT * FROM runs WHERE id = ?"),
     attempts: db.prepare(
-      "SELECT node_id, variant, state, provider, model, submitted_at, finished_at, error_code, error_message, cancel_requested, truncated, cost_usd, cost_status, output FROM attempts WHERE run_id = ? ORDER BY id",
+      "SELECT node_id, variant, state, provider, model, submitted_at, finished_at, error_code, error_message, cancel_requested, truncated, cost_usd, cost_status, output, prompt FROM attempts WHERE run_id = ? ORDER BY id",
     ),
     latestRun: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1"),
     listRuns: db.prepare("SELECT * FROM runs WHERE workflow_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"),
@@ -253,6 +307,22 @@ function statements(db: DatabaseSync) {
     olderThanRecent: db.prepare(OLDER_THAN_RECENT),
     deleteRun: db.prepare("DELETE FROM runs WHERE id = ?"),
     workflowRuns: db.prepare("SELECT id FROM runs WHERE workflow_id = ? ORDER BY created_at"),
+    // Newest first by finish time, then insertion order for attempts that finished in the same millisecond.
+    generatedAttempts: db.prepare(
+      `SELECT r.id AS run_id, r.workflow_id AS workflow_id, a.node_id AS node_id, a.variant AS variant, a.provider AS provider,
+        a.model AS model, a.prompt AS prompt, a.finished_at AS finished_at, r.created_at AS created_at, a.output AS output
+      FROM attempts a JOIN runs r ON r.id = a.run_id
+      WHERE a.state = 'succeeded' AND a.output IS NOT NULL AND a.provider IS NOT NULL AND (?1 IS NULL OR r.workflow_id = ?1)
+      ORDER BY a.finished_at DESC, a.id DESC LIMIT ?2`,
+    ),
+    allOutputs: db.prepare("SELECT output FROM attempts WHERE output IS NOT NULL"),
+    exportPath: db.prepare("SELECT path FROM exports WHERE asset_id = ?"),
+    allExports: db.prepare("SELECT asset_id, path FROM exports"),
+    recordExport: db.prepare(
+      "INSERT INTO exports (asset_id, path, exported_at) VALUES (?, ?, ?) ON CONFLICT(asset_id) DO UPDATE SET path = excluded.path, exported_at = excluded.exported_at",
+    ),
+    exportIds: db.prepare("SELECT asset_id FROM exports"),
+    deleteExport: db.prepare("DELETE FROM exports WHERE asset_id = ?"),
   };
 }
 
@@ -358,6 +428,18 @@ export class ImageRunLedger {
       }
       const tables = db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'attempts')").get() as { count: number };
       if (Number(tables.count) !== 2) throw new ImageRunLedgerError("corrupt", "The image run ledger is missing its tables.");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        ensureAdditions(db);
+        db.exec("COMMIT");
+      } catch (error) {
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // SQLite may already have rolled back.
+        }
+        throw error;
+      }
       for (const suffix of ["-wal", "-shm"]) {
         if (existsSync(file + suffix)) assertPrivate(file + suffix, false);
       }
@@ -386,12 +468,16 @@ export class ImageRunLedger {
     });
   }
 
-  /** Counts one paid request and marks the attempt submitted, atomically, before the call is made. */
-  claimProviderRequest(runId: string, nodeId: string, variant: number): boolean {
+  /**
+   * Counts one paid request and marks the attempt submitted, atomically, before the call is made.
+   * `prompt` is the exact text the request sends, kept so history can show it; it is stored only
+   * here and goes away when the run is pruned.
+   */
+  claimProviderRequest(runId: string, nodeId: string, variant: number, prompt?: string): boolean {
     try {
       return this.transaction(() => {
         if (Number(this.sql.claim.run(runId).changes) !== 1) return false;
-        if (Number(this.sql.submit.run(this.now(), runId, nodeId, variant).changes) !== 1) throw NOT_QUEUED;
+        if (Number(this.sql.submit.run(this.now(), prompt ?? null, runId, nodeId, variant).changes) !== 1) throw NOT_QUEUED;
         return true;
       });
     } catch (error) {
@@ -506,6 +592,54 @@ export class ImageRunLedger {
     return new Map([...runs].map(([runId, ids]) => [runId, [...ids].sort()]));
   }
 
+  /**
+   * Succeeded Generate attempts with their images, newest first: one workflow's, or every
+   * workflow's when `workflowId` is undefined. Includes latest outputs kept past run retention.
+   */
+  generatedAttempts(workflowId: string | undefined, limit: number): GeneratedAttempt[] {
+    this.requireOpen();
+    return (this.sql.generatedAttempts.all(workflowId ?? null, limit) as unknown as GeneratedAttemptRow[]).map(generatedAttemptFrom);
+  }
+
+  /** The newest succeeded Generate attempt that produced this asset, or undefined when the ledger never generated it. */
+  generatedAsset(assetId: string): { attempt: GeneratedAttempt; ref: OutputRef } | undefined {
+    this.requireOpen();
+    for (const row of this.sql.generatedAttempts.all(null, -1) as unknown as GeneratedAttemptRow[]) {
+      const attempt = generatedAttemptFrom(row);
+      const ref = attempt.output.find((candidate) => candidate.assetId === assetId);
+      if (ref) return { attempt, ref };
+    }
+    return undefined;
+  }
+
+  /** Where Aiden auto-saved this asset, if it recorded doing so. The file may since have moved. */
+  exportPath(assetId: string): string | undefined {
+    this.requireOpen();
+    return (this.sql.exportPath.get(assetId) as { path: string } | undefined)?.path;
+  }
+
+  /** Every recorded auto-saved copy, by asset id. */
+  exportPaths(): Map<string, string> {
+    this.requireOpen();
+    return new Map((this.sql.allExports.all() as unknown as { asset_id: string; path: string }[]).map((row) => [row.asset_id, row.path]));
+  }
+
+  recordExport(assetId: string, filePath: string): void {
+    this.requireOpen();
+    this.sql.recordExport.run(assetId, filePath, this.now());
+  }
+
+  /** Drops export records of assets no attempt names any more; the files themselves are the person's and stay. */
+  private forgetOrphanExports(): void {
+    const known = new Set<string>();
+    for (const row of this.sql.allOutputs.all() as unknown as { output: string }[]) {
+      for (const ref of parseOutput(row.output)) known.add(ref.assetId);
+    }
+    for (const row of this.sql.exportIds.all() as unknown as { asset_id: string }[]) {
+      if (!known.has(row.asset_id)) this.sql.deleteExport.run(row.asset_id);
+    }
+  }
+
   private generatedRows(): { run_id: string; workflow_id: string; output: string | null }[] {
     this.requireOpen();
     return this.sql.generatedOutputs.all() as unknown as { run_id: string; workflow_id: string; output: string | null }[];
@@ -536,6 +670,7 @@ export class ImageRunLedger {
       }
       const ids = (this.sql.olderThanRecent.all(keep) as unknown as { id: string }[]).map((row) => row.id).filter((id) => !holding.has(id));
       for (const id of ids) this.sql.deleteRun.run(id);
+      if (ids.length > 0) this.forgetOrphanExports();
       return ids;
     });
   }
@@ -550,6 +685,7 @@ export class ImageRunLedger {
     return this.transaction(() => {
       const ids = (this.sql.workflowRuns.all(workflowId) as unknown as { id: string }[]).map((row) => row.id);
       for (const id of ids) this.sql.deleteRun.run(id);
+      if (ids.length > 0) this.forgetOrphanExports();
       return ids;
     });
   }

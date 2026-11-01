@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SAVE_ALL_MAX_IMAGES } from "../../../renderer/shared/images/ipc-types.js";
 import {
   parseConsentRequest,
   parseCreateRequest,
   parseEmptyRequest,
+  parseGalleryRequest,
   parseGetRunRequest,
+  parseImageActionRequest,
   parseImportRequest,
   parseListRunsRequest,
   parseMutateRequest,
@@ -81,4 +84,43 @@ test("imports take the dialog or bounded bytes of a supported type", () => {
     { source: "url", url: "https://example.com/x.png" },
   ]);
   assert.equal(parseImportRequest({ source: "bytes", name: "x.webp", mimeType: "image/webp", data: png }).source, "bytes");
+});
+
+test("the gallery takes nothing or one workflow id", () => {
+  assert.deepEqual(parseGalleryRequest(undefined), {});
+  assert.deepEqual(parseGalleryRequest({}), {});
+  assert.deepEqual(parseGalleryRequest({ workflowId: ID }), { workflowId: ID });
+  refuses(parseGalleryRequest, [{ workflowId: "" }, { workflowId: "toString" }, { workflowId: ID, limit: 5 }, { all: true }, [], null, ID]);
+});
+
+test("image actions name images by asset id only, with exact keys per op", () => {
+  const ASSET = "a".repeat(64);
+  for (const op of ["view", "save-as", "copy", "reveal", "drag"] as const) {
+    assert.deepEqual(parseImageActionRequest({ op, assetId: ASSET }), { op, assetId: ASSET });
+    refuses(parseImageActionRequest, [
+      { op },
+      { op, assetId: ASSET, path: "/tmp/x.png" },
+      { op, assetId: ASSET.toUpperCase() },
+      { op, assetId: "a".repeat(63) },
+      { op, assetId: `../${"a".repeat(61)}` },
+      { op, assetIds: [ASSET] },
+    ]);
+  }
+  assert.deepEqual(parseImageActionRequest({ op: "reveal-folder" }), { op: "reveal-folder" });
+  const many = Array.from({ length: SAVE_ALL_MAX_IMAGES }, (_, index) => index.toString(16).padStart(64, "0"));
+  assert.deepEqual(parseImageActionRequest({ op: "save-all", assetIds: many }), { op: "save-all", assetIds: many });
+  // eslint-disable-next-line no-sparse-arrays
+  const sparse = [ASSET, , ASSET];
+  refuses(parseImageActionRequest, [
+    { op: "reveal-folder", assetId: ASSET },
+    { op: "save-all", assetIds: [] },
+    { op: "save-all", assetIds: [...many, ASSET] },
+    { op: "save-all", assetIds: [ASSET, "nope"] },
+    { op: "save-all", assetIds: sparse },
+    { op: "save-all", assetIds: ASSET },
+    { op: "save-all", assetIds: [ASSET], folder: "/tmp" },
+    { op: "delete", assetId: ASSET },
+    { assetId: ASSET },
+    Object.assign(Object.create({ op: "view" }) as object, { assetId: ASSET }),
+  ]);
 });

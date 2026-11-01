@@ -126,6 +126,7 @@ CREATE INDEX live_attempts ON attempts(state) WHERE state IN ('queued','running'
   - Run `UPDATE attempts SET state='interrupted' WHERE state IN ('queued','running')`, plus the matching `runs` update.
   - Attempts with `submitted_at` show "may have been billed". There is no resubmit.
 - **Retention.** Keep the 100 newest runs **plus**, for each workflow, the run holding each node's latest succeeded output. Pruning runs after each run finishes and once at startup. *Amended 2026-10-31:* the latest-output exemption applies only to nodes still in the workflow document (a deleted workflow keeps none; a workflow whose file exists but can't be read keeps all, since it is kept for repair), ordered by attempt id rather than `finished_at`. On open, Create Images reconciles its `images-*` holds against the ledger and documents, and a corrupt ledger is quarantined and recreated because it is history only.
+- *Amended 2026-10-31:* every open adds the `attempts.prompt` column and the `exports` table when missing (no `user_version` bump, no migration code); see §2.11.
 - **Assets** go to the shared store (ADR-F). Each output asset is retained by holder `images-run:<runId>`, and each Image Input asset by `images-workflow:<id>`. Prune and delete release holders. If ADR-F lands plain ref-counts, use one increment per output row. GC belongs to F.
 - **Perf target.** A synthetic 500-node run against a zero-latency fake port must spend **< 1 s total** inside ledger calls, measured by wrapping the ledger. It runs as a separate `test:create-images:perf` npm script filed into an existing CI lane (ADR-F: no new lanes), not in the default pretest chain. The old branch took 114 s.
 
@@ -177,7 +178,7 @@ UI rules:
 - Neutral focus ring on non-text controls; no ring on text inputs.
 - The client is `renderer/lib/create-images-ipc.ts`; no edits to `renderer/lib/ipc.ts`.
 
-### 2.7 IPC (12 invoke channels plus 1 notification; ≤ 15 budget)
+### 2.7 IPC (14 invoke channels plus 1 notification; ≤ 15 budget)
 
 | Channel | Request | Response |
 |---|---|---|
@@ -193,11 +194,14 @@ UI rules:
 | `imageWorkflows:cancel-run` | `{ runId }` | `{ ok }` |
 | `imageWorkflows:get-run` | `{ runId } \| { workflowId /* active or latest */ }` | `{ snapshot: RunSnapshot \| null }` |
 | `imageWorkflows:list-runs` | `{ workflowId, limit ≤ 50 }` | `{ runs: RunSummary[] }` |
+| `imageWorkflows:gallery` (amended 2026-10-31) | `{ workflowId? }` | `{ items: GalleryItem[] /* newest first, ≤ 2,000 */, saveFolderLabel }` |
+| `imageWorkflows:image-action` (amended 2026-10-31) | `{ op: "view" \| "save-as" \| "copy" \| "reveal" \| "drag", assetId } \| { op: "save-all", assetIds /* 1–200 */ } \| { op: "reveal-folder" }` | `{ ok: true, url?, count? } \| { ok: false, reason: "cancelled" \| "not-found" \| "unsupported" \| "failed", message? }` |
 | `imageWorkflows:run-changed` (notify) | – | `RunSnapshot` |
 
 - All channels use `ipcMain.handle` with `main/shared/guards.ts` exact-key validators and the `rendererDocumentOwner` check.
 - Handlers live in `main/handlers/create-images/`.
 - Asset display URLs come from ADR-F's grant API. Create Images adds no asset channel and no paths cross IPC: the dialog runs in main.
+- *Amended 2026-10-31:* image actions name images by asset id only, and act only on a Generate output the ledger knows or an Image Input held by a workflow (`images-workflow:<id>`); anything else is `not-found`. Dialogs, the clipboard, the file manager and native drag stay in main. See §2.11.
 
 ### 2.8 CI-1 node set (schema v1)
 
@@ -250,6 +254,17 @@ UI rules:
   - Both checked against iOS/Android only if the transcript artifact contract changes, which is not expected.
 - **CI-3 / CI-4.** Unchanged, except that the quit-copy item shrinks to polish.
 
+### 2.11 Amendment (2026-10-31): see, explore, save
+
+Owner decisions: (a) keep each request's prompt locally so history can show it; (b) always auto-save every generated image to a visible folder; (c) a per-workflow history plus a cross-workflow library.
+
+- **Prompts in the ledger.** `attempts.prompt` holds the exact prompt text a Generate request sends, written in the same transaction as the request claim, and returned as `AttemptSnapshot.prompt` and `GalleryItem.prompt`. It is deleted with its run by retention or workflow delete. Prompts never go into usage records, analytics, logs or file names.
+- **Additive schema, no migration.** `user_version` stays 1. Every open adds the `attempts.prompt` column and the `exports (asset_id PRIMARY KEY, path, exported_at)` table when they are missing, so an older ledger gains them and keeps its history.
+- **Auto-save (supersedes the Q5 "userData only" answer).** After an attempt's images are stored, held and recorded, each is written in the background to `<Pictures>/Aiden/Create Images/<YYYY-MM-DD>/<HHMMSS> <workflow title> <sha8>.<ext>` (local time; the title made file-system safe, "Image" when empty). Files are created exclusively with a ` (n)` suffix when a name is taken, and `exports` records asset → path. An asset already exported whose file still exists is not written again; a moved or deleted copy is written again by Reveal or drag. Failures are reported to the warning hook and never fail or delay the run. `app.getPath("pictures")` is `~/Pictures` on macOS and the XDG pictures folder on Linux. Export records of images no remaining run names are dropped with pruning; the files are the person's and stay.
+- **Gallery.** `imageWorkflows:gallery` lists every succeeded Generate output the ledger knows (including latest outputs kept past retention), newest first by finish time, optionally for one workflow, each image once, capped at `GALLERY_MAX_ITEMS`. Items carry the current workflow and Generate node titles (absent when gone), prompt, provider and model, `saved` (an export is recorded and its file exists now) and a document-bound `thumb-512` grant. `saveFolderLabel` is display text ("Pictures › Aiden › Create Images"); no absolute path crosses IPC.
+- **Image actions.** `view` returns a document-bound `original` grant; `save-as` opens a Save dialog defaulting to the auto-saved name and folder (overwrite confirmed by the dialog); `save-all` opens a folder picker and writes up to `SAVE_ALL_MAX_IMAGES` de-duplicated images under unique names; `copy` decodes with `nativeImage` and answers `unsupported` when it can't (some WebP); `reveal` and `drag` first make sure the auto-saved copy exists; `reveal-folder` creates and opens the folder.
+- **Tests never touch the real Pictures folder.** `CreateImagesRuntime` writes nothing outside userData unless given `saveRoot` (unit and handler tests pass a temporary folder). The E2E bootstrap (`tests/e2e/electron-test-bootstrap.cjs`) sets Electron's `pictures` path inside the fixture's temporary home, and `assertRuntimeIsolation` fails a launch whose Pictures folder escapes it. With `AIDEN_EXPERIMENTAL_CREATE_IMAGES` off nothing opens, so nothing is saved.
+
 ## 3. Owner decisions (2026-10-07)
 
 - **Q1/Q2:** OpenRouter in CI-1 with default `google/gemini-3.1-flash-image`; direct Google deferred to CI-2. The owner has an OpenRouter key for CI-1.10.
@@ -264,7 +279,7 @@ UI rules:
 | Q2 | Do you have an OpenRouter key for CI-1.10, or should direct Google be in CI-1? | Use OpenRouter in CI-1 and direct Google in CI-2. Pull Google forward only if OpenRouter is not an option for you. |
 | Q3 | Caps | Concurrency default 2 and max 4; `count` ≤ 4 per node; **≤ 16 provider requests per run** in CI-1. Raise this with CI-3 batching. |
 | Q4 | Cost estimate | Show "Estimate unavailable" in CI-1, because catalog token pricing does not model per-image pricing, and show the reported cost after each attempt. In CI-2, consider "last reported cost for this model" from local usage history. |
-| Q5 | Where generated images live | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). |
+| Q5 | Where generated images live | userData asset store only in CI-1, with Download/Reveal in CI-2. No auto-export folder (the old branch's forced external folder and Finder sync are dropped). *Superseded 2026-10-31 by §2.11: every generated image is also auto-saved to `Pictures/Aiden/Create Images`.* |
 | Q6 | Aspect ratio | Leave it out of CI-1 and use prompt wording. Revisit only through a per-API `onPayload` adapter (OpenRouter `image_config`) if live use shows a need. |
 
 ## 4. Risks

@@ -677,6 +677,7 @@ async function assertRuntimeIsolation(
     userDataDir: electronApp.getPath("userData"),
     sessionDataDir: electronApp.getPath("sessionData"),
     appHomeDir: electronApp.getPath("home"),
+    picturesDir: electronApp.getPath("pictures"),
     configDir: process.env.AIDEN_CONFIG_DIR ?? "",
     homeDir: process.env.HOME ?? "",
     xdgCacheDir: process.env.XDG_CACHE_HOME ?? "",
@@ -714,6 +715,12 @@ async function assertRuntimeIsolation(
   if (path.resolve(runtime.appHomeDir) !== homeDir) {
     throw new Error(
       `Electron ignored the isolated home root: expected ${homeDir}, received ${runtime.appHomeDir}.`,
+    );
+  }
+  // Create Images auto-saves generated images under Pictures; it must stay inside the fixture.
+  if (!path.resolve(runtime.picturesDir).startsWith(`${homeDir}${path.sep}`)) {
+    throw new Error(
+      `Electron's Pictures folder escaped the isolated home: expected inside ${homeDir}, received ${runtime.picturesDir}.`,
     );
   }
   if (

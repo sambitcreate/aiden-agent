@@ -4,6 +4,7 @@ import type { ImageGenerationPort } from "../../../renderer/shared/images/port.j
 import type { RunSnapshot } from "../../../renderer/shared/images/run-types.js";
 import type { StudioAssetHolder, StudioAssetHolderKind } from "../studio-assets/contract.js";
 import type { StudioAssetStore } from "../studio-assets/store.js";
+import { CreateImagesExports, type ExportFileSystem } from "./image-export.js";
 import { ImageRunCoordinator } from "./run-coordinator.js";
 import { ImageRunLedger, ImageRunLedgerError } from "./run-ledger.js";
 import { ImageWorkflowStore } from "./workflow-store.js";
@@ -25,6 +26,8 @@ export interface CreateImagesServices {
   coordinator: ImageRunCoordinator;
   port: ImageGenerationPort;
   assets: CreateImagesAssets;
+  /** Auto-saved copies in the Pictures folder, and on-demand exports. */
+  exports: CreateImagesExports;
 }
 
 export interface CreateImagesRuntimeOptions {
@@ -32,6 +35,13 @@ export interface CreateImagesRuntimeOptions {
   assets: CreateImagesAssets;
   port: () => ImageGenerationPort;
   notify(snapshot: RunSnapshot): void;
+  /**
+   * The auto-save folder, `<Pictures>/Aiden/Create Images` in the app. Without it nothing is
+   * written outside userData: tests opt in with a temporary folder.
+   */
+  saveRoot?: () => string;
+  /** File system for exports (tests inject failures). */
+  exportFs?: ExportFileSystem;
   /** Non-fatal failures from the workflow store and the run coordinator. */
   reportIssue?(message: string, error: unknown): void;
   now?: () => number;
@@ -139,11 +149,20 @@ export class CreateImagesRuntime {
           this.options.reportIssue?.(`The image run history could not be read and was moved to ${moved}. Aiden started an empty run history.`, error),
       });
       const port = this.options.port();
+      const exports = new CreateImagesExports({
+        root: this.options.saveRoot ?? null,
+        ledger,
+        assets: this.options.assets,
+        ...(this.options.exportFs ? { fs: this.options.exportFs } : {}),
+        ...now,
+        ...reportIssue,
+      });
       const coordinator = new ImageRunCoordinator({
         ledger,
         port,
         assets: this.options.assets,
         workflows,
+        exports,
         notify: this.options.notify,
         ...now,
         ...reportIssue,
@@ -163,7 +182,7 @@ export class CreateImagesRuntime {
         // Holds are repaired on the next start; they never block opening.
         this.options.reportIssue?.("Could not reconcile Create Images asset holds.", error);
       }
-      this.current = { workflows, coordinator, port, assets: this.options.assets };
+      this.current = { workflows, coordinator, port, assets: this.options.assets, exports };
       this.failure = null;
       return true;
     } catch (error) {

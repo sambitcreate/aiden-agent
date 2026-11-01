@@ -1,15 +1,28 @@
 // Create Images IPC. Every handler checks its renderer document first, parses
 // an exact request shape second, and only then touches a store.
 import * as fs from "node:fs/promises";
-import { IMAGE_IMPORT_MAX_BYTES, type ImportImageResponse } from "../../../renderer/shared/images/ipc-types.js";
+import path from "node:path";
+import {
+  GALLERY_MAX_ITEMS,
+  IMAGE_IMPORT_MAX_BYTES,
+  type GalleryResponse,
+  type ImageActionRequest,
+  type ImageActionResponse,
+  type ImportImageResponse,
+} from "../../../renderer/shared/images/ipc-types.js";
 import { pickDefaultImageModel } from "../../../renderer/shared/images/port.js";
+import type { ImageMediaType, OutputRef } from "../../../renderer/shared/images/run-types.js";
+import { selectGalleryImages, toGalleryItems } from "../../services/create-images/gallery-core.js";
+import { CreateImagesExportUnavailableError, writeUniqueFile } from "../../services/create-images/image-export.js";
 import type { CreateImagesServices } from "../../services/create-images/runtime.js";
 import type { StudioAssetGrantOwner, StudioAssetGrants } from "../../services/studio-assets/delivery-core.js";
 import {
   parseConsentRequest,
   parseCreateRequest,
   parseEmptyRequest,
+  parseGalleryRequest,
   parseGetRunRequest,
+  parseImageActionRequest,
   parseImportRequest,
   parseListRunsRequest,
   parseMutateRequest,
@@ -33,6 +46,29 @@ export interface CreateImagesHandlerDependencies<Event> {
   services(): CreateImagesServices | Promise<CreateImagesServices>;
   grants: Pick<StudioAssetGrants, "issue">;
   pickImage(event: Event): Promise<Uint8Array | null>;
+  files: CreateImagesFileActions<Event>;
+}
+
+/** The Electron side of image actions: dialogs, clipboard, file manager and native drag. */
+export interface CreateImagesFileActions<Event> {
+  /** A Save dialog; the chosen path, or null when cancelled. Overwrite is confirmed by the dialog. */
+  chooseSavePath(event: Event, options: { defaultPath: string; mediaType: ImageMediaType }): Promise<string | null>;
+  /** A folder picker; the chosen folder, or null when cancelled. */
+  chooseFolder(event: Event, options: { defaultPath: string }): Promise<string | null>;
+  /** Puts the image on the clipboard; false when the bytes cannot be decoded (some WebP). */
+  copyImage(bytes: Uint8Array): boolean;
+  showItemInFolder(file: string): void;
+  openFolder(folder: string): Promise<void>;
+  /** Starts a native drag of the file out of the sender's window. */
+  startDrag(event: Event, file: string): void;
+}
+
+const ACTION_FAILED = "Aiden couldn't finish that image action.";
+
+/** An image an action may touch: a Generate output the ledger knows, or an Image Input a workflow holds. */
+interface AuthorizedImage {
+  ref: Pick<OutputRef, "assetId" | "mediaType">;
+  workflowTitle?: string;
 }
 
 const PICKED_IMAGE_REFUSED = "Choose a PNG, JPEG or WebP image of 8 MiB or less.";
@@ -192,5 +228,131 @@ export function registerCreateImagesHandlers<Event>(deps: CreateImagesHandlerDep
     return { runs: (await deps.services()).coordinator.listRuns(request.workflowId, request.limit) };
   });
 
+  handle("imageWorkflows:gallery", async (event, input): Promise<GalleryResponse> => {
+    const owner = deps.owner(event);
+    const request = parseGalleryRequest(input);
+    const { coordinator, workflows, assets, exports } = await deps.services();
+    const titles = new Map(workflows.list().map((entry) => [entry.id, entry.title]));
+    const images = selectGalleryImages(coordinator.generatedAttempts(request.workflowId, GALLERY_MAX_ITEMS), {
+      exists: (assetId) => assets.get(assetId) !== undefined,
+    });
+    const assetIds = images.map((image) => image.ref.assetId);
+    const saved = await exports.savedAssetIds(assetIds);
+    const thumbs = new Map(Object.entries(urls(owner, assetIds)));
+    return {
+      items: toGalleryItems(images, {
+        workflowTitle: (workflowId) => titles.get(workflowId),
+        nodeTitle: (workflowId, nodeId) => workflows.generateNodeTitle(workflowId, nodeId),
+        saved,
+        thumbUrl: (assetId) => thumbs.get(assetId),
+      }),
+      saveFolderLabel: exports.folderLabel,
+    };
+  });
+
+  handle("imageWorkflows:image-action", async (event, input): Promise<ImageActionResponse> => {
+    const owner = deps.owner(event);
+    const request = parseImageActionRequest(input);
+    const services = await deps.services();
+    try {
+      return await imageAction(deps, event, owner, request, services);
+    } catch (error) {
+      if (error instanceof CreateImagesExportUnavailableError) return { ok: false, reason: "unsupported", message: error.message };
+      // File system details (paths, titles) stay in main.
+      return { ok: false, reason: "failed", message: ACTION_FAILED };
+    }
+  });
+
   return registered;
+}
+
+function authorizeImage(services: CreateImagesServices, assetId: string): AuthorizedImage | undefined {
+  const record = services.assets.get(assetId);
+  if (!record) return undefined;
+  const title = (workflowId: string) => services.workflows.list().find((entry) => entry.id === workflowId)?.title;
+  const ref = { assetId, mediaType: record.mediaType };
+  const generated = services.coordinator.generatedAsset(assetId);
+  const workflowId = generated?.attempt.workflowId ?? services.assets.holders(assetId).find((holder) => holder.kind === "images-workflow")?.id;
+  if (workflowId === undefined) return undefined;
+  const workflowTitle = title(workflowId);
+  return { ref, ...(workflowTitle !== undefined ? { workflowTitle } : {}) };
+}
+
+async function imageAction<Event>(
+  deps: CreateImagesHandlerDependencies<Event>,
+  event: Event,
+  owner: CreateImagesOwner,
+  request: ImageActionRequest,
+  services: CreateImagesServices,
+): Promise<ImageActionResponse> {
+  const { exports, assets } = services;
+  const fileSystem = exports.fileSystem();
+  if (request.op === "reveal-folder") {
+    const folder = exports.folder();
+    await fileSystem.mkdir(folder, { recursive: true });
+    await deps.files.openFolder(folder);
+    return { ok: true };
+  }
+  if (request.op === "save-all") {
+    const images: AuthorizedImage[] = [];
+    for (const assetId of new Set(request.assetIds)) {
+      const image = authorizeImage(services, assetId);
+      if (!image) return { ok: false, reason: "not-found" };
+      images.push(image);
+    }
+    const defaultPath = exports.folder();
+    await fileSystem.mkdir(defaultPath, { recursive: true });
+    const folder = await deps.files.chooseFolder(event, { defaultPath });
+    if (!folder) return { ok: false, reason: "cancelled" };
+    let count = 0;
+    for (const image of images) {
+      try {
+        const { bytes } = await assets.read(image.ref.assetId);
+        await writeUniqueFile(fileSystem, folder, exports.target(image.ref, image.workflowTitle).fileName, bytes);
+        count += 1;
+      } catch {
+        // Counted below; one unreadable image does not stop the rest.
+      }
+    }
+    return count === images.length
+      ? { ok: true, count }
+      : { ok: false, reason: "failed", message: `Aiden saved ${count} of ${images.length} images.` };
+  }
+  const image = authorizeImage(services, request.assetId);
+  if (!image) return { ok: false, reason: "not-found" };
+  switch (request.op) {
+    case "view":
+      return { ok: true, url: deps.grants.issue(owner.grants, image.ref.assetId, "original") };
+    case "copy": {
+      const { bytes } = await assets.read(image.ref.assetId);
+      return deps.files.copyImage(bytes) ? { ok: true } : { ok: false, reason: "unsupported", message: "This image can't be copied." };
+    }
+    case "reveal":
+      deps.files.showItemInFolder(await exports.ensureExported(image.ref, image.workflowTitle));
+      return { ok: true };
+    case "drag":
+      deps.files.startDrag(event, await exports.ensureExported(image.ref, image.workflowTitle));
+      return { ok: true };
+    case "save-as": {
+      const saved = await exports.savedPath(image.ref.assetId);
+      const target = saved
+        ? { directory: path.dirname(saved), fileName: path.basename(saved) }
+        : exports.target(image.ref, image.workflowTitle);
+      await fileSystem.mkdir(target.directory, { recursive: true });
+      const chosen = await deps.files.chooseSavePath(event, {
+        defaultPath: path.join(target.directory, target.fileName),
+        mediaType: image.ref.mediaType,
+      });
+      if (!chosen) return { ok: false, reason: "cancelled" };
+      const { bytes } = await assets.read(image.ref.assetId);
+      // The dialog already confirmed any overwrite.
+      const handle = await fileSystem.open(chosen, "w", 0o644);
+      try {
+        await handle.writeFile(bytes);
+      } finally {
+        await handle.close();
+      }
+      return { ok: true };
+    }
+  }
 }
