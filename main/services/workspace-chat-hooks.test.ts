@@ -473,13 +473,18 @@ test("hook messages and Aiden's notices go to the person, never into the tool re
   const { dispatcher } = fakeDispatcher({
     PostToolUse: { systemMessages: ["formatted 3 files"], notices: ["A hook timed out and was skipped."], ranHooks: ["fmt"] },
     UserPromptSubmit: { systemMessages: ["prompt logged"], ranHooks: ["audit"] },
+    Notification: { systemMessages: ["pinged your phone"], ranHooks: ["ping"] },
   });
   const hooks = createWorkspaceChatHooks({ chatId: "c" }, dispatcher, { onMessages: (lines) => messages.push(lines) });
   await hooks.dispatch("UserPromptSubmit", { prompt: "hi" });
   const { toolText } = await runHookedTurn(hooks);
+  // An approval card's Notification (fire-and-forget) reports the same way.
+  hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
+  await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(messages, [
     ["Hook audit: prompt logged"],
     ["Hook fmt: formatted 3 files", "A hook timed out and was skipped."],
+    ["Hook ping: pinged your phone"],
   ]);
   assert.equal(toolText, "echoed");
 

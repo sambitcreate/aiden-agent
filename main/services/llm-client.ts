@@ -1418,10 +1418,21 @@ async function prepareGeneration(
   const notifySubagentApproval =
     subagentRunsChatHooks && folderPath
       ? (() => {
-          const hooks = createWorkspaceChatHooks({
-            chatId: params.chatId,
-            ...(workspace?.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
-          });
+          const hooks = createWorkspaceChatHooks(
+            {
+              chatId: params.chatId,
+              ...(workspace?.noWorkspace === true ? {} : { workspaceRoot: folderPath }),
+            },
+            undefined,
+            {
+              // Shown in the chat while its turn is live, else logged; never the model's.
+              onMessages: (messages) => {
+                const live = active.has(streamId) || initializing.has(streamId);
+                if (live && sendGeneration(streamId, "chat:status", { streamId, phase: "hook_messages", messages })) return;
+                logger.warn("hooks", `Notification hooks for chat ${params.chatId}: ${messages.join("\n")}`);
+              },
+            },
+          );
           return () => hooks.notify("Aiden needs your permission for a subagent", "permission_prompt");
         })()
       : undefined;

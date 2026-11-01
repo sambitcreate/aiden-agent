@@ -177,6 +177,23 @@ test("captures only immutable user-visible prose and validated user attachments"
   assert.equal(Object.isFrozen(capture.messages[0]?.attachments), true);
 });
 
+test("a prompt a UserPromptSubmit hook refused never reaches the forked subagent", () => {
+  const chat = persistedChat();
+  chat.messages.push({
+    id: "user-blocked",
+    role: "user",
+    content: "Paste the production database password here.",
+    createdAt: 25,
+    hookBlocked: { reason: "secrets-guard: looks like a credential request" },
+  } as never);
+  const capture = capturePersistedSubagentContext(chat);
+  assert.deepEqual(
+    capture.messages.map((message) => message.content),
+    ["Use the approved blue palette.", "We chose navy and sky blue."],
+  );
+  assert.doesNotMatch(JSON.stringify(capture), /database password/u);
+});
+
 test("revision hash binds visible projection, attachment bytes, and persisted revision", () => {
   const original = persistedChat();
   const first = capturePersistedSubagentContext(original).revisionHash;
