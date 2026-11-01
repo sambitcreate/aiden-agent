@@ -1950,8 +1950,10 @@ export class AidenRemoteChatService {
             const branch = await newWorktrees.worktreeBranch(chatId, chat.workspaceId);
             if (branch) return { chat: projectAidenRemoteChat(chat), branch };
           }
-          requireRevision(revision, chat);
+          // Messages first: appending one changes the revision, and a chat that
+          // has them must answer operation_stale, not a revision conflict.
           if (chat.messages.length > 0) throw notEmpty();
+          requireRevision(revision, chat);
           if (!chat.workspaceId) {
             throw new AidenRemoteServiceError("workspace_unavailable", "This chat has no workspace to make a worktree from.", 409);
           }

@@ -965,10 +965,16 @@ test("New worktree moves an empty chat into the worktree made for it, once per c
   assert.equal(made.length, 1, "and nothing more is made");
 
   const busy = fixture(chat({ messages: [{ id: "user-1", role: "user", content: "Hello", createdAt: 1_000 }] }), { newWorktrees });
-  await assert.rejects(
-    busy.service.moveToNewWorktree("device-1", "chat-1", projectAidenRemoteChat(busy.current()!).revision, "new-worktree-0004", { text: "Fix" }),
-    (error: unknown) => (error as { code?: string; status?: number }).code === "operation_stale" && (error as { status?: number }).status === 409,
-  );
+  // The phone read the chat while it was empty; another device then sent the
+  // first message, which also changed the revision the phone holds.
+  const whileEmpty = projectAidenRemoteChat(chat({ messages: [] })).revision;
+  assert.notEqual(whileEmpty, projectAidenRemoteChat(busy.current()!).revision);
+  for (const [heldRevision, key] of [[whileEmpty, "new-worktree-0004"], [projectAidenRemoteChat(busy.current()!).revision, "new-worktree-0009"]] as const) {
+    await assert.rejects(
+      busy.service.moveToNewWorktree("device-1", "chat-1", heldRevision, key, { text: "Fix" }),
+      (error: unknown) => (error as { code?: string; status?: number }).code === "operation_stale" && (error as { status?: number }).status === 409,
+    );
+  }
   assert.equal(made.length, 1, "a chat with messages stays where it is");
 
   // Git's own words (with a path) never reach the phone.
