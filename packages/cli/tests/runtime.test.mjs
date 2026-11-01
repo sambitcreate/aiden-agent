@@ -161,9 +161,10 @@ test("aiden help names Aiden's MCP commands and no native pi-mcp routing", () =>
 });
 
 test("foreground serve drains and removes its socket when its terminal hangs up", { skip: process.platform === "win32" }, async () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-hup-"));
+  const agentDir = path.join(home, "agent");
   const child = spawn(process.execPath, [cli, "serve"], {
-    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: home, PI_OFFLINE: "1" }, stdio: ["ignore", "ignore", "pipe"],
   });
   try {
     let stderr = "";
@@ -178,12 +179,13 @@ test("foreground serve drains and removes its socket when its terminal hangs up"
     child.kill("SIGHUP");
     assert.deepEqual(await exited, { code: 0, signal: null }, stderr);
     assert.equal(existsSync(socket), false, "a hung-up daemon must still remove its control socket");
-  } finally { child.kill("SIGKILL"); rmSync(agentDir, { recursive: true, force: true }); }
+  } finally { child.kill("SIGKILL"); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("a background daemon records that it leads its own process group and stops on request", { skip: process.platform === "win32" }, async () => {
-  const agentDir = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
-  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: agentDir, PI_OFFLINE: "1" } };
+  const home = mkdtempSync(path.join(tmpdir(), "aiden-cli-daemon-"));
+  const agentDir = path.join(home, "agent");
+  const options = { env: { ...process.env, AIDEN_CODING_AGENT_DIR: agentDir, HOME: home, PI_OFFLINE: "1" } };
   try {
     const started = runCli(["serve", "--daemon"], options);
     assert.equal(started.status, 0, started.stderr);
@@ -194,7 +196,7 @@ test("a background daemon records that it leads its own process group and stops 
     assert.equal(existsSync(path.join(agentDir, "serve.lock")), false);
   } finally {
     runCli(["serve", "stop"], options);
-    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
